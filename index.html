@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Followyes Gallery V0_8</title>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
   <style>
     :root {
       --header-height: 64px;
@@ -19,16 +23,22 @@
     html,
     body {
       width: 100%;
-      height: 100%;
+      min-height: 100%;
       margin: 0;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
       background: #F0EADE;
-      font-family: Arial, sans-serif;
+      font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      color: #111;
     }
 
     #appShell {
       width: 100%;
-      height: 100%;
+      min-height: 100%;
       display: flex;
       flex-direction: column;
     }
@@ -99,13 +109,117 @@
       display: none;
     }
 
-    #renderCanvas {
-      flex: 1;
+    #gallerySection {
       width: 100%;
-      min-height: 0;
+      height: calc(100vh - var(--header-height));
+      min-height: 620px;
+      position: relative;
+      background: #F0EADE;
+    }
+
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
       display: block;
       touch-action: none;
       outline: none;
+    }
+
+    #testPageContent {
+      background: #F0EADE;
+      color: #111;
+    }
+
+    .contentSection {
+      padding: 88px min(8vw, 112px);
+      box-sizing: border-box;
+    }
+
+    .contentSection.dark {
+      background: #111;
+      color: #fff;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(17, 17, 17, 0.58);
+    }
+
+    .contentSection.dark .eyebrow {
+      color: rgba(255, 255, 255, 0.58);
+    }
+
+    .contentSection h1,
+    .contentSection h2 {
+      margin: 0;
+      max-width: 980px;
+      letter-spacing: -0.055em;
+      line-height: 0.95;
+      font-weight: 800;
+    }
+
+    .contentSection h1 {
+      font-size: clamp(42px, 7vw, 104px);
+    }
+
+    .contentSection h2 {
+      font-size: clamp(34px, 5vw, 72px);
+    }
+
+    .leadText {
+      margin: 28px 0 0;
+      max-width: 780px;
+      font-size: clamp(17px, 1.5vw, 22px);
+      line-height: 1.65;
+      color: rgba(17, 17, 17, 0.72);
+    }
+
+    .contentSection.dark .leadText {
+      color: rgba(255, 255, 255, 0.74);
+    }
+
+    .infoGrid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 44px;
+      max-width: 1180px;
+    }
+
+    .infoCard {
+      min-height: 170px;
+      padding: 24px;
+      border: 1px solid rgba(17, 17, 17, 0.14);
+      background: rgba(255, 255, 255, 0.36);
+      box-sizing: border-box;
+    }
+
+    .infoCard h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .infoCard p {
+      margin: 0;
+      color: rgba(17, 17, 17, 0.68);
+      line-height: 1.55;
+      font-size: 15px;
+    }
+
+    #siteFooter {
+      padding: 30px min(8vw, 112px);
+      background: #0b0b0b;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
     }
 
     #startupError,
@@ -200,6 +314,22 @@
         padding: 8px 10px;
         font-size: 12px;
       }
+
+      #gallerySection {
+        min-height: 540px;
+      }
+
+      .contentSection {
+        padding: 64px 24px;
+      }
+
+      .infoGrid {
+        grid-template-columns: 1fr;
+      }
+
+      #siteFooter {
+        padding: 26px 24px;
+      }
     }
   </style>
 </head>
@@ -220,7 +350,57 @@
       </div>
     </header>
 
-    <canvas id="renderCanvas"></canvas>
+    <section id="gallerySection" aria-label="Interaktywna galeria 3D">
+      <canvas id="renderCanvas"></canvas>
+    </section>
+
+    <main id="testPageContent">
+      <section class="contentSection">
+        <p class="eyebrow">Wersja testowa</p>
+        <h1>Followyes Gallery jest aktualnie w fazie testow.</h1>
+        <p class="leadText">
+          To robocza wersja internetowej galerii 3D. Testujemy nawigacje,
+          rozmieszczanie obrazow, wyrownywanie, oswietlenie oraz zapis stanu galerii.
+        </p>
+
+        <div class="infoGrid">
+          <article class="infoCard">
+            <h3>Galeria 3D</h3>
+            <p>
+              Gorna sekcja strony uruchamia scene Babylon.js z aktualna wersja galerii.
+            </p>
+          </article>
+
+          <article class="infoCard">
+            <h3>Tryb edycji</h3>
+            <p>
+              Panel edycji jest widoczny wylacznie po zalogowaniu na konto edytora.
+            </p>
+          </article>
+
+          <article class="infoCard">
+            <h3>Zapis online</h3>
+            <p>
+              Zmiany ukladu galerii sa zapisywane do Supabase jako jeden aktualny stan.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="contentSection dark">
+        <p class="eyebrow">Cel projektu</p>
+        <h2>Budujemy strone, ktora polaczy klasyczna prezentacje z edytowalna galeria 3D.</h2>
+        <p class="leadText">
+          Publiczny uzytkownik oglada gotowa galerie. Edytor po zalogowaniu moze
+          zmieniac uklad obrazow i zapisac aktualny stan, ktory bedzie widoczny dla wszystkich.
+        </p>
+      </section>
+    </main>
+
+    <footer id="siteFooter">
+      <span>Followyes Gallery - Gallery_V0_8</span>
+      <span>Strona testowa</span>
+    </footer>
   </div>
 
   <div id="authModalBackdrop">
