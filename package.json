@@ -1,6 +1,6 @@
 {
-  "name": "gallery-v0-7",
-  "version": "0.7.0",
+  "name": "followyes-gallery-v0-8",
+  "version": "0.8.0",
   "private": true,
   "scripts": {
     "start": "python3 -m http.server 8000"

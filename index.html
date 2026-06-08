@@ -3,9 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gallery V0_7</title>
+  <title>Followyes Gallery V0_8</title>
 
   <style>
+    :root {
+      --header-height: 64px;
+      --bg: #0f1115;
+      --panel: rgba(17, 17, 17, 0.94);
+      --line: rgba(255, 255, 255, 0.18);
+      --text: #ffffff;
+      --muted: rgba(255, 255, 255, 0.68);
+      --accent: #F0EADE;
+    }
+
     html,
     body {
       width: 100%;
@@ -16,15 +26,90 @@
       font-family: Arial, sans-serif;
     }
 
-    #renderCanvas {
+    #appShell {
       width: 100%;
       height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #siteHeader {
+      height: var(--header-height);
+      min-height: var(--header-height);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 24px;
+      box-sizing: border-box;
+      background: var(--panel);
+      color: var(--text);
+      border-bottom: 1px solid var(--line);
+      z-index: 5000;
+    }
+
+    #brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+
+    #brandMark {
+      width: 12px;
+      height: 28px;
+      background: var(--accent);
+      transform: skew(-14deg);
+      display: inline-block;
+    }
+
+    #headerRight {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    #authStatus {
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 42vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .headerButton {
+      padding: 9px 13px;
+      border: 1px solid rgba(255,255,255,0.55);
+      background: #111;
+      color: white;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .headerButton.primary {
+      background: #163b16;
+    }
+
+    .headerButton.hidden {
+      display: none;
+    }
+
+    #renderCanvas {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
       display: block;
       touch-action: none;
       outline: none;
     }
 
-    #startupError {
+    #startupError,
+    #galleryToast {
       position: fixed;
       left: 24px;
       right: 24px;
@@ -39,22 +124,290 @@
       line-height: 1.45;
       white-space: pre-wrap;
     }
+
+    #galleryToast {
+      right: auto;
+      max-width: 560px;
+    }
+
+    #authModalBackdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 9000;
+    }
+
+    #authModal {
+      width: min(420px, calc(100vw - 36px));
+      padding: 22px;
+      box-sizing: border-box;
+      background: rgba(15, 17, 21, 0.98);
+      border: 1px solid rgba(255,255,255,0.32);
+      color: white;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.5);
+    }
+
+    #authModal h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+    }
+
+    .authField {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .authField input {
+      padding: 11px 12px;
+      background: #111;
+      color: white;
+      border: 1px solid rgba(255,255,255,0.38);
+      outline: none;
+    }
+
+    #authActions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    #authError {
+      display: none;
+      margin-top: 10px;
+      color: #ff8a8a;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    @media (max-width: 720px) {
+      #siteHeader {
+        padding: 0 12px;
+      }
+
+      #authStatus {
+        display: none;
+      }
+
+      .headerButton {
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+    }
   </style>
 </head>
 
 <body>
-  <canvas id="renderCanvas"></canvas>
+  <div id="appShell">
+    <header id="siteHeader">
+      <div id="brand">
+        <span id="brandMark"></span>
+        <span>Followyes Gallery</span>
+      </div>
+
+      <div id="headerRight">
+        <span id="authStatus">Galeria publiczna</span>
+        <button id="saveStateButton" class="headerButton primary hidden">Zapisz stan</button>
+        <button id="loginButton" class="headerButton">Zaloguj</button>
+        <button id="logoutButton" class="headerButton hidden">Wyloguj</button>
+      </div>
+    </header>
+
+    <canvas id="renderCanvas"></canvas>
+  </div>
+
+  <div id="authModalBackdrop">
+    <form id="authModal">
+      <h2>Logowanie edytora</h2>
+
+      <label class="authField">
+        Login / e-mail
+        <input id="authEmail" type="email" autocomplete="username" required />
+      </label>
+
+      <label class="authField">
+        Hasło
+        <input id="authPassword" type="password" autocomplete="current-password" required />
+      </label>
+
+      <div id="authError"></div>
+
+      <div id="authActions">
+        <button type="button" id="cancelLoginButton" class="headerButton">Anuluj</button>
+        <button type="submit" class="headerButton primary">Zaloguj</button>
+      </div>
+    </form>
+  </div>
+
   <div id="startupError"></div>
+  <div id="galleryToast"></div>
 
   <!-- Babylon.js -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
   <script type="module">
-    import { createScene } from "./src/Gallery_V0_7.js";
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+    import { createScene } from "./src/Gallery_V0_8.js";
+
+    const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
+
+    const supabase = createClient(
+      SUPABASE_URL,
+      SUPABASE_PUBLISHABLE_KEY
+    );
+
+    window.gallerySupabase = supabase;
 
     const canvas = document.getElementById("renderCanvas");
     const startupError = document.getElementById("startupError");
+    const galleryToast = document.getElementById("galleryToast");
+
+    const loginButton = document.getElementById("loginButton");
+    const logoutButton = document.getElementById("logoutButton");
+    const saveStateButton = document.getElementById("saveStateButton");
+    const authStatus = document.getElementById("authStatus");
+
+    const authModalBackdrop = document.getElementById("authModalBackdrop");
+    const authModal = document.getElementById("authModal");
+    const authEmail = document.getElementById("authEmail");
+    const authPassword = document.getElementById("authPassword");
+    const authError = document.getElementById("authError");
+    const cancelLoginButton = document.getElementById("cancelLoginButton");
+
+    let currentSession = null;
+
+    function showToast(message) {
+      if (!message) {
+        return;
+      }
+
+      galleryToast.textContent = message;
+      galleryToast.style.display = "block";
+
+      window.clearTimeout(showToast.timeoutId);
+      showToast.timeoutId = window.setTimeout(function () {
+        galleryToast.style.display = "none";
+      }, 3600);
+    }
+
+    function showAuthError(message) {
+      authError.textContent = message;
+      authError.style.display = message ? "block" : "none";
+    }
+
+    function openAuthModal() {
+      showAuthError("");
+      authPassword.value = "";
+      authModalBackdrop.style.display = "flex";
+      setTimeout(function () {
+        authEmail.focus();
+      }, 0);
+    }
+
+    function closeAuthModal() {
+      authModalBackdrop.style.display = "none";
+      showAuthError("");
+    }
+
+    function updateAuthUi() {
+      const isLoggedIn = !!currentSession;
+
+      window.galleryEditorAuthenticated = isLoggedIn;
+
+      loginButton.classList.toggle("hidden", isLoggedIn);
+      logoutButton.classList.toggle("hidden", !isLoggedIn);
+      saveStateButton.classList.toggle("hidden", !isLoggedIn);
+
+      authStatus.textContent = isLoggedIn
+        ? "Edytor zalogowany: " + (currentSession.user.email || "konto edytora")
+        : "Galeria publiczna";
+
+      if (window.GalleryApp) {
+        window.GalleryApp.setEditorAuthenticated(isLoggedIn);
+      }
+    }
+
+    window.addEventListener("gallery-status", function (event) {
+      showToast(event.detail && event.detail.message);
+    });
+
+    window.addEventListener("gallery-ready", function () {
+      updateAuthUi();
+    });
+
+    loginButton.addEventListener("click", function () {
+      openAuthModal();
+    });
+
+    cancelLoginButton.addEventListener("click", function () {
+      closeAuthModal();
+    });
+
+    authModalBackdrop.addEventListener("click", function (event) {
+      if (event.target === authModalBackdrop) {
+        closeAuthModal();
+      }
+    });
+
+    authModal.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      showAuthError("");
+
+      const email = authEmail.value.trim();
+      const password = authPassword.value;
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        showAuthError("Nie udało się zalogować. Sprawdź login i hasło.");
+        return;
+      }
+
+      currentSession = data.session;
+      closeAuthModal();
+      updateAuthUi();
+      showToast("Zalogowano edytora.");
+    });
+
+    logoutButton.addEventListener("click", async function () {
+      await supabase.auth.signOut();
+      currentSession = null;
+      updateAuthUi();
+      showToast("Wylogowano.");
+    });
+
+    saveStateButton.addEventListener("click", async function () {
+      if (!window.GalleryApp) {
+        showToast("Galeria jeszcze się ładuje.");
+        return;
+      }
+
+      saveStateButton.disabled = true;
+      saveStateButton.textContent = "Zapisywanie...";
+
+      try {
+        await window.GalleryApp.saveStateToSupabase();
+      } finally {
+        saveStateButton.disabled = false;
+        saveStateButton.textContent = "Zapisz stan";
+      }
+    });
+
+    const sessionResult = await supabase.auth.getSession();
+    currentSession = sessionResult.data.session || null;
+    window.galleryEditorAuthenticated = !!currentSession;
 
     const engine = new BABYLON.Engine(canvas, true, {
       preserveDrawingBuffer: true,
@@ -65,12 +418,19 @@
     try {
       const scene = createScene(engine, canvas);
 
+      updateAuthUi();
+
       engine.runRenderLoop(function () {
         scene.render();
       });
 
       window.addEventListener("resize", function () {
         engine.resize();
+      });
+
+      supabase.auth.onAuthStateChange(function (_event, session) {
+        currentSession = session;
+        updateAuthUi();
       });
     } catch (error) {
       console.error(error);

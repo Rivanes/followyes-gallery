@@ -1,49 +1,39 @@
-# Gallery V0_7
+# Followyes Gallery V0_8
 
-Minimalna strona testowa pod GitHub Pages, która uruchamia aktualną wersję galerii Babylon.js.
+Wersja strony z:
+
+- headerem,
+- logowaniem edytora przez Supabase,
+- ukrytym panelem edycji dla niezalogowanych,
+- odczytem stanu galerii z tabeli `gallery_state`,
+- zapisem stanu galerii do Supabase przyciskiem `Zapisz stan`.
 
 ## Pliki
 
-- `index.html` — główna strona z canvasem Babylon.js.
-- `src/Gallery_V0_7.js` — aktualny kod galerii.
-- `.nojekyll` — wyłącza przetwarzanie Jekyll na GitHub Pages.
+- `index.html`
+- `src/Gallery_V0_8.js`
+- `.nojekyll`
+- `package.json`
+- `README.md`
 
-## Uruchomienie lokalne
+## Supabase
 
-Najprościej uruchomić lokalny serwer HTTP w katalogu projektu:
-
-```bash
-python3 -m http.server 8000
-```
-
-Potem wejść w przeglądarce:
+Projekt używa:
 
 ```text
-http://localhost:8000
+https://bazbszvhoxmuekxahokc.supabase.co
 ```
 
-Nie otwieraj `index.html` bezpośrednio z dysku przez `file://`, bo moduły JavaScript i ładowanie assetów mogą wtedy nie działać poprawnie.
+oraz publishable key w `index.html`.
 
-## Publikacja na GitHub Pages
+Nie wolno dodawać do frontendu Secret key, Service role key ani database password.
 
-1. Utwórz nowe repozytorium na GitHub, np. `gallery`.
-2. Wrzuć zawartość tego folderu do repozytorium.
-3. Wejdź w `Settings` → `Pages`.
-4. Wybierz `Deploy from a branch`.
-5. Branch: `main`.
-6. Folder: `/root`.
-7. Zapisz ustawienia.
+## Konto edytora
 
-Po chwili strona będzie dostępna pod adresem w stylu:
+Konto edytora należy dodać ręcznie w Supabase:
 
 ```text
-https://twoj-login.github.io/gallery/
+Authentication -> Users -> Add user
 ```
 
-## Aktualny status wersji
-
-```text
-Gallery_V0_7
-```
-
-Funkcja 7 — wyrównywanie obrazów — zamknięta i w trakcie testów.
+Na stronie nie ma publicznej rejestracji.
