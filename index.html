@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gallery V0_7</title>
+
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #F0EADE;
+      font-family: Arial, sans-serif;
+    }
+
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+      outline: none;
+    }
+
+    #startupError {
+      position: fixed;
+      left: 24px;
+      right: 24px;
+      bottom: 24px;
+      z-index: 10000;
+      display: none;
+      padding: 14px 16px;
+      background: rgba(0, 0, 0, 0.84);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <div id="startupError"></div>
+
+  <!-- Babylon.js -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+
+  <script type="module">
+    import { createScene } from "./src/Gallery_V0_7.js";
+
+    const canvas = document.getElementById("renderCanvas");
+    const startupError = document.getElementById("startupError");
+
+    const engine = new BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: true,
+      stencil: true,
+      antialias: true
+    });
+
+    try {
+      const scene = createScene(engine, canvas);
+
+      engine.runRenderLoop(function () {
+        scene.render();
+      });
+
+      window.addEventListener("resize", function () {
+        engine.resize();
+      });
+    } catch (error) {
+      console.error(error);
+
+      startupError.style.display = "block";
+      startupError.textContent =
+        "Nie udało się uruchomić galerii.\n\n" +
+        (error && error.stack ? error.stack : String(error));
+    }
+  </script>
+</body>
+</html>
