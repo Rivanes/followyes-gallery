@@ -803,12 +803,13 @@
       </a>
 
       <div id="headerRight">
+        <a id="exploreBelowButton" class="headerButton" href="#project-info">About project</a>
+
         <div id="languageSwitch" aria-label="Language switch">
           <button type="button" class="langButton active" data-set-lang="en">EN</button>
           <button type="button" class="langButton" data-set-lang="pl">PL</button>
         </div>
 
-        <a id="exploreBelowButton" class="headerButton" href="#project-info">Explore below</a>
         <span id="authStatus">Public gallery</span>
         <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
         <button id="loginButton" class="headerButton">Log in</button>
@@ -926,7 +927,7 @@
 
           <div class="roadmapBoard">
             <article class="roadmapColumn">
-              <h3>W trakcie</h3>
+              <h3>Testowane</h3>
               <ul>
                 <li>Globalny WEB state i zapis stanu galerii online</li>
                 <li>Edytor Local Lights: Spot / Point, targety i grupy</li>
@@ -970,7 +971,7 @@
 
           <div class="roadmapBoard">
             <article class="roadmapColumn">
-              <h3>In progress</h3>
+              <h3>Testing</h3>
               <ul>
                 <li>Global WEB state and online gallery saving</li>
                 <li>Local Lights editor: Spot / Point, targets and groups</li>
@@ -1007,7 +1008,7 @@
 
     <footer id="siteFooter">
       <span>Followyes Gallery</span>
-      <span>Gallery_V0_10_WEB</span>
+      <span>Gallery_V0_10</span>
     </footer>
   </div>
 
@@ -1112,7 +1113,7 @@
 
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-    import { createScene } from "./src/Gallery_V0_10_WEB.js";
+    import { createScene } from "./src/Gallery_V0_10.js";
 
     const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -1146,7 +1147,7 @@
     const authPasswordLabel = document.getElementById("authPasswordLabel");
 
     let currentSession = null;
-    let currentLang = localStorage.getItem("followyes_gallery_lang") || "en";
+    let currentLang = "en";
     const uiText = {
       pl: {
         publicGallery: "Galeria publiczna",
@@ -1165,7 +1166,7 @@
         loggedOut: "Wylogowano.",
         galleryLoading: "Galeria jeszcze się ładuje.",
         startupError: "Nie udało się uruchomić galerii.",
-        exploreBelow: "Zobacz niżej"
+        exploreBelow: "O projekcie"
       },
       en: {
         publicGallery: "Public gallery",
@@ -1184,7 +1185,7 @@
         loggedOut: "Logged out.",
         galleryLoading: "The gallery is still loading.",
         startupError: "The gallery could not be started.",
-        exploreBelow: "Explore below"
+        exploreBelow: "About project"
       }
     };
 
