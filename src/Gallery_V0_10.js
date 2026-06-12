@@ -14,6 +14,7 @@
   - WEB v0_10: local browser storage nie jest glownym zapisem; save/export zwraca pelny globalny state do backendu.
   - WEB v0_10: stare lokalne zapisy Local Lights / Lighting sa wylaczone z glownego flow.
   - FIX: zapis/odczyt WEB zawsze zawiera lighting + localLights i pobiera najnowszy rekord Supabase.
+  - COMPLETE STATE: zapis obejmuje wszystkie edytowalne elementy V0_10: obrazy, sciany, postumenty, global lighting, presets, Local Lights, targets, groups i gizmo transforms.
 
   Zasada dalszej pracy:
   - localLightItems jest jednym zrodlem prawdy,
@@ -1334,7 +1335,7 @@ export const createScene = function (engineArg, canvasArg) {
                 ascending: false,
                 nullsFirst: false
             })
-            .limit(1);
+            .limit(10);
 
         if (response.error) {
             console.warn(response.error);
@@ -1343,7 +1344,18 @@ export const createScene = function (engineArg, canvasArg) {
             return false;
         }
 
-        var row = Array.isArray(response.data) ? response.data[0] : response.data;
+        var rows = Array.isArray(response.data)
+            ? response.data
+            : (response.data ? [response.data] : []);
+
+        var row = rows.find(function (candidate) {
+            return !!(
+                candidate &&
+                candidate.state &&
+                candidate.state.localLights &&
+                Array.isArray(candidate.state.localLights.lights)
+            );
+        }) || rows[0];
 
         if (
             row &&
@@ -1392,10 +1404,20 @@ export const createScene = function (engineArg, canvasArg) {
             });
 
         // Fallback dla starszej tabeli bez poprawnego constraintu na id.
-        // Jeśli upsert z onConflict nie przejdzie, zapisujemy nowy wiersz,
-        // a load i tak pobierze najnowszy po updated_at.
+        // Najpierw próbujemy wyczyścić stare rekordy id = main i wstawić jeden świeży.
+        // Jeśli polityka RLS nie pozwala na delete, robimy zwykły insert, a load i tak
+        // wybiera najnowszy rekord z pełnym state V0_10.
         if (response.error) {
             console.warn(response.error);
+
+            var deleteResponse = await client
+                .from("gallery_state")
+                .delete()
+                .eq("id", "main");
+
+            if (deleteResponse.error) {
+                console.warn(deleteResponse.error);
+            }
 
             response = await client
                 .from("gallery_state")
@@ -3819,9 +3841,45 @@ export const createScene = function (engineArg, canvasArg) {
         }) || null;
     }
 
+    function readMeshMaterialState(mesh) {
+        if (!mesh || !mesh.material) {
+            return null;
+        }
+
+        var material = mesh.material;
+
+        return {
+            name: material.name || null,
+            materialKey: getWallMaterialKey(material),
+            diffuseColor: material.diffuseColor ? color3ToHex(material.diffuseColor) : null,
+            emissiveColor: material.emissiveColor ? color3ToHex(material.emissiveColor) : null,
+            albedoColor: material.albedoColor ? color3ToHex(material.albedoColor) : null
+        };
+    }
+
+    function applyMeshMaterialState(mesh, materialState) {
+        if (!mesh || !materialState || !mesh.material) {
+            return;
+        }
+
+        var material = mesh.material;
+
+        if (materialState.diffuseColor && material.diffuseColor) {
+            material.diffuseColor = hexToColor3(materialState.diffuseColor);
+        }
+
+        if (materialState.emissiveColor && material.emissiveColor) {
+            material.emissiveColor = hexToColor3(materialState.emissiveColor);
+        }
+
+        if (materialState.albedoColor && material.albedoColor) {
+            material.albedoColor = hexToColor3(materialState.albedoColor);
+        }
+    }
+
     function readEditorStateFromScene() {
         return {
-            version: 1,
+            version: 2,
             selectedWallMaterialKey: getWallMaterialKey(selectedWallMaterial),
             walls: wallMeshes
                 .map(function (wallMesh) {
@@ -3831,7 +3889,8 @@ export const createScene = function (engineArg, canvasArg) {
 
                     return {
                         name: wallMesh.name,
-                        materialKey: getWallMaterialKey(wallMesh.material)
+                        materialKey: getWallMaterialKey(wallMesh.material),
+                        colorName: getWallMaterialKey(wallMesh.material)
                     };
                 })
                 .filter(function (wallState) {
@@ -3843,15 +3902,44 @@ export const createScene = function (engineArg, canvasArg) {
                         return null;
                     }
 
+                    var wallData = getArtworkWallDataFromRotation(artwork);
+                    var wallMesh = getWallMeshForArtwork(artwork);
+
                     return {
                         name: artwork.name,
                         index: index,
                         position: serializeVector3(artwork.position),
-                        rotation: serializeVector3(artwork.rotation)
+                        rotation: serializeVector3(artwork.rotation),
+                        scaling: serializeVector3(artwork.scaling),
+                        wall: {
+                            wallMeshName: wallMesh ? wallMesh.name : null,
+                            wallAxis: wallData ? wallData.wallAxis : null,
+                            wallValue: wallData ? wallData.wallValue : null,
+                            horizontalAxis: wallData ? wallData.horizontalAxis : null
+                        },
+                        material: readMeshMaterialState(artwork)
                     };
                 })
                 .filter(function (artworkState) {
                     return !!artworkState;
+                }),
+            spheres: artSpheres
+                .map(function (sphere, index) {
+                    if (!sphere) {
+                        return null;
+                    }
+
+                    return {
+                        name: sphere.name,
+                        index: index,
+                        position: serializeVector3(sphere.position),
+                        rotation: serializeVector3(sphere.rotation),
+                        scaling: serializeVector3(sphere.scaling),
+                        material: readMeshMaterialState(sphere)
+                    };
+                })
+                .filter(function (sphereState) {
+                    return !!sphereState;
                 })
         };
     }
@@ -3867,12 +3955,13 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (Array.isArray(editorState.walls)) {
             editorState.walls.forEach(function (wallState) {
-                if (!wallState || !wallState.materialKey) {
+                if (!wallState) {
                     return;
                 }
 
                 var wallMesh = findMeshByNameInList(wallMeshes, wallState.name);
-                var material = wallColorMaterials[wallState.materialKey];
+                var materialKey = wallState.materialKey || wallState.colorName;
+                var material = materialKey ? wallColorMaterials[materialKey] : null;
 
                 if (wallMesh && material) {
                     wallMesh.material = material;
@@ -3909,7 +3998,65 @@ export const createScene = function (engineArg, canvasArg) {
                     );
                 }
 
+                if (artworkState.scaling) {
+                    artwork.scaling.copyFrom(
+                        deserializeVector3(artworkState.scaling, artwork.scaling)
+                    );
+                }
+
+                if (artworkState.wall) {
+                    setArtworkWallMetadata(
+                        artwork,
+                        findMeshByNameInList(wallMeshes, artworkState.wall.wallMeshName),
+                        artworkState.wall.wallAxis,
+                        artworkState.wall.wallValue,
+                        artworkState.wall.horizontalAxis
+                    );
+                }
+
+                applyMeshMaterialState(artwork, artworkState.material);
+                artwork.computeWorldMatrix(true);
                 updateArtworkLight(artwork);
+            });
+        }
+
+        if (Array.isArray(editorState.spheres)) {
+            editorState.spheres.forEach(function (sphereState) {
+                if (!sphereState) {
+                    return;
+                }
+
+                var sphere = findMeshByNameInList(artSpheres, sphereState.name);
+
+                if (!sphere && sphereState.index !== undefined) {
+                    sphere = artSpheres[Number(sphereState.index)] || null;
+                }
+
+                if (!sphere) {
+                    return;
+                }
+
+                if (sphereState.position) {
+                    sphere.position.copyFrom(
+                        deserializeVector3(sphereState.position, sphere.position)
+                    );
+                }
+
+                if (sphereState.rotation) {
+                    sphere.rotation.copyFrom(
+                        deserializeVector3(sphereState.rotation, sphere.rotation)
+                    );
+                }
+
+                if (sphereState.scaling) {
+                    sphere.scaling.copyFrom(
+                        deserializeVector3(sphereState.scaling, sphere.scaling)
+                    );
+                }
+
+                applyMeshMaterialState(sphere, sphereState.material);
+                sphere.computeWorldMatrix(true);
+                updatePedestalLight(sphere);
             });
         }
 
@@ -10573,6 +10720,21 @@ export const createScene = function (engineArg, canvasArg) {
         loadStateFromSupabase: loadWebGalleryStateFromSupabase,
         getState: readWebGalleryStateFromScene,
         applyState: applyWebGalleryState,
+        serializeGalleryState: readWebGalleryStateFromScene,
+        applyGalleryState: applyWebGalleryState,
+        getStateSummary: function () {
+            var state = readWebGalleryStateFromScene();
+
+            return {
+                schema: state.schema,
+                artworks: state.editor && state.editor.artworks ? state.editor.artworks.length : 0,
+                walls: state.editor && state.editor.walls ? state.editor.walls.length : 0,
+                spheres: state.editor && state.editor.spheres ? state.editor.spheres.length : 0,
+                localLights: state.localLights && state.localLights.lights ? state.localLights.lights.length : 0,
+                localGroups: state.localLights && state.localLights.groups ? state.localLights.groups.length : 0,
+                hasLighting: !!state.lighting
+            };
+        },
         getWebStateApi: function () {
             return globalThis.FollowyesGalleryWebState;
         }
