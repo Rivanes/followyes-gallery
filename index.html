@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Followyes Gallery V0_10 WEB</title>
+  <title>Followyes Gallery V0_10</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -921,7 +921,7 @@
             <p class="sectionEyebrow">Roadmapa projektu</p>
             <h2 class="sectionTitle">Rozwój galerii.</h2>
             <p class="leadText">
-              Główne obszary rozwoju po wersji V0_10 WEB.
+              Główne obszary, nad którymi pracujemy w kolejnych etapach projektu.
             </p>
           </div>
 
@@ -929,31 +929,36 @@
             <article class="roadmapColumn">
               <h3>Testowane</h3>
               <ul>
-                <li>Globalny WEB state i zapis stanu galerii online</li>
-                <li>Edytor Local Lights: Spot / Point, targety i grupy</li>
-                <li>Ujednolicenie stylu UI paneli edytora</li>
-                <li>Dostosowanie strony do wersji mobilnej</li>
+                <li>Stabilność kolizji</li>
+                <li>Clipping i granice ścian</li>
+                <li>Proporcje obrazów</li>
+                <li>Rotacja obiektów</li>
+                <li>Precyzja ustawiania prac</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Kolejne kroki</h3>
               <ul>
+                <li>Poprawa i wymiana tekstur</li>
+                <li>Rzeźby ustawiane na podłodze</li>
+                <li>Podstawki i standy ekspozycyjne</li>
+                <li>Wiszące oraz nietypowe formaty obrazów</li>
+                <li>Okrągłe obrazy i małe plansze</li>
+                <li>Lepsze narzędzia edytora</li>
                 <li>Uzupełnienie obszaru poza galerią</li>
                 <li>Ulepszenie systemu poruszania się</li>
-                <li>Tryb publicznego oglądania bez elementów edytora</li>
-                <li>Optymalizacja wydajności dla większych ekspozycji</li>
-                <li>Lepsze punkty przywracania zapisanego stanu</li>
+                <li>Dostosowanie strony do wersji mobilnej</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Pomysły</h3>
               <ul>
-                <li>Historia stanów / restore points</li>
-                <li>Role i uprawnienia edytorów</li>
+                <li>Wędrujący NPC</li>
+                <li>Interaktywny kustosz</li>
+                <li>Koncepcja schodów</li>
                 <li>Materiały filmowe w galerii</li>
-                <li>Interaktywny kustosz lub oprowadzanie po wystawie</li>
                 <li>Rozbudowa narracji wystawy</li>
               </ul>
             </article>
@@ -965,39 +970,44 @@
             <p class="sectionEyebrow">Project roadmap</p>
             <h2 class="sectionTitle">Gallery development.</h2>
             <p class="leadText">
-              The main development areas after the V0_10 WEB version.
+              The main areas we are working on in the next stages of the project.
             </p>
           </div>
 
           <div class="roadmapBoard">
             <article class="roadmapColumn">
-              <h3>Testing</h3>
+              <h3>In testing</h3>
               <ul>
-                <li>Global WEB state and online gallery saving</li>
-                <li>Local Lights editor: Spot / Point, targets and groups</li>
-                <li>Unified UI style across editor panels</li>
-                <li>Mobile version adjustment</li>
+                <li>Collision stability</li>
+                <li>Clipping and wall boundaries</li>
+                <li>Artwork proportions</li>
+                <li>Object rotation</li>
+                <li>Placement precision</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Next steps</h3>
               <ul>
+                <li>Texture improvement and replacement</li>
+                <li>Sculptures placed on the floor</li>
+                <li>Display bases and stands</li>
+                <li>Hanging and non-standard artwork formats</li>
+                <li>Round artworks and small boards</li>
+                <li>Improved editor tools</li>
                 <li>Expanding the gallery's exterior</li>
                 <li>Movement enhancement</li>
-                <li>Public viewer mode without editor elements</li>
-                <li>Performance pass for larger exhibitions</li>
-                <li>Better restore points for saved states</li>
+                <li>Mobile version adjustment</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Ideas</h3>
               <ul>
-                <li>State history / restore points</li>
-                <li>Editor roles and permissions</li>
+                <li>Walking NPC</li>
+                <li>Interactive curator</li>
+                <li>Staircase concept</li>
                 <li>Video materials inside the gallery</li>
-                <li>Interactive curator or guided tour</li>
                 <li>Expanded exhibition narrative</li>
               </ul>
             </article>
@@ -1147,7 +1157,7 @@
     const authPasswordLabel = document.getElementById("authPasswordLabel");
 
     let currentSession = null;
-    let currentLang = "en";
+    let currentLang = localStorage.getItem("followyes_gallery_lang") || "en";
     const uiText = {
       pl: {
         publicGallery: "Galeria publiczna",

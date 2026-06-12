@@ -1,54 +1,24 @@
-# Followyes Gallery V0_10 WEB
+# Followyes Gallery V0_10
 
-Wersja strony zgodna ze starą strukturą repozytorium V0_8, ale z aktualnym silnikiem `Gallery_V0_10_WEB.js`.
+Paczka pod GitHub Pages zgodna ze starą strukturą repozytorium V0_8.
 
-## Pliki
+## Struktura
 
 - `index.html`
-- `src/Gallery_V0_10_WEB.js`
-- `src/Gallery_V0_8.js` i `src/Gallery_V0_7.js` zostają jako archiwalne wersje referencyjne
+- `src/Gallery_V0_10.js`
+- `src/Gallery_V0_10_WEB.js` — alias kompatybilności
+- `src/Gallery_V0_8.js` — archiwalna wersja referencyjna
+- `src/Gallery_V0_7.js` — archiwalna wersja referencyjna, jeśli była w repo
 - `.nojekyll`
 - `package.json`
-- `README.md`
 
-## Co zmieniło się względem V0_8
+## Zmiany
 
-- strona domyślnie startuje po angielsku,
-- header ma przycisk `Explore below`, który przewija do sekcji pod galerią,
-- roadmapa jest dalej w `index.html`,
-- `index.html` importuje `./src/Gallery_V0_10_WEB.js`,
-- zapis online używa pełnego `FollowyesGalleryWebState`,
-- zapisywane są też nowe elementy V0_10: global lighting, Local Lights, targets, groups i transformy gizmo,
-- lokalny zapis stanu galerii nie jest głównym flow wersji WEB.
-
-## Supabase
-
-Projekt używa tabeli:
-
-```text
-public.gallery_state
-```
-
-Rekord główny:
-
-```text
-id = main
-```
-
-Kolumna ze stanem:
-
-```text
-state
-```
-
-Nie wolno dodawać do frontendu Secret key, Service role key ani database password.
-
-## Konto edytora
-
-Konto edytora należy dodać ręcznie w Supabase:
-
-```text
-Authentication -> Users -> Add user
-```
-
-Na stronie nie ma publicznej rejestracji.
+- Domyślny język strony: angielski.
+- Przełącznik PL / EN działa dalej i zapisuje wybór w localStorage.
+- Roadmapa została przywrócona do starego układu i dopisano tylko:
+  - Uzupełnienie obszaru poza galerią / Expanding the gallery's exterior
+  - Ulepszenie systemu poruszania się / Movement enhancement
+  - Dostosowanie strony do wersji mobilnej / Mobile version adjustment
+- Silnik galerii to aktualny V0_10 z poprawką zapisu świateł.
+- Zapis WEB obejmuje global lighting oraz Local Lights.
