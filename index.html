@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="pl" data-page-lang="pl">
+<html lang="en" data-page-lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Followyes Gallery V0_8</title>
+  <title>Followyes Gallery V0_10 WEB</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -145,6 +145,20 @@
       font-family: var(--font);
       font-weight: 700;
       font-size: 13px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+    }
+
+    #exploreBelowButton {
+      border-color: rgba(240, 234, 222, 0.55);
+      background: rgba(240, 234, 222, 0.08);
+    }
+
+    body:not(.is-editor-authenticated) #editModeButton {
+      display: none !important;
     }
 
     .headerButton.primary {
@@ -783,30 +797,31 @@
 
   <div id="appShell">
     <header id="siteHeader">
-      <a id="brand" href="#top" aria-label="Followyes Gallery, wróć na górę strony">
+      <a id="brand" href="#top" aria-label="Followyes Gallery, back to top">
         <span id="brandMark"></span>
         <span>Followyes Gallery</span>
       </a>
 
       <div id="headerRight">
         <div id="languageSwitch" aria-label="Language switch">
-          <button type="button" class="langButton active" data-set-lang="pl">PL</button>
-          <button type="button" class="langButton" data-set-lang="en">EN</button>
+          <button type="button" class="langButton active" data-set-lang="en">EN</button>
+          <button type="button" class="langButton" data-set-lang="pl">PL</button>
         </div>
 
-        <span id="authStatus">Galeria publiczna</span>
-        <button id="saveStateButton" class="headerButton primary hidden">Zapisz stan</button>
-        <button id="loginButton" class="headerButton">Zaloguj</button>
-        <button id="logoutButton" class="headerButton hidden">Wyloguj</button>
+        <a id="exploreBelowButton" class="headerButton" href="#project-info">Explore below</a>
+        <span id="authStatus">Public gallery</span>
+        <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
+        <button id="loginButton" class="headerButton">Log in</button>
+        <button id="logoutButton" class="headerButton hidden">Log out</button>
       </div>
     </header>
 
-    <section id="gallerySection" aria-label="Interaktywna galeria 3D">
+    <section id="gallerySection" aria-label="Interactive 3D gallery">
       <canvas id="renderCanvas"></canvas>
     </section>
 
     <main id="siteContent">
-      <section class="contentSection introSection">
+      <section id="project-info" class="contentSection introSection">
         <div class="languageBlock" data-lang="pl">
           <p class="sectionEyebrow">Wersja robocza</p>
           <h1 class="heroTitle">Testowa galeria 3D online.</h1>
@@ -905,41 +920,39 @@
             <p class="sectionEyebrow">Roadmapa projektu</p>
             <h2 class="sectionTitle">Rozwój galerii.</h2>
             <p class="leadText">
-              Główne obszary, nad którymi pracujemy w kolejnych etapach projektu.
+              Główne obszary rozwoju po wersji V0_10 WEB.
             </p>
           </div>
 
           <div class="roadmapBoard">
             <article class="roadmapColumn">
-              <h3>Testowane</h3>
+              <h3>W trakcie</h3>
               <ul>
-                <li>Stabilność kolizji</li>
-                <li>Clipping i granice ścian</li>
-                <li>Proporcje obrazów</li>
-                <li>Rotacja obiektów</li>
-                <li>Precyzja ustawiania prac</li>
+                <li>Globalny WEB state i zapis stanu galerii online</li>
+                <li>Edytor Local Lights: Spot / Point, targety i grupy</li>
+                <li>Ujednolicenie stylu UI paneli edytora</li>
+                <li>Dostosowanie strony do wersji mobilnej</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Kolejne kroki</h3>
               <ul>
-                <li>Poprawa i wymiana tekstur</li>
-                <li>Rzeźby ustawiane na podłodze</li>
-                <li>Podstawki i standy ekspozycyjne</li>
-                <li>Wiszące oraz nietypowe formaty obrazów</li>
-                <li>Okrągłe obrazy i małe plansze</li>
-                <li>Lepsze narzędzia edytora</li>
+                <li>Uzupełnienie obszaru poza galerią</li>
+                <li>Ulepszenie systemu poruszania się</li>
+                <li>Tryb publicznego oglądania bez elementów edytora</li>
+                <li>Optymalizacja wydajności dla większych ekspozycji</li>
+                <li>Lepsze punkty przywracania zapisanego stanu</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Pomysły</h3>
               <ul>
-                <li>Wędrujący NPC</li>
-                <li>Interaktywny kustosz</li>
-                <li>Koncepcja schodów</li>
+                <li>Historia stanów / restore points</li>
+                <li>Role i uprawnienia edytorów</li>
                 <li>Materiały filmowe w galerii</li>
+                <li>Interaktywny kustosz lub oprowadzanie po wystawie</li>
                 <li>Rozbudowa narracji wystawy</li>
               </ul>
             </article>
@@ -951,41 +964,39 @@
             <p class="sectionEyebrow">Project roadmap</p>
             <h2 class="sectionTitle">Gallery development.</h2>
             <p class="leadText">
-              The main areas we are working on in the next stages of the project.
+              The main development areas after the V0_10 WEB version.
             </p>
           </div>
 
           <div class="roadmapBoard">
             <article class="roadmapColumn">
-              <h3>In testing</h3>
+              <h3>In progress</h3>
               <ul>
-                <li>Collision stability</li>
-                <li>Clipping and wall boundaries</li>
-                <li>Artwork proportions</li>
-                <li>Object rotation</li>
-                <li>Placement precision</li>
+                <li>Global WEB state and online gallery saving</li>
+                <li>Local Lights editor: Spot / Point, targets and groups</li>
+                <li>Unified UI style across editor panels</li>
+                <li>Mobile version adjustment</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Next steps</h3>
               <ul>
-                <li>Texture improvement and replacement</li>
-                <li>Sculptures placed on the floor</li>
-                <li>Display bases and stands</li>
-                <li>Hanging and non-standard artwork formats</li>
-                <li>Round artworks and small boards</li>
-                <li>Improved editor tools</li>
+                <li>Expanding the gallery's exterior</li>
+                <li>Movement enhancement</li>
+                <li>Public viewer mode without editor elements</li>
+                <li>Performance pass for larger exhibitions</li>
+                <li>Better restore points for saved states</li>
               </ul>
             </article>
 
             <article class="roadmapColumn">
               <h3>Ideas</h3>
               <ul>
-                <li>Walking NPC</li>
-                <li>Interactive curator</li>
-                <li>Staircase concept</li>
+                <li>State history / restore points</li>
+                <li>Editor roles and permissions</li>
                 <li>Video materials inside the gallery</li>
+                <li>Interactive curator or guided tour</li>
                 <li>Expanded exhibition narrative</li>
               </ul>
             </article>
@@ -996,7 +1007,7 @@
 
     <footer id="siteFooter">
       <span>Followyes Gallery</span>
-      <span>Gallery_V0_8</span>
+      <span>Gallery_V0_10_WEB</span>
     </footer>
   </div>
 
@@ -1101,7 +1112,7 @@
 
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-    import { createScene } from "./src/Gallery_V0_8.js";
+    import { createScene } from "./src/Gallery_V0_10_WEB.js";
 
     const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -1120,6 +1131,7 @@
     const loginButton = document.getElementById("loginButton");
     const logoutButton = document.getElementById("logoutButton");
     const saveStateButton = document.getElementById("saveStateButton");
+    const exploreBelowButton = document.getElementById("exploreBelowButton");
     const authStatus = document.getElementById("authStatus");
 
     const authModalBackdrop = document.getElementById("authModalBackdrop");
@@ -1134,7 +1146,7 @@
     const authPasswordLabel = document.getElementById("authPasswordLabel");
 
     let currentSession = null;
-    let currentLang = localStorage.getItem("followyes_gallery_lang") || "pl";
+    let currentLang = localStorage.getItem("followyes_gallery_lang") || "en";
     const uiText = {
       pl: {
         publicGallery: "Galeria publiczna",
@@ -1152,7 +1164,8 @@
         loggedIn: "Zalogowano edytora.",
         loggedOut: "Wylogowano.",
         galleryLoading: "Galeria jeszcze się ładuje.",
-        startupError: "Nie udało się uruchomić galerii."
+        startupError: "Nie udało się uruchomić galerii.",
+        exploreBelow: "Zobacz niżej"
       },
       en: {
         publicGallery: "Public gallery",
@@ -1170,12 +1183,13 @@
         loggedIn: "Editor logged in.",
         loggedOut: "Logged out.",
         galleryLoading: "The gallery is still loading.",
-        startupError: "The gallery could not be started."
+        startupError: "The gallery could not be started.",
+        exploreBelow: "Explore below"
       }
     };
 
     function t(key) {
-      return uiText[currentLang][key] || uiText.pl[key] || key;
+      return uiText[currentLang][key] || uiText.en[key] || uiText.pl[key] || key;
     }
 
     function applyLanguage(lang) {
@@ -1191,6 +1205,7 @@
       loginButton.textContent = t("login");
       logoutButton.textContent = t("logout");
       saveStateButton.textContent = t("save");
+      exploreBelowButton.textContent = t("exploreBelow");
       authModalTitle.textContent = t("editorLogin");
       authEmailLabel.textContent = t("email");
       authPasswordLabel.textContent = t("password");
