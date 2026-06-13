@@ -1,25 +1,47 @@
 # Followyes Gallery V0_10
 
-Wersja z jednym plikiem silnika: `src/Gallery_V0_10.js`.
+Wersja WEB z jednym plikiem silnika: `src/Gallery_V0_10.js`.
 
-## Zakres tej paczki
+## Model zapisu
 
-Pierwszy etap naprawy zapisu WEB dla świateł:
+Tak jak w działającej wersji V0_8, strona używa:
 
-- zapis pozycji istniejących lamp wygenerowanych przy obrazach/rzeźbach,
-- zapis pozycji nowo dodanych Point Light,
-- zapis pozycji nowo dodanych Spot Light,
-- osobna warstwa `localLightPositions` w WEB state,
-- restore pozycji wykonywany po odtworzeniu Local Lights i dodatkowo z opóźnieniem, żeby nie został nadpisany przez automatyczne ustawianie lamp ekspozycji.
+- `window.GalleryApp.saveStateToSupabase()`
+- `window.GalleryApp.loadStateFromSupabase()`
+- tabela: `gallery_state`
+- rekord: `id = main`
+- kolumna: `state`
+
+## Co zapisuje V0_10
+
+- ściany i kolory ścian,
+- obrazy: pozycja, rotacja, skala, metadata ściany, materiał,
+- postumenty / punkty obserwacji,
+- global lighting,
+- lighting presets,
+- Local Lights:
+  - Spot / Point,
+  - lampy ręczne,
+  - lampy wygenerowane przy obrazach i rzeźbach,
+  - pozycja,
+  - rotacja,
+  - kierunek Spot,
+  - enabled,
+  - color,
+  - intensity,
+  - range,
+  - Spot Angle,
+  - Spot Blend,
+  - targets,
+  - groups,
+  - manualTransformOverride.
 
 ## Test
 
-Po wrzuceniu na GitHub:
-
 1. Zaloguj się jako edytor.
-2. Przesuń lampę istniejącą przy obrazie.
-3. Dodaj nowy Point Light i Spot Light.
-4. Przesuń je.
-5. Kliknij `Save state`.
-6. Odśwież stronę jako publiczny użytkownik.
-7. Lampy powinny wrócić do zapisanych pozycji.
+2. Zmień ustawienia światła głównego.
+3. Dodaj Spot i Point.
+4. Zmień pozycje i parametry lamp.
+5. Zmień targety i grupy.
+6. Kliknij `Save state`.
+7. Odśwież stronę jako publiczny użytkownik.
