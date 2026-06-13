@@ -1,35 +1,25 @@
 # Followyes Gallery V0_10
 
-Paczka pod GitHub Pages zgodna ze starą strukturą repozytorium V0_8.
+Wersja z jednym plikiem silnika: `src/Gallery_V0_10.js`.
 
-## Najważniejsze
+## Zakres tej paczki
 
-- `index.html` importuje `src/Gallery_V0_10.js`.
-- `src/Gallery_V0_10_WEB.js` jest zostawiony jako alias kompatybilności.
-- Domyślny język strony to EN, ale przełącznik PL / EN działa i zapamiętuje wybór.
-- Roadmapa zachowuje stary układ, dopisano tylko 3 nowe punkty.
-- Zapis WEB zapisuje pełny stan V0_10:
-  - ściany i kolory ścian,
-  - obrazy: pozycja, rotacja, skala, metadata ściany,
-  - postumenty / punkty obserwacji,
-  - global lighting,
-  - lighting presets,
-  - wszystkie Local Lights: Spot / Point,
-  - nowe lampy, pozycje, rotacje, kierunki,
-  - enabled, color, intensity, range,
-  - Spot Angle, Spot Blend,
-  - targets: Floor / Walls / Ceiling / Artworks / Sculptures / Props,
-  - groups i active group,
-  - manualTransformOverride / gizmo transforms.
+Pierwszy etap naprawy zapisu WEB dla świateł:
 
-## Test po wrzuceniu
+- zapis pozycji istniejących lamp wygenerowanych przy obrazach/rzeźbach,
+- zapis pozycji nowo dodanych Point Light,
+- zapis pozycji nowo dodanych Spot Light,
+- osobna warstwa `localLightPositions` w WEB state,
+- restore pozycji wykonywany po odtworzeniu Local Lights i dodatkowo z opóźnieniem, żeby nie został nadpisany przez automatyczne ustawianie lamp ekspozycji.
+
+## Test
+
+Po wrzuceniu na GitHub:
 
 1. Zaloguj się jako edytor.
-2. Zmień globalne światło.
-3. Dodaj Spot i Point.
-4. Przesuń / obróć lampę gizmo.
-5. Zmień kolor, intensity, range, angle, blend i targety.
-6. Dodaj lampy do grupy.
-7. Kliknij `Save state`.
-8. Odśwież stronę jako zwykły użytkownik.
-9. Wczytana wersja powinna zawierać ten sam układ i światła.
+2. Przesuń lampę istniejącą przy obrazie.
+3. Dodaj nowy Point Light i Spot Light.
+4. Przesuń je.
+5. Kliknij `Save state`.
+6. Odśwież stronę jako publiczny użytkownik.
+7. Lampy powinny wrócić do zapisanych pozycji.

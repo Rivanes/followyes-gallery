@@ -15,6 +15,7 @@
   - WEB v0_10: stare lokalne zapisy Local Lights / Lighting sa wylaczone z glownego flow.
   - FIX: zapis/odczyt WEB zawsze zawiera lighting + localLights i pobiera najnowszy rekord Supabase.
   - COMPLETE STATE: zapis obejmuje wszystkie edytowalne elementy V0_10: obrazy, sciany, postumenty, global lighting, presets, Local Lights, targets, groups i gizmo transforms.
+  - STEP 1 SAVE FIX: osobna warstwa localLightPositions zapisuje i odtwarza pozycje istniejących i nowych lamp Spot/Point.
 
   Zasada dalszej pracy:
   - localLightItems jest jednym zrodlem prawdy,
@@ -1312,6 +1313,12 @@ export const createScene = function (engineArg, canvasArg) {
         ) {
             state.localLights = readLocalLightStateFromScene();
         }
+
+        // STEP 1 FIX:
+        // Osobny snapshot pozycji lamp. Dzięki temu nawet jeśli część parametrów
+        // Local Lights zmieni się później, pozycje istniejących i nowych Spot/Point
+        // mają własną warstwę restore.
+        state.localLightPositions = readLocalLightPositionStateFromScene();
 
         return state;
     }
@@ -3411,6 +3418,9 @@ export const createScene = function (engineArg, canvasArg) {
             return null;
         }
 
+        var lightPosition = item.light.position || item.markerMesh.position;
+        var markerPosition = item.markerMesh.position || lightPosition;
+
         var state = {
             id: item.id,
             name: item.name,
@@ -3423,7 +3433,14 @@ export const createScene = function (engineArg, canvasArg) {
             intensity: Number(item.light.intensity) || 0,
             range: Number(item.light.range) || 0,
             targetOptions: normalizeLocalTargetOptions(item.targetOptions),
-            position: serializeVector3(item.markerMesh.position),
+
+            // STEP 1 FIX:
+            // Pozycja zapisywana jest bezpośrednio z samego światła oraz z markera.
+            // Dotychczas główne pole position opierało się tylko na markerMesh.position.
+            // Dla WEB restore trzymamy oba źródła, żeby nie gubić położeń Spot/Point.
+            position: serializeVector3(lightPosition),
+            lightPosition: serializeVector3(lightPosition),
+            markerPosition: serializeVector3(markerPosition),
             rotation: serializeVector3(item.markerMesh.rotation)
         };
 
@@ -3436,19 +3453,56 @@ export const createScene = function (engineArg, canvasArg) {
         return state;
     }
 
-    function readLocalLightStateFromScene() {
+    function readLocalLightPositionStateFromScene() {
         return {
-            version: 9,
-            activeGroupIndex: activeLocalGroupIndex,
-            createCounter: localLightCreateCounter,
-            groups: cloneLocalLightGroupsForState(),
+            version: 1,
+            savedAt: new Date().toISOString(),
             lights: localLightItems
                 .map(function (item) {
-                    return readLocalLightItemState(item);
+                    var baseState = readLocalLightItemState(item);
+
+                    if (!baseState) {
+                        return null;
+                    }
+
+                    return {
+                        id: baseState.id,
+                        name: baseState.name,
+                        type: baseState.type,
+                        hasOwner: baseState.hasOwner,
+                        ownerMeshName: baseState.ownerMeshName,
+                        manualTransformOverride: baseState.manualTransformOverride,
+
+                        // Główne dane tego etapu:
+                        position: baseState.position,
+                        lightPosition: baseState.lightPosition,
+                        markerPosition: baseState.markerPosition,
+                        rotation: baseState.rotation,
+                        direction: baseState.direction || null
+                    };
                 })
                 .filter(function (state) {
                     return !!state;
                 })
+        };
+    }
+
+    function readLocalLightStateFromScene() {
+        var lights = localLightItems
+            .map(function (item) {
+                return readLocalLightItemState(item);
+            })
+            .filter(function (state) {
+                return !!state;
+            });
+
+        return {
+            version: 10,
+            activeGroupIndex: activeLocalGroupIndex,
+            createCounter: localLightCreateCounter,
+            groups: cloneLocalLightGroupsForState(),
+            lights: lights,
+            positionState: readLocalLightPositionStateFromScene()
         };
     }
 
@@ -3497,7 +3551,18 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         item.name = savedState.name || item.name;
-        item.manualTransformOverride = !!savedState.manualTransformOverride;
+
+        // STEP 1 FIX:
+        // Jeśli state zawiera zapisaną pozycję lampy, traktujemy ją jako pozycję nadrzędną.
+        // Dotyczy również lamp wygenerowanych przy obrazach/rzeźbach, żeby updateDisplaySpotLight()
+        // nie nadpisał ich po odświeżeniu na pozycję domyślną.
+        item.manualTransformOverride = !!(
+            savedState.manualTransformOverride ||
+            savedState.position ||
+            savedState.lightPosition ||
+            savedState.markerPosition
+        );
+
         item.targetOptions = normalizeLocalTargetOptions(savedState.targetOptions);
 
         if (item.light.setEnabled) {
@@ -3517,10 +3582,22 @@ export const createScene = function (engineArg, canvasArg) {
             item.light.range = Math.max(0.1, Number(savedState.range));
         }
 
-        if (savedState.position) {
-            var position = deserializeVector3(savedState.position, item.markerMesh.position);
-            item.markerMesh.position.copyFrom(position);
-            item.light.position.copyFrom(position);
+        var savedLightPosition = savedState.lightPosition || savedState.position || savedState.markerPosition;
+        var savedMarkerPosition = savedState.markerPosition || savedState.position || savedState.lightPosition;
+
+        if (savedLightPosition || savedMarkerPosition) {
+            var lightPosition = deserializeVector3(
+                savedLightPosition || savedMarkerPosition,
+                item.light.position || item.markerMesh.position
+            );
+
+            var markerPosition = deserializeVector3(
+                savedMarkerPosition || savedLightPosition,
+                item.markerMesh.position || item.light.position
+            );
+
+            item.light.position.copyFrom(lightPosition);
+            item.markerMesh.position.copyFrom(markerPosition);
         }
 
         if (savedState.rotation) {
@@ -3577,6 +3654,120 @@ export const createScene = function (engineArg, canvasArg) {
         updateLocalLightHelper(item);
         updateLocalLightVisualState(item);
         requestLocalSpotShadowRefresh(item, true);
+    }
+
+    function applyLocalLightPositionState(positionState) {
+        if (!positionState || !Array.isArray(positionState.lights)) {
+            return;
+        }
+
+        positionState.lights.forEach(function (savedState) {
+            if (!savedState || !savedState.id) {
+                return;
+            }
+
+            var item = getLocalLightItemById(savedState.id);
+
+            if (!item && !savedState.hasOwner) {
+                // Manualne Spot/Point mogą jeszcze nie istnieć, więc odtwarzamy je z zapisu.
+                item = createMissingLocalLightFromState({
+                    id: savedState.id,
+                    name: savedState.name,
+                    type: savedState.type,
+                    position: savedState.position || savedState.lightPosition || savedState.markerPosition,
+                    lightPosition: savedState.lightPosition || savedState.position,
+                    markerPosition: savedState.markerPosition || savedState.position,
+                    rotation: savedState.rotation,
+                    direction: savedState.direction,
+                    manualTransformOverride: true,
+                    targetOptions: getDefaultLocalTargetOptions()
+                });
+            }
+
+            if (!item || !item.light || !item.markerMesh) {
+                return;
+            }
+
+            item.manualTransformOverride = true;
+
+            var lightPositionState = savedState.lightPosition || savedState.position || savedState.markerPosition;
+            var markerPositionState = savedState.markerPosition || savedState.position || savedState.lightPosition;
+
+            if (lightPositionState) {
+                item.light.position.copyFrom(
+                    deserializeVector3(lightPositionState, item.light.position)
+                );
+            }
+
+            if (markerPositionState) {
+                item.markerMesh.position.copyFrom(
+                    deserializeVector3(markerPositionState, item.markerMesh.position)
+                );
+            }
+
+            if (savedState.rotation) {
+                item.markerMesh.rotation.copyFrom(
+                    deserializeVector3(savedState.rotation, item.markerMesh.rotation)
+                );
+            }
+
+            if (item.type === "spot") {
+                if (savedState.direction) {
+                    item.light.direction.copyFrom(
+                        deserializeVector3(savedState.direction, item.light.direction)
+                    );
+
+                    if (item.light.direction.length() === 0) {
+                        item.light.direction.copyFrom(getSpotDirectionFromMarker(item));
+                    } else {
+                        item.light.direction.normalize();
+                    }
+                } else {
+                    item.light.direction.copyFrom(getSpotDirectionFromMarker(item));
+                }
+
+                if (isFinite(item.light.range) && item.light.range > 0) {
+                    item.light.shadowMaxZ = item.light.range + 2;
+                    item.helperLength = item.light.range;
+                    item.helperMaxRadius = item.light.range;
+                }
+
+                item.helperSoftness = getSpotBlendFromExponent(item.light.exponent);
+            }
+
+            if (item.type === "point") {
+                if (isFinite(item.light.range) && item.light.range > 0) {
+                    item.helperMaxRadius = item.light.range;
+                }
+
+                disableLocalPointLightShadow(item);
+            }
+
+            applyCommonLocalLightTargets(item);
+            updateLocalLightHelper(item);
+            updateLocalLightVisualState(item);
+            requestLocalSpotShadowRefresh(item, true);
+        });
+
+        updateLocalLightsUi();
+    }
+
+    function reapplyLocalLightPositionState(positionState) {
+        if (!positionState || !Array.isArray(positionState.lights)) {
+            return;
+        }
+
+        applyLocalLightPositionState(positionState);
+
+        // Bezpiecznik na przypadek, gdy lampy przy obrazach/rzeźbach zostaną jeszcze raz
+        // przeliczone przez updateArtworkLight/updatePedestalLight po wczytaniu.
+        setTimeout(function () {
+            applyLocalLightPositionState(positionState);
+        }, 120);
+
+        setTimeout(function () {
+            applyLocalLightPositionState(positionState);
+        }, 450);
     }
 
     function createRestoredManualSpotLight(savedState) {
@@ -3784,6 +3975,16 @@ export const createScene = function (engineArg, canvasArg) {
             });
 
             restoreLocalLightGroupsFromState(localLightState);
+
+            if (localLightState.positionState) {
+                reapplyLocalLightPositionState(localLightState.positionState);
+            } else {
+                reapplyLocalLightPositionState({
+                    version: 1,
+                    lights: localLightState.lights
+                });
+            }
+
             clearLocalLightSelection();
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
@@ -4104,6 +4305,12 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (webState.localLights) {
             restoreLocalLightState(webState.localLights);
+        }
+
+        if (webState.localLightPositions) {
+            reapplyLocalLightPositionState(webState.localLightPositions);
+        } else if (webState.localLights && webState.localLights.positionState) {
+            reapplyLocalLightPositionState(webState.localLights.positionState);
         }
 
         updateLocalLightsUi();
@@ -10731,6 +10938,7 @@ export const createScene = function (engineArg, canvasArg) {
                 walls: state.editor && state.editor.walls ? state.editor.walls.length : 0,
                 spheres: state.editor && state.editor.spheres ? state.editor.spheres.length : 0,
                 localLights: state.localLights && state.localLights.lights ? state.localLights.lights.length : 0,
+                localLightPositions: state.localLightPositions && state.localLightPositions.lights ? state.localLightPositions.lights.length : 0,
                 localGroups: state.localLights && state.localLights.groups ? state.localLights.groups.length : 0,
                 hasLighting: !!state.lighting
             };
