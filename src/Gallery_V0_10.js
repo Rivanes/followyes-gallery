@@ -1869,6 +1869,7 @@ export const createScene = function (engineArg, canvasArg) {
             return false;
         }
 
+        var previousImageState = getArtworkImageState(artwork);
         var storagePath = createArtworkStoragePath(artwork, file);
         notifyGalleryStatus("Wgrywam obraz...");
 
@@ -1921,12 +1922,86 @@ export const createScene = function (engineArg, canvasArg) {
             uploadedAt: new Date().toISOString()
         });
 
+        var previousDeleteState = getArtworkStorageDeleteState(previousImageState);
+
+        if (
+            previousDeleteState &&
+            previousDeleteState.imagePath &&
+            previousDeleteState.imagePath !== storagePath
+        ) {
+            deleteArtworkImageFromSupabase(previousDeleteState)
+                .then(function (removedOldFile) {
+                    if (!removedOldFile) {
+                        console.warn("Previous artwork image was not removed from Storage:", previousDeleteState);
+                    }
+                })
+                .catch(function (error) {
+                    console.warn("Previous artwork image delete warning:", error);
+                });
+        }
+
         notifyGalleryStatus("Wgrano obraz. Zapisz stan galerii, aby zachowac zmiane.");
         return true;
     }
 
+    function getArtworkStoragePathFromPublicUrl(publicUrl, bucketName) {
+        if (!publicUrl) {
+            return "";
+        }
+
+        var safeBucketName = bucketName || galleryArtworkStorageBucket;
+        var urlText = String(publicUrl);
+        var marker = "/storage/v1/object/public/" + safeBucketName + "/";
+
+        var markerIndex = urlText.indexOf(marker);
+
+        if (markerIndex === -1) {
+            return "";
+        }
+
+        var pathWithQuery = urlText.slice(markerIndex + marker.length);
+        var queryIndex = pathWithQuery.indexOf("?");
+
+        if (queryIndex !== -1) {
+            pathWithQuery = pathWithQuery.slice(0, queryIndex);
+        }
+
+        try {
+            return decodeURIComponent(pathWithQuery);
+        } catch (error) {
+            return pathWithQuery;
+        }
+    }
+
+    function getArtworkStorageDeleteState(imageState) {
+        if (!imageState) {
+            return null;
+        }
+
+        var bucketName = imageState.storageBucket || galleryArtworkStorageBucket;
+        var imagePath = imageState.imagePath || "";
+
+        if (!imagePath && (imageState.imageUrl || imageState.publicUrl)) {
+            imagePath = getArtworkStoragePathFromPublicUrl(
+                imageState.imageUrl || imageState.publicUrl,
+                bucketName
+            );
+        }
+
+        if (!imagePath) {
+            return null;
+        }
+
+        return {
+            imagePath: imagePath,
+            storageBucket: bucketName
+        };
+    }
+
     async function deleteArtworkImageFromSupabase(imageState) {
-        if (!imageState || !imageState.imagePath) {
+        var deleteState = getArtworkStorageDeleteState(imageState);
+
+        if (!deleteState || !deleteState.imagePath) {
             return true;
         }
 
@@ -1939,15 +2014,43 @@ export const createScene = function (engineArg, canvasArg) {
 
         var removeResponse = await client
             .storage
-            .from(imageState.storageBucket || galleryArtworkStorageBucket)
-            .remove([imageState.imagePath]);
+            .from(deleteState.storageBucket)
+            .remove([deleteState.imagePath]);
 
         if (removeResponse.error) {
-            console.warn(removeResponse.error);
+            console.warn("Artwork Storage delete error:", {
+                bucket: deleteState.storageBucket,
+                path: deleteState.imagePath,
+                originalState: imageState,
+                error: removeResponse.error
+            });
             notifyGalleryStatus("Nie udalo sie usunac pliku ze Storage.");
             return false;
         }
 
+        console.info("Artwork Storage file removed:", {
+            bucket: deleteState.storageBucket,
+            path: deleteState.imagePath,
+            data: removeResponse.data || null
+        });
+
+        return true;
+    }
+
+    async function removeArtworkImageWithStorageDelete(artwork) {
+        if (!artwork) {
+            return false;
+        }
+
+        var imageState = getArtworkImageState(artwork);
+        var removedFromStorage = await deleteArtworkImageFromSupabase(imageState);
+
+        if (!removedFromStorage) {
+            return false;
+        }
+
+        removeArtworkImageFromMesh(artwork, true);
+        updateArtworkTransformUi();
         return true;
     }
 
@@ -3992,20 +4095,25 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        var imageState = getArtworkImageState(artwork);
+        if (!getArtworkImageState(artwork)) {
+            removeArtworkImageFromMesh(artwork, true);
+            updateArtworkTransformUi();
+            notifyGalleryStatus("Obraz jest juz pusty.");
+            return;
+        }
 
-        deleteArtworkImageFromSupabase(imageState)
-            .then(function (removedFromStorage) {
-                if (!removedFromStorage) {
+        notifyGalleryStatus("Usuwam obraz...");
+
+        removeArtworkImageWithStorageDelete(artwork)
+            .then(function (removedImage) {
+                if (!removedImage) {
                     return;
                 }
 
-                removeArtworkImageFromMesh(artwork, true);
-                updateArtworkTransformUi();
-                notifyGalleryStatus("Usunieto obraz. Zapisz stan galerii, aby zachowac zmiane.");
+                notifyGalleryStatus("Usunieto obraz i plik ze Storage. Zapisz stan galerii, aby zachowac zmiane.");
             })
             .catch(function (error) {
-                console.warn(error);
+                console.warn("Artwork remove error:", error);
                 notifyGalleryStatus("Blad usuwania obrazu.");
             });
     };
@@ -12401,7 +12509,7 @@ export const createScene = function (engineArg, canvasArg) {
                 ? artworks[artworkNameOrIndex]
                 : getArtworkByName(artworkNameOrIndex);
 
-            return removeArtworkImageFromMesh(artwork, true);
+            return removeArtworkImageWithStorageDelete(artwork);
         },
         getArtworkImageState: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
