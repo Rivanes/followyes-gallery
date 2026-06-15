@@ -70,3 +70,11 @@ This package adds the first stage of real artwork image support:
 
 Included SQL reference:
 - `supabase_gallery_state_and_artwork_storage_STAGE1.sql`
+
+
+## Upload fix
+
+This version changes artwork upload from `upsert: true` to `upsert: false`.
+Artwork paths already include `Date.now()`, so every upload gets a unique path.
+
+It also shows the Supabase Storage error message in the gallery toast and logs upload details to the browser console.

@@ -1559,13 +1559,25 @@ export const createScene = function (engineArg, canvasArg) {
             .from(galleryArtworkStorageBucket)
             .upload(storagePath, file, {
                 cacheControl: "3600",
-                upsert: true,
+                upsert: false,
                 contentType: file.type
             });
 
         if (uploadResponse.error) {
-            console.warn(uploadResponse.error);
-            notifyGalleryStatus("Nie udalo sie wgrac obrazu do Supabase Storage.");
+            var uploadErrorMessage = uploadResponse.error.message ||
+                uploadResponse.error.error_description ||
+                uploadResponse.error.name ||
+                "Nieznany blad Supabase Storage";
+
+            console.warn("Artwork upload error:", {
+                bucket: galleryArtworkStorageBucket,
+                path: storagePath,
+                mimeType: file.type,
+                size: file.size,
+                error: uploadResponse.error
+            });
+
+            notifyGalleryStatus("Upload nieudany: " + uploadErrorMessage);
             return false;
         }
 
