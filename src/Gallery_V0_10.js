@@ -1698,24 +1698,6 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.artworkImage.transform = getArtworkTransformState(artwork);
     }
 
-    function revokeArtworkImageObjectUrl(artwork) {
-        if (
-            artwork &&
-            artwork.metadata &&
-            artwork.metadata.imageObjectUrl &&
-            typeof URL !== "undefined" &&
-            URL.revokeObjectURL
-        ) {
-            try {
-                URL.revokeObjectURL(artwork.metadata.imageObjectUrl);
-            } catch (error) {
-                console.warn("Artwork image object URL revoke warning:", error);
-            }
-
-            artwork.metadata.imageObjectUrl = null;
-        }
-    }
-
     function disposeArtworkImageMaterial(artwork) {
         if (
             artwork &&
@@ -1723,19 +1705,12 @@ export const createScene = function (engineArg, canvasArg) {
             artwork.metadata.imageMaterial
         ) {
             try {
-                var diffuseTexture = artwork.metadata.imageMaterial.diffuseTexture || null;
-                var emissiveTexture = artwork.metadata.imageMaterial.emissiveTexture || null;
-
-                if (diffuseTexture && !diffuseTexture.isDisposed()) {
-                    diffuseTexture.dispose();
+                if (artwork.metadata.imageMaterial.diffuseTexture) {
+                    artwork.metadata.imageMaterial.diffuseTexture.dispose();
                 }
 
-                if (
-                    emissiveTexture &&
-                    emissiveTexture !== diffuseTexture &&
-                    !emissiveTexture.isDisposed()
-                ) {
-                    emissiveTexture.dispose();
+                if (artwork.metadata.imageMaterial.emissiveTexture) {
+                    artwork.metadata.imageMaterial.emissiveTexture.dispose();
                 }
 
                 artwork.metadata.imageMaterial.dispose();
@@ -1745,8 +1720,6 @@ export const createScene = function (engineArg, canvasArg) {
 
             artwork.metadata.imageMaterial = null;
         }
-
-        revokeArtworkImageObjectUrl(artwork);
     }
 
     function isArtworkTextureLoadTokenCurrent(artwork, loadToken) {
@@ -1755,29 +1728,6 @@ export const createScene = function (engineArg, canvasArg) {
             artwork.metadata &&
             artwork.metadata.imageLoadToken === loadToken
         );
-    }
-
-    function assignArtworkTextureToMaterial(imageMaterial, texture) {
-        if (!imageMaterial || !texture) {
-            return;
-        }
-
-        imageMaterial.diffuseTexture = texture;
-        imageMaterial.emissiveTexture = texture;
-    }
-
-    function clearArtworkTextureFromMaterial(imageMaterial, texture) {
-        if (!imageMaterial || !texture) {
-            return;
-        }
-
-        if (imageMaterial.diffuseTexture === texture) {
-            imageMaterial.diffuseTexture = null;
-        }
-
-        if (imageMaterial.emissiveTexture === texture) {
-            imageMaterial.emissiveTexture = null;
-        }
     }
 
     function finalizeArtworkTextureLoad(artwork, texture, normalizedState, loadToken) {
@@ -1797,13 +1747,22 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkTransformUi();
     }
 
-    function createArtworkTextureFromSource(
+    function assignArtworkTextureToMaterial(imageMaterial, texture) {
+        if (!imageMaterial || !texture) {
+            return;
+        }
+
+        imageMaterial.diffuseTexture = texture;
+        imageMaterial.emissiveTexture = texture;
+    }
+
+    function createArtworkTextureFromUrl(
         artwork,
         imageMaterial,
         normalizedState,
         sourceUrl,
-        allowStorageBlobFallback,
-        loadToken
+        loadToken,
+        fallbackToPublicUrl
     ) {
         var texture = new BABYLON.Texture(
             sourceUrl,
@@ -1828,31 +1787,21 @@ export const createScene = function (engineArg, canvasArg) {
                     sourceUrl: sourceUrl,
                     message: message,
                     exception: exception,
-                    imagePath: normalizedState.imagePath || null,
-                    storageBucket: normalizedState.storageBucket || galleryArtworkStorageBucket
+                    imagePath: normalizedState.imagePath || null
                 });
 
-                clearArtworkTextureFromMaterial(imageMaterial, texture);
-
-                try {
-                    if (texture && !texture.isDisposed()) {
-                        texture.dispose();
-                    }
-                } catch (error) {
-                    console.warn("Artwork failed texture dispose warning:", error);
-                }
-
                 if (
-                    allowStorageBlobFallback &&
-                    normalizedState.imagePath &&
-                    window.gallerySupabase &&
-                    window.gallerySupabase.storage
+                    fallbackToPublicUrl &&
+                    normalizedState.imageUrl &&
+                    normalizedState.imageUrl !== sourceUrl
                 ) {
-                    loadArtworkTextureFromStorageBlob(
+                    createArtworkTextureFromUrl(
                         artwork,
                         imageMaterial,
                         normalizedState,
-                        loadToken
+                        normalizedState.imageUrl,
+                        loadToken,
+                        false
                     );
                     return;
                 }
@@ -1869,57 +1818,109 @@ export const createScene = function (engineArg, canvasArg) {
         return texture;
     }
 
-    async function loadArtworkTextureFromStorageBlob(
+    function loadArtworkTextureFromStorageDataUrl(
         artwork,
         imageMaterial,
         normalizedState,
         loadToken
     ) {
-        if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-            return;
-        }
-
-        try {
-            var bucketName = normalizedState.storageBucket || galleryArtworkStorageBucket;
-            var storagePath = normalizedState.imagePath;
-
-            var downloadResponse = await window.gallerySupabase
-                .storage
-                .from(bucketName)
-                .download(storagePath);
-
-            if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                return;
-            }
-
-            if (downloadResponse.error || !downloadResponse.data) {
-                console.warn("Artwork Storage blob fallback error:", {
-                    bucket: bucketName,
-                    path: storagePath,
-                    error: downloadResponse.error
-                });
-
-                notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu ze Storage.");
-                return;
-            }
-
-            revokeArtworkImageObjectUrl(artwork);
-
-            var objectUrl = URL.createObjectURL(downloadResponse.data);
-            artwork.metadata.imageObjectUrl = objectUrl;
-
-            createArtworkTextureFromSource(
+        if (
+            !normalizedState.imagePath ||
+            !window.gallerySupabase ||
+            !window.gallerySupabase.storage
+        ) {
+            createArtworkTextureFromUrl(
                 artwork,
                 imageMaterial,
                 normalizedState,
-                objectUrl,
-                false,
-                loadToken
+                normalizedState.imageUrl,
+                loadToken,
+                false
             );
-        } catch (error) {
-            console.warn("Artwork Storage blob fallback exception:", error);
-            notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu ze Storage.");
+            return;
         }
+
+        var bucketName = normalizedState.storageBucket || galleryArtworkStorageBucket;
+
+        window.gallerySupabase
+            .storage
+            .from(bucketName)
+            .download(normalizedState.imagePath)
+            .then(function (downloadResponse) {
+                if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
+                    return;
+                }
+
+                if (downloadResponse.error || !downloadResponse.data) {
+                    console.warn("Artwork Storage data texture download failed:", {
+                        bucket: bucketName,
+                        path: normalizedState.imagePath,
+                        error: downloadResponse.error
+                    });
+
+                    createArtworkTextureFromUrl(
+                        artwork,
+                        imageMaterial,
+                        normalizedState,
+                        normalizedState.imageUrl,
+                        loadToken,
+                        false
+                    );
+                    return;
+                }
+
+                var reader = new FileReader();
+
+                reader.onload = function () {
+                    if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
+                        return;
+                    }
+
+                    createArtworkTextureFromUrl(
+                        artwork,
+                        imageMaterial,
+                        normalizedState,
+                        reader.result,
+                        loadToken,
+                        true
+                    );
+                };
+
+                reader.onerror = function (error) {
+                    console.warn("Artwork Storage data texture FileReader failed:", error);
+
+                    if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
+                        return;
+                    }
+
+                    createArtworkTextureFromUrl(
+                        artwork,
+                        imageMaterial,
+                        normalizedState,
+                        normalizedState.imageUrl,
+                        loadToken,
+                        false
+                    );
+                };
+
+                reader.readAsDataURL(downloadResponse.data);
+            })
+            .catch(function (error) {
+                console.warn("Artwork Storage data texture exception:", error);
+
+                if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
+                    return;
+                }
+
+                createArtworkTextureFromUrl(
+                    artwork,
+                    imageMaterial,
+                    normalizedState,
+                    normalizedState.imageUrl,
+                    loadToken,
+                    false
+                );
+            });
     }
 
     function applyArtworkImageState(artwork, imageState) {
@@ -1975,14 +1976,23 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.imageMaterial = imageMaterial;
         artwork.metadata.imageLoadToken = Date.now() + "_" + Math.random().toString(36).slice(2);
 
-        createArtworkTextureFromSource(
-            artwork,
-            imageMaterial,
-            normalizedState,
-            imageUrl,
-            true,
-            artwork.metadata.imageLoadToken
-        );
+        if (normalizedState.imagePath && window.gallerySupabase && window.gallerySupabase.storage) {
+            loadArtworkTextureFromStorageDataUrl(
+                artwork,
+                imageMaterial,
+                normalizedState,
+                artwork.metadata.imageLoadToken
+            );
+        } else {
+            createArtworkTextureFromUrl(
+                artwork,
+                imageMaterial,
+                normalizedState,
+                imageUrl,
+                artwork.metadata.imageLoadToken,
+                false
+            );
+        }
 
         refreshCommonLightingMaterialSupport();
         updateArtworkLight(artwork);

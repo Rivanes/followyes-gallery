@@ -137,11 +137,9 @@ Changed:
 SQL files are intentionally not included in this package.
 
 
-## Stage 4 texture load fallback fix
+## Stage 4 storage data texture fix
 
-If Babylon fails to load the public Supabase image URL as a texture, the gallery now falls back to:
-`Supabase Storage download(imagePath)` → `Blob URL` → Babylon texture.
-
-This keeps the saved state format unchanged and makes Save/Refresh/Load more reliable.
+For Supabase-hosted artwork images, textures are now loaded from `Storage download(imagePath)` as a Data URL.
+This keeps the saved public URL/path unchanged, but avoids runtime texture load issues after refresh.
 
 SQL files are intentionally not included in this package.
