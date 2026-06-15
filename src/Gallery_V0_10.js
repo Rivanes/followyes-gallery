@@ -1227,6 +1227,400 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkCollisionTouchTolerance = 0.001;
     var artworkSameWallTolerance = 0.35;
 
+
+    function getArtworkImageState(artwork) {
+        if (!artwork || !artwork.metadata) {
+            return null;
+        }
+
+        return artwork.metadata.artworkImage || null;
+    }
+
+    function getArtworkImageUrlFromState(imageState) {
+        if (!imageState) {
+            return "";
+        }
+
+        if (imageState.imageUrl) {
+            return imageState.imageUrl;
+        }
+
+        if (imageState.publicUrl) {
+            return imageState.publicUrl;
+        }
+
+        if (imageState.imagePath && window.gallerySupabase && window.gallerySupabase.storage) {
+            try {
+                var publicUrlResponse = window.gallerySupabase
+                    .storage
+                    .from(imageState.storageBucket || galleryArtworkStorageBucket)
+                    .getPublicUrl(imageState.imagePath);
+
+                if (
+                    publicUrlResponse &&
+                    publicUrlResponse.data &&
+                    publicUrlResponse.data.publicUrl
+                ) {
+                    return publicUrlResponse.data.publicUrl;
+                }
+            } catch (error) {
+                console.warn("Artwork public URL warning:", error);
+            }
+        }
+
+        return "";
+    }
+
+    function createSafeStorageFileName(fileName) {
+        var originalName = String(fileName || "artwork-image").trim();
+        var extensionMatch = originalName.match(/\.([a-zA-Z0-9]+)$/);
+        var extension = extensionMatch ? extensionMatch[1].toLowerCase() : "jpg";
+
+        if (extension === "jpeg") {
+            extension = "jpg";
+        }
+
+        if (!/^(jpg|png|webp|gif|avif)$/.test(extension)) {
+            extension = "jpg";
+        }
+
+        var baseName = originalName
+            .replace(/\.[^/.]+$/, "")
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+        if (!baseName) {
+            baseName = "artwork-image";
+        }
+
+        return baseName + "." + extension;
+    }
+
+    function createArtworkStoragePath(artwork, file) {
+        var safeFileName = createSafeStorageFileName(file && file.name);
+        var artworkName = artwork && artwork.name
+            ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+            : "artwork";
+
+        return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+    }
+
+    function getArtworkImagePlane(artwork) {
+        if (!artwork) {
+            return null;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+
+        if (
+            artwork.metadata.imagePlane &&
+            !artwork.metadata.imagePlane.isDisposed()
+        ) {
+            return artwork.metadata.imagePlane;
+        }
+
+        var imagePlane = BABYLON.MeshBuilder.CreatePlane(
+            artwork.name + "_ImagePlane",
+            {
+                width: artworkWidth,
+                height: artworkHeight
+            },
+            scene
+        );
+
+        imagePlane.parent = artwork;
+        imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
+        imagePlane.rotation = BABYLON.Vector3.Zero();
+        imagePlane.isPickable = false;
+        imagePlane.metadata = imagePlane.metadata || {};
+        imagePlane.metadata.isArtworkImagePlane = true;
+
+        artwork.metadata.imagePlane = imagePlane;
+
+        return imagePlane;
+    }
+
+    function fitArtworkImagePlaneToTexture(artwork, texture, fitMode) {
+        if (!artwork || !texture) {
+            return;
+        }
+
+        var imagePlane = getArtworkImagePlane(artwork);
+        var baseSize = texture.getBaseSize ? texture.getBaseSize() : null;
+
+        if (!baseSize || !baseSize.width || !baseSize.height) {
+            imagePlane.scaling.x = 1;
+            imagePlane.scaling.y = 1;
+            return;
+        }
+
+        var imageAspect = baseSize.width / baseSize.height;
+        var artworkAspect = artworkWidth / artworkHeight;
+        var mode = fitMode || galleryArtworkDefaultFitMode;
+
+        imagePlane.scaling.x = 1;
+        imagePlane.scaling.y = 1;
+
+        if (mode === "cover") {
+            if (imageAspect > artworkAspect) {
+                imagePlane.scaling.x = imageAspect / artworkAspect;
+                imagePlane.scaling.y = 1;
+            } else {
+                imagePlane.scaling.x = 1;
+                imagePlane.scaling.y = artworkAspect / imageAspect;
+            }
+        } else {
+            // Default: contain. Nie znieksztalca obrazu, tylko miesci go w placeholderze.
+            if (imageAspect > artworkAspect) {
+                imagePlane.scaling.x = 1;
+                imagePlane.scaling.y = artworkAspect / imageAspect;
+            } else {
+                imagePlane.scaling.x = imageAspect / artworkAspect;
+                imagePlane.scaling.y = 1;
+            }
+        }
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = artwork.metadata.artworkImage || {};
+        artwork.metadata.artworkImage.aspectRatio = imageAspect;
+        artwork.metadata.artworkImage.width = baseSize.width;
+        artwork.metadata.artworkImage.height = baseSize.height;
+    }
+
+    function disposeArtworkImageMaterial(artwork) {
+        if (
+            artwork &&
+            artwork.metadata &&
+            artwork.metadata.imageMaterial
+        ) {
+            try {
+                if (artwork.metadata.imageMaterial.diffuseTexture) {
+                    artwork.metadata.imageMaterial.diffuseTexture.dispose();
+                }
+
+                if (artwork.metadata.imageMaterial.emissiveTexture) {
+                    artwork.metadata.imageMaterial.emissiveTexture.dispose();
+                }
+
+                artwork.metadata.imageMaterial.dispose();
+            } catch (error) {
+                console.warn("Artwork image material dispose warning:", error);
+            }
+
+            artwork.metadata.imageMaterial = null;
+        }
+    }
+
+    function applyArtworkImageState(artwork, imageState) {
+        if (!artwork) {
+            return false;
+        }
+
+        var imageUrl = getArtworkImageUrlFromState(imageState);
+
+        if (!imageUrl) {
+            removeArtworkImageFromMesh(artwork, false);
+            return false;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+
+        var normalizedState = Object.assign(
+            {
+                fitMode: galleryArtworkDefaultFitMode,
+                storageBucket: galleryArtworkStorageBucket
+            },
+            imageState || {},
+            {
+                imageUrl: imageUrl
+            }
+        );
+
+        artwork.metadata.artworkImage = normalizedState;
+
+        var imagePlane = getArtworkImagePlane(artwork);
+        disposeArtworkImageMaterial(artwork);
+
+        var imageMaterial = new BABYLON.StandardMaterial(
+            artwork.name + "_ImageMaterial",
+            scene
+        );
+
+        imageMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        imageMaterial.emissiveColor = new BABYLON.Color3(0.16, 0.16, 0.16);
+        imageMaterial.specularColor = new BABYLON.Color3(0.03, 0.03, 0.03);
+        imageMaterial.backFaceCulling = false;
+        imageMaterial.disableLighting = false;
+
+        var texture = new BABYLON.Texture(
+            imageUrl,
+            scene,
+            false,
+            true,
+            BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+            function () {
+                fitArtworkImagePlaneToTexture(
+                    artwork,
+                    texture,
+                    normalizedState.fitMode || galleryArtworkDefaultFitMode
+                );
+
+                updateArtworkImageUi();
+            },
+            function (message, exception) {
+                console.warn("Nie udalo sie wczytac obrazu:", message, exception);
+                notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu.");
+            }
+        );
+
+        texture.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
+        texture.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+
+        imageMaterial.diffuseTexture = texture;
+        imageMaterial.emissiveTexture = texture;
+
+        configureMaterialForCommonLighting(imageMaterial);
+
+        imagePlane.material = imageMaterial;
+        imagePlane.setEnabled(true);
+
+        artwork.metadata.imageMaterial = imageMaterial;
+
+        refreshCommonLightingMaterialSupport();
+        updateArtworkLight(artwork);
+        updateArtworkImageUi();
+
+        return true;
+    }
+
+    function removeArtworkImageFromMesh(artwork, shouldDisposePlane) {
+        if (!artwork) {
+            return false;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+        disposeArtworkImageMaterial(artwork);
+
+        if (artwork.metadata.imagePlane) {
+            if (shouldDisposePlane) {
+                try {
+                    artwork.metadata.imagePlane.dispose();
+                } catch (error) {
+                    console.warn("Artwork image plane dispose warning:", error);
+                }
+
+                artwork.metadata.imagePlane = null;
+            } else {
+                artwork.metadata.imagePlane.setEnabled(false);
+            }
+        }
+
+        artwork.metadata.artworkImage = null;
+        updateArtworkImageUi();
+        return true;
+    }
+
+    async function uploadArtworkImageToSupabase(artwork, file) {
+        if (!artwork || !file) {
+            notifyGalleryStatus("Zaznacz jeden obraz i wybierz plik.");
+            return false;
+        }
+
+        if (!galleryArtworkUploadEnabled) {
+            notifyGalleryStatus("Upload obrazow jest wylaczony w tej wersji.");
+            return false;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany.");
+            return false;
+        }
+
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby wgrac obraz.");
+            return false;
+        }
+
+        if (!file.type || file.type.indexOf("image/") !== 0) {
+            notifyGalleryStatus("Wybierz plik obrazu.");
+            return false;
+        }
+
+        var storagePath = createArtworkStoragePath(artwork, file);
+        notifyGalleryStatus("Wgrywam obraz...");
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(storagePath, file, {
+                cacheControl: "3600",
+                upsert: true,
+                contentType: file.type
+            });
+
+        if (uploadResponse.error) {
+            console.warn(uploadResponse.error);
+            notifyGalleryStatus("Nie udalo sie wgrac obrazu do Supabase Storage.");
+            return false;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(storagePath);
+
+        var publicUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+
+        applyArtworkImageState(artwork, {
+            imagePath: storagePath,
+            imageUrl: publicUrl,
+            storageBucket: galleryArtworkStorageBucket,
+            originalName: file.name || null,
+            size: file.size || null,
+            mimeType: file.type || null,
+            fitMode: galleryArtworkDefaultFitMode,
+            uploadedAt: new Date().toISOString()
+        });
+
+        notifyGalleryStatus("Wgrano obraz. Zapisz stan galerii, aby zachowac zmiane.");
+        return true;
+    }
+
+    async function deleteArtworkImageFromSupabase(imageState) {
+        if (!imageState || !imageState.imagePath) {
+            return true;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany. Usuwam tylko z aktualnego obrazu.");
+            return true;
+        }
+
+        var removeResponse = await client
+            .storage
+            .from(imageState.storageBucket || galleryArtworkStorageBucket)
+            .remove([imageState.imagePath]);
+
+        if (removeResponse.error) {
+            console.warn(removeResponse.error);
+            notifyGalleryStatus("Nie udalo sie usunac pliku ze Storage.");
+            return false;
+        }
+
+        return true;
+    }
+
     var selectedArtwork = null;
     var activeArtwork = null;
     var selectedArtworks = [];
@@ -1417,7 +1811,20 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     var editMode = false;
-    var editorAuthenticated = !!globalThis.galleryEditorAuthenticated;
+
+    // DEV / ENGINE MODE:
+    // false = logowanie edytora jest wylaczone, panel edytora dziala bez strony WEB/loginu.
+    // true  = wraca normalna blokada logowania przez globalThis.galleryEditorAuthenticated.
+    // Nie usuwamy systemu logowania, tylko omijamy go podczas pracy w samym silniku Babylon.
+    var galleryEditorLoginEnabled = true;
+    var editorAuthenticated = !galleryEditorLoginEnabled || !!globalThis.galleryEditorAuthenticated;
+
+    // ARTWORK UPLOAD / SUPABASE STORAGE
+    // Pliki obrazow trzymamy w Supabase Storage, a w gallery_state zapisujemy tylko path/url.
+    var galleryArtworkUploadEnabled = true;
+    var galleryArtworkStorageBucket = "gallery-artworks";
+    var galleryArtworkStoragePrefix = "main";
+    var galleryArtworkDefaultFitMode = "contain";
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 
@@ -1434,6 +1841,7 @@ export const createScene = function (engineArg, canvasArg) {
             --gallery-editor-radius-swatch: 10px;
             --gallery-editor-screen-gap: clamp(30px, 3.2vw, 40px);
             --gallery-editor-bottom-gap: calc(var(--gallery-editor-screen-gap) + 34px);
+            --gallery-editor-top-gap: var(--gallery-editor-bottom-gap);
             --gallery-editor-border-soft: rgba(255, 255, 255, 0.62);
         }
 
@@ -1448,7 +1856,7 @@ export const createScene = function (engineArg, canvasArg) {
             right: var(--gallery-editor-screen-gap);
             bottom: var(--gallery-editor-bottom-gap);
             width: min(420px, calc(100vw - 32px));
-            max-height: calc(100vh - var(--gallery-editor-bottom-gap) - var(--gallery-editor-screen-gap));
+            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
             z-index: 1000;
             display: none;
             flex-direction: column;
@@ -1495,7 +1903,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         .gallery-editor-scroll {
-            max-height: calc(100vh - var(--gallery-editor-bottom-gap) - var(--gallery-editor-screen-gap));
+            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
             overflow-y: auto;
             padding: 22px 28px 22px;
             scrollbar-width: thin;
@@ -1792,11 +2200,21 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         .gallery-lighting-scroll {
-            max-height: calc(100vh - var(--gallery-editor-bottom-gap) - var(--gallery-editor-screen-gap));
-            overflow-y: auto;
+            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
+            overflow: hidden;
             padding: 22px 28px 22px;
             scrollbar-width: thin;
             display: none;
+            flex-direction: column;
+        }
+
+        .gallery-lighting-content-stack {
+            flex: 0 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 10px;
+            scrollbar-width: thin;
         }
 
         .gallery-lighting-header {
@@ -1890,9 +2308,9 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-lighting-row {
             display: grid;
-            grid-template-columns: 120px 1fr 46px;
+            grid-template-columns: 142px 1fr 50px;
             align-items: center;
-            gap: 12px;
+            gap: 18px;
             margin-bottom: 13px;
         }
 
@@ -2277,8 +2695,10 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-lighting-back-button {
             width: 100%;
+            height: 56px;
             min-height: 56px;
-            margin-top: 20px;
+            flex: 0 0 56px;
+            margin-top: 14px;
             border-radius: 15px;
             border: 1px solid rgba(0, 0, 0, 0.24);
             background: linear-gradient(180deg, rgba(45, 45, 45, 0.96), rgba(25, 25, 25, 0.96));
@@ -2305,6 +2725,7 @@ export const createScene = function (engineArg, canvasArg) {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
+            flex: 0 0 auto;
             margin: 18px 0 0;
             padding: 4px;
             border: 1px solid rgba(0, 0, 0, 0.09);
@@ -2315,7 +2736,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-lighting-tab-button {
             appearance: none;
-            min-height: 38px;
+            height: 40px;
+            width: 100%;
             padding: 0 12px;
             border-radius: 11px;
             border: 1px solid transparent;
@@ -2325,6 +2747,10 @@ export const createScene = function (engineArg, canvasArg) {
             font-weight: 800;
             letter-spacing: 0.035em;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
         }
 
         .gallery-lighting-tab-button.is-active {
@@ -2334,6 +2760,13 @@ export const createScene = function (engineArg, canvasArg) {
             box-shadow:
                 0 4px 12px rgba(0, 0, 0, 0.08),
                 inset 0 1px 0 rgba(255, 255, 255, 0.72);
+        }
+
+        .gallery-lighting-tab-button,
+        .gallery-lighting-tab-button.is-active {
+            height: 40px;
+            min-height: 40px;
+            max-height: 40px;
         }
 
         .gallery-lighting-main-content,
@@ -2503,7 +2936,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         .gallery-local-transform-grid {
-            margin: 10px 0 0;
+            gap: 12px;
+            margin: 0 0 18px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(66, 66, 66, 0.10);
         }
 
         .gallery-local-targets-grid .gallery-lighting-checkbox-row,
@@ -2562,18 +2998,136 @@ export const createScene = function (engineArg, canvasArg) {
             text-transform: uppercase;
         }
 
+        .gallery-local-general-section .gallery-local-subtle-heading {
+            margin-top: 4px;
+            margin-bottom: 12px;
+        }
+
+        .gallery-local-general-section .gallery-local-enabled-row {
+            margin: 0 0 16px;
+        }
+
+        .gallery-local-general-section .gallery-lighting-color-row {
+            margin-top: 2px;
+        }
+
+
+        .gallery-artwork-image-section.is-hidden {
+            display: none;
+        }
+
+        .gallery-artwork-image-status {
+            margin: 0 0 12px;
+            font-size: 14px;
+            line-height: 1.35;
+            color: #555555;
+            overflow-wrap: anywhere;
+        }
+
+        .gallery-artwork-image-status strong {
+            color: #303030;
+            font-weight: 800;
+        }
+
+        .gallery-editor-field-label {
+            display: block;
+            margin: 0 0 8px;
+            color: #555555;
+            font-size: 12px;
+            line-height: 1.2;
+            font-weight: 800;
+            letter-spacing: 0.035em;
+            text-transform: uppercase;
+        }
+
+        .gallery-editor-text-input {
+            appearance: none;
+            width: 100%;
+            min-height: 40px;
+            padding: 0 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.13);
+            background: rgba(255, 255, 255, 0.24);
+            color: #303030;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 13px;
+            outline: none;
+        }
+
+        .gallery-editor-text-input:focus {
+            border-color: rgba(63, 127, 61, 0.45);
+            background: rgba(255, 255, 255, 0.36);
+        }
+
+        .gallery-artwork-image-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .gallery-artwork-image-actions.is-three {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .gallery-editor-action-button {
+            appearance: none;
+            min-height: 40px;
+            padding: 0 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            background: rgba(255, 255, 255, 0.24);
+            color: #333333;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .gallery-editor-action-button:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.36);
+        }
+
+        .gallery-editor-action-button:disabled {
+            opacity: 0.42;
+            cursor: not-allowed;
+        }
+
+        .gallery-editor-action-button.is-primary {
+            color: #2f5f2e;
+            border-color: rgba(63, 127, 61, 0.34);
+            background:
+                linear-gradient(145deg, rgba(236, 248, 232, 0.48), rgba(255, 255, 255, 0.22));
+        }
+
+        .gallery-editor-action-button.is-danger {
+            color: #6b2b2b;
+            border-color: rgba(130, 45, 45, 0.22);
+        }
+
+        .gallery-artwork-image-note {
+            margin: 10px 0 0;
+            color: #6c6c6c;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+
         @media (max-width: 768px) {
             #galleryEditorPanel {
                 left: 18px;
                 right: 18px;
                 bottom: 58px;
                 width: auto;
-                max-height: calc(100vh - 82px);
+                max-height: calc(100vh - 116px);
                 border-radius: 24px;
             }
 
             .gallery-editor-scroll {
-                max-height: calc(100vh - 82px);
+                max-height: calc(100vh - 116px);
                 padding: 20px 20px 20px;
             }
 
@@ -2608,13 +3162,17 @@ export const createScene = function (engineArg, canvasArg) {
             }
 
             .gallery-lighting-scroll {
-                max-height: calc(100vh - 82px);
+                max-height: calc(100vh - 116px);
                 padding: 20px 20px 20px;
             }
 
+            .gallery-lighting-content-stack {
+                padding-right: 6px;
+            }
+
             .gallery-lighting-row {
-                grid-template-columns: 104px 1fr 42px;
-                gap: 10px;
+                grid-template-columns: 128px 1fr 44px;
+                gap: 14px;
             }
 
             .gallery-lighting-quick-presets {
@@ -2702,6 +3260,188 @@ export const createScene = function (engineArg, canvasArg) {
     selectionSectionData.section.appendChild(selectedArtworkStatus);
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
     editorScroll.appendChild(selectionSectionData.section);
+
+    var artworkImageSectionData = createEditorSection("ARTWORK IMAGE");
+    artworkImageSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
+
+    var artworkImageStatus = document.createElement("div");
+    artworkImageStatus.className = "gallery-artwork-image-status";
+    artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+
+    var artworkImageUrlLabel = document.createElement("label");
+    artworkImageUrlLabel.className = "gallery-editor-field-label";
+    artworkImageUrlLabel.innerText = "Image URL / public path";
+
+    var artworkImageUrlInput = document.createElement("input");
+    artworkImageUrlInput.type = "text";
+    artworkImageUrlInput.className = "gallery-editor-text-input";
+    artworkImageUrlInput.placeholder = "https://... albo Supabase public URL";
+
+    var artworkImageFileInput = document.createElement("input");
+    artworkImageFileInput.type = "file";
+    artworkImageFileInput.accept = "image/*";
+    artworkImageFileInput.style.display = "none";
+
+    var artworkImageActions = document.createElement("div");
+    artworkImageActions.className = "gallery-artwork-image-actions is-three";
+
+    var artworkImageUploadButton = document.createElement("button");
+    artworkImageUploadButton.type = "button";
+    artworkImageUploadButton.className = "gallery-editor-action-button is-primary";
+    artworkImageUploadButton.innerText = "UPLOAD";
+
+    var artworkImageApplyUrlButton = document.createElement("button");
+    artworkImageApplyUrlButton.type = "button";
+    artworkImageApplyUrlButton.className = "gallery-editor-action-button";
+    artworkImageApplyUrlButton.innerText = "APPLY URL";
+
+    var artworkImageRemoveButton = document.createElement("button");
+    artworkImageRemoveButton.type = "button";
+    artworkImageRemoveButton.className = "gallery-editor-action-button is-danger";
+    artworkImageRemoveButton.innerText = "REMOVE";
+
+    var artworkImageNote = document.createElement("p");
+    artworkImageNote.className = "gallery-artwork-image-note";
+    artworkImageNote.innerText = "Upload zapisuje plik w Supabase Storage. State galerii przechowuje tylko URL/path.";
+
+    artworkImageActions.appendChild(artworkImageUploadButton);
+    artworkImageActions.appendChild(artworkImageApplyUrlButton);
+    artworkImageActions.appendChild(artworkImageRemoveButton);
+
+    artworkImageSectionData.section.appendChild(artworkImageStatus);
+    artworkImageSectionData.section.appendChild(artworkImageUrlLabel);
+    artworkImageSectionData.section.appendChild(artworkImageUrlInput);
+    artworkImageSectionData.section.appendChild(artworkImageFileInput);
+    artworkImageSectionData.section.appendChild(artworkImageActions);
+    artworkImageSectionData.section.appendChild(artworkImageNote);
+    editorScroll.appendChild(artworkImageSectionData.section);
+
+    function getSingleSelectedArtworkForImageUi() {
+        return selectedArtworks.length === 1 ? selectedArtworks[0] : null;
+    }
+
+    function updateArtworkImageUi() {
+        if (!artworkImageSectionData || !artworkImageSectionData.section) {
+            return;
+        }
+
+        var artwork = getSingleSelectedArtworkForImageUi();
+        var imageState = getArtworkImageState(artwork);
+
+        artworkImageSectionData.section.classList.toggle(
+            "is-hidden",
+            !editMode || !artwork
+        );
+
+        artworkImageUploadButton.disabled = !artwork;
+        artworkImageApplyUrlButton.disabled = !artwork;
+        artworkImageRemoveButton.disabled = !artwork || !imageState;
+
+        if (!artwork) {
+            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+            artworkImageUrlInput.value = "";
+            return;
+        }
+
+        if (imageState) {
+            var label = imageState.originalName || imageState.imagePath || imageState.imageUrl || "Custom image";
+            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>";
+            artworkImageUrlInput.value = imageState.imageUrl || "";
+        } else {
+            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+            artworkImageUrlInput.value = "";
+        }
+    }
+
+    artworkImageUploadButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = getSingleSelectedArtworkForImageUi();
+
+        if (!artwork) {
+            notifyGalleryStatus("Zaznacz jeden obraz, aby wgrac plik.");
+            return;
+        }
+
+        artworkImageFileInput.value = "";
+        artworkImageFileInput.click();
+    };
+
+    artworkImageFileInput.onchange = function () {
+        var artwork = getSingleSelectedArtworkForImageUi();
+        var file = artworkImageFileInput.files && artworkImageFileInput.files[0]
+            ? artworkImageFileInput.files[0]
+            : null;
+
+        if (!artwork || !file) {
+            return;
+        }
+
+        uploadArtworkImageToSupabase(artwork, file)
+            .catch(function (error) {
+                console.warn(error);
+                notifyGalleryStatus("Blad uploadu obrazu.");
+            })
+            .finally(function () {
+                artworkImageFileInput.value = "";
+                updateArtworkImageUi();
+            });
+    };
+
+    artworkImageApplyUrlButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = getSingleSelectedArtworkForImageUi();
+        var imageUrl = artworkImageUrlInput.value.trim();
+
+        if (!artwork) {
+            notifyGalleryStatus("Zaznacz jeden obraz, aby ustawic URL.");
+            return;
+        }
+
+        if (!imageUrl) {
+            notifyGalleryStatus("Wklej URL obrazu.");
+            return;
+        }
+
+        applyArtworkImageState(artwork, {
+            imageUrl: imageUrl,
+            fitMode: galleryArtworkDefaultFitMode,
+            source: "manual-url",
+            updatedAt: new Date().toISOString()
+        });
+
+        notifyGalleryStatus("Ustawiono obraz z URL. Zapisz stan galerii, aby zachowac zmiane.");
+    };
+
+    artworkImageRemoveButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = getSingleSelectedArtworkForImageUi();
+
+        if (!artwork) {
+            return;
+        }
+
+        var imageState = getArtworkImageState(artwork);
+
+        deleteArtworkImageFromSupabase(imageState)
+            .then(function (removedFromStorage) {
+                if (!removedFromStorage) {
+                    return;
+                }
+
+                removeArtworkImageFromMesh(artwork, true);
+                notifyGalleryStatus("Usunieto obraz. Zapisz stan galerii, aby zachowac zmiane.");
+            })
+            .catch(function (error) {
+                console.warn(error);
+                notifyGalleryStatus("Blad usuwania obrazu.");
+            });
+    };
 
     var alignSectionData = createEditorSection("ALIGN");
     var artworkAlignPanel = document.createElement("div");
@@ -5933,6 +6673,9 @@ export const createScene = function (engineArg, canvasArg) {
     lightingModeTabs.appendChild(lightingMainTabButton);
     lightingModeTabs.appendChild(lightingLocalTabButton);
 
+    var lightingContentStack = document.createElement("div");
+    lightingContentStack.className = "gallery-lighting-content-stack";
+
     var mainLightingContent = document.createElement("div");
     mainLightingContent.className = "gallery-lighting-main-content";
 
@@ -5994,6 +6737,10 @@ export const createScene = function (engineArg, canvasArg) {
             updateLocalLightsUi();
         }
 
+        if (lightingContentStack) {
+            lightingContentStack.scrollTop = 0;
+        }
+
         updateLightingDropdownOptions();
     }
 
@@ -6009,8 +6756,9 @@ export const createScene = function (engineArg, canvasArg) {
         setLightingContentMode("local");
     };
 
-    lightingScroll.appendChild(mainLightingContent);
-    lightingScroll.appendChild(localLightingContent);
+    lightingContentStack.appendChild(mainLightingContent);
+    lightingContentStack.appendChild(localLightingContent);
+    lightingScroll.appendChild(lightingContentStack);
 
     var globalLookSection = createLightingSection("GLOBAL LOOK");
 
@@ -6264,6 +7012,7 @@ export const createScene = function (engineArg, canvasArg) {
     localLightingContent.appendChild(localSelectionSection);
 
     var localGeneralSection = createLightingSection("GENERAL SETTINGS");
+    localGeneralSection.classList.add("gallery-local-general-section");
 
     var localTransformTitle = document.createElement("p");
     localTransformTitle.className = "gallery-local-subtle-heading";
@@ -6278,7 +7027,12 @@ export const createScene = function (engineArg, canvasArg) {
     createLocalRotationGizmoToggle(localTransformGrid);
 
 
-    createLocalEditCheckbox(localGeneralSection, "enabled", "Enabled", true);
+    var localEnabledInput = createLocalEditCheckbox(localGeneralSection, "enabled", "Enabled", true);
+
+    if (localEnabledInput && localEnabledInput.parentElement) {
+        localEnabledInput.parentElement.classList.add("gallery-local-enabled-row");
+    }
+
     createLocalEditColor(localGeneralSection, "color", "Color", "#fff1c8");
     createLocalEditSlider(localGeneralSection, "intensity", "Intensity", 0, 120, 0.1, 2.2, 1, "");
     createLocalEditSlider(localGeneralSection, "range", "Range", 0.1, 30, 0.1, 12.5, 1, "");
@@ -6453,7 +7207,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         editHelpPanel.classList.toggle("is-lighting-mode", lightingPanelMode === "lighting");
         editorScroll.style.display = lightingPanelMode === "edit" ? "block" : "none";
-        lightingScroll.style.display = lightingPanelMode === "lighting" ? "block" : "none";
+        lightingScroll.style.display = lightingPanelMode === "lighting" ? "flex" : "none";
 
         if (lightingPanelMode === "lighting") {
             syncLightingControls(readLightingSettingsFromScene());
@@ -6630,7 +7384,7 @@ export const createScene = function (engineArg, canvasArg) {
             event.stopPropagation();
         }
 
-        if (!editorAuthenticated) {
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
             editMode = false;
             setEditorUiVisible(false);
             notifyGalleryStatus("Zaloguj sie jako edytor, aby otworzyc panel edycji.");
@@ -6667,7 +7421,7 @@ export const createScene = function (engineArg, canvasArg) {
     setEditorUiVisible(false);
 
     function setEditorAuthenticated(isAuthenticated) {
-        editorAuthenticated = !!isAuthenticated;
+        editorAuthenticated = !galleryEditorLoginEnabled || !!isAuthenticated;
         globalThis.galleryEditorAuthenticated = editorAuthenticated;
         window.galleryEditorAuthenticated = editorAuthenticated;
 
@@ -6676,10 +7430,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (editButton) {
-            editButton.style.display = editorAuthenticated ? "" : "none";
+            editButton.style.display = (!galleryEditorLoginEnabled || editorAuthenticated) ? "" : "none";
         }
 
-        if (!editorAuthenticated && editMode) {
+        if (galleryEditorLoginEnabled && !editorAuthenticated && editMode) {
             editMode = false;
             setEditorUiVisible(false);
             clearEditSelection();
@@ -7357,6 +8111,7 @@ export const createScene = function (engineArg, canvasArg) {
             colorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">" + colorName + "</span>";
         }
 
+        updateArtworkImageUi();
         updateAlignmentPanel();
     }
 
@@ -10173,6 +10928,8 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.position = pos;
         artwork.material = mat;
         artwork.isPickable = true;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = null;
         // Obraz nie jest casterem cieni.
         // Wczesniej obraz jako lokalny/globalny caster zostawial prostokatny cien na scianie
         // i wymuszal drogie odswiezanie shadow map podczas przeciagania.
@@ -10676,7 +11433,8 @@ export const createScene = function (engineArg, canvasArg) {
                         wallValue: wallData ? wallData.wallValue : null,
                         horizontalAxis: wallData ? wallData.horizontalAxis : null
                     },
-                    material: getMaterialState(artwork.material)
+                    material: getMaterialState(artwork.material),
+                    image: getArtworkImageState(artwork)
                 };
             }),
             spheres: artSpheres.map(function (sphere, index) {
@@ -10766,6 +11524,20 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 applyMaterialStateToMesh(artwork, artworkState.material);
+
+                if (artworkState.image || artworkState.artworkImage || artworkState.imageUrl || artworkState.imagePath) {
+                    applyArtworkImageState(
+                        artwork,
+                        artworkState.image || artworkState.artworkImage || {
+                            imageUrl: artworkState.imageUrl || "",
+                            imagePath: artworkState.imagePath || "",
+                            fitMode: artworkState.fitMode || galleryArtworkDefaultFitMode
+                        }
+                    );
+                } else {
+                    removeArtworkImageFromMesh(artwork, true);
+                }
+
                 artwork.computeWorldMatrix(true);
                 updateArtworkLight(artwork);
             });
@@ -10938,7 +11710,7 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     async function saveGalleryStateToSupabase() {
-        if (!editorAuthenticated) {
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
             notifyGalleryStatus("Zaloguj sie jako edytor, aby zapisac stan.");
             return false;
         }
@@ -11003,6 +11775,13 @@ export const createScene = function (engineArg, canvasArg) {
 
     globalThis.GalleryApp = {
         setEditorAuthenticated: setEditorAuthenticated,
+        isEditorLoginEnabled: function () {
+            return galleryEditorLoginEnabled;
+        },
+        setEditorLoginEnabled: function (isEnabled) {
+            galleryEditorLoginEnabled = !!isEnabled;
+            setEditorAuthenticated(globalThis.galleryEditorAuthenticated);
+        },
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
         getState: serializeGalleryState,
@@ -11019,7 +11798,45 @@ export const createScene = function (engineArg, canvasArg) {
                 spheres: state.editor && state.editor.spheres ? state.editor.spheres.length : 0,
                 localLights: state.localLights && state.localLights.lights ? state.localLights.lights.length : 0,
                 localGroups: state.localLights && state.localLights.groups ? state.localLights.groups.length : 0,
-                hasLighting: !!state.lighting
+                hasLighting: !!state.lighting,
+                artworkImages: state.editor && state.editor.artworks
+                    ? state.editor.artworks.filter(function (artworkState) {
+                        return !!(artworkState && artworkState.image);
+                    }).length
+                    : 0
+            };
+        },
+        applyArtworkImageUrl: function (artworkNameOrIndex, imageUrl) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return applyArtworkImageState(artwork, {
+                imageUrl: imageUrl,
+                fitMode: galleryArtworkDefaultFitMode,
+                source: "GalleryApp"
+            });
+        },
+        removeArtworkImage: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return removeArtworkImageFromMesh(artwork, true);
+        },
+        getArtworkImageState: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return getArtworkImageState(artwork);
+        },
+        getArtworkStorageSettings: function () {
+            return {
+                uploadEnabled: galleryArtworkUploadEnabled,
+                bucket: galleryArtworkStorageBucket,
+                prefix: galleryArtworkStoragePrefix,
+                defaultFitMode: galleryArtworkDefaultFitMode
             };
         }
     };

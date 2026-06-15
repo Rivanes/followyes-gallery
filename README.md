@@ -55,3 +55,18 @@ Update note:
 - Mobile joystick / mobile viewer controls no longer render above the fixed page header.
 - `#mobileViewerControls` z-index was lowered below `#siteHeader` (`8000`) while staying above the gallery canvas.
 - Previous fixes are preserved: gallery UI anchoring and middle-mouse camera rotation in Viewer/Edit mode.
+
+## V0_10 Supabase Artwork Upload Stage 1
+
+This package adds the first stage of real artwork image support:
+
+- Edit Mode section: `ARTWORK IMAGE`
+- Buttons: `UPLOAD`, `APPLY URL`, `REMOVE`
+- Supabase Storage bucket expected: `gallery-artworks`
+- Storage folder/prefix: `main`
+- `gallery_state` stores only image metadata/path/url, not base64 image data.
+- Website package has `galleryEditorLoginEnabled = true`, so public visitors do not get editor access.
+- The working `.txt` engine version can still use `galleryEditorLoginEnabled = false` for Babylon-only development.
+
+Included SQL reference:
+- `supabase_gallery_state_and_artwork_storage_STAGE1.sql`
