@@ -1343,51 +1343,105 @@ export const createScene = function (engineArg, canvasArg) {
         return imagePlane;
     }
 
+    function getArtworkDimensionsForAspectRatio(imageAspect) {
+        var safeAspect = Number(imageAspect);
+        var baseAspect = artworkWidth / artworkHeight;
+
+        if (!isFinite(safeAspect) || safeAspect <= 0) {
+            safeAspect = baseAspect;
+        }
+
+        var fittedWidth = artworkWidth;
+        var fittedHeight = artworkHeight;
+
+        if (safeAspect >= baseAspect) {
+            fittedWidth = artworkWidth;
+            fittedHeight = artworkWidth / safeAspect;
+        } else {
+            fittedHeight = artworkHeight;
+            fittedWidth = artworkHeight * safeAspect;
+        }
+
+        return {
+            width: fittedWidth,
+            height: fittedHeight,
+            aspectRatio: safeAspect
+        };
+    }
+
+    function applyArtworkAspectRatioToMesh(artwork, imageAspect) {
+        if (!artwork) {
+            return null;
+        }
+
+        var fittedDimensions = getArtworkDimensionsForAspectRatio(imageAspect);
+        var imagePlane = getArtworkImagePlane(artwork);
+
+        artwork.scaling.x = fittedDimensions.width / artworkWidth;
+        artwork.scaling.y = fittedDimensions.height / artworkHeight;
+        artwork.scaling.z = 1;
+
+        imagePlane.scaling.x = 1;
+        imagePlane.scaling.y = 1;
+        imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.dynamicArtworkSize = {
+            width: fittedDimensions.width,
+            height: fittedDimensions.height,
+            aspectRatio: fittedDimensions.aspectRatio
+        };
+
+        return fittedDimensions;
+    }
+
+    function resetArtworkAspectRatioToDefault(artwork) {
+        if (!artwork) {
+            return;
+        }
+
+        artwork.scaling.x = 1;
+        artwork.scaling.y = 1;
+        artwork.scaling.z = 1;
+
+        if (artwork.metadata) {
+            artwork.metadata.dynamicArtworkSize = null;
+        }
+
+        if (
+            artwork.metadata &&
+            artwork.metadata.imagePlane &&
+            !artwork.metadata.imagePlane.isDisposed()
+        ) {
+            artwork.metadata.imagePlane.scaling.x = 1;
+            artwork.metadata.imagePlane.scaling.y = 1;
+            artwork.metadata.imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
+        }
+    }
+
     function fitArtworkImagePlaneToTexture(artwork, texture, fitMode) {
         if (!artwork || !texture) {
             return;
         }
 
-        var imagePlane = getArtworkImagePlane(artwork);
         var baseSize = texture.getBaseSize ? texture.getBaseSize() : null;
 
         if (!baseSize || !baseSize.width || !baseSize.height) {
-            imagePlane.scaling.x = 1;
-            imagePlane.scaling.y = 1;
+            resetArtworkAspectRatioToDefault(artwork);
             return;
         }
 
         var imageAspect = baseSize.width / baseSize.height;
-        var artworkAspect = artworkWidth / artworkHeight;
-        var mode = fitMode || galleryArtworkDefaultFitMode;
-
-        imagePlane.scaling.x = 1;
-        imagePlane.scaling.y = 1;
-
-        if (mode === "cover") {
-            if (imageAspect > artworkAspect) {
-                imagePlane.scaling.x = imageAspect / artworkAspect;
-                imagePlane.scaling.y = 1;
-            } else {
-                imagePlane.scaling.x = 1;
-                imagePlane.scaling.y = artworkAspect / imageAspect;
-            }
-        } else {
-            // Default: contain. Nie znieksztalca obrazu, tylko miesci go w placeholderze.
-            if (imageAspect > artworkAspect) {
-                imagePlane.scaling.x = 1;
-                imagePlane.scaling.y = artworkAspect / imageAspect;
-            } else {
-                imagePlane.scaling.x = imageAspect / artworkAspect;
-                imagePlane.scaling.y = 1;
-            }
-        }
+        var fittedDimensions = applyArtworkAspectRatioToMesh(artwork, imageAspect);
 
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkImage = artwork.metadata.artworkImage || {};
+        artwork.metadata.artworkImage.fitMode = fitMode || galleryArtworkDefaultFitMode;
         artwork.metadata.artworkImage.aspectRatio = imageAspect;
         artwork.metadata.artworkImage.width = baseSize.width;
         artwork.metadata.artworkImage.height = baseSize.height;
+        artwork.metadata.artworkImage.fittedWidth = fittedDimensions ? fittedDimensions.width : artworkWidth;
+        artwork.metadata.artworkImage.fittedHeight = fittedDimensions ? fittedDimensions.height : artworkHeight;
     }
 
     function disposeArtworkImageMaterial(artwork) {
@@ -1468,6 +1522,8 @@ export const createScene = function (engineArg, canvasArg) {
                     normalizedState.fitMode || galleryArtworkDefaultFitMode
                 );
 
+                artwork.computeWorldMatrix(true);
+                updateArtworkLight(artwork);
                 updateArtworkImageUi();
             },
             function (message, exception) {
@@ -1518,7 +1574,9 @@ export const createScene = function (engineArg, canvasArg) {
             }
         }
 
+        resetArtworkAspectRatioToDefault(artwork);
         artwork.metadata.artworkImage = null;
+        updateArtworkLight(artwork);
         updateArtworkImageUi();
         return true;
     }
