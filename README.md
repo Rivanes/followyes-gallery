@@ -49,3 +49,9 @@ Tak jak w działającej wersji V0_8, strona używa:
 Update note:
 - Desktop middle mouse / scroll camera rotation now works in both Viewer Mode and Edit Mode.
 - The gallery UI anchor fix is preserved.
+
+## Update: mobile UI header priority fix
+
+- Mobile joystick / mobile viewer controls no longer render above the fixed page header.
+- `#mobileViewerControls` z-index was lowered below `#siteHeader` (`8000`) while staying above the gallery canvas.
+- Previous fixes are preserved: gallery UI anchoring and middle-mouse camera rotation in Viewer/Edit mode.

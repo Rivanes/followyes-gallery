@@ -7190,7 +7190,8 @@ export const createScene = function (engineArg, canvasArg) {
             #mobileViewerControls {
                 position: absolute;
                 inset: 0;
-                z-index: 10020;
+                /* Header strony ma z-index 8000, więc mobile UI galerii musi zostać niżej. */
+                z-index: 7000;
                 pointer-events: none;
                 display: none;
                 font-family: Arial, sans-serif;
