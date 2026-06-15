@@ -1221,10 +1221,6 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkHeight = 0.9;
     var artworkDepth = 0.04;
     var artworkWallOffset = 0.04;
-    var artworkTransformScaleMin = 0.25;
-    var artworkTransformScaleMax = 3.0;
-    var artworkTransformScaleStep = 0.05;
-    var artworkTransformRotationStepDegrees = 15;
 
     var artworkBoundsSafeMargin = 0.0;
     var artworkCollisionPadding = 0.0;
@@ -1347,259 +1343,6 @@ export const createScene = function (engineArg, canvasArg) {
         return imagePlane;
     }
 
-    function clampArtworkTransformScale(value) {
-        var scale = Number(value);
-
-        if (!isFinite(scale)) {
-            scale = 1;
-        }
-
-        return BABYLON.Scalar.Clamp(
-            scale,
-            artworkTransformScaleMin,
-            artworkTransformScaleMax
-        );
-    }
-
-    function getUniformArtworkScaleFromStoredTransform(storedTransform) {
-        if (!storedTransform) {
-            return 1;
-        }
-
-        if (storedTransform.scale !== undefined) {
-            return storedTransform.scale;
-        }
-
-        var scaleX = storedTransform.scaleX !== undefined ? Number(storedTransform.scaleX) : NaN;
-        var scaleY = storedTransform.scaleY !== undefined ? Number(storedTransform.scaleY) : NaN;
-
-        if (isFinite(scaleX) && isFinite(scaleY)) {
-            return (scaleX + scaleY) * 0.5;
-        }
-
-        if (isFinite(scaleX)) {
-            return scaleX;
-        }
-
-        if (isFinite(scaleY)) {
-            return scaleY;
-        }
-
-        return 1;
-    }
-
-    function normalizeArtworkTransformRotationDegrees(value) {
-        var degrees = Number(value);
-
-        if (!isFinite(degrees)) {
-            degrees = 0;
-        }
-
-        degrees = Math.round(degrees / artworkTransformRotationStepDegrees) * artworkTransformRotationStepDegrees;
-
-        while (degrees > 180) {
-            degrees -= 360;
-        }
-
-        while (degrees < -180) {
-            degrees += 360;
-        }
-
-        return degrees;
-    }
-
-    function getArtworkTransformState(artwork) {
-        var storedTransform = null;
-
-        if (artwork && artwork.metadata) {
-            storedTransform = artwork.metadata.artworkTransform || null;
-
-            if (!storedTransform && artwork.metadata.artworkImage) {
-                storedTransform = artwork.metadata.artworkImage.transform || null;
-            }
-        }
-
-        var uniformScale = clampArtworkTransformScale(
-            getUniformArtworkScaleFromStoredTransform(storedTransform)
-        );
-
-        var rotationDegrees = normalizeArtworkTransformRotationDegrees(
-            storedTransform && storedTransform.rotationDegrees !== undefined
-                ? storedTransform.rotationDegrees
-                : 0
-        );
-
-        return {
-            scale: uniformScale,
-            scaleX: uniformScale,
-            scaleY: uniformScale,
-            rotationDegrees: rotationDegrees
-        };
-    }
-
-    function setArtworkTransformState(artwork, transformState) {
-        if (!artwork) {
-            return null;
-        }
-
-        artwork.metadata = artwork.metadata || {};
-
-        var uniformScale = clampArtworkTransformScale(
-            transformState && transformState.scale !== undefined
-                ? transformState.scale
-                : getUniformArtworkScaleFromStoredTransform(transformState)
-        );
-
-        var normalizedTransform = {
-            scale: uniformScale,
-            scaleX: uniformScale,
-            scaleY: uniformScale,
-            rotationDegrees: normalizeArtworkTransformRotationDegrees(
-                transformState && transformState.rotationDegrees !== undefined
-                    ? transformState.rotationDegrees
-                    : 0
-            )
-        };
-
-        artwork.metadata.artworkTransform = normalizedTransform;
-
-        if (artwork.metadata.artworkImage) {
-            artwork.metadata.artworkImage.transform = normalizedTransform;
-        }
-
-        return normalizedTransform;
-    }
-
-    function resetArtworkTransformState(artwork) {
-        return setArtworkTransformState(artwork, {
-            scale: 1,
-            rotationDegrees: 0
-        });
-    }
-
-    function getArtworkBaseDimensionsForCurrentImage(artwork) {
-        var imageAspect = null;
-
-        if (artwork && artwork.metadata) {
-            if (
-                artwork.metadata.dynamicArtworkSize &&
-                artwork.metadata.dynamicArtworkSize.aspectRatio
-            ) {
-                imageAspect = artwork.metadata.dynamicArtworkSize.aspectRatio;
-            } else if (
-                artwork.metadata.artworkImage &&
-                artwork.metadata.artworkImage.aspectRatio
-            ) {
-                imageAspect = artwork.metadata.artworkImage.aspectRatio;
-            }
-        }
-
-        if (!imageAspect) {
-            imageAspect = artworkWidth / artworkHeight;
-        }
-
-        return getArtworkDimensionsForAspectRatio(imageAspect);
-    }
-
-    function applyArtworkTransformToMesh(artwork) {
-        if (!artwork) {
-            return null;
-        }
-
-        var baseDimensions = getArtworkBaseDimensionsForCurrentImage(artwork);
-        var transformState = getArtworkTransformState(artwork);
-
-        setArtworkTransformState(artwork, transformState);
-
-        artwork.scaling.x = (baseDimensions.width / artworkWidth) * transformState.scale;
-        artwork.scaling.y = (baseDimensions.height / artworkHeight) * transformState.scale;
-        artwork.scaling.z = 1;
-        artwork.rotation.z = BABYLON.Tools.ToRadians(transformState.rotationDegrees);
-
-        if (
-            artwork.metadata &&
-            artwork.metadata.imagePlane &&
-            !artwork.metadata.imagePlane.isDisposed()
-        ) {
-            artwork.metadata.imagePlane.scaling.x = 1;
-            artwork.metadata.imagePlane.scaling.y = 1;
-            artwork.metadata.imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
-        }
-
-        artwork.computeWorldMatrix(true);
-        updateArtworkLight(artwork);
-
-        return {
-            width: baseDimensions.width * transformState.scale,
-            height: baseDimensions.height * transformState.scale,
-            aspectRatio: baseDimensions.aspectRatio,
-            scale: transformState.scale,
-            scaleX: transformState.scale,
-            scaleY: transformState.scale,
-            rotationDegrees: transformState.rotationDegrees
-        };
-    }
-
-    function setSelectedArtworkTransform(scale, rotationDegrees, shouldNotify) {
-        var artwork = getSingleSelectedArtworkForImageUi();
-
-        if (!artwork) {
-            notifyGalleryStatus("Zaznacz jeden obraz, aby zmienic skale lub rotacje.");
-            return;
-        }
-
-        var currentTransform = getArtworkTransformState(artwork);
-        var nextTransform = {
-            scale: scale !== undefined ? scale : currentTransform.scale,
-            rotationDegrees: rotationDegrees !== undefined ? rotationDegrees : currentTransform.rotationDegrees
-        };
-
-        setArtworkTransformState(artwork, nextTransform);
-        applyArtworkTransformToMesh(artwork);
-        updateArtworkTransformUi();
-        updateAlignmentPanel();
-
-        if (shouldNotify) {
-            notifyGalleryStatus("Zmieniono transformacje obrazu. Zapisz stan galerii, aby zachowac zmiane.");
-        }
-    }
-
-    function changeSelectedArtworkTransform(deltaScaleX, deltaScaleY, deltaRotationDegrees) {
-        var artwork = getSingleSelectedArtworkForImageUi();
-
-        if (!artwork) {
-            notifyGalleryStatus("Zaznacz jeden obraz, aby zmienic skale lub rotacje.");
-            return;
-        }
-
-        var currentTransform = getArtworkTransformState(artwork);
-        var scaleDelta = 0;
-
-        if (deltaScaleX || deltaScaleY) {
-            scaleDelta = ((deltaScaleX || 0) + (deltaScaleY || 0)) * 0.5;
-        }
-
-        setSelectedArtworkTransform(
-            currentTransform.scale + scaleDelta,
-            currentTransform.rotationDegrees + (deltaRotationDegrees || 0),
-            true
-        );
-    }
-
-    function resetSelectedArtworkTransform() {
-        var artwork = getSingleSelectedArtworkForImageUi();
-
-        if (!artwork) {
-            return;
-        }
-
-        resetArtworkTransformState(artwork);
-        applyArtworkTransformToMesh(artwork);
-        updateArtworkTransformUi();
-        updateAlignmentPanel();
-        notifyGalleryStatus("Zresetowano skale i rotacje obrazu. Zapisz stan galerii, aby zachowac zmiane.");
-    }
-
     function getArtworkDimensionsForAspectRatio(imageAspect) {
         var safeAspect = Number(imageAspect);
         var baseAspect = artworkWidth / artworkHeight;
@@ -1632,7 +1375,15 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         var fittedDimensions = getArtworkDimensionsForAspectRatio(imageAspect);
-        getArtworkImagePlane(artwork);
+        var imagePlane = getArtworkImagePlane(artwork);
+
+        artwork.scaling.x = fittedDimensions.width / artworkWidth;
+        artwork.scaling.y = fittedDimensions.height / artworkHeight;
+        artwork.scaling.z = 1;
+
+        imagePlane.scaling.x = 1;
+        imagePlane.scaling.y = 1;
+        imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
 
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.dynamicArtworkSize = {
@@ -1640,8 +1391,6 @@ export const createScene = function (engineArg, canvasArg) {
             height: fittedDimensions.height,
             aspectRatio: fittedDimensions.aspectRatio
         };
-
-        applyArtworkTransformToMesh(artwork);
 
         return fittedDimensions;
     }
@@ -1654,11 +1403,9 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.scaling.x = 1;
         artwork.scaling.y = 1;
         artwork.scaling.z = 1;
-        artwork.rotation.z = 0;
 
         if (artwork.metadata) {
             artwork.metadata.dynamicArtworkSize = null;
-            resetArtworkTransformState(artwork);
         }
 
         if (
@@ -1695,7 +1442,6 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.artworkImage.height = baseSize.height;
         artwork.metadata.artworkImage.fittedWidth = fittedDimensions ? fittedDimensions.width : artworkWidth;
         artwork.metadata.artworkImage.fittedHeight = fittedDimensions ? fittedDimensions.height : artworkHeight;
-        artwork.metadata.artworkImage.transform = getArtworkTransformState(artwork);
     }
 
     function disposeArtworkImageMaterial(artwork) {
@@ -1720,207 +1466,6 @@ export const createScene = function (engineArg, canvasArg) {
 
             artwork.metadata.imageMaterial = null;
         }
-    }
-
-    function isArtworkTextureLoadTokenCurrent(artwork, loadToken) {
-        return !!(
-            artwork &&
-            artwork.metadata &&
-            artwork.metadata.imageLoadToken === loadToken
-        );
-    }
-
-    function finalizeArtworkTextureLoad(artwork, texture, normalizedState, loadToken) {
-        if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-            return;
-        }
-
-        fitArtworkImagePlaneToTexture(
-            artwork,
-            texture,
-            normalizedState.fitMode || galleryArtworkDefaultFitMode
-        );
-
-        artwork.computeWorldMatrix(true);
-        updateArtworkLight(artwork);
-        updateArtworkImageUi();
-        updateArtworkTransformUi();
-    }
-
-    function assignArtworkTextureToMaterial(imageMaterial, texture) {
-        if (!imageMaterial || !texture) {
-            return;
-        }
-
-        imageMaterial.diffuseTexture = texture;
-        imageMaterial.emissiveTexture = texture;
-    }
-
-    function createArtworkTextureFromUrl(
-        artwork,
-        imageMaterial,
-        normalizedState,
-        sourceUrl,
-        loadToken,
-        fallbackToPublicUrl
-    ) {
-        var texture = new BABYLON.Texture(
-            sourceUrl,
-            scene,
-            false,
-            true,
-            BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
-            function () {
-                finalizeArtworkTextureLoad(
-                    artwork,
-                    texture,
-                    normalizedState,
-                    loadToken
-                );
-            },
-            function (message, exception) {
-                if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                    return;
-                }
-
-                console.warn("Artwork texture load failed:", {
-                    sourceUrl: sourceUrl,
-                    message: message,
-                    exception: exception,
-                    imagePath: normalizedState.imagePath || null
-                });
-
-                if (
-                    fallbackToPublicUrl &&
-                    normalizedState.imageUrl &&
-                    normalizedState.imageUrl !== sourceUrl
-                ) {
-                    createArtworkTextureFromUrl(
-                        artwork,
-                        imageMaterial,
-                        normalizedState,
-                        normalizedState.imageUrl,
-                        loadToken,
-                        false
-                    );
-                    return;
-                }
-
-                notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu.");
-            }
-        );
-
-        texture.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
-        texture.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
-
-        assignArtworkTextureToMaterial(imageMaterial, texture);
-
-        return texture;
-    }
-
-    function loadArtworkTextureFromStorageDataUrl(
-        artwork,
-        imageMaterial,
-        normalizedState,
-        loadToken
-    ) {
-        if (
-            !normalizedState.imagePath ||
-            !window.gallerySupabase ||
-            !window.gallerySupabase.storage
-        ) {
-            createArtworkTextureFromUrl(
-                artwork,
-                imageMaterial,
-                normalizedState,
-                normalizedState.imageUrl,
-                loadToken,
-                false
-            );
-            return;
-        }
-
-        var bucketName = normalizedState.storageBucket || galleryArtworkStorageBucket;
-
-        window.gallerySupabase
-            .storage
-            .from(bucketName)
-            .download(normalizedState.imagePath)
-            .then(function (downloadResponse) {
-                if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                    return;
-                }
-
-                if (downloadResponse.error || !downloadResponse.data) {
-                    console.warn("Artwork Storage data texture download failed:", {
-                        bucket: bucketName,
-                        path: normalizedState.imagePath,
-                        error: downloadResponse.error
-                    });
-
-                    createArtworkTextureFromUrl(
-                        artwork,
-                        imageMaterial,
-                        normalizedState,
-                        normalizedState.imageUrl,
-                        loadToken,
-                        false
-                    );
-                    return;
-                }
-
-                var reader = new FileReader();
-
-                reader.onload = function () {
-                    if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                        return;
-                    }
-
-                    createArtworkTextureFromUrl(
-                        artwork,
-                        imageMaterial,
-                        normalizedState,
-                        reader.result,
-                        loadToken,
-                        true
-                    );
-                };
-
-                reader.onerror = function (error) {
-                    console.warn("Artwork Storage data texture FileReader failed:", error);
-
-                    if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                        return;
-                    }
-
-                    createArtworkTextureFromUrl(
-                        artwork,
-                        imageMaterial,
-                        normalizedState,
-                        normalizedState.imageUrl,
-                        loadToken,
-                        false
-                    );
-                };
-
-                reader.readAsDataURL(downloadResponse.data);
-            })
-            .catch(function (error) {
-                console.warn("Artwork Storage data texture exception:", error);
-
-                if (!isArtworkTextureLoadTokenCurrent(artwork, loadToken)) {
-                    return;
-                }
-
-                createArtworkTextureFromUrl(
-                    artwork,
-                    imageMaterial,
-                    normalizedState,
-                    normalizedState.imageUrl,
-                    loadToken,
-                    false
-                );
-            });
     }
 
     function applyArtworkImageState(artwork, imageState) {
@@ -1950,10 +1495,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         artwork.metadata.artworkImage = normalizedState;
 
-        if (normalizedState.transform) {
-            setArtworkTransformState(artwork, normalizedState.transform);
-        }
-
         var imagePlane = getArtworkImagePlane(artwork);
         disposeArtworkImageMaterial(artwork);
 
@@ -1968,36 +1509,45 @@ export const createScene = function (engineArg, canvasArg) {
         imageMaterial.backFaceCulling = false;
         imageMaterial.disableLighting = false;
 
+        var texture = new BABYLON.Texture(
+            imageUrl,
+            scene,
+            false,
+            true,
+            BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+            function () {
+                fitArtworkImagePlaneToTexture(
+                    artwork,
+                    texture,
+                    normalizedState.fitMode || galleryArtworkDefaultFitMode
+                );
+
+                artwork.computeWorldMatrix(true);
+                updateArtworkLight(artwork);
+                updateArtworkImageUi();
+            },
+            function (message, exception) {
+                console.warn("Nie udalo sie wczytac obrazu:", message, exception);
+                notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu.");
+            }
+        );
+
+        texture.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
+        texture.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+
+        imageMaterial.diffuseTexture = texture;
+        imageMaterial.emissiveTexture = texture;
+
         configureMaterialForCommonLighting(imageMaterial);
 
         imagePlane.material = imageMaterial;
         imagePlane.setEnabled(true);
 
         artwork.metadata.imageMaterial = imageMaterial;
-        artwork.metadata.imageLoadToken = Date.now() + "_" + Math.random().toString(36).slice(2);
-
-        if (normalizedState.imagePath && window.gallerySupabase && window.gallerySupabase.storage) {
-            loadArtworkTextureFromStorageDataUrl(
-                artwork,
-                imageMaterial,
-                normalizedState,
-                artwork.metadata.imageLoadToken
-            );
-        } else {
-            createArtworkTextureFromUrl(
-                artwork,
-                imageMaterial,
-                normalizedState,
-                imageUrl,
-                artwork.metadata.imageLoadToken,
-                false
-            );
-        }
 
         refreshCommonLightingMaterialSupport();
         updateArtworkLight(artwork);
         updateArtworkImageUi();
-        updateArtworkTransformUi();
 
         return true;
     }
@@ -2028,7 +1578,6 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.artworkImage = null;
         updateArtworkLight(artwork);
         updateArtworkImageUi();
-        updateArtworkTransformUi();
         return true;
     }
 
@@ -3533,102 +3082,8 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
 
-        .gallery-artwork-image-section.is-hidden,
-        .gallery-artwork-transform-section.is-hidden {
+        .gallery-artwork-image-section.is-hidden {
             display: none;
-        }
-
-        .gallery-artwork-transform-grid {
-            display: grid;
-            gap: 12px;
-        }
-
-        .gallery-artwork-transform-row {
-            display: grid;
-            grid-template-columns: 72px minmax(120px, 1fr) 64px;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .gallery-artwork-transform-label {
-            margin: 0;
-            color: #555555;
-            font-size: 12px;
-            line-height: 1.2;
-            font-weight: 800;
-            letter-spacing: 0.035em;
-            text-transform: uppercase;
-        }
-
-        .gallery-artwork-transform-value {
-            min-height: 34px;
-            padding: 0 8px;
-            border-radius: 11px;
-            border: 1px solid rgba(0, 0, 0, 0.10);
-            background: rgba(255, 255, 255, 0.22);
-            color: #303030;
-            font-size: 12px;
-            font-weight: 800;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            white-space: nowrap;
-        }
-
-        .gallery-artwork-transform-slider {
-            appearance: none;
-            width: 100%;
-            height: 34px;
-            margin: 0;
-            background: transparent;
-            cursor: pointer;
-        }
-
-        .gallery-artwork-transform-slider::-webkit-slider-runnable-track {
-            height: 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(0, 0, 0, 0.10);
-            background: rgba(255, 255, 255, 0.28);
-            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.10);
-        }
-
-        .gallery-artwork-transform-slider::-webkit-slider-thumb {
-            appearance: none;
-            width: 22px;
-            height: 22px;
-            margin-top: -7px;
-            border-radius: 50%;
-            border: 2px solid rgba(0, 0, 0, 0.18);
-            background: rgba(255, 255, 255, 0.95);
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
-        }
-
-        .gallery-artwork-transform-slider::-moz-range-track {
-            height: 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(0, 0, 0, 0.10);
-            background: rgba(255, 255, 255, 0.28);
-            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.10);
-        }
-
-        .gallery-artwork-transform-slider::-moz-range-thumb {
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            border: 2px solid rgba(0, 0, 0, 0.18);
-            background: rgba(255, 255, 255, 0.95);
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
-        }
-
-        .gallery-artwork-transform-slider:disabled {
-            opacity: 0.45;
-            cursor: not-allowed;
-        }
-
-        .gallery-artwork-transform-reset {
-            margin-top: 12px;
-            width: 100%;
         }
 
         .gallery-artwork-image-status {
@@ -3770,10 +3225,6 @@ export const createScene = function (engineArg, canvasArg) {
             .gallery-editor-swatch {
                 width: 30px;
                 height: 30px;
-            }
-
-            .gallery-artwork-transform-row {
-                grid-template-columns: 64px minmax(104px, 1fr) 58px;
             }
 
             #galleryEditorPanel.is-lighting-mode {
@@ -3921,7 +3372,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
-    artworkImageNote.innerText = "Upload saves the file in Supabase Storage. Gallery state stores only the URL/path.";
+    artworkImageNote.innerText = "Upload zapisuje plik w Supabase Storage. State galerii przechowuje tylko URL/path.";
 
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
@@ -3934,69 +3385,6 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageSectionData.section.appendChild(artworkImageActions);
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
-
-    var artworkTransformSectionData = createEditorSection("ARTWORK TRANSFORM");
-    artworkTransformSectionData.section.classList.add("gallery-artwork-transform-section", "is-hidden");
-
-    var artworkTransformGrid = document.createElement("div");
-    artworkTransformGrid.className = "gallery-artwork-transform-grid";
-
-    function createArtworkTransformSliderRow(labelText, minValue, maxValue, stepValue) {
-        var row = document.createElement("div");
-        row.className = "gallery-artwork-transform-row";
-
-        var label = document.createElement("p");
-        label.className = "gallery-artwork-transform-label";
-        label.innerText = labelText;
-
-        var input = document.createElement("input");
-        input.type = "range";
-        input.className = "gallery-artwork-transform-slider";
-        input.min = String(minValue);
-        input.max = String(maxValue);
-        input.step = String(stepValue);
-        input.value = "0";
-
-        var value = document.createElement("span");
-        value.className = "gallery-artwork-transform-value";
-        value.innerText = "-";
-
-        row.appendChild(label);
-        row.appendChild(input);
-        row.appendChild(value);
-
-        return {
-            row: row,
-            label: label,
-            input: input,
-            value: value
-        };
-    }
-
-    var artworkTransformScaleRow = createArtworkTransformSliderRow(
-        "Scale",
-        Math.round(artworkTransformScaleMin * 100),
-        Math.round(artworkTransformScaleMax * 100),
-        1
-    );
-    var artworkTransformRotationRow = createArtworkTransformSliderRow("Rotate", -180, 180, artworkTransformRotationStepDegrees);
-
-    artworkTransformGrid.appendChild(artworkTransformScaleRow.row);
-    artworkTransformGrid.appendChild(artworkTransformRotationRow.row);
-
-    var artworkTransformResetButton = document.createElement("button");
-    artworkTransformResetButton.type = "button";
-    artworkTransformResetButton.className = "gallery-editor-action-button gallery-artwork-transform-reset";
-    artworkTransformResetButton.innerText = "RESET TRANSFORM";
-
-    var artworkTransformNote = document.createElement("p");
-    artworkTransformNote.className = "gallery-artwork-image-note";
-    artworkTransformNote.innerText = "Scale changes width and height together, without changing depth. Rotation snaps every 15°.";
-
-    artworkTransformSectionData.section.appendChild(artworkTransformGrid);
-    artworkTransformSectionData.section.appendChild(artworkTransformResetButton);
-    artworkTransformSectionData.section.appendChild(artworkTransformNote);
-    editorScroll.appendChild(artworkTransformSectionData.section);
 
     function getSingleSelectedArtworkForImageUi() {
         return selectedArtworks.length === 1 ? selectedArtworks[0] : null;
@@ -4035,79 +3423,6 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
-    function updateArtworkTransformUi() {
-        if (!artworkTransformSectionData || !artworkTransformSectionData.section) {
-            return;
-        }
-
-        var artwork = getSingleSelectedArtworkForImageUi();
-
-        artworkTransformSectionData.section.classList.toggle(
-            "is-hidden",
-            !editMode || !artwork
-        );
-
-        var disabled = !artwork;
-        artworkTransformScaleRow.input.disabled = disabled;
-        artworkTransformRotationRow.input.disabled = disabled;
-        artworkTransformResetButton.disabled = disabled;
-
-        if (!artwork) {
-            artworkTransformScaleRow.value.innerText = "-";
-            artworkTransformRotationRow.value.innerText = "-";
-            return;
-        }
-
-        var transformState = getArtworkTransformState(artwork);
-        var scalePercent = Math.round(transformState.scale * 100);
-
-        artworkTransformScaleRow.input.value = String(scalePercent);
-        artworkTransformRotationRow.input.value = String(transformState.rotationDegrees);
-        artworkTransformScaleRow.value.innerText = scalePercent + "%";
-        artworkTransformRotationRow.value.innerText = transformState.rotationDegrees + "°";
-    }
-
-    function applyArtworkTransformSliderValues(shouldNotify) {
-        var scaleValue = Number(artworkTransformScaleRow.input.value) / 100;
-        var rotationValue = Number(artworkTransformRotationRow.input.value);
-
-        setSelectedArtworkTransform(
-            scaleValue,
-            rotationValue,
-            !!shouldNotify
-        );
-    }
-
-    artworkTransformScaleRow.input.addEventListener("input", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        applyArtworkTransformSliderValues(false);
-    });
-
-    artworkTransformScaleRow.input.addEventListener("change", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        applyArtworkTransformSliderValues(true);
-    });
-
-    artworkTransformRotationRow.input.addEventListener("input", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        applyArtworkTransformSliderValues(false);
-    });
-
-    artworkTransformRotationRow.input.addEventListener("change", function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        applyArtworkTransformSliderValues(true);
-    });
-
-    artworkTransformResetButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        resetSelectedArtworkTransform();
-    };
-
     artworkImageUploadButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -4141,7 +3456,6 @@ export const createScene = function (engineArg, canvasArg) {
             .finally(function () {
                 artworkImageFileInput.value = "";
                 updateArtworkImageUi();
-                updateArtworkTransformUi();
             });
     };
 
@@ -4169,7 +3483,6 @@ export const createScene = function (engineArg, canvasArg) {
             updatedAt: new Date().toISOString()
         });
 
-        updateArtworkTransformUi();
         notifyGalleryStatus("Ustawiono obraz z URL. Zapisz stan galerii, aby zachowac zmiane.");
     };
 
@@ -4192,7 +3505,6 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 removeArtworkImageFromMesh(artwork, true);
-                updateArtworkTransformUi();
                 notifyGalleryStatus("Usunieto obraz. Zapisz stan galerii, aby zachowac zmiane.");
             })
             .catch(function (error) {
@@ -8870,7 +8182,6 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         updateArtworkImageUi();
-        updateArtworkTransformUi();
         updateAlignmentPanel();
     }
 
@@ -11085,7 +10396,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         let point = pickWall.pickedPoint;
         let normal = pickWall.getNormal(true);
-        var preservedRoll = artwork.rotation ? artwork.rotation.z : 0;
 
         if (!normal) {
             return;
@@ -11113,7 +10423,7 @@ export const createScene = function (engineArg, canvasArg) {
             candidateRotation = new BABYLON.Vector3(
                 0,
                 normal.x > 0 ? Math.PI / 2 : -Math.PI / 2,
-                preservedRoll
+                0
             );
 
             candidateWallAxis = "x";
@@ -11142,7 +10452,7 @@ export const createScene = function (engineArg, canvasArg) {
             candidateRotation = new BABYLON.Vector3(
                 0,
                 normal.z > 0 ? 0 : Math.PI,
-                preservedRoll
+                0
             );
 
             candidateWallAxis = "z";
@@ -12194,8 +11504,7 @@ export const createScene = function (engineArg, canvasArg) {
                         horizontalAxis: wallData ? wallData.horizontalAxis : null
                     },
                     material: getMaterialState(artwork.material),
-                    image: getArtworkImageState(artwork),
-                    artworkTransform: getArtworkTransformState(artwork)
+                    image: getArtworkImageState(artwork)
                 };
             }),
             spheres: artSpheres.map(function (sphere, index) {
@@ -12285,15 +11594,6 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 applyMaterialStateToMesh(artwork, artworkState.material);
-
-                if (artworkState.artworkTransform) {
-                    setArtworkTransformState(artwork, artworkState.artworkTransform);
-                } else if (
-                    artworkState.image &&
-                    artworkState.image.transform
-                ) {
-                    setArtworkTransformState(artwork, artworkState.image.transform);
-                }
 
                 if (artworkState.image || artworkState.artworkImage || artworkState.imageUrl || artworkState.imagePath) {
                     applyArtworkImageState(
