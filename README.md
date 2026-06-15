@@ -78,3 +78,60 @@ This version changes artwork upload from `upsert: true` to `upsert: false`.
 Artwork paths already include `Date.now()`, so every upload gets a unique path.
 
 It also shows the Supabase Storage error message in the gallery toast and logs upload details to the browser console.
+
+
+## V0_10 Supabase Artwork Upload Stage 2 - Dynamic Aspect Ratio
+
+This GitHub package includes:
+- Supabase artwork upload stage 1.
+- Upload fix: `upsert: false` and detailed upload error logging.
+- Dynamic artwork aspect ratio after image upload/load.
+- Artwork mesh scaling is adjusted to the uploaded image proportions.
+- Remove image resets the artwork to the default placeholder size.
+
+SQL files are intentionally not included in this package.
+
+
+## V0_10 Supabase Artwork Upload Stage 3 - Artwork Scale + Rotation
+
+This GitHub package includes:
+- Stage 1 artwork upload to Supabase Storage.
+- Stage 2 dynamic artwork aspect ratio.
+- Stage 3 manual artwork transform controls.
+- Width / Height scaling on the wall, without changing artwork depth.
+- Symmetric scaling from the artwork center.
+- Rotation on the wall snapped every 15 degrees.
+- Save/load support for `artworkTransform`.
+
+SQL files are intentionally not included in this package.
+
+
+## V0_10 Supabase Artwork Upload Stage 4 - Uniform Scale Slider + Rotation Slider
+
+This GitHub package includes:
+- Supabase artwork upload and dynamic aspect ratio.
+- Uniform artwork scale slider: width and height scale together.
+- Scale range: 25% - 300%, step 1%.
+- Rotation slider: -180° - 180°, snapped every 15°.
+- Artwork thickness is preserved: `scaling.z = 1`.
+- Reset transform keeps returning scale/rotation to default values.
+- SQL files are intentionally not included.
+
+
+## Stage 4 UI English text fix
+
+Visible helper text in the editor UI has been changed back to English:
+- Artwork image upload note.
+- Artwork transform scale/rotation note.
+
+SQL files are intentionally not included in this package.
+
+
+## Stage 4 rotation -180 fix
+
+Artwork transform rotation now preserves `-180°` instead of normalizing it to `180°`.
+
+Changed:
+- `while (degrees <= -180)` to `while (degrees < -180)`
+
+SQL files are intentionally not included in this package.
