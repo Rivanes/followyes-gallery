@@ -1672,6 +1672,110 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function cloneArtworkMaterialColor(color) {
+        if (!color) {
+            return null;
+        }
+
+        if (color.clone) {
+            return color.clone();
+        }
+
+        return color;
+    }
+
+    function storeArtworkOriginalMaterialState(artwork) {
+        if (
+            !artwork ||
+            !artwork.material ||
+            (
+                artwork.metadata &&
+                artwork.metadata.originalArtworkMaterialState
+            )
+        ) {
+            return;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+
+        artwork.metadata.originalArtworkMaterialState = {
+            diffuseColor: cloneArtworkMaterialColor(artwork.material.diffuseColor),
+            emissiveColor: cloneArtworkMaterialColor(artwork.material.emissiveColor),
+            specularColor: cloneArtworkMaterialColor(artwork.material.specularColor),
+            albedoColor: cloneArtworkMaterialColor(artwork.material.albedoColor)
+        };
+    }
+
+    function setArtworkBaseMaterialColor(artwork, color) {
+        if (!artwork || !artwork.material || !color) {
+            return;
+        }
+
+        if (artwork.material.diffuseColor) {
+            artwork.material.diffuseColor = color.clone ? color.clone() : color;
+        }
+
+        if (artwork.material.emissiveColor) {
+            artwork.material.emissiveColor = BABYLON.Color3.Black();
+        }
+
+        if (artwork.material.specularColor) {
+            artwork.material.specularColor = new BABYLON.Color3(0.08, 0.08, 0.08);
+        }
+
+        if (artwork.material.albedoColor) {
+            artwork.material.albedoColor = color.clone ? color.clone() : color;
+        }
+    }
+
+    function applyArtworkImageBaseMaterial(artwork) {
+        if (!artwork || !artwork.material) {
+            return;
+        }
+
+        storeArtworkOriginalMaterialState(artwork);
+        setArtworkBaseMaterialColor(artwork, new BABYLON.Color3(1, 1, 1));
+        configureMeshMaterialForMainShadows(artwork);
+    }
+
+    function restoreArtworkPlaceholderBaseMaterial(artwork) {
+        if (!artwork || !artwork.metadata || !artwork.material) {
+            return;
+        }
+
+        var originalState = artwork.metadata.originalArtworkMaterialState;
+
+        if (!originalState) {
+            return;
+        }
+
+        if (originalState.diffuseColor && artwork.material.diffuseColor) {
+            artwork.material.diffuseColor = originalState.diffuseColor.clone
+                ? originalState.diffuseColor.clone()
+                : originalState.diffuseColor;
+        }
+
+        if (originalState.emissiveColor && artwork.material.emissiveColor) {
+            artwork.material.emissiveColor = originalState.emissiveColor.clone
+                ? originalState.emissiveColor.clone()
+                : originalState.emissiveColor;
+        }
+
+        if (originalState.specularColor && artwork.material.specularColor) {
+            artwork.material.specularColor = originalState.specularColor.clone
+                ? originalState.specularColor.clone()
+                : originalState.specularColor;
+        }
+
+        if (originalState.albedoColor && artwork.material.albedoColor) {
+            artwork.material.albedoColor = originalState.albedoColor.clone
+                ? originalState.albedoColor.clone()
+                : originalState.albedoColor;
+        }
+
+        configureMeshMaterialForMainShadows(artwork);
+    }
+
     function fitArtworkImagePlaneToTexture(artwork, texture, fitMode) {
         if (!artwork || !texture) {
             return;
@@ -1748,6 +1852,7 @@ export const createScene = function (engineArg, canvasArg) {
         );
 
         artwork.metadata.artworkImage = normalizedState;
+        applyArtworkImageBaseMaterial(artwork);
 
         if (normalizedState.transform) {
             setArtworkTransformState(artwork, normalizedState.transform);
@@ -1834,6 +1939,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         resetArtworkAspectRatioToDefault(artwork);
+        restoreArtworkPlaceholderBaseMaterial(artwork);
         artwork.metadata.artworkImage = null;
         updateArtworkLight(artwork);
         updateArtworkImageUi();

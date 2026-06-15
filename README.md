@@ -135,3 +135,35 @@ Changed:
 - `while (degrees <= -180)` to `while (degrees < -180)`
 
 SQL files are intentionally not included in this package.
+
+
+## Stage 5 Storage replace/delete fix
+
+When uploading a new image for an artwork that already has a Storage image, the old Storage file is removed after the new upload succeeds.
+
+This prevents unused duplicates from accumulating in:
+`gallery-artworks/main`.
+
+Existing old duplicates must still be removed manually in Supabase Storage if they are no longer referenced by the current gallery state.
+
+SQL files are intentionally not included in this package.
+
+
+## Stage 6 Remove Storage delete fix
+
+The `REMOVE` button now removes the currently assigned artwork image from Supabase Storage before clearing it from the artwork.
+
+It also supports extracting the Storage path from a Supabase public URL if `imagePath` is missing.
+
+Reupload/replace delete behavior from Stage 5 is preserved.
+
+SQL files are intentionally not included in this package.
+
+
+## Stage 7 White Artwork Base Fix
+
+When an artwork has an uploaded image, the base artwork mesh is forced to white so side edges do not show the old placeholder color.
+
+When the image is removed, the placeholder base material/color is restored.
+
+SQL files are intentionally not included in this package.
