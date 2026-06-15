@@ -135,3 +135,13 @@ Changed:
 - `while (degrees <= -180)` to `while (degrees < -180)`
 
 SQL files are intentionally not included in this package.
+
+
+## Stage 4 texture load fallback fix
+
+If Babylon fails to load the public Supabase image URL as a texture, the gallery now falls back to:
+`Supabase Storage download(imagePath)` → `Blob URL` → Babylon texture.
+
+This keeps the saved state format unchanged and makes Save/Refresh/Load more reliable.
+
+SQL files are intentionally not included in this package.
