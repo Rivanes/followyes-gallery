@@ -96,6 +96,171 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     attachGalleryCameraControl();
+
+    // DESKTOP VIEWER ROTATION FIX
+    // W trybie obserwatora Babylonowe buttons = [1] nie zawsze lapalo obrót,
+    // bo pozniejsza logika sceny przechwytuje pointery. Dlatego desktopowy Viewer
+    // dostaje wlasny, prosty obrót kamery pod wcisnietym scrollem / srodkowym przyciskiem.
+    var desktopViewerMiddleLookActive = false;
+    var desktopViewerMiddleLookPointerId = null;
+    var desktopViewerMiddleLookLastX = 0;
+    var desktopViewerMiddleLookLastY = 0;
+    var desktopViewerMiddleLookSensitivityX = 0.004;
+    var desktopViewerMiddleLookSensitivityY = 0.003;
+
+    function isDesktopViewerMiddleLookAllowed(event) {
+        if (!event || event.button !== 1) {
+            return false;
+        }
+
+        if (editMode) {
+            return false;
+        }
+
+        if (typeof isMobileViewerActive === "function" && isMobileViewerActive()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function preventMiddleMouseBrowserAction(event) {
+        if (!event || event.button !== 1) {
+            return;
+        }
+
+        if (event.preventDefault) {
+            event.preventDefault();
+        }
+    }
+
+    function beginDesktopViewerMiddleLook(event) {
+        if (!isDesktopViewerMiddleLookAllowed(event)) {
+            return false;
+        }
+
+        desktopViewerMiddleLookActive = true;
+        desktopViewerMiddleLookPointerId = event.pointerId !== undefined ? event.pointerId : null;
+        desktopViewerMiddleLookLastX = event.clientX;
+        desktopViewerMiddleLookLastY = event.clientY;
+
+        if (canvas && canvas.setPointerCapture && event.pointerId !== undefined) {
+            try {
+                canvas.setPointerCapture(event.pointerId);
+            } catch (captureError) {
+                // Pointer capture nie jest krytyczny; obrót i tak dziala na window pointermove.
+            }
+        }
+
+        if (event.preventDefault) {
+            event.preventDefault();
+        }
+
+        if (event.stopPropagation) {
+            event.stopPropagation();
+        }
+
+        return true;
+    }
+
+    function updateDesktopViewerMiddleLook(event) {
+        if (!desktopViewerMiddleLookActive || !event) {
+            return false;
+        }
+
+        if (
+            desktopViewerMiddleLookPointerId !== null &&
+            event.pointerId !== undefined &&
+            event.pointerId !== desktopViewerMiddleLookPointerId
+        ) {
+            return false;
+        }
+
+        var dx = event.clientX - desktopViewerMiddleLookLastX;
+        var dy = event.clientY - desktopViewerMiddleLookLastY;
+
+        desktopViewerMiddleLookLastX = event.clientX;
+        desktopViewerMiddleLookLastY = event.clientY;
+
+        camera.rotation.y += dx * desktopViewerMiddleLookSensitivityX;
+        camera.rotation.x += dy * desktopViewerMiddleLookSensitivityY;
+        camera.rotation.x = BABYLON.Scalar.Clamp(camera.rotation.x, -0.58, 0.58);
+
+        if (event.preventDefault) {
+            event.preventDefault();
+        }
+
+        if (event.stopPropagation) {
+            event.stopPropagation();
+        }
+
+        return true;
+    }
+
+    function endDesktopViewerMiddleLook(event) {
+        if (!desktopViewerMiddleLookActive) {
+            return false;
+        }
+
+        if (
+            event &&
+            desktopViewerMiddleLookPointerId !== null &&
+            event.pointerId !== undefined &&
+            event.pointerId !== desktopViewerMiddleLookPointerId
+        ) {
+            return false;
+        }
+
+        if (canvas && canvas.releasePointerCapture && event && event.pointerId !== undefined) {
+            try {
+                canvas.releasePointerCapture(event.pointerId);
+            } catch (releaseError) {
+                // Brak capture nie blokuje zakonczenia obrotu.
+            }
+        }
+
+        desktopViewerMiddleLookActive = false;
+        desktopViewerMiddleLookPointerId = null;
+
+        if (event && event.preventDefault) {
+            event.preventDefault();
+        }
+
+        if (event && event.stopPropagation) {
+            event.stopPropagation();
+        }
+
+        return true;
+    }
+
+    canvas.addEventListener("pointerdown", function (event) {
+        beginDesktopViewerMiddleLook(event);
+    }, true);
+
+    window.addEventListener("pointermove", function (event) {
+        updateDesktopViewerMiddleLook(event);
+    }, true);
+
+    window.addEventListener("pointerup", function (event) {
+        endDesktopViewerMiddleLook(event);
+    }, true);
+
+    window.addEventListener("pointercancel", function (event) {
+        endDesktopViewerMiddleLook(event);
+    }, true);
+
+    canvas.addEventListener("mousedown", function (event) {
+        if (!editMode && event.button === 1) {
+            preventMiddleMouseBrowserAction(event);
+        }
+    }, true);
+
+    canvas.addEventListener("auxclick", function (event) {
+        if (!editMode && event.button === 1) {
+            preventMiddleMouseBrowserAction(event);
+        }
+    }, true);
+
     camera.speed = 0.3;
     camera.setTarget(new BABYLON.Vector3(0, 1, 0));
 
@@ -617,6 +782,49 @@ export const createScene = function (engineArg, canvasArg) {
     canvas.addEventListener("contextmenu", (e) => {
         e.preventDefault();
     });
+
+    // UI ANCHOR FIX
+    // Elementy UI galerii nie moga byc przyklejone do calego viewportu strony,
+    // bo podczas scrollowania podazaly za uzytkownikiem poza sekcje 3D.
+    // Od teraz panele, przycisk edycji i joystick sa przypiete do kontenera canvasu
+    // czyli do sekcji galerii, a nie do document.body.
+    function getGalleryUiRoot() {
+        if (canvas && canvas.parentElement) {
+            return canvas.parentElement;
+        }
+
+        return document.getElementById("gallerySection") || document.body;
+    }
+
+    function prepareGalleryUiRoot() {
+        var galleryUiRoot = getGalleryUiRoot();
+
+        if (!galleryUiRoot || galleryUiRoot === document.body) {
+            return galleryUiRoot || document.body;
+        }
+
+        var rootPosition = "relative";
+
+        try {
+            rootPosition = window.getComputedStyle(galleryUiRoot).position;
+        } catch (error) {
+            rootPosition = galleryUiRoot.style.position || "relative";
+        }
+
+        if (!rootPosition || rootPosition === "static") {
+            galleryUiRoot.style.position = "relative";
+        }
+
+        return galleryUiRoot;
+    }
+
+    function appendGalleryUiElement(element) {
+        if (!element) {
+            return;
+        }
+
+        prepareGalleryUiRoot().appendChild(element);
+    }
 
     var floorMeshes = [];
     var wallMeshes = [];
@@ -1234,7 +1442,7 @@ export const createScene = function (engineArg, canvasArg) {
             --gallery-editor-screen-gap: clamp(30px, 3.2vw, 40px);
             --gallery-editor-bottom-gap: calc(var(--gallery-editor-screen-gap) + 34px);
             --gallery-editor-border-soft: rgba(255, 255, 255, 0.62);
-            position: fixed;
+            position: absolute;
             right: var(--gallery-editor-screen-gap);
             bottom: var(--gallery-editor-bottom-gap);
             width: min(420px, calc(100vw - 32px));
@@ -1548,7 +1756,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         .gallery-editor-floating-mode-button {
-            position: fixed;
+            position: absolute;
             right: var(--gallery-editor-screen-gap);
             bottom: var(--gallery-editor-bottom-gap);
             z-index: 999;
@@ -6304,7 +6512,7 @@ export const createScene = function (engineArg, canvasArg) {
     updateLightingPresetRows();
     setEditorPanelMode("edit");
 
-    document.body.appendChild(editHelpPanel);
+    appendGalleryUiElement(editHelpPanel);
 
     function setEditorUiVisible(isVisible) {
         editHelpPanel.style.display = isVisible ? "flex" : "none";
@@ -6328,8 +6536,8 @@ export const createScene = function (engineArg, canvasArg) {
 
             lightingQuickButton.style.display = "none";
 
-            if (editButton.parentElement !== document.body) {
-                document.body.appendChild(editButton);
+            if (editButton.parentElement !== prepareGalleryUiRoot()) {
+                appendGalleryUiElement(editButton);
             }
 
             editButton.className = "gallery-editor-floating-mode-button";
@@ -6978,7 +7186,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         mobileStyle.innerHTML = `
             #mobileViewerControls {
-                position: fixed;
+                position: absolute;
                 inset: 0;
                 z-index: 10020;
                 pointer-events: none;
@@ -7033,7 +7241,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         mobileViewerControls.appendChild(mobileJoystickBase);
 
-        document.body.appendChild(mobileViewerControls);
+        appendGalleryUiElement(mobileViewerControls);
 
         mobileJoystickBase.addEventListener("pointerdown", function (event) {
             if (!isMobileViewerActive()) {
