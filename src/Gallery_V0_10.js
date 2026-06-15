@@ -1687,7 +1687,6 @@ export const createScene = function (engineArg, canvasArg) {
     function storeArtworkOriginalMaterialState(artwork) {
         if (
             !artwork ||
-            !artwork.material ||
             (
                 artwork.metadata &&
                 artwork.metadata.originalArtworkMaterialState
@@ -1699,47 +1698,49 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata = artwork.metadata || {};
 
         artwork.metadata.originalArtworkMaterialState = {
-            diffuseColor: cloneArtworkMaterialColor(artwork.material.diffuseColor),
-            emissiveColor: cloneArtworkMaterialColor(artwork.material.emissiveColor),
-            specularColor: cloneArtworkMaterialColor(artwork.material.specularColor),
-            albedoColor: cloneArtworkMaterialColor(artwork.material.albedoColor)
+            material: artwork.material || null,
+            diffuseColor: artwork.material ? cloneArtworkMaterialColor(artwork.material.diffuseColor) : null,
+            emissiveColor: artwork.material ? cloneArtworkMaterialColor(artwork.material.emissiveColor) : null,
+            specularColor: artwork.material ? cloneArtworkMaterialColor(artwork.material.specularColor) : null,
+            albedoColor: artwork.material ? cloneArtworkMaterialColor(artwork.material.albedoColor) : null
         };
     }
 
-    function setArtworkBaseMaterialColor(artwork, color) {
-        if (!artwork || !artwork.material || !color) {
-            return;
+    function getArtworkImageBaseMaterial() {
+        if (
+            galleryArtworkImageBaseMaterial &&
+            !galleryArtworkImageBaseMaterial.isDisposed()
+        ) {
+            return galleryArtworkImageBaseMaterial;
         }
 
-        if (artwork.material.diffuseColor) {
-            artwork.material.diffuseColor = color.clone ? color.clone() : color;
-        }
+        galleryArtworkImageBaseMaterial = new BABYLON.StandardMaterial(
+            "Artwork_Image_Base_White_Material",
+            scene
+        );
 
-        if (artwork.material.emissiveColor) {
-            artwork.material.emissiveColor = BABYLON.Color3.Black();
-        }
+        galleryArtworkImageBaseMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        galleryArtworkImageBaseMaterial.emissiveColor = new BABYLON.Color3(0.12, 0.12, 0.12);
+        galleryArtworkImageBaseMaterial.specularColor = new BABYLON.Color3(0.12, 0.12, 0.12);
+        galleryArtworkImageBaseMaterial.backFaceCulling = false;
 
-        if (artwork.material.specularColor) {
-            artwork.material.specularColor = new BABYLON.Color3(0.08, 0.08, 0.08);
-        }
+        configureMaterialForCommonLighting(galleryArtworkImageBaseMaterial);
 
-        if (artwork.material.albedoColor) {
-            artwork.material.albedoColor = color.clone ? color.clone() : color;
-        }
+        return galleryArtworkImageBaseMaterial;
     }
 
     function applyArtworkImageBaseMaterial(artwork) {
-        if (!artwork || !artwork.material) {
+        if (!artwork) {
             return;
         }
 
         storeArtworkOriginalMaterialState(artwork);
-        setArtworkBaseMaterialColor(artwork, new BABYLON.Color3(1, 1, 1));
+        artwork.material = getArtworkImageBaseMaterial();
         configureMeshMaterialForMainShadows(artwork);
     }
 
     function restoreArtworkPlaceholderBaseMaterial(artwork) {
-        if (!artwork || !artwork.metadata || !artwork.material) {
+        if (!artwork || !artwork.metadata) {
             return;
         }
 
@@ -1749,28 +1750,34 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        if (originalState.diffuseColor && artwork.material.diffuseColor) {
-            artwork.material.diffuseColor = originalState.diffuseColor.clone
-                ? originalState.diffuseColor.clone()
-                : originalState.diffuseColor;
+        if (originalState.material) {
+            artwork.material = originalState.material;
         }
 
-        if (originalState.emissiveColor && artwork.material.emissiveColor) {
-            artwork.material.emissiveColor = originalState.emissiveColor.clone
-                ? originalState.emissiveColor.clone()
-                : originalState.emissiveColor;
-        }
+        if (artwork.material) {
+            if (originalState.diffuseColor && artwork.material.diffuseColor) {
+                artwork.material.diffuseColor = originalState.diffuseColor.clone
+                    ? originalState.diffuseColor.clone()
+                    : originalState.diffuseColor;
+            }
 
-        if (originalState.specularColor && artwork.material.specularColor) {
-            artwork.material.specularColor = originalState.specularColor.clone
-                ? originalState.specularColor.clone()
-                : originalState.specularColor;
-        }
+            if (originalState.emissiveColor && artwork.material.emissiveColor) {
+                artwork.material.emissiveColor = originalState.emissiveColor.clone
+                    ? originalState.emissiveColor.clone()
+                    : originalState.emissiveColor;
+            }
 
-        if (originalState.albedoColor && artwork.material.albedoColor) {
-            artwork.material.albedoColor = originalState.albedoColor.clone
-                ? originalState.albedoColor.clone()
-                : originalState.albedoColor;
+            if (originalState.specularColor && artwork.material.specularColor) {
+                artwork.material.specularColor = originalState.specularColor.clone
+                    ? originalState.specularColor.clone()
+                    : originalState.specularColor;
+            }
+
+            if (originalState.albedoColor && artwork.material.albedoColor) {
+                artwork.material.albedoColor = originalState.albedoColor.clone
+                    ? originalState.albedoColor.clone()
+                    : originalState.albedoColor;
+            }
         }
 
         configureMeshMaterialForMainShadows(artwork);
@@ -2364,6 +2371,7 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryArtworkStorageBucket = "gallery-artworks";
     var galleryArtworkStoragePrefix = "main";
     var galleryArtworkDefaultFitMode = "contain";
+    var galleryArtworkImageBaseMaterial = null;
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 

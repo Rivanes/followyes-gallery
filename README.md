@@ -167,3 +167,13 @@ When an artwork has an uploaded image, the base artwork mesh is forced to white 
 When the image is removed, the placeholder base material/color is restored.
 
 SQL files are intentionally not included in this package.
+
+
+## Stage 7 White Base Material Fix
+
+Fixes the artwork side edge turning dark/black after the previous white base attempt.
+
+Uploaded-image artworks now use a dedicated white base material with slight emissive lighting.
+When the image is removed, the original placeholder material is restored.
+
+SQL files are intentionally not included in this package.
