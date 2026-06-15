@@ -78,15 +78,3 @@ This version changes artwork upload from `upsert: true` to `upsert: false`.
 Artwork paths already include `Date.now()`, so every upload gets a unique path.
 
 It also shows the Supabase Storage error message in the gallery toast and logs upload details to the browser console.
-
-
-## V0_10 Supabase Artwork Upload Stage 2 - Dynamic Aspect Ratio
-
-This GitHub package includes:
-- Supabase artwork upload stage 1.
-- Upload fix: `upsert: false` and detailed upload error logging.
-- Dynamic artwork aspect ratio after image upload/load.
-- Artwork mesh scaling is adjusted to the uploaded image proportions.
-- Remove image resets the artwork to the default placeholder size.
-
-SQL files are intentionally not included in this package.
