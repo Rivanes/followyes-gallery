@@ -97,10 +97,11 @@ export const createScene = function (engineArg, canvasArg) {
 
     attachGalleryCameraControl();
 
-    // DESKTOP VIEWER ROTATION FIX
-    // W trybie obserwatora Babylonowe buttons = [1] nie zawsze lapalo obrót,
-    // bo pozniejsza logika sceny przechwytuje pointery. Dlatego desktopowy Viewer
-    // dostaje wlasny, prosty obrót kamery pod wcisnietym scrollem / srodkowym przyciskiem.
+    // DESKTOP MIDDLE MOUSE ROTATION FIX
+    // Babylonowe buttons = [1] nie zawsze lapie obrót,
+    // bo pozniejsza logika sceny przechwytuje pointery. Dlatego desktop dostaje
+    // wlasny, prosty obrót kamery pod wcisnietym scrollem / srodkowym przyciskiem.
+    // Dziala w Viewer Mode i Edit Mode, poza aktywnym przeciaganiem obiektow.
     var desktopViewerMiddleLookActive = false;
     var desktopViewerMiddleLookPointerId = null;
     var desktopViewerMiddleLookLastX = 0;
@@ -113,11 +114,12 @@ export const createScene = function (engineArg, canvasArg) {
             return false;
         }
 
-        if (editMode) {
+        if (typeof isMobileViewerActive === "function" && isMobileViewerActive()) {
             return false;
         }
 
-        if (typeof isMobileViewerActive === "function" && isMobileViewerActive()) {
+        // Nie obracamy kamery scrollem w trakcie aktywnego przeciagania elementow edycji.
+        if (isDraggingArtwork || isDraggingSphere) {
             return false;
         }
 
@@ -250,13 +252,13 @@ export const createScene = function (engineArg, canvasArg) {
     }, true);
 
     canvas.addEventListener("mousedown", function (event) {
-        if (!editMode && event.button === 1) {
+        if (event.button === 1) {
             preventMiddleMouseBrowserAction(event);
         }
     }, true);
 
     canvas.addEventListener("auxclick", function (event) {
-        if (!editMode && event.button === 1) {
+        if (event.button === 1) {
             preventMiddleMouseBrowserAction(event);
         }
     }, true);

@@ -45,3 +45,7 @@ Tak jak w działającej wersji V0_8, strona używa:
 5. Zmień targety i grupy.
 6. Kliknij `Save state`.
 7. Odśwież stronę jako publiczny użytkownik.
+
+Update note:
+- Desktop middle mouse / scroll camera rotation now works in both Viewer Mode and Edit Mode.
+- The gallery UI anchor fix is preserved.
