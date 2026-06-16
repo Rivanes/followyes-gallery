@@ -352,9 +352,10 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightingShadowsEnabled = true;
     var localSpotShadowMapSize = 1024;
     var localShadowRefreshThrottleMs = 90;
-    // Keep this conservative: high values can exceed WebGL texture-unit limits
-    // once PBR materials, environment maps and multiple shadow maps are active.
-    var commonLightingMaxSimultaneousLights = 6;
+    // Keep this below the old 24 limit. Generated display lights do not use
+    // local shadow maps, so 12 keeps all artwork lamps visible without
+    // exceeding WebGL texture-unit limits on PBR materials.
+    var commonLightingMaxSimultaneousLights = 12;
     var localShadowCasterMeshes = [];
     var localShadowReceiverMeshes = [];
 
@@ -678,12 +679,8 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
-    function disableLocalPointLightShadow(item) {
+    function disposeLocalLightShadowGenerator(item, warningLabel) {
         if (!item || !item.light) {
-            return;
-        }
-
-        if (!(BABYLON.PointLight && item.light instanceof BABYLON.PointLight)) {
             return;
         }
 
@@ -695,7 +692,7 @@ export const createScene = function (engineArg, canvasArg) {
                     shadowMap.renderList = [];
                 }
             } catch (error) {
-                console.warn("Point shadow cleanup warning:", error);
+                console.warn((warningLabel || "Local light shadow cleanup") + " warning:", error);
             }
 
             if (item.localShadowGenerator.dispose) {
@@ -704,6 +701,18 @@ export const createScene = function (engineArg, canvasArg) {
 
             item.localShadowGenerator = null;
         }
+    }
+
+    function disableLocalPointLightShadow(item) {
+        if (!item || !item.light) {
+            return;
+        }
+
+        if (!(BABYLON.PointLight && item.light instanceof BABYLON.PointLight)) {
+            return;
+        }
+
+        disposeLocalLightShadowGenerator(item, "Point shadow cleanup");
     }
 
     function isLocalLightNativeShadowCapable(item) {
@@ -727,6 +736,11 @@ export const createScene = function (engineArg, canvasArg) {
 
     function ensureCommonLightShadowLogic(item) {
         if (!item || !item.light) {
+            return;
+        }
+
+        if (item.localShadowsEnabled === false) {
+            disposeLocalLightShadowGenerator(item, "Disabled local shadow cleanup");
             return;
         }
 
@@ -6983,6 +6997,7 @@ export const createScene = function (engineArg, canvasArg) {
             helperMaxRadius: options.helperMaxRadius || null,
             helperSoftness: options.helperSoftness !== undefined ? options.helperSoftness : 0.45,
             targetOptions: normalizeLocalTargetOptions(options.targetOptions),
+            localShadowsEnabled: options.localShadowsEnabled !== false,
             localShadowGenerator: null,
             selected: false
         };
@@ -11405,7 +11420,8 @@ export const createScene = function (engineArg, canvasArg) {
             ownerMesh: artwork,
             helperLength: unifiedSpot.range,
             helperMaxRadius: unifiedSpot.range,
-            helperSoftness: unifiedSpot.blend
+            helperSoftness: unifiedSpot.blend,
+            localShadowsEnabled: false
         });
 
         refreshArtworkLightExclusions();
@@ -11982,7 +11998,8 @@ export const createScene = function (engineArg, canvasArg) {
             ownerMesh: displayMesh,
             helperLength: unifiedSpot.range,
             helperMaxRadius: unifiedSpot.range,
-            helperSoftness: unifiedSpot.blend
+            helperSoftness: unifiedSpot.blend,
+            localShadowsEnabled: false
         });
 
         updatePedestalLightIncludedMeshes(displayMesh);
