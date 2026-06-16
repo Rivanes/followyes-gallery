@@ -355,7 +355,10 @@ export const createScene = function (engineArg, canvasArg) {
     // Artwork/display lamps stay shadowless, so they can remain numerous.
     // Shadow maps are capped separately to avoid WebGL/PBR texture-unit crashes.
     var commonLightingMaxSimultaneousLights = 16;
-    var maxLocalShadowCastingSpotLights = 3;
+    var maxLocalShadowCastingSpotLights = 2;
+    var maxActiveArtworkDisplayLights = 10;
+    var artworkLightCullingIntervalMs = 220;
+    var lastArtworkLightCullingTime = 0;
     var localShadowCasterMeshes = [];
     var localShadowReceiverMeshes = [];
 
@@ -558,9 +561,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (!localLightingShadowsEnabled) {
-            if (item.localShadowGenerator && item.localShadowGenerator.getShadowMap()) {
-                item.localShadowGenerator.getShadowMap().renderList = [];
-            }
+            disposeLocalLightShadowGenerator(item, "Global local shadow cleanup");
             return;
         }
 
@@ -601,6 +602,8 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function refreshAllLocalSpotShadows() {
+        var activeLocalShadowSpotCount = 0;
+
         localLightItems.forEach(function (item) {
             if (!item) {
                 return;
@@ -612,7 +615,12 @@ export const createScene = function (engineArg, canvasArg) {
             }
 
             if (isLocalLightNativeShadowCapable(item)) {
-                refreshLocalSpotShadowForItem(item);
+                if (activeLocalShadowSpotCount < maxLocalShadowCastingSpotLights) {
+                    activeLocalShadowSpotCount += 1;
+                    refreshLocalSpotShadowForItem(item);
+                } else {
+                    disposeLocalLightShadowGenerator(item, "Local shadow cap cleanup");
+                }
             }
         });
     }
@@ -722,6 +730,11 @@ export const createScene = function (engineArg, canvasArg) {
 
     function isLocalLightNativeShadowCapable(item) {
         if (!item || !item.light) {
+            return false;
+        }
+
+        if (item.localShadowsEnabled === false) {
+            disposeLocalLightShadowGenerator(item, "Disabled local shadow cleanup");
             return false;
         }
 
@@ -996,6 +1009,16 @@ export const createScene = function (engineArg, canvasArg) {
             ) {
                 includedMeshes.push(ownerMesh.metadata.imagePlane);
             }
+
+            var artworkWallMesh = getWallMeshForArtwork(ownerMesh);
+
+            if (artworkWallMesh) {
+                includedMeshes.push(artworkWallMesh);
+            }
+
+            floorMeshes.forEach(function (floorMesh) {
+                includedMeshes.push(floorMesh);
+            });
         } else {
             if (ownerMesh.metadata && ownerMesh.metadata.sculptureMesh) {
                 includedMeshes.push(ownerMesh.metadata.sculptureMesh);
@@ -1345,104 +1368,6 @@ export const createScene = function (engineArg, canvasArg) {
             : "artwork";
 
         return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
-    }
-
-    function getArtworkLightWashMaterial() {
-        if (
-            galleryArtworkLightWashMaterial &&
-            (
-                !galleryArtworkLightWashMaterial.isDisposed ||
-                !galleryArtworkLightWashMaterial.isDisposed()
-            )
-        ) {
-            return galleryArtworkLightWashMaterial;
-        }
-
-        var textureSize = 256;
-        var washTexture = new BABYLON.DynamicTexture(
-            "Artwork_Light_Wash_Texture",
-            {
-                width: textureSize,
-                height: textureSize
-            },
-            scene,
-            false
-        );
-        var context = washTexture.getContext();
-        var gradient = context.createRadialGradient(
-            textureSize / 2,
-            textureSize / 2,
-            8,
-            textureSize / 2,
-            textureSize / 2,
-            textureSize / 2
-        );
-
-        gradient.addColorStop(0.0, "rgba(255, 244, 214, 0.72)");
-        gradient.addColorStop(0.34, "rgba(255, 232, 188, 0.32)");
-        gradient.addColorStop(0.74, "rgba(255, 220, 170, 0.10)");
-        gradient.addColorStop(1.0, "rgba(255, 220, 170, 0)");
-
-        context.clearRect(0, 0, textureSize, textureSize);
-        context.fillStyle = gradient;
-        context.fillRect(0, 0, textureSize, textureSize);
-        washTexture.update(false);
-        washTexture.hasAlpha = true;
-
-        galleryArtworkLightWashMaterial = new BABYLON.StandardMaterial(
-            "Artwork_Light_Wash_Material",
-            scene
-        );
-        galleryArtworkLightWashMaterial.diffuseTexture = washTexture;
-        galleryArtworkLightWashMaterial.emissiveTexture = washTexture;
-        galleryArtworkLightWashMaterial.opacityTexture = washTexture;
-        galleryArtworkLightWashMaterial.diffuseColor = new BABYLON.Color3(1, 0.92, 0.72);
-        galleryArtworkLightWashMaterial.emissiveColor = new BABYLON.Color3(1, 0.82, 0.48);
-        galleryArtworkLightWashMaterial.alpha = 0.78;
-        galleryArtworkLightWashMaterial.disableLighting = true;
-        galleryArtworkLightWashMaterial.backFaceCulling = false;
-        galleryArtworkLightWashMaterial.useAlphaFromDiffuseTexture = true;
-        galleryArtworkLightWashMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-        galleryArtworkLightWashMaterial.needDepthPrePass = false;
-
-        return galleryArtworkLightWashMaterial;
-    }
-
-    function getArtworkLightWashPlane(artwork) {
-        if (!artwork) {
-            return null;
-        }
-
-        artwork.metadata = artwork.metadata || {};
-
-        if (
-            artwork.metadata.lightWashPlane &&
-            !artwork.metadata.lightWashPlane.isDisposed()
-        ) {
-            return artwork.metadata.lightWashPlane;
-        }
-
-        var washPlane = BABYLON.MeshBuilder.CreatePlane(
-            artwork.name + "_LightWash",
-            {
-                width: artworkWidth * 2.8,
-                height: artworkHeight * 2.7
-            },
-            scene
-        );
-
-        washPlane.parent = artwork;
-        washPlane.position = new BABYLON.Vector3(0, 0, -artworkDepth * 0.66);
-        washPlane.rotation = new BABYLON.Vector3(0, 0, 0);
-        washPlane.isPickable = false;
-        washPlane.material = getArtworkLightWashMaterial();
-        washPlane.metadata = washPlane.metadata || {};
-        washPlane.metadata.isArtworkLightWash = true;
-        washPlane.visibility = 0.92;
-
-        artwork.metadata.lightWashPlane = washPlane;
-
-        return washPlane;
     }
 
     function getArtworkImagePlane(artwork) {
@@ -2505,7 +2430,6 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryArtworkStoragePrefix = "main";
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
-    var galleryArtworkLightWashMaterial = null;
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 
@@ -5101,7 +5025,9 @@ export const createScene = function (engineArg, canvasArg) {
             ownerMeshName: item.ownerMesh ? item.ownerMesh.name : null,
             hasOwner: !!item.ownerMesh,
             manualTransformOverride: !!item.manualTransformOverride,
-            enabled: item.light.isEnabled ? item.light.isEnabled() : true,
+            enabled: item.displayCullingEnabled && item.userEnabled !== undefined
+                ? item.userEnabled
+                : (item.light.isEnabled ? item.light.isEnabled() : true),
             color: getLocalLightStateColor(item),
             intensity: Number(item.light.intensity) || 0,
             range: Number(item.light.range) || 0,
@@ -5228,8 +5154,14 @@ export const createScene = function (engineArg, canvasArg) {
         item.manualTransformOverride = !!savedState.manualTransformOverride;
         item.targetOptions = normalizeLocalTargetOptions(savedState.targetOptions);
 
+        item.userEnabled = savedState.enabled !== false;
+
         if (item.light.setEnabled) {
-            item.light.setEnabled(savedState.enabled !== false);
+            if (item.displayCullingEnabled) {
+                updateArtworkDisplayLightCulling(true);
+            } else {
+                item.light.setEnabled(item.userEnabled);
+            }
         }
 
         var color = hexToColor3(savedState.color || getLocalLightStateColor(item));
@@ -5611,7 +5543,7 @@ export const createScene = function (engineArg, canvasArg) {
             var needsGeometryUpdate = false;
 
             if (key === "enabled") {
-                item.light.setEnabled(!!value);
+                setLocalLightItemEnabled(item, !!value, !!forceShadowRefresh);
             } else if (key === "color") {
                 var color = hexToColor3(value);
                 item.light.diffuse = color;
@@ -5836,7 +5768,9 @@ export const createScene = function (engineArg, canvasArg) {
             var enabledState = getMixedBoolState(
                 allItems,
                 function (item) {
-                    return item.light.isEnabled();
+                    return item.displayCullingEnabled && item.userEnabled !== undefined
+                        ? item.userEnabled
+                        : item.light.isEnabled();
                 },
                 true
             );
@@ -6453,6 +6387,7 @@ export const createScene = function (engineArg, canvasArg) {
         removeLocalLightIdFromGroups(item.id);
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
+        updateArtworkDisplayLightCulling(true);
     }
 
     function deleteSelectedLocalLights() {
@@ -6938,7 +6873,14 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        item.light.setEnabled(!!isEnabled);
+        item.userEnabled = !!isEnabled;
+
+        if (item.displayCullingEnabled) {
+            updateArtworkDisplayLightCulling(true);
+            return;
+        }
+
+        item.light.setEnabled(item.userEnabled);
 
         if (item.type === "point") {
             disableLocalPointLightShadow(item);
@@ -6976,7 +6918,10 @@ export const createScene = function (engineArg, canvasArg) {
             localLightSoloState.enabledById = {};
             localLightItems.forEach(function (item) {
                 if (item && item.light && item.light.isEnabled) {
-                    localLightSoloState.enabledById[item.id] = item.light.isEnabled();
+                    localLightSoloState.enabledById[item.id] =
+                        item.displayCullingEnabled && item.userEnabled !== undefined
+                            ? item.userEnabled
+                            : item.light.isEnabled();
                 }
             });
         }
@@ -7115,6 +7060,10 @@ export const createScene = function (engineArg, canvasArg) {
             helperSoftness: options.helperSoftness !== undefined ? options.helperSoftness : 0.45,
             targetOptions: normalizeLocalTargetOptions(options.targetOptions),
             localShadowsEnabled: options.localShadowsEnabled !== false,
+            displayCullingEnabled: options.displayCullingEnabled === true,
+            userEnabled: options.userEnabled !== undefined
+                ? !!options.userEnabled
+                : (options.light.isEnabled ? options.light.isEnabled() : true),
             localShadowGenerator: null,
             selected: false
         };
@@ -7132,10 +7081,93 @@ export const createScene = function (engineArg, canvasArg) {
         ensureCommonLightShadowLogic(item);
         updateLocalLightHelper(item);
 
+        if (item.displayCullingEnabled) {
+            updateArtworkDisplayLightCulling(true);
+        }
+
         updateLocalLightsUi();
 
         return item;
     }
+
+    function getArtworkDisplayLightItems() {
+        return localLightItems.filter(function (item) {
+            return !!(
+                item &&
+                item.displayCullingEnabled &&
+                item.light &&
+                item.ownerMesh &&
+                artworks.indexOf(item.ownerMesh) !== -1 &&
+                !item.ownerMesh.isDisposed()
+            );
+        });
+    }
+
+    function getArtworkDisplayLightScore(item) {
+        if (!item || !item.ownerMesh || !camera) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        var artworkPosition = item.ownerMesh.getAbsolutePosition
+            ? item.ownerMesh.getAbsolutePosition()
+            : item.ownerMesh.position;
+        var toArtwork = artworkPosition.subtract(camera.position);
+        var distance = toArtwork.length();
+
+        if (!isFinite(distance) || distance <= 0.001) {
+            return 0;
+        }
+
+        var directionToArtwork = toArtwork.scale(1 / distance);
+        var cameraForward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+
+        if (cameraForward.lengthSquared() > 0) {
+            cameraForward.normalize();
+        }
+
+        var facingScore = BABYLON.Vector3.Dot(cameraForward, directionToArtwork);
+        var behindPenalty = facingScore < -0.18 ? 100000 : 0;
+
+        return distance - facingScore * 18 + behindPenalty;
+    }
+
+    function updateArtworkDisplayLightCulling(force) {
+        var now = Date.now();
+
+        if (
+            !force &&
+            now - lastArtworkLightCullingTime < artworkLightCullingIntervalMs
+        ) {
+            return;
+        }
+
+        lastArtworkLightCullingTime = now;
+
+        var displayItems = getArtworkDisplayLightItems();
+
+        if (!displayItems.length) {
+            return;
+        }
+
+        var sortedItems = displayItems.slice().sort(function (a, b) {
+            return getArtworkDisplayLightScore(a) - getArtworkDisplayLightScore(b);
+        });
+        var activeItems = sortedItems.slice(0, maxActiveArtworkDisplayLights);
+
+        displayItems.forEach(function (item) {
+            var shouldBeEnabled = item.userEnabled !== false && activeItems.indexOf(item) !== -1;
+            var isEnabled = item.light.isEnabled ? item.light.isEnabled() : true;
+
+            if (isEnabled !== shouldBeEnabled && item.light.setEnabled) {
+                item.light.setEnabled(shouldBeEnabled);
+                updateLocalLightVisualState(item);
+            }
+        });
+    }
+
+    scene.onBeforeRenderObservable.add(function () {
+        updateArtworkDisplayLightCulling(false);
+    });
 
     function getLocalLightItemByMesh(mesh) {
         if (!mesh || !mesh.metadata || !mesh.metadata.localLightId) {
@@ -11538,7 +11570,8 @@ export const createScene = function (engineArg, canvasArg) {
             helperLength: unifiedSpot.range,
             helperMaxRadius: unifiedSpot.range,
             helperSoftness: unifiedSpot.blend,
-            localShadowsEnabled: false
+            localShadowsEnabled: false,
+            displayCullingEnabled: true
         });
 
         refreshArtworkLightExclusions();
@@ -11610,7 +11643,6 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.isPickable = true;
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkImage = null;
-        getArtworkLightWashPlane(artwork);
 
         if (options.wall) {
             setArtworkWallMetadata(
@@ -11632,6 +11664,7 @@ export const createScene = function (engineArg, canvasArg) {
         artworks.push(artwork);
         createArtworkLight(artwork, index);
         refreshAllCommonLocalLightTargets();
+        updateArtworkDisplayLightCulling(true);
 
         return artwork;
     }
@@ -11817,6 +11850,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         refreshArtworkLightExclusions();
         refreshAllCommonLocalLightTargets();
+        updateArtworkDisplayLightCulling(true);
         refreshAllLocalSpotShadows();
         updateLocalLightsUi();
         schedulePersistLocalLightState(true);
@@ -12900,6 +12934,7 @@ export const createScene = function (engineArg, canvasArg) {
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
         refreshAllCommonLocalLightTargets();
+        updateArtworkDisplayLightCulling(true);
         refreshAllLocalSpotShadows();
         updateEditHelpStatus();
         updateAlignmentPanel();
