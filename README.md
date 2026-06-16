@@ -177,3 +177,18 @@ Uploaded-image artworks now use a dedicated white base material with slight emis
 When the image is removed, the original placeholder material is restored.
 
 SQL files are intentionally not included in this package.
+
+
+## Stage 8M No Auto Artwork / Sculpture Lights
+
+Removes automatic light generation from artworks and sculptures.
+
+- Existing artworks no longer get auto SpotLights.
+- Newly added artworks are created without lamps.
+- Sculptures do not generate automatic lights.
+- Manual Local Lights Spot / Point remain available.
+- Adds `ADD ARTWORK` and `DELETE SELECTED`.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+SQL files are intentionally not included in this package.

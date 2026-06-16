@@ -352,13 +352,7 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightingShadowsEnabled = true;
     var localSpotShadowMapSize = 1024;
     var localShadowRefreshThrottleMs = 90;
-    // Artwork/display lamps stay shadowless, so they can remain numerous.
-    // Shadow maps are capped separately to avoid WebGL/PBR texture-unit crashes.
-    var commonLightingMaxSimultaneousLights = 16;
-    var maxLocalShadowCastingSpotLights = 2;
-    var maxActiveArtworkDisplayLights = 10;
-    var artworkLightCullingIntervalMs = 220;
-    var lastArtworkLightCullingTime = 0;
+    var commonLightingMaxSimultaneousLights = 24;
     var localShadowCasterMeshes = [];
     var localShadowReceiverMeshes = [];
 
@@ -514,11 +508,6 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function requestLocalSpotShadowRefresh(item, forceRefresh) {
-        if (item && item.localShadowsEnabled === false) {
-            disposeLocalLightShadowGenerator(item, "Disabled local shadow cleanup");
-            return;
-        }
-
         if (
             item &&
             item.localShadowGenerator &&
@@ -561,7 +550,9 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (!localLightingShadowsEnabled) {
-            disposeLocalLightShadowGenerator(item, "Global local shadow cleanup");
+            if (item.localShadowGenerator && item.localShadowGenerator.getShadowMap()) {
+                item.localShadowGenerator.getShadowMap().renderList = [];
+            }
             return;
         }
 
@@ -602,8 +593,6 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function refreshAllLocalSpotShadows() {
-        var activeLocalShadowSpotCount = 0;
-
         localLightItems.forEach(function (item) {
             if (!item) {
                 return;
@@ -615,12 +604,7 @@ export const createScene = function (engineArg, canvasArg) {
             }
 
             if (isLocalLightNativeShadowCapable(item)) {
-                if (activeLocalShadowSpotCount < maxLocalShadowCastingSpotLights) {
-                    activeLocalShadowSpotCount += 1;
-                    refreshLocalSpotShadowForItem(item);
-                } else {
-                    disposeLocalLightShadowGenerator(item, "Local shadow cap cleanup");
-                }
+                refreshLocalSpotShadowForItem(item);
             }
         });
     }
@@ -692,8 +676,12 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
-    function disposeLocalLightShadowGenerator(item, warningLabel) {
+    function disableLocalPointLightShadow(item) {
         if (!item || !item.light) {
+            return;
+        }
+
+        if (!(BABYLON.PointLight && item.light instanceof BABYLON.PointLight)) {
             return;
         }
 
@@ -705,7 +693,7 @@ export const createScene = function (engineArg, canvasArg) {
                     shadowMap.renderList = [];
                 }
             } catch (error) {
-                console.warn((warningLabel || "Local light shadow cleanup") + " warning:", error);
+                console.warn("Point shadow cleanup warning:", error);
             }
 
             if (item.localShadowGenerator.dispose) {
@@ -716,25 +704,8 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
-    function disableLocalPointLightShadow(item) {
-        if (!item || !item.light) {
-            return;
-        }
-
-        if (!(BABYLON.PointLight && item.light instanceof BABYLON.PointLight)) {
-            return;
-        }
-
-        disposeLocalLightShadowGenerator(item, "Point shadow cleanup");
-    }
-
     function isLocalLightNativeShadowCapable(item) {
         if (!item || !item.light) {
-            return false;
-        }
-
-        if (item.localShadowsEnabled === false) {
-            disposeLocalLightShadowGenerator(item, "Disabled local shadow cleanup");
             return false;
         }
 
@@ -754,26 +725,6 @@ export const createScene = function (engineArg, canvasArg) {
 
     function ensureCommonLightShadowLogic(item) {
         if (!item || !item.light) {
-            return;
-        }
-
-        if (item.localShadowsEnabled === false) {
-            disposeLocalLightShadowGenerator(item, "Disabled local shadow cleanup");
-            return;
-        }
-
-        var activeShadowSpotCount = localLightItems.filter(function (localLightItem) {
-            return !!(
-                localLightItem &&
-                localLightItem !== item &&
-                localLightItem.localShadowGenerator
-            );
-        }).length;
-
-        if (
-            activeShadowSpotCount >= maxLocalShadowCastingSpotLights &&
-            !item.localShadowGenerator
-        ) {
             return;
         }
 
@@ -884,6 +835,8 @@ export const createScene = function (engineArg, canvasArg) {
     var artSpheres = [];
     var artworks = [];
     var artworkLights = [];
+    var artworkCreateCounter = 0;
+    var deletedArtworkNames = [];
 
     var lampCeilingY = -0.55;
     var lampCubeY = -1.2;
@@ -999,19 +952,19 @@ export const createScene = function (engineArg, canvasArg) {
             return includedMeshes;
         }
 
-        if (artworks.indexOf(ownerMesh) >= 0) {
-            var artworkWallMesh = getWallMeshForArtwork(ownerMesh);
+        includedMeshes.push(ownerMesh);
 
-            if (artworkWallMesh) {
-                includedMeshes.push(artworkWallMesh);
+        if (artworks.indexOf(ownerMesh) >= 0) {
+            var wallMesh = getWallMeshForArtwork(ownerMesh);
+
+            if (wallMesh) {
+                includedMeshes.push(wallMesh);
             }
 
             floorMeshes.forEach(function (floorMesh) {
                 includedMeshes.push(floorMesh);
             });
         } else {
-            includedMeshes.push(ownerMesh);
-
             if (ownerMesh.metadata && ownerMesh.metadata.sculptureMesh) {
                 includedMeshes.push(ownerMesh.metadata.sculptureMesh);
             }
@@ -1269,7 +1222,6 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkWidth = 1.3;
     var artworkHeight = 0.9;
     var artworkDepth = 0.04;
-    var artworkCreateCounter = 0;
     var artworkWallOffset = 0.04;
     var artworkTransformScaleMin = 0.25;
     var artworkTransformScaleMax = 3.0;
@@ -2564,13 +2516,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-editor-status-line:last-child {
             margin-bottom: 0;
-        }
-
-        .gallery-editor-selection-actions {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-            margin-top: 12px;
         }
 
         .gallery-editor-align-grid {
@@ -3948,30 +3893,6 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    function setInlineStatusValue(element, labelText, valueText, options) {
-        if (!element) {
-            return null;
-        }
-
-        var config = options || {};
-        var valueElement = document.createElement(config.valueTag || "strong");
-
-        if (config.valueClass) {
-            valueElement.className = config.valueClass;
-        }
-
-        valueElement.textContent = valueText !== undefined && valueText !== null
-            ? String(valueText)
-            : "";
-
-        element.replaceChildren(
-            document.createTextNode(labelText || ""),
-            valueElement
-        );
-
-        return valueElement;
-    }
-
     var selectionSectionData = createEditorSection("SELECTION");
     var selectedArtworkStatus = document.createElement("p");
     selectedArtworkStatus.id = "editorSelectedArtworkStatus";
@@ -3983,34 +3904,76 @@ export const createScene = function (engineArg, canvasArg) {
     selectedArtworkCountStatus.className = "gallery-editor-status-line";
     selectedArtworkCountStatus.innerText = "Selected Count: 0";
 
-    var artworkManageActions = document.createElement("div");
-    artworkManageActions.className = "gallery-editor-selection-actions";
-
-    var addArtworkButton = document.createElement("button");
-    addArtworkButton.type = "button";
-    addArtworkButton.className = "gallery-editor-action-button is-primary";
-    addArtworkButton.innerText = "ADD ARTWORK";
-
-    var deleteSelectedArtworkButton = document.createElement("button");
-    deleteSelectedArtworkButton.type = "button";
-    deleteSelectedArtworkButton.className = "gallery-editor-action-button is-danger";
-    deleteSelectedArtworkButton.innerText = "DELETE SELECTED";
-    deleteSelectedArtworkButton.disabled = true;
-
-    artworkManageActions.appendChild(addArtworkButton);
-    artworkManageActions.appendChild(deleteSelectedArtworkButton);
-
     selectionSectionData.section.appendChild(selectedArtworkStatus);
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
-    selectionSectionData.section.appendChild(artworkManageActions);
     editorScroll.appendChild(selectionSectionData.section);
+
+    var artworkManageSectionData = createEditorSection("ARTWORKS");
+    var artworkManageActions = document.createElement("div");
+    artworkManageActions.className = "gallery-artwork-image-actions";
+
+    var artworkAddButton = document.createElement("button");
+    artworkAddButton.type = "button";
+    artworkAddButton.className = "gallery-editor-action-button is-primary";
+    artworkAddButton.innerText = "ADD ARTWORK";
+
+    var artworkDeleteSelectedButton = document.createElement("button");
+    artworkDeleteSelectedButton.type = "button";
+    artworkDeleteSelectedButton.className = "gallery-editor-action-button is-danger";
+    artworkDeleteSelectedButton.innerText = "DELETE SELECTED";
+
+    var artworkManageNote = document.createElement("p");
+    artworkManageNote.className = "gallery-artwork-image-note";
+    artworkManageNote.innerText = "Add creates a new artwork without automatic lights. Delete removes only selected artwork.";
+
+    artworkManageActions.appendChild(artworkAddButton);
+    artworkManageActions.appendChild(artworkDeleteSelectedButton);
+    artworkManageSectionData.section.appendChild(artworkManageActions);
+    artworkManageSectionData.section.appendChild(artworkManageNote);
+    editorScroll.appendChild(artworkManageSectionData.section);
+
+    function updateArtworkManagementUi() {
+        if (!artworkManageSectionData || !artworkManageSectionData.section) {
+            return;
+        }
+
+        artworkManageSectionData.section.classList.toggle(
+            "is-hidden",
+            !editMode
+        );
+
+        artworkAddButton.disabled = !editMode;
+        artworkDeleteSelectedButton.disabled = !editMode || selectedArtworks.length === 0;
+    }
+
+    artworkAddButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = addNewArtworkToScene();
+
+        if (artwork) {
+            notifyGalleryStatus("Added new artwork without automatic light. Upload an image, move it on the wall, then save state.");
+        }
+    };
+
+    artworkDeleteSelectedButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        deleteSelectedArtworksNoAutoLights()
+            .catch(function (error) {
+                console.warn("Delete selected artworks error:", error);
+                notifyGalleryStatus("Artwork delete error.");
+            });
+    };
 
     var artworkImageSectionData = createEditorSection("ARTWORK IMAGE");
     artworkImageSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
 
     var artworkImageStatus = document.createElement("div");
     artworkImageStatus.className = "gallery-artwork-image-status";
-    setInlineStatusValue(artworkImageStatus, "Image: ", "None");
+    artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
 
     var artworkImageUrlLabel = document.createElement("label");
     artworkImageUrlLabel.className = "gallery-editor-field-label";
@@ -4145,17 +4108,17 @@ export const createScene = function (engineArg, canvasArg) {
         artworkImageRemoveButton.disabled = !artwork || !imageState;
 
         if (!artwork) {
-            setInlineStatusValue(artworkImageStatus, "Image: ", "None");
+            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
             artworkImageUrlInput.value = "";
             return;
         }
 
         if (imageState) {
             var label = imageState.originalName || imageState.imagePath || imageState.imageUrl || "Custom image";
-            setInlineStatusValue(artworkImageStatus, "Image: ", label);
+            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>";
             artworkImageUrlInput.value = imageState.imageUrl || "";
         } else {
-            setInlineStatusValue(artworkImageStatus, "Image: ", "None");
+            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
             artworkImageUrlInput.value = "";
         }
     }
@@ -4331,28 +4294,6 @@ export const createScene = function (engineArg, canvasArg) {
             });
     };
 
-    addArtworkButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (!editMode) {
-            return;
-        }
-
-        addEditorArtwork();
-    };
-
-    deleteSelectedArtworkButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (!editMode || selectedArtworks.length === 0) {
-            return;
-        }
-
-        deleteSelectedEditorArtworks();
-    };
-
     var alignSectionData = createEditorSection("ALIGN");
     var artworkAlignPanel = document.createElement("div");
     artworkAlignPanel.id = "artworkAlignPanel";
@@ -4479,15 +4420,7 @@ export const createScene = function (engineArg, canvasArg) {
     var selectedWallColorStatus = document.createElement("div");
     selectedWallColorStatus.id = "editorSelectedWallColorStatus";
     selectedWallColorStatus.className = "gallery-editor-color-status";
-    setInlineStatusValue(
-        selectedWallColorStatus,
-        "Selected Color: ",
-        "None",
-        {
-            valueTag: "span",
-            valueClass: "gallery-editor-accent-text"
-        }
-    );
+    selectedWallColorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">None</span>";
 
     wallColorSectionData.section.appendChild(wallPalette);
     wallColorSectionData.section.appendChild(selectedWallColorStatus);
@@ -5017,9 +4950,7 @@ export const createScene = function (engineArg, canvasArg) {
             ownerMeshName: item.ownerMesh ? item.ownerMesh.name : null,
             hasOwner: !!item.ownerMesh,
             manualTransformOverride: !!item.manualTransformOverride,
-            enabled: item.displayCullingEnabled && item.userEnabled !== undefined
-                ? item.userEnabled
-                : (item.light.isEnabled ? item.light.isEnabled() : true),
+            enabled: item.light.isEnabled ? item.light.isEnabled() : true,
             color: getLocalLightStateColor(item),
             intensity: Number(item.light.intensity) || 0,
             range: Number(item.light.range) || 0,
@@ -5146,14 +5077,8 @@ export const createScene = function (engineArg, canvasArg) {
         item.manualTransformOverride = !!savedState.manualTransformOverride;
         item.targetOptions = normalizeLocalTargetOptions(savedState.targetOptions);
 
-        item.userEnabled = savedState.enabled !== false;
-
         if (item.light.setEnabled) {
-            if (item.displayCullingEnabled) {
-                updateArtworkDisplayLightCulling(true);
-            } else {
-                item.light.setEnabled(item.userEnabled);
-            }
+            item.light.setEnabled(savedState.enabled !== false);
         }
 
         var color = hexToColor3(savedState.color || getLocalLightStateColor(item));
@@ -5163,17 +5088,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (savedState.intensity !== undefined) {
             item.light.intensity = Math.max(0, Number(savedState.intensity));
-        }
-
-        if (
-            item.displayCullingEnabled &&
-            item.maxDisplayLightIntensity !== null &&
-            item.maxDisplayLightIntensity !== undefined
-        ) {
-            item.light.intensity = Math.min(
-                item.light.intensity,
-                Number(item.maxDisplayLightIntensity)
-            );
         }
 
         if (savedState.range !== undefined) {
@@ -5546,7 +5460,7 @@ export const createScene = function (engineArg, canvasArg) {
             var needsGeometryUpdate = false;
 
             if (key === "enabled") {
-                setLocalLightItemEnabled(item, !!value, !!forceShadowRefresh);
+                item.light.setEnabled(!!value);
             } else if (key === "color") {
                 var color = hexToColor3(value);
                 item.light.diffuse = color;
@@ -5771,9 +5685,7 @@ export const createScene = function (engineArg, canvasArg) {
             var enabledState = getMixedBoolState(
                 allItems,
                 function (item) {
-                    return item.displayCullingEnabled && item.userEnabled !== undefined
-                        ? item.userEnabled
-                        : item.light.isEnabled();
+                    return item.light.isEnabled();
                 },
                 true
             );
@@ -6390,7 +6302,6 @@ export const createScene = function (engineArg, canvasArg) {
         removeLocalLightIdFromGroups(item.id);
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
-        updateArtworkDisplayLightCulling(true);
     }
 
     function deleteSelectedLocalLights() {
@@ -6876,14 +6787,7 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        item.userEnabled = !!isEnabled;
-
-        if (item.displayCullingEnabled) {
-            updateArtworkDisplayLightCulling(true);
-            return;
-        }
-
-        item.light.setEnabled(item.userEnabled);
+        item.light.setEnabled(!!isEnabled);
 
         if (item.type === "point") {
             disableLocalPointLightShadow(item);
@@ -6921,10 +6825,7 @@ export const createScene = function (engineArg, canvasArg) {
             localLightSoloState.enabledById = {};
             localLightItems.forEach(function (item) {
                 if (item && item.light && item.light.isEnabled) {
-                    localLightSoloState.enabledById[item.id] =
-                        item.displayCullingEnabled && item.userEnabled !== undefined
-                            ? item.userEnabled
-                            : item.light.isEnabled();
+                    localLightSoloState.enabledById[item.id] = item.light.isEnabled();
                 }
             });
         }
@@ -7062,14 +6963,6 @@ export const createScene = function (engineArg, canvasArg) {
             helperMaxRadius: options.helperMaxRadius || null,
             helperSoftness: options.helperSoftness !== undefined ? options.helperSoftness : 0.45,
             targetOptions: normalizeLocalTargetOptions(options.targetOptions),
-            localShadowsEnabled: options.localShadowsEnabled !== false,
-            displayCullingEnabled: options.displayCullingEnabled === true,
-            maxDisplayLightIntensity: options.maxDisplayLightIntensity !== undefined
-                ? Number(options.maxDisplayLightIntensity)
-                : null,
-            userEnabled: options.userEnabled !== undefined
-                ? !!options.userEnabled
-                : (options.light.isEnabled ? options.light.isEnabled() : true),
             localShadowGenerator: null,
             selected: false
         };
@@ -7087,93 +6980,10 @@ export const createScene = function (engineArg, canvasArg) {
         ensureCommonLightShadowLogic(item);
         updateLocalLightHelper(item);
 
-        if (item.displayCullingEnabled) {
-            updateArtworkDisplayLightCulling(true);
-        }
-
         updateLocalLightsUi();
 
         return item;
     }
-
-    function getArtworkDisplayLightItems() {
-        return localLightItems.filter(function (item) {
-            return !!(
-                item &&
-                item.displayCullingEnabled &&
-                item.light &&
-                item.ownerMesh &&
-                artworks.indexOf(item.ownerMesh) !== -1 &&
-                !item.ownerMesh.isDisposed()
-            );
-        });
-    }
-
-    function getArtworkDisplayLightScore(item) {
-        if (!item || !item.ownerMesh || !camera) {
-            return Number.POSITIVE_INFINITY;
-        }
-
-        var artworkPosition = item.ownerMesh.getAbsolutePosition
-            ? item.ownerMesh.getAbsolutePosition()
-            : item.ownerMesh.position;
-        var toArtwork = artworkPosition.subtract(camera.position);
-        var distance = toArtwork.length();
-
-        if (!isFinite(distance) || distance <= 0.001) {
-            return 0;
-        }
-
-        var directionToArtwork = toArtwork.scale(1 / distance);
-        var cameraForward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
-
-        if (cameraForward.lengthSquared() > 0) {
-            cameraForward.normalize();
-        }
-
-        var facingScore = BABYLON.Vector3.Dot(cameraForward, directionToArtwork);
-        var behindPenalty = facingScore < -0.18 ? 100000 : 0;
-
-        return distance - facingScore * 18 + behindPenalty;
-    }
-
-    function updateArtworkDisplayLightCulling(force) {
-        var now = Date.now();
-
-        if (
-            !force &&
-            now - lastArtworkLightCullingTime < artworkLightCullingIntervalMs
-        ) {
-            return;
-        }
-
-        lastArtworkLightCullingTime = now;
-
-        var displayItems = getArtworkDisplayLightItems();
-
-        if (!displayItems.length) {
-            return;
-        }
-
-        var sortedItems = displayItems.slice().sort(function (a, b) {
-            return getArtworkDisplayLightScore(a) - getArtworkDisplayLightScore(b);
-        });
-        var activeItems = sortedItems.slice(0, maxActiveArtworkDisplayLights);
-
-        displayItems.forEach(function (item) {
-            var shouldBeEnabled = item.userEnabled !== false && activeItems.indexOf(item) !== -1;
-            var isEnabled = item.light.isEnabled ? item.light.isEnabled() : true;
-
-            if (isEnabled !== shouldBeEnabled && item.light.setEnabled) {
-                item.light.setEnabled(shouldBeEnabled);
-                updateLocalLightVisualState(item);
-            }
-        });
-    }
-
-    scene.onBeforeRenderObservable.add(function () {
-        updateArtworkDisplayLightCulling(false);
-    });
 
     function getLocalLightItemByMesh(mesh) {
         if (!mesh || !mesh.metadata || !mesh.metadata.localLightId) {
@@ -7930,12 +7740,9 @@ export const createScene = function (engineArg, canvasArg) {
 
             var nameWrap = document.createElement("div");
             nameWrap.className = "gallery-lighting-preset-name";
-            nameWrap.appendChild(document.createTextNode("Preset " + (index + 1)));
+            nameWrap.innerHTML = "Preset " + (index + 1) + "<span class=\"gallery-lighting-preset-status\">Empty</span>";
 
-            var status = document.createElement("span");
-            status.className = "gallery-lighting-preset-status";
-            status.textContent = "Empty";
-            nameWrap.appendChild(status);
+            var status = nameWrap.querySelector(".gallery-lighting-preset-status");
 
             var loadButton = document.createElement("button");
             loadButton.type = "button";
@@ -8030,15 +7837,18 @@ export const createScene = function (engineArg, canvasArg) {
 
     var localSelectedLine = document.createElement("span");
     localSelectedLine.className = "gallery-local-status-line";
-    localLightUiRefs.selectedCountValue = setInlineStatusValue(localSelectedLine, "Selected Lights: ", "0");
+    localSelectedLine.innerHTML = "Selected Lights: <strong>0</strong>";
+    localLightUiRefs.selectedCountValue = localSelectedLine.querySelector("strong");
 
     var localRegisteredLine = document.createElement("span");
     localRegisteredLine.className = "gallery-local-status-line";
-    localLightUiRefs.registeredCountValue = setInlineStatusValue(localRegisteredLine, "Registered Lights: ", "0");
+    localRegisteredLine.innerHTML = "Registered Lights: <strong>0</strong>";
+    localLightUiRefs.registeredCountValue = localRegisteredLine.querySelector("strong");
 
     var localActiveGroupLine = document.createElement("span");
     localActiveGroupLine.className = "gallery-local-status-line";
-    localLightUiRefs.activeGroupValue = setInlineStatusValue(localActiveGroupLine, "Active Group: ", "Group 1");
+    localActiveGroupLine.innerHTML = "Active Group: <strong>Group 1</strong>";
+    localLightUiRefs.activeGroupValue = localActiveGroupLine.querySelector("strong");
 
     localSelectionLines.appendChild(localSelectedLine);
     localSelectionLines.appendChild(localRegisteredLine);
@@ -9140,10 +8950,6 @@ export const createScene = function (engineArg, canvasArg) {
             countStatus.innerText = "Selected Count: " + selectedArtworks.length;
         }
 
-        if (deleteSelectedArtworkButton) {
-            deleteSelectedArtworkButton.disabled = !editMode || selectedArtworks.length === 0;
-        }
-
         if (colorStatus) {
             var colorName = "None";
 
@@ -9153,17 +8959,10 @@ export const createScene = function (engineArg, canvasArg) {
                     : selectedWallMaterial.name.replace("WallColor_", "");
             }
 
-            setInlineStatusValue(
-                colorStatus,
-                "Selected Color: ",
-                colorName,
-                {
-                    valueTag: "span",
-                    valueClass: "gallery-editor-accent-text"
-                }
-            );
+            colorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">" + colorName + "</span>";
         }
 
+        updateArtworkManagementUi();
         updateArtworkImageUi();
         updateArtworkTransformUi();
         updateAlignmentPanel();
@@ -10298,7 +10097,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             var otherArtwork = artworks[i];
 
-            if (otherArtwork === movingArtwork) {
+            if (otherArtwork === movingArtwork || isArtworkDeleted(otherArtwork)) {
                 continue;
             }
 
@@ -10589,7 +10388,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         artworks.forEach(function (otherArtwork) {
 
-            if (otherArtwork === artwork) {
+            if (otherArtwork === artwork || isArtworkDeleted(otherArtwork)) {
                 return;
             }
 
@@ -11525,350 +11324,16 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function createArtworkLight(artwork, index) {
-
-        let lampMaterial = new BABYLON.StandardMaterial("LampMaterial_" + index, scene);
-        lampMaterial.diffuseColor = new BABYLON.Color3(1, 0.35, 0);
-        lampMaterial.emissiveColor = new BABYLON.Color3(1, 0.35, 0);
-        lampMaterial.disableLighting = true;
-
-        let lampMesh = BABYLON.MeshBuilder.CreateBox(
-            "ArtworkLamp_" + index,
-            {
-                width: 0.6,
-                height: 0.15,
-                depth: 0.15
-            },
-            scene
-        );
-
-        lampMesh.material = lampMaterial;
-        lampMesh.isPickable = true;
-
-        let unifiedSpot = createUnifiedSpotLight(
-            "ArtworkSpotLight_" + index,
-            new BABYLON.Vector3(0, lampCubeY, 0),
-            new BABYLON.Vector3(0, -1, 0),
-            {
-                intensity: 18,
-                range: 7.5,
-                angleDegrees: 42,
-                blend: 0.58,
-                diffuse: new BABYLON.Color3(1.0, 0.94, 0.82),
-                specular: new BABYLON.Color3(0.025, 0.02, 0.012)
-            }
-        );
-
-        let spotLight = unifiedSpot.light;
-
-        artwork.metadata = artwork.metadata || {};
-        artwork.metadata.lampMesh = lampMesh;
-        artwork.metadata.spotLight = spotLight;
-
-        artworkLights.push({
-            artwork: artwork,
-            lampMesh: lampMesh,
-            spotLight: spotLight
-        });
-
-        registerLocalLight({
-            id: "ArtworkSpotLight_" + index,
-            name: "Artwork Spot " + (index + 1),
-            type: "spot",
-            light: spotLight,
-            markerMesh: lampMesh,
-            ownerMesh: artwork,
-            helperLength: unifiedSpot.range,
-            helperMaxRadius: unifiedSpot.range,
-            helperSoftness: unifiedSpot.blend,
-            localShadowsEnabled: false,
-            displayCullingEnabled: true,
-            maxDisplayLightIntensity: 22
-        });
-
-        refreshArtworkLightExclusions();
-        updateArtworkLight(artwork);
-    }
-
-    function getArtworkIndexFromName(name) {
-        var match = String(name || "").match(/^Artwork_(\d+)$/);
-
-        if (!match) {
-            return null;
+        // Stage 8M:
+        // Automatyczne lampy przy artworkach są wyłączone.
+        // Obrazy mają być tylko obrazami. Oświetlenie ma być dodawane ręcznie
+        // przez Local Lights Spot / Point albo przez przyszły system fake glow.
+        if (artwork && artwork.metadata) {
+            artwork.metadata.lampMesh = null;
+            artwork.metadata.spotLight = null;
         }
 
-        return Number(match[1]);
-    }
-
-    function getNextArtworkIndex(options) {
-        var preferredIndex = options && options.index !== undefined
-            ? Number(options.index)
-            : null;
-
-        if (!isFinite(preferredIndex) && options && options.name) {
-            preferredIndex = getArtworkIndexFromName(options.name);
-        }
-
-        if (!isFinite(preferredIndex)) {
-            preferredIndex = artworkCreateCounter;
-        }
-
-        preferredIndex = Math.max(0, Math.floor(preferredIndex));
-        artworkCreateCounter = Math.max(artworkCreateCounter, preferredIndex + 1);
-
-        return preferredIndex;
-    }
-
-    function createArtworkDisplay(options) {
-        options = options || {};
-
-        var index = getNextArtworkIndex(options);
-        var artworkName = options.name || ("Artwork_" + index);
-        var materialColor = artworkMaterials[index % artworkMaterials.length] || new BABYLON.Color3(0.8, 0.05, 0.05);
-        var mat = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
-
-        mat.diffuseColor = materialColor;
-        mat.emissiveColor = materialColor;
-        mat.disableLighting = false;
-        configureMaterialForCommonLighting(mat);
-
-        var artwork = BABYLON.MeshBuilder.CreateBox(
-            artworkName,
-            {
-                width: artworkWidth,
-                height: artworkHeight,
-                depth: artworkDepth
-            },
-            scene
-        );
-
-        artwork.position = options.position
-            ? options.position.clone()
-            : new BABYLON.Vector3(0, -2.5, -4.8);
-        artwork.rotation = options.rotation
-            ? options.rotation.clone()
-            : new BABYLON.Vector3(0, 0, 0);
-        artwork.scaling = options.scaling
-            ? options.scaling.clone()
-            : new BABYLON.Vector3(1, 1, 1);
-        artwork.material = mat;
-        artwork.isPickable = true;
-        artwork.metadata = artwork.metadata || {};
-        artwork.metadata.artworkImage = null;
-
-        if (options.wall) {
-            setArtworkWallMetadata(
-                artwork,
-                options.wall.wallMesh || null,
-                options.wall.wallAxis,
-                options.wall.wallValue,
-                options.wall.horizontalAxis
-            );
-        }
-
-        registerCommonShadowMesh(artwork, {
-            global: false,
-            local: false,
-            receive: false,
-            cast: false
-        });
-
-        artworks.push(artwork);
-        createArtworkLight(artwork, index);
-        refreshAllCommonLocalLightTargets();
-        updateArtworkDisplayLightCulling(true);
-
-        return artwork;
-    }
-
-    function getEditorArtworkSpawnData() {
-        var sourceArtwork = primaryArtwork || selectedArtworks[0] || null;
-
-        if (sourceArtwork) {
-            var sourceWallData = getArtworkWallDataFromRotation(sourceArtwork);
-            var sourceWallMesh = getWallMeshForArtwork(sourceArtwork);
-            var position = sourceArtwork.position.clone();
-            var rotation = sourceArtwork.rotation.clone();
-            var horizontalAxis = sourceWallData ? sourceWallData.horizontalAxis : "x";
-            var spawnOffsets = [1.55, -1.55, 3.1, -3.1, 4.65, -4.65, 0];
-
-            for (var step = 0; step < spawnOffsets.length; step++) {
-                var candidatePosition = position.clone();
-                candidatePosition[horizontalAxis] += spawnOffsets[step];
-
-                if (sourceWallData && sourceWallMesh) {
-                    candidatePosition.y = clampArtworkYByWallBounds(
-                        sourceArtwork,
-                        candidatePosition.y,
-                        sourceWallMesh
-                    );
-                    candidatePosition[horizontalAxis] = clampArtworkHorizontalByWallBounds(
-                        sourceArtwork,
-                        candidatePosition[horizontalAxis],
-                        sourceWallMesh,
-                        sourceWallData.horizontalAxis,
-                        rotation,
-                        sourceWallData.wallAxis,
-                        sourceWallData.wallValue
-                    );
-                }
-
-                if (
-                    !sourceWallData ||
-                    !wouldArtworkOverlap(
-                        sourceArtwork,
-                        candidatePosition,
-                        sourceWallData.wallAxis,
-                        sourceWallData.wallValue,
-                        sourceWallData.horizontalAxis
-                    )
-                ) {
-                    position = candidatePosition;
-                    break;
-                }
-            }
-
-            return {
-                position: position,
-                rotation: rotation,
-                wall: sourceWallData
-                    ? {
-                        wallMesh: sourceWallMesh,
-                        wallAxis: sourceWallData.wallAxis,
-                        wallValue: sourceWallData.wallValue,
-                        horizontalAxis: sourceWallData.horizontalAxis
-                    }
-                    : null
-            };
-        }
-
-        return {
-            position: new BABYLON.Vector3(
-                -3 + (artworks.length % 5) * 1.5,
-                -2.5,
-                -4.8
-            ),
-            rotation: new BABYLON.Vector3(0, 0, 0),
-            wall: null
-        };
-    }
-
-    function addEditorArtwork() {
-        var spawnData = getEditorArtworkSpawnData();
-        var artwork = createArtworkDisplay(spawnData);
-
-        clearWallColorSelection();
-        selectArtwork(artwork, false);
-        updateEditHelpStatus();
-        notifyGalleryStatus("Dodano nowy obraz. Ustaw pozycje i zapisz stan galerii.");
-
-        return artwork;
-    }
-
-    function removeArtworkFromShadowRegistries(artwork) {
-        shadowCasterMeshes = shadowCasterMeshes.filter(function (mesh) {
-            return mesh !== artwork;
-        });
-        localShadowCasterMeshes = localShadowCasterMeshes.filter(function (mesh) {
-            return mesh !== artwork;
-        });
-        localShadowReceiverMeshes = localShadowReceiverMeshes.filter(function (mesh) {
-            return mesh !== artwork;
-        });
-
-        refreshMainShadowRenderList();
-    }
-
-    function disposeArtworkLightForArtwork(artwork) {
-        if (!artwork || !artwork.metadata) {
-            return;
-        }
-
-        var lampMesh = artwork.metadata.lampMesh || null;
-        var spotLight = artwork.metadata.spotLight || null;
-        var lightItem = spotLight
-            ? getLocalLightItemByLight(spotLight)
-            : null;
-
-        if (!lightItem && lampMesh) {
-            lightItem = localLightItems.find(function (item) {
-                return item && item.markerMesh === lampMesh;
-            }) || null;
-        }
-
-        if (!lightItem) {
-            lightItem = localLightItems.find(function (item) {
-                return item && item.ownerMesh === artwork;
-            }) || null;
-        }
-
-        if (lightItem) {
-            disposeLocalLightItem(lightItem);
-        } else {
-            artworkLights = artworkLights.filter(function (lightData) {
-                return !!(
-                    lightData &&
-                    lightData.artwork !== artwork &&
-                    lightData.lampMesh !== lampMesh &&
-                    lightData.spotLight !== spotLight
-                );
-            });
-
-            if (spotLight && spotLight.dispose) {
-                spotLight.dispose();
-            }
-
-            if (lampMesh && lampMesh.dispose) {
-                lampMesh.dispose();
-            }
-        }
-
-        artwork.metadata.lampMesh = null;
-        artwork.metadata.spotLight = null;
-    }
-
-    function disposeArtworkDisplay(artwork) {
-        if (!artwork) {
-            return;
-        }
-
-        disposeArtworkLightForArtwork(artwork);
-        removeArtworkImageFromMesh(artwork, true);
-        hideArtworkSelectionGlow(artwork);
-        removeArtworkFromShadowRegistries(artwork);
-
-        artworks = artworks.filter(function (item) {
-            return item !== artwork;
-        });
-
-        if (artwork.dispose) {
-            artwork.dispose();
-        }
-    }
-
-    function deleteSelectedEditorArtworks() {
-        var itemsToDelete = selectedArtworks.slice();
-
-        itemsToDelete.forEach(function (artwork) {
-            disposeArtworkDisplay(artwork);
-        });
-
-        selectedArtworks = [];
-        primaryArtwork = null;
-        referenceArtwork = null;
-        activeArtwork = null;
-        selectedArtwork = null;
-        isDraggingArtwork = false;
-
-        refreshArtworkLightExclusions();
-        refreshAllCommonLocalLightTargets();
-        updateArtworkDisplayLightCulling(true);
-        refreshAllLocalSpotShadows();
-        updateLocalLightsUi();
-        schedulePersistLocalLightState(true);
-        updateEditHelpStatus();
-        updateAlignmentPanel();
-
-        notifyGalleryStatus("Usunieto zaznaczone obrazy. Zapisz stan galerii, aby zachowac zmiane.");
+        return null;
     }
 
     function focusCameraOnObject(targetMesh) {
@@ -12118,56 +11583,9 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function createPedestalLight(displayMesh, index) {
-
-        var lampMaterial = new BABYLON.StandardMaterial("PedestalLampMaterial_" + index, scene);
-        lampMaterial.diffuseColor = new BABYLON.Color3(1, 0.35, 0);
-        lampMaterial.emissiveColor = new BABYLON.Color3(1, 0.35, 0);
-        lampMaterial.disableLighting = true;
-
-        var lampMesh = BABYLON.MeshBuilder.CreateBox(
-            "PedestalLamp_" + index,
-            {
-                width: 0.6,
-                height: 0.15,
-                depth: 0.15
-            },
-            scene
-        );
-
-        lampMesh.material = lampMaterial;
-        lampMesh.isPickable = true;
-
-        var unifiedSpot = createUnifiedSpotLight(
-            "PedestalSpotLight_" + index,
-            new BABYLON.Vector3(displayMesh.position.x, lampCubeY, displayMesh.position.z),
-            new BABYLON.Vector3(0, -1, 0),
-            {
-                diffuse: new BABYLON.Color3(1.0, 0.88, 0.66),
-                specular: new BABYLON.Color3(0.025, 0.022, 0.016)
-            }
-        );
-
-        var spotLight = unifiedSpot.light;
-
-        displayMesh.metadata = displayMesh.metadata || {};
-        displayMesh.metadata.lampMesh = lampMesh;
-        displayMesh.metadata.spotLight = spotLight;
-
-        registerLocalLight({
-            id: "PedestalSpotLight_" + index,
-            name: "Pedestal Spot " + (index + 1),
-            type: "spot",
-            light: spotLight,
-            markerMesh: lampMesh,
-            ownerMesh: displayMesh,
-            helperLength: unifiedSpot.range,
-            helperMaxRadius: unifiedSpot.range,
-            helperSoftness: unifiedSpot.blend,
-            localShadowsEnabled: false
-        });
-
-        updatePedestalLightIncludedMeshes(displayMesh);
-        updatePedestalLight(displayMesh);
+        // Stage 8M:
+        // Automatyczne lampy przy rzeźbach są wyłączone.
+        return null;
     }
 
     function createPedestalDisplay(position, index) {
@@ -12254,11 +11672,590 @@ export const createScene = function (engineArg, canvasArg) {
     ];
 
     artworkStartPositions.forEach((pos, index) => {
-        createArtworkDisplay({
-            index: index,
-            position: pos
+
+        var mat = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
+        mat.diffuseColor = artworkMaterials[index];
+        mat.emissiveColor = artworkMaterials[index];
+        mat.disableLighting = true;
+
+        var artwork = BABYLON.MeshBuilder.CreateBox(
+            "Artwork_" + index,
+            {
+                width: artworkWidth,
+                height: artworkHeight,
+                depth: artworkDepth
+            },
+            scene
+        );
+
+        artwork.position = pos;
+        artwork.material = mat;
+        artwork.isPickable = true;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = null;
+        artwork.metadata.lampMesh = null;
+        artwork.metadata.spotLight = null;
+        artwork.metadata.isDynamicArtwork = false;
+        artwork.metadata.deletedArtwork = false;
+        updateArtworkCreateCounterFromName(artwork.name);
+        // Obraz nie jest casterem cieni.
+        // Wczesniej obraz jako lokalny/globalny caster zostawial prostokatny cien na scianie
+        // i wymuszal drogie odswiezanie shadow map podczas przeciagania.
+        registerCommonShadowMesh(artwork, {
+            global: false,
+            local: false,
+            receive: false,
+            cast: false
         });
+
+        artworks.push(artwork);
+
+        // Auto artwork lights disabled in Stage 8M.
+        refreshAllCommonLocalLightTargets();
     });
+
+
+    artworkCreateCounter = Math.max(artworkCreateCounter, artworks.length);
+
+    function isArtworkDeleted(artwork) {
+        return !!(
+            artwork &&
+            artwork.metadata &&
+            artwork.metadata.deletedArtwork
+        );
+    }
+
+    function getActiveArtworks() {
+        return artworks.filter(function (artwork) {
+            return !!artwork && !isArtworkDeleted(artwork) && !(artwork.isDisposed && artwork.isDisposed());
+        });
+    }
+
+    function rememberDeletedArtworkName(name) {
+        if (!name) {
+            return;
+        }
+
+        if (deletedArtworkNames.indexOf(name) === -1) {
+            deletedArtworkNames.push(name);
+        }
+    }
+
+    function forgetDeletedArtworkName(name) {
+        deletedArtworkNames = deletedArtworkNames.filter(function (storedName) {
+            return storedName !== name;
+        });
+    }
+
+    function updateArtworkCreateCounterFromName(name) {
+        var match = String(name || "").match(/^Artwork_(\d+)$/);
+
+        if (!match) {
+            return;
+        }
+
+        artworkCreateCounter = Math.max(
+            artworkCreateCounter,
+            Number(match[1]) + 1
+        );
+    }
+
+    function getNextArtworkCreateIndex() {
+        while (getArtworkByName("Artwork_" + artworkCreateCounter)) {
+            artworkCreateCounter += 1;
+        }
+
+        var index = artworkCreateCounter;
+        artworkCreateCounter += 1;
+
+        return index;
+    }
+
+    function getArtworkDisplayIndex(artwork) {
+        if (!artwork || !artwork.name) {
+            return Math.max(0, artworks.indexOf(artwork));
+        }
+
+        var match = String(artwork.name).match(/^Artwork_(\d+)$/);
+
+        if (match) {
+            return Number(match[1]);
+        }
+
+        return Math.max(0, artworks.indexOf(artwork));
+    }
+
+    function getDefaultArtworkPlaceholderColor(index) {
+        if (artworkMaterials && artworkMaterials.length) {
+            return artworkMaterials[Math.abs(index) % artworkMaterials.length];
+        }
+
+        return new BABYLON.Color3(0.75, 0.05, 0.05);
+    }
+
+    function createArtworkPlaceholderMaterial(index, baseColor) {
+        var material = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
+        var color = baseColor || getDefaultArtworkPlaceholderColor(index);
+
+        material.diffuseColor = color.clone ? color.clone() : color;
+        material.emissiveColor = color.clone ? color.clone() : color;
+        material.disableLighting = true;
+
+        return material;
+    }
+
+    function createArtworkMeshNoAutoLight(options) {
+        options = options || {};
+
+        var index = Number(options.index);
+
+        if (!isFinite(index)) {
+            index = getNextArtworkCreateIndex();
+        }
+
+        var artworkName = options.name || ("Artwork_" + index);
+
+        if (getArtworkByName(artworkName)) {
+            index = getNextArtworkCreateIndex();
+            artworkName = "Artwork_" + index;
+        }
+
+        var artwork = BABYLON.MeshBuilder.CreateBox(
+            artworkName,
+            {
+                width: artworkWidth,
+                height: artworkHeight,
+                depth: artworkDepth
+            },
+            scene
+        );
+
+        artwork.position = options.position && options.position.clone
+            ? options.position.clone()
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        artwork.rotation = options.rotation && options.rotation.clone
+            ? options.rotation.clone()
+            : new BABYLON.Vector3(0, 0, 0);
+
+        artwork.scaling = options.scaling && options.scaling.clone
+            ? options.scaling.clone()
+            : new BABYLON.Vector3(1, 1, 1);
+
+        artwork.material = options.material || createArtworkPlaceholderMaterial(index);
+        artwork.isPickable = true;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = null;
+        artwork.metadata.lampMesh = null;
+        artwork.metadata.spotLight = null;
+        artwork.metadata.isDynamicArtwork = !!options.isDynamicArtwork;
+        artwork.metadata.deletedArtwork = false;
+        artwork.metadata.createdAt = options.createdAt || new Date().toISOString();
+
+        registerCommonShadowMesh(artwork, {
+            global: false,
+            local: false,
+            receive: false,
+            cast: false
+        });
+
+        artworks.push(artwork);
+        updateArtworkCreateCounterFromName(artwork.name);
+        refreshAllCommonLocalLightTargets();
+
+        return artwork;
+    }
+
+    function restoreDeletedArtworkIfNeeded(artwork) {
+        if (!artwork) {
+            return;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.deletedArtwork = false;
+        forgetDeletedArtworkName(artwork.name);
+
+        artwork.setEnabled(true);
+        artwork.isVisible = true;
+        artwork.visibility = 1;
+        artwork.isPickable = true;
+    }
+
+    function getReferenceArtworkForAdd() {
+        if (primaryArtwork && !isArtworkDeleted(primaryArtwork)) {
+            return primaryArtwork;
+        }
+
+        if (activeArtwork && !isArtworkDeleted(activeArtwork)) {
+            return activeArtwork;
+        }
+
+        var active = getActiveArtworks();
+
+        return active.length ? active[active.length - 1] : null;
+    }
+
+    function placeArtworkNearReference(newArtwork, reference) {
+        if (!newArtwork || !reference) {
+            return false;
+        }
+
+        var wallData = getArtworkWallDataFromRotation(reference);
+        var wallMesh = getWallMeshForArtwork(reference);
+        var horizontalAxis = wallData && wallData.horizontalAxis ? wallData.horizontalAxis : "x";
+        var wallAxis = wallData && wallData.wallAxis ? wallData.wallAxis : "z";
+        var wallValue = wallData && wallData.wallValue !== undefined
+            ? wallData.wallValue
+            : reference.position[wallAxis];
+
+        var candidateRotation = new BABYLON.Vector3(
+            0,
+            reference.rotation ? reference.rotation.y : 0,
+            0
+        );
+
+        var referenceHalf = getArtworkHalfSizeOnAxisForRotation(
+            reference,
+            horizontalAxis,
+            reference.rotation
+        );
+
+        var newHalf = getArtworkHalfSizeOnAxisForRotation(
+            newArtwork,
+            horizontalAxis,
+            candidateRotation
+        );
+
+        var baseStep = referenceHalf + newHalf + 0.18;
+        var offsets = [baseStep, -baseStep, baseStep * 2, -baseStep * 2, baseStep * 3, -baseStep * 3, 0];
+
+        for (var i = 0; i < offsets.length; i++) {
+            var candidatePosition = reference.position.clone();
+
+            candidatePosition[horizontalAxis] += offsets[i];
+            candidatePosition[wallAxis] = wallValue;
+
+            if (wallMesh) {
+                candidatePosition[horizontalAxis] = clampArtworkHorizontalByTargetSegment(
+                    newArtwork,
+                    candidatePosition[horizontalAxis],
+                    wallMesh,
+                    horizontalAxis,
+                    candidateRotation,
+                    wallAxis,
+                    wallValue
+                );
+
+                candidatePosition.y = clampArtworkYByWallBounds(
+                    newArtwork,
+                    candidatePosition.y,
+                    wallMesh
+                );
+            }
+
+            if (
+                !wouldArtworkOverlap(
+                    newArtwork,
+                    candidatePosition,
+                    wallAxis,
+                    wallValue,
+                    horizontalAxis
+                )
+            ) {
+                newArtwork.position.copyFrom(candidatePosition);
+                newArtwork.rotation.copyFrom(candidateRotation);
+
+                setArtworkWallMetadata(
+                    newArtwork,
+                    wallMesh,
+                    wallAxis,
+                    wallValue,
+                    horizontalAxis
+                );
+
+                newArtwork.computeWorldMatrix(true);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function addNewArtworkToScene() {
+        var reference = getReferenceArtworkForAdd();
+        var index = getNextArtworkCreateIndex();
+
+        var startPosition = reference
+            ? reference.position.clone()
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        var startRotation = reference
+            ? new BABYLON.Vector3(0, reference.rotation.y, 0)
+            : new BABYLON.Vector3(0, 0, 0);
+
+        var artwork = createArtworkMeshNoAutoLight({
+            index: index,
+            name: "Artwork_" + index,
+            position: startPosition,
+            rotation: startRotation,
+            isDynamicArtwork: true
+        });
+
+        if (reference) {
+            placeArtworkNearReference(artwork, reference);
+        } else {
+            setArtworkWallMetadata(
+                artwork,
+                null,
+                "z",
+                artwork.position.z,
+                "x"
+            );
+        }
+
+        selectArtwork(artwork, false);
+        updateEditHelpStatus();
+
+        return artwork;
+    }
+
+    function createMissingArtworkFromState(artworkState) {
+        if (!artworkState || !artworkState.name) {
+            return null;
+        }
+
+        var existing = getArtworkByName(artworkState.name);
+
+        if (existing) {
+            restoreDeletedArtworkIfNeeded(existing);
+            return existing;
+        }
+
+        var stateIndex = artworkState.index !== undefined
+            ? Number(artworkState.index)
+            : NaN;
+
+        if (!isFinite(stateIndex)) {
+            var match = String(artworkState.name).match(/^Artwork_(\d+)$/);
+            stateIndex = match ? Number(match[1]) : getNextArtworkCreateIndex();
+        }
+
+        var position = artworkState.position
+            ? vectorFromState(artworkState.position, new BABYLON.Vector3(0, -2.5, -4.8))
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        var rotation = artworkState.rotation
+            ? vectorFromState(artworkState.rotation, new BABYLON.Vector3(0, 0, 0))
+            : new BABYLON.Vector3(0, 0, 0);
+
+        var scaling = artworkState.scaling
+            ? vectorFromState(artworkState.scaling, new BABYLON.Vector3(1, 1, 1))
+            : new BABYLON.Vector3(1, 1, 1);
+
+        return createArtworkMeshNoAutoLight({
+            index: stateIndex,
+            name: artworkState.name,
+            position: position,
+            rotation: rotation,
+            scaling: scaling,
+            isDynamicArtwork: !!artworkState.isDynamicArtwork,
+            createdAt: artworkState.createdAt || null
+        });
+    }
+
+    function applyDeletedArtworkNamesFromState(editorState) {
+        deletedArtworkNames = Array.isArray(editorState.deletedArtworkNames)
+            ? editorState.deletedArtworkNames.slice()
+            : [];
+
+        deletedArtworkNames.forEach(function (artworkName) {
+            var artwork = getArtworkByName(artworkName);
+
+            if (artwork) {
+                artwork.metadata = artwork.metadata || {};
+                artwork.metadata.deletedArtwork = true;
+                artwork.setEnabled(false);
+                artwork.isVisible = false;
+                artwork.visibility = 0;
+                artwork.isPickable = false;
+            }
+        });
+    }
+
+    function detachArtworkSelectionForDelete(artwork) {
+        hideArtworkSelectionGlow(artwork);
+
+        if (
+            artwork &&
+            artwork.metadata &&
+            artwork.metadata.selectionGlowPlane &&
+            !artwork.metadata.selectionGlowPlane.isDisposed()
+        ) {
+            artwork.metadata.selectionGlowPlane.dispose();
+            artwork.metadata.selectionGlowPlane = null;
+        }
+
+        selectedArtworks = selectedArtworks.filter(function (candidate) {
+            return candidate !== artwork;
+        });
+
+        if (selectedArtwork === artwork) {
+            selectedArtwork = null;
+        }
+
+        if (primaryArtwork === artwork) {
+            primaryArtwork = selectedArtworks.length ? selectedArtworks[selectedArtworks.length - 1] : null;
+        }
+
+        if (referenceArtwork === artwork) {
+            referenceArtwork = selectedArtworks.length ? selectedArtworks[0] : null;
+        }
+
+        if (activeArtwork === artwork) {
+            activeArtwork = primaryArtwork || null;
+        }
+
+        isDraggingArtwork = false;
+    }
+
+    function disposeArtworkImageOnly(artwork) {
+        if (!artwork || !artwork.metadata) {
+            return;
+        }
+
+        var imagePlane = artwork.metadata.imagePlane || null;
+        var imageMaterial = artwork.metadata.imageMaterial || null;
+
+        if (imagePlane && !imagePlane.isDisposed()) {
+            try {
+                imagePlane.dispose();
+            } catch (error) {
+                console.warn("Artwork image plane dispose warning:", error);
+            }
+        }
+
+        if (imageMaterial && imageMaterial.dispose) {
+            try {
+                if (imageMaterial.diffuseTexture && imageMaterial.diffuseTexture.dispose) {
+                    imageMaterial.diffuseTexture.dispose();
+                }
+
+                if (
+                    imageMaterial.emissiveTexture &&
+                    imageMaterial.emissiveTexture !== imageMaterial.diffuseTexture &&
+                    imageMaterial.emissiveTexture.dispose
+                ) {
+                    imageMaterial.emissiveTexture.dispose();
+                }
+
+                imageMaterial.dispose();
+            } catch (error) {
+                console.warn("Artwork image material dispose warning:", error);
+            }
+        }
+
+        artwork.metadata.imagePlane = null;
+        artwork.metadata.imageMaterial = null;
+        artwork.metadata.artworkImage = null;
+    }
+
+    function deleteArtworkRuntimeNoLights(artwork) {
+        if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
+            return false;
+        }
+
+        var isDynamicArtwork = !!(
+            artwork.metadata &&
+            artwork.metadata.isDynamicArtwork
+        );
+
+        if (!isDynamicArtwork) {
+            rememberDeletedArtworkName(artwork.name);
+        }
+
+        detachArtworkSelectionForDelete(artwork);
+        disposeArtworkImageOnly(artwork);
+
+        artworks = artworks.filter(function (candidate) {
+            return candidate !== artwork;
+        });
+
+        artworkLights = artworkLights.filter(function (lightData) {
+            return !(lightData && lightData.artwork === artwork);
+        });
+
+        if (artwork.metadata) {
+            artwork.metadata.lampMesh = null;
+            artwork.metadata.spotLight = null;
+            artwork.metadata.deletedArtwork = true;
+        }
+
+        try {
+            artwork.dispose();
+        } catch (error) {
+            console.warn("Artwork mesh dispose warning:", error);
+        }
+
+        refreshAllCommonLocalLightTargets();
+        updateEditHelpStatus();
+        updateAlignmentPanel();
+
+        return true;
+    }
+
+    async function deleteArtworkSafelyNoAutoLights(artwork) {
+        if (!artwork || (artwork.isDisposed && artwork.isDisposed()) || isArtworkDeleted(artwork)) {
+            return false;
+        }
+
+        var imageState = getArtworkImageState(artwork);
+
+        if (imageState) {
+            var removedImage = await deleteArtworkImageFromSupabase(imageState);
+
+            if (!removedImage) {
+                return false;
+            }
+        }
+
+        return deleteArtworkRuntimeNoLights(artwork);
+    }
+
+    async function deleteSelectedArtworksNoAutoLights() {
+        if (!selectedArtworks.length) {
+            notifyGalleryStatus("Select an artwork to delete.");
+            return false;
+        }
+
+        var artworksToDelete = selectedArtworks.slice();
+        notifyGalleryStatus("Deleting selected artwork...");
+
+        var deletedCount = 0;
+
+        for (var i = 0; i < artworksToDelete.length; i++) {
+            var deleted = await deleteArtworkSafelyNoAutoLights(artworksToDelete[i]);
+
+            if (deleted) {
+                deletedCount += 1;
+            }
+        }
+
+        selectedArtworks = [];
+        primaryArtwork = null;
+        referenceArtwork = null;
+        activeArtwork = null;
+        selectedArtwork = null;
+        isDraggingArtwork = false;
+
+        updateEditHelpStatus();
+        updateAlignmentPanel();
+
+        if (deletedCount > 0) {
+            notifyGalleryStatus("Deleted " + deletedCount + " artwork(s). Save state to keep the change.");
+        }
+
+        return deletedCount > 0;
+    }
 
     scene.onPointerDown = function (evt, pickResult) {
 
@@ -12731,13 +12728,16 @@ export const createScene = function (engineArg, canvasArg) {
                     colorName: getWallColorNameFromMaterial(wallMesh.material)
                 };
             }),
-            artworks: artworks.map(function (artwork, index) {
+            deletedArtworkNames: deletedArtworkNames.slice(),
+            artworks: getActiveArtworks().map(function (artwork, index) {
                 var wallData = getArtworkWallDataFromRotation(artwork);
                 var wallMesh = getWallMeshForArtwork(artwork);
 
                 return {
                     name: artwork.name,
-                    index: index,
+                    index: getArtworkDisplayIndex(artwork),
+                    isDynamicArtwork: !!(artwork.metadata && artwork.metadata.isDynamicArtwork),
+                    createdAt: artwork.metadata && artwork.metadata.createdAt ? artwork.metadata.createdAt : null,
                     position: vectorToState(artwork.position),
                     rotation: vectorToState(artwork.rotation),
                     scaling: vectorToState(artwork.scaling),
@@ -12795,18 +12795,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (Array.isArray(editorState.artworks)) {
-            var savedArtworkNames = editorState.artworks
-                .filter(function (artworkState) {
-                    return !!artworkState && !!artworkState.name;
-                })
-                .map(function (artworkState) {
-                    return artworkState.name;
-                });
+            applyDeletedArtworkNamesFromState(editorState);
 
-            artworks.slice().forEach(function (artwork) {
-                if (savedArtworkNames.indexOf(artwork.name) === -1) {
-                    disposeArtworkDisplay(artwork);
-                }
+            editorState.artworks.forEach(function (artworkState) {
+                createMissingArtworkFromState(artworkState);
             });
 
             editorState.artworks.forEach(function (artworkState) {
@@ -12820,28 +12812,8 @@ export const createScene = function (engineArg, canvasArg) {
                     artwork = artworks[Number(artworkState.index)] || null;
                 }
 
-                if (!artwork) {
-                    artwork = createArtworkDisplay({
-                        name: artworkState.name || null,
-                        index: artworkState.index,
-                        position: artworkState.position
-                            ? vectorFromState(artworkState.position, new BABYLON.Vector3(0, -2.5, -4.8))
-                            : new BABYLON.Vector3(0, -2.5, -4.8),
-                        rotation: artworkState.rotation
-                            ? vectorFromState(artworkState.rotation, new BABYLON.Vector3(0, 0, 0))
-                            : new BABYLON.Vector3(0, 0, 0),
-                        scaling: artworkState.scaling
-                            ? vectorFromState(artworkState.scaling, new BABYLON.Vector3(1, 1, 1))
-                            : new BABYLON.Vector3(1, 1, 1),
-                        wall: artworkState.wall
-                            ? {
-                                wallMesh: getWallMeshByName(artworkState.wall.wallMeshName),
-                                wallAxis: artworkState.wall.wallAxis,
-                                wallValue: artworkState.wall.wallValue,
-                                horizontalAxis: artworkState.wall.horizontalAxis
-                            }
-                            : null
-                    });
+                if (!artwork || isArtworkDeleted(artwork)) {
+                    return;
                 }
 
                 if (artworkState.position) {
@@ -12945,7 +12917,6 @@ export const createScene = function (engineArg, canvasArg) {
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
         refreshAllCommonLocalLightTargets();
-        updateArtworkDisplayLightCulling(true);
         refreshAllLocalSpotShadows();
         updateEditHelpStatus();
         updateAlignmentPanel();
@@ -13005,6 +12976,10 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (state.localLights) {
             restoreLocalLightState(state.localLights);
+        }
+
+        if (state.editor || state.deletedArtworkNames) {
+            applyDeletedArtworkNamesFromState(editorState);
         }
 
         refreshCommonLightingMaterialSupport();
@@ -13183,6 +13158,17 @@ export const createScene = function (engineArg, canvasArg) {
 
             return removeArtworkImageWithStorageDelete(artwork);
         },
+        addArtwork: function () {
+            return addNewArtworkToScene();
+        },
+        deleteArtwork: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return deleteArtworkSafelyNoAutoLights(artwork);
+        },
+        deleteSelectedArtworks: deleteSelectedArtworksNoAutoLights,
         getArtworkImageState: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
