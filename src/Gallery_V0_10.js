@@ -3759,6 +3759,106 @@ export const createScene = function (engineArg, canvasArg) {
             line-height: 1.35;
         }
 
+
+        .gallery-artwork-info-popup {
+            position: absolute;
+            left: 50%;
+            bottom: 34px;
+            transform: translateX(-50%);
+            width: min(380px, calc(100% - 32px));
+            padding: 14px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background:
+                linear-gradient(135deg, rgba(28, 30, 48, 0.92), rgba(16, 18, 32, 0.84));
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            z-index: 40;
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 180ms ease, transform 180ms ease, visibility 180ms ease;
+        }
+
+        .gallery-artwork-info-popup.is-visible {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(-6px);
+        }
+
+        .gallery-artwork-info-popup-inner {
+            display: grid;
+            grid-template-columns: 60px minmax(0, 1fr);
+            gap: 12px;
+            align-items: start;
+        }
+
+        .gallery-artwork-info-author-photo {
+            width: 60px;
+            height: 60px;
+            border-radius: 16px;
+            object-fit: cover;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            display: none;
+        }
+
+        .gallery-artwork-info-author-photo.is-visible {
+            display: block;
+        }
+
+        .gallery-artwork-info-text {
+            min-width: 0;
+        }
+
+        .gallery-artwork-info-kicker {
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 10px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .gallery-artwork-info-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1.25;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .gallery-artwork-info-author {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+
+        .gallery-artwork-info-description {
+            color: rgba(255, 255, 255, 0.68);
+            font-size: 12px;
+            line-height: 1.45;
+            max-height: 88px;
+            overflow: hidden;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .gallery-artwork-info-empty {
+            color: rgba(255, 255, 255, 0.52);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .gallery-artwork-info-textarea {
+            min-height: 76px;
+            resize: vertical;
+            line-height: 1.35;
+        }
+
         @media (max-width: 768px) {
             #galleryEditorPanel {
                 left: 18px;
@@ -4022,6 +4122,122 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageSectionData.section.appendChild(artworkImageActions);
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
+
+    var artworkInfoSectionData = createEditorSection("ARTWORK INFO");
+    var artworkInfoAuthorPhotoInput = createTextInput("Author photo URL");
+    var artworkInfoAuthorNameInput = createTextInput("Author name");
+    var artworkInfoTitleInput = createTextInput("Artwork title");
+    var artworkInfoDescriptionInput = document.createElement("textarea");
+    artworkInfoDescriptionInput.className = "gallery-input gallery-artwork-info-textarea";
+    artworkInfoDescriptionInput.placeholder = "Description";
+
+    var artworkInfoActions = document.createElement("div");
+    artworkInfoActions.className = "gallery-artwork-image-actions";
+
+    var artworkInfoApplyButton = document.createElement("button");
+    artworkInfoApplyButton.type = "button";
+    artworkInfoApplyButton.className = "gallery-editor-action-button is-primary";
+    artworkInfoApplyButton.innerText = "APPLY INFO";
+
+    var artworkInfoClearButton = document.createElement("button");
+    artworkInfoClearButton.type = "button";
+    artworkInfoClearButton.className = "gallery-editor-action-button";
+    artworkInfoClearButton.innerText = "CLEAR";
+
+    var artworkInfoNote = document.createElement("p");
+    artworkInfoNote.className = "gallery-artwork-image-note";
+    artworkInfoNote.innerText = "Shown near the artwork in Viewer Mode and Edit Mode.";
+
+    artworkInfoActions.appendChild(artworkInfoApplyButton);
+    artworkInfoActions.appendChild(artworkInfoClearButton);
+    artworkInfoSectionData.section.appendChild(artworkInfoAuthorPhotoInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoAuthorNameInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoTitleInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoDescriptionInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoActions);
+    artworkInfoSectionData.section.appendChild(artworkInfoNote);
+    editorScroll.appendChild(artworkInfoSectionData.section);
+
+    function getArtworkInfoUiTarget() {
+        return selectedArtworks.length === 1 ? selectedArtworks[0] : null;
+    }
+
+    function updateArtworkInfoUi() {
+        var artwork = getArtworkInfoUiTarget();
+        var isVisible = editMode && !!artwork;
+
+        artworkInfoSectionData.section.classList.toggle("is-hidden", !isVisible);
+
+        artworkInfoAuthorPhotoInput.disabled = !isVisible;
+        artworkInfoAuthorNameInput.disabled = !isVisible;
+        artworkInfoTitleInput.disabled = !isVisible;
+        artworkInfoDescriptionInput.disabled = !isVisible;
+        artworkInfoApplyButton.disabled = !isVisible;
+        artworkInfoClearButton.disabled = !isVisible;
+
+        if (!isVisible) {
+            return;
+        }
+
+        var info = getArtworkInfoState(artwork);
+
+        if (document.activeElement !== artworkInfoAuthorPhotoInput) {
+            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+        }
+
+        if (document.activeElement !== artworkInfoAuthorNameInput) {
+            artworkInfoAuthorNameInput.value = info.authorName;
+        }
+
+        if (document.activeElement !== artworkInfoTitleInput) {
+            artworkInfoTitleInput.value = info.title;
+        }
+
+        if (document.activeElement !== artworkInfoDescriptionInput) {
+            artworkInfoDescriptionInput.value = info.description;
+        }
+    }
+
+    function applyArtworkInfoFromUi() {
+        var artwork = getArtworkInfoUiTarget();
+
+        if (!artwork) {
+            notifyGalleryStatus("Select one artwork to edit info.");
+            return;
+        }
+
+        setArtworkInfoState(artwork, {
+            authorPhotoUrl: artworkInfoAuthorPhotoInput.value,
+            authorName: artworkInfoAuthorNameInput.value,
+            title: artworkInfoTitleInput.value,
+            description: artworkInfoDescriptionInput.value
+        });
+
+        updateArtworkInfoPopupContent(artwork);
+        notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
+    }
+
+    artworkInfoApplyButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyArtworkInfoFromUi();
+    };
+
+    artworkInfoClearButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = getArtworkInfoUiTarget();
+
+        if (!artwork) {
+            return;
+        }
+
+        setArtworkInfoState(artwork, null);
+        updateArtworkInfoUi();
+        updateArtworkInfoPopupContent(artwork);
+        notifyGalleryStatus("Artwork info cleared. Save state to keep the change.");
+    };
 
     var artworkTransformSectionData = createEditorSection("ARTWORK TRANSFORM");
     artworkTransformSectionData.section.classList.add("gallery-artwork-transform-section", "is-hidden");
@@ -8121,6 +8337,32 @@ export const createScene = function (engineArg, canvasArg) {
 
     appendGalleryUiElement(editHelpPanel);
 
+    var artworkInfoPopup = document.createElement("div");
+    artworkInfoPopup.className = "gallery-artwork-info-popup";
+    artworkInfoPopup.innerHTML = ""
+        + "<div class=\"gallery-artwork-info-popup-inner\">"
+        + "  <img class=\"gallery-artwork-info-author-photo\" alt=\"Author photo\" />"
+        + "  <div class=\"gallery-artwork-info-text\">"
+        + "    <div class=\"gallery-artwork-info-kicker\">Artwork info</div>"
+        + "    <div class=\"gallery-artwork-info-title\"></div>"
+        + "    <div class=\"gallery-artwork-info-author\"></div>"
+        + "    <div class=\"gallery-artwork-info-description\"></div>"
+        + "    <div class=\"gallery-artwork-info-empty\">No artwork information added yet.</div>"
+        + "  </div>"
+        + "</div>";
+    appendGalleryUiElement(artworkInfoPopup);
+
+    var artworkInfoPopupRefs = {
+        photo: artworkInfoPopup.querySelector(".gallery-artwork-info-author-photo"),
+        title: artworkInfoPopup.querySelector(".gallery-artwork-info-title"),
+        author: artworkInfoPopup.querySelector(".gallery-artwork-info-author"),
+        description: artworkInfoPopup.querySelector(".gallery-artwork-info-description"),
+        empty: artworkInfoPopup.querySelector(".gallery-artwork-info-empty")
+    };
+
+    var currentArtworkInfoPopupMesh = null;
+
+
     function setEditorUiVisible(isVisible) {
         editHelpPanel.style.display = isVisible ? "flex" : "none";
         setModeButtonContent(isVisible);
@@ -8928,6 +9170,12 @@ export const createScene = function (engineArg, canvasArg) {
     setupMobileViewerControls();
 
 
+    scene.onBeforeRenderObservable.add(function () {
+        updateArtworkInfoPopup();
+    });
+
+
+
     function updateEditHelpStatus() {
 
         var selectedStatus = document.getElementById("editorSelectedArtworkStatus");
@@ -8964,6 +9212,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         updateArtworkManagementUi();
         updateArtworkImageUi();
+        updateArtworkInfoUi();
         updateArtworkTransformUi();
         updateAlignmentPanel();
     }
@@ -11693,6 +11942,7 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.isPickable = true;
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkImage = null;
+        artwork.metadata.artworkInfo = normalizeArtworkInfo();
         artwork.metadata.lampMesh = null;
         artwork.metadata.spotLight = null;
         artwork.metadata.isDynamicArtwork = false;
@@ -11846,6 +12096,7 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.isPickable = true;
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkImage = null;
+        artwork.metadata.artworkInfo = normalizeArtworkInfo(options.artworkInfo);
         artwork.metadata.lampMesh = null;
         artwork.metadata.spotLight = null;
         artwork.metadata.isDynamicArtwork = !!options.isDynamicArtwork;
@@ -12251,7 +12502,8 @@ export const createScene = function (engineArg, canvasArg) {
             rotation: rotation,
             scaling: scaling,
             isDynamicArtwork: !!artworkState.isDynamicArtwork,
-            createdAt: artworkState.createdAt || null
+            createdAt: artworkState.createdAt || null,
+            artworkInfo: artworkState.info || artworkState.artworkInfo || null
         });
     }
 
@@ -12446,6 +12698,157 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         return deletedCount > 0;
+    }
+
+
+    function normalizeArtworkInfo(info) {
+        info = info || {};
+
+        return {
+            authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
+            authorName: String(info.authorName || "").trim(),
+            title: String(info.title || "").trim(),
+            description: String(info.description || "").trim()
+        };
+    }
+
+    function getArtworkInfoState(artwork) {
+        if (!artwork || !artwork.metadata) {
+            return normalizeArtworkInfo();
+        }
+
+        return normalizeArtworkInfo(artwork.metadata.artworkInfo);
+    }
+
+    function setArtworkInfoState(artwork, info) {
+        if (!artwork) {
+            return;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkInfo = normalizeArtworkInfo(info);
+    }
+
+    function hasArtworkInfo(info) {
+        info = normalizeArtworkInfo(info);
+
+        return !!(
+            info.authorPhotoUrl ||
+            info.authorName ||
+            info.title ||
+            info.description
+        );
+    }
+
+    function getArtworkPopupDistance() {
+        return editMode ? 4.4 : 3.4;
+    }
+
+    function getNearestArtworkForInfoPopup() {
+        if (!camera) {
+            return null;
+        }
+
+        var activeArtworks = typeof getActiveArtworks === "function"
+            ? getActiveArtworks()
+            : artworks;
+
+        var nearestArtwork = null;
+        var nearestDistance = Infinity;
+        var maxDistance = getArtworkPopupDistance();
+
+        activeArtworks.forEach(function (artwork) {
+            if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
+                return;
+            }
+
+            if (typeof isArtworkDeleted === "function" && isArtworkDeleted(artwork)) {
+                return;
+            }
+
+            var distance = BABYLON.Vector3.Distance(
+                camera.position,
+                artwork.getAbsolutePosition()
+            );
+
+            if (distance < maxDistance && distance < nearestDistance) {
+                nearestArtwork = artwork;
+                nearestDistance = distance;
+            }
+        });
+
+        return nearestArtwork;
+    }
+
+    function updateArtworkInfoPopupContent(artwork) {
+        if (!artworkInfoPopup || !artworkInfoPopupRefs) {
+            return;
+        }
+
+        var info = getArtworkInfoState(artwork);
+        var hasInfo = hasArtworkInfo(info);
+
+        if (artworkInfoPopupRefs.photo) {
+            if (info.authorPhotoUrl) {
+                artworkInfoPopupRefs.photo.src = info.authorPhotoUrl;
+                artworkInfoPopupRefs.photo.classList.add("is-visible");
+            } else {
+                artworkInfoPopupRefs.photo.removeAttribute("src");
+                artworkInfoPopupRefs.photo.classList.remove("is-visible");
+            }
+        }
+
+        if (artworkInfoPopupRefs.title) {
+            artworkInfoPopupRefs.title.innerText = info.title || "Untitled artwork";
+            artworkInfoPopupRefs.title.style.display = hasInfo ? "" : "none";
+        }
+
+        if (artworkInfoPopupRefs.author) {
+            artworkInfoPopupRefs.author.innerText = info.authorName ? ("by " + info.authorName) : "";
+            artworkInfoPopupRefs.author.style.display = info.authorName ? "" : "none";
+        }
+
+        if (artworkInfoPopupRefs.description) {
+            artworkInfoPopupRefs.description.innerText = info.description || "";
+            artworkInfoPopupRefs.description.style.display = info.description ? "" : "none";
+        }
+
+        if (artworkInfoPopupRefs.empty) {
+            artworkInfoPopupRefs.empty.style.display = hasInfo ? "none" : "";
+        }
+    }
+
+    function showArtworkInfoPopup(artwork) {
+        if (!artworkInfoPopup || !artwork) {
+            return;
+        }
+
+        if (currentArtworkInfoPopupMesh !== artwork) {
+            updateArtworkInfoPopupContent(artwork);
+            currentArtworkInfoPopupMesh = artwork;
+        }
+
+        artworkInfoPopup.classList.add("is-visible");
+    }
+
+    function hideArtworkInfoPopup() {
+        if (!artworkInfoPopup) {
+            return;
+        }
+
+        artworkInfoPopup.classList.remove("is-visible");
+        currentArtworkInfoPopupMesh = null;
+    }
+
+    function updateArtworkInfoPopup() {
+        var artwork = getNearestArtworkForInfoPopup();
+
+        if (!artwork) {
+            hideArtworkInfoPopup();
+            return;
+        }
+
+        showArtworkInfoPopup(artwork);
     }
 
     scene.onPointerDown = function (evt, pickResult) {
@@ -12940,7 +13343,8 @@ export const createScene = function (engineArg, canvasArg) {
                     },
                     material: getMaterialState(artwork.material),
                     image: getArtworkImageState(artwork),
-                    artworkTransform: getArtworkTransformState(artwork)
+                    artworkTransform: getArtworkTransformState(artwork),
+                    info: getArtworkInfoState(artwork)
                 };
             }),
             spheres: artSpheres.map(function (sphere, index) {
@@ -13036,6 +13440,11 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 applyMaterialStateToMesh(artwork, artworkState.material);
+
+                setArtworkInfoState(
+                    artwork,
+                    artworkState.info || artworkState.artworkInfo || null
+                );
 
                 var savedArtworkTransform = null;
 
@@ -13413,6 +13822,23 @@ export const createScene = function (engineArg, canvasArg) {
                 : getArtworkByName(artworkNameOrIndex);
 
             return getArtworkImageState(artwork);
+        },
+        getArtworkInfo: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return getArtworkInfoState(artwork);
+        },
+        setArtworkInfo: function (artworkNameOrIndex, info) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            setArtworkInfoState(artwork, info);
+            updateArtworkInfoPopupContent(artwork);
+
+            return getArtworkInfoState(artwork);
         },
         getArtworkStorageSettings: function () {
             return {

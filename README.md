@@ -247,3 +247,20 @@ Fix:
 The engine TXT has login disabled.
 The GitHub package has login enabled.
 SQL files are intentionally not included in this package.
+
+
+## Stage 8Q Artwork Info Popup
+
+This package is based on the uploaded stable Stage 8P package and adds artwork info popup support.
+
+Added:
+- popup near artworks in Viewer Mode and Edit Mode,
+- editable artwork info in Edit Mode,
+- author photo URL,
+- author name,
+- artwork title,
+- artwork description,
+- save/restore of artwork info in gallery_state.
+
+Note: author photo is URL-based in this stage (no Storage upload yet).
+TXT has login disabled. GitHub package has login enabled.
