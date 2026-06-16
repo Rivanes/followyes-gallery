@@ -3949,6 +3949,8 @@ export const createScene = function (engineArg, canvasArg) {
         event.preventDefault();
         event.stopPropagation();
 
+        clearWallColorSelection();
+
         var artwork = addNewArtworkToScene();
 
         if (artwork) {
@@ -4577,6 +4579,7 @@ export const createScene = function (engineArg, canvasArg) {
     };
     var localLightCreateCounter = 0;
     var localLightStateRestoring = false;
+    var galleryStateApplying = false;
     var localLightStateRestoreApplied = false;
     var localLightPersistTimer = null;
     var localLightTransformGizmoEnabled = true;
@@ -11380,6 +11383,128 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkLight(artwork);
     }
 
+
+    function getArtworkDisplayIndex(artwork) {
+        if (!artwork || !artwork.name) {
+            return artworks.indexOf(artwork);
+        }
+
+        var match = String(artwork.name).match(/^Artwork_(\d+)$/);
+
+        if (match) {
+            return Number(match[1]);
+        }
+
+        return Math.max(0, artworks.indexOf(artwork));
+    }
+
+    function ensureArtworkLampMarkerVisible(artwork) {
+        if (
+            !artwork ||
+            !artwork.metadata ||
+            !artwork.metadata.lampMesh
+        ) {
+            return;
+        }
+
+        var lampMesh = artwork.metadata.lampMesh;
+
+        lampMesh.setEnabled(true);
+        lampMesh.isVisible = true;
+        lampMesh.isPickable = editMode;
+
+        if (!lampMesh.material || lampMesh.material.isDisposed()) {
+            lampMesh.material = makeLocalLightMaterial(
+                lampMesh.name + "_VisibleMat",
+                new BABYLON.Color3(1, 0.35, 0)
+            );
+        }
+
+        if (lampMesh.material.diffuseColor) {
+            lampMesh.material.diffuseColor = new BABYLON.Color3(1, 0.35, 0);
+        }
+
+        if (lampMesh.material.emissiveColor) {
+            lampMesh.material.emissiveColor = new BABYLON.Color3(1, 0.35, 0);
+        }
+
+        lampMesh.material.disableLighting = true;
+    }
+
+    function ensureArtworkDisplayLight(artwork) {
+        if (!artwork) {
+            return null;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+
+        var hasLamp =
+            artwork.metadata.lampMesh &&
+            !artwork.metadata.lampMesh.isDisposed &&
+            !artwork.metadata.lampMesh.isDisposed();
+
+        var hasLight =
+            artwork.metadata.spotLight &&
+            !artwork.metadata.spotLight.isDisposed &&
+            !artwork.metadata.spotLight.isDisposed();
+
+        if (!hasLamp || !hasLight) {
+            artwork.metadata.lampMesh = null;
+            artwork.metadata.spotLight = null;
+
+            createArtworkLight(
+                artwork,
+                getArtworkDisplayIndex(artwork)
+            );
+        }
+
+        ensureArtworkLampMarkerVisible(artwork);
+
+        if (artwork.metadata.spotLight) {
+            if (artwork.metadata.spotLight.setEnabled) {
+                artwork.metadata.spotLight.setEnabled(true);
+            }
+
+            if (!isFinite(artwork.metadata.spotLight.intensity) || artwork.metadata.spotLight.intensity <= 0) {
+                artwork.metadata.spotLight.intensity = 2.2;
+            }
+        }
+
+        var item = getLocalLightItemByLight(artwork.metadata.spotLight);
+
+        if (!item && artwork.metadata.spotLight && artwork.metadata.lampMesh) {
+            item = registerLocalLight({
+                id: "ArtworkSpotLight_" + getArtworkDisplayIndex(artwork),
+                name: "Artwork Spot " + (getArtworkDisplayIndex(artwork) + 1),
+                type: "spot",
+                light: artwork.metadata.spotLight,
+                markerMesh: artwork.metadata.lampMesh,
+                ownerMesh: artwork,
+                helperLength: artwork.metadata.spotLight.range || unifiedSpotDefaults.range,
+                helperMaxRadius: artwork.metadata.spotLight.range || unifiedSpotDefaults.range,
+                helperSoftness: getSpotBlendFromExponent(artwork.metadata.spotLight.exponent)
+            });
+        }
+
+        if (item) {
+            item.ownerMesh = artwork;
+            applyCommonLocalLightTargets(item);
+        }
+
+        updateArtworkLight(artwork);
+        return item;
+    }
+
+    function ensureAllArtworkDisplayLights() {
+        artworks.forEach(function (artwork) {
+            ensureArtworkDisplayLight(artwork);
+        });
+
+        refreshAllCommonLocalLightTargets();
+        refreshAllLocalSpotShadows();
+        updateLocalLightsUi();
+    }
+
     function focusCameraOnObject(targetMesh) {
 
         enterMobileFocusState();
@@ -12051,6 +12176,7 @@ export const createScene = function (engineArg, canvasArg) {
             );
         }
 
+        ensureArtworkDisplayLight(artwork);
         selectArtwork(artwork, false);
         updateEditHelpStatus();
         updateLocalLightsUi();
@@ -12136,7 +12262,10 @@ export const createScene = function (engineArg, canvasArg) {
         refreshArtworkLightExclusions();
         refreshAllCommonLocalLightTargets();
         updateLocalLightsUi();
-        updateEditHelpStatus();
+
+        if (!galleryStateApplying) {
+            updateEditHelpStatus();
+        }
 
         return true;
     }
@@ -12165,6 +12294,8 @@ export const createScene = function (engineArg, canvasArg) {
             return false;
         }
 
+        clearWallColorSelection();
+
         var artworksToDelete = selectedArtworks.slice();
         notifyGalleryStatus("Deleting selected artwork...");
 
@@ -12185,6 +12316,7 @@ export const createScene = function (engineArg, canvasArg) {
         selectedArtwork = null;
         isDraggingArtwork = false;
 
+        ensureAllArtworkDisplayLights();
         updateEditHelpStatus();
         updateAlignmentPanel();
 
@@ -12870,8 +13002,11 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 artwork.computeWorldMatrix(true);
+                ensureArtworkDisplayLight(artwork);
                 updateArtworkLight(artwork);
             });
+
+            ensureAllArtworkDisplayLights();
         }
 
         if (Array.isArray(editorState.spheres)) {
@@ -12951,6 +13086,8 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
+        galleryStateApplying = true;
+
         // Kompatybilność ze starym V0_8: jeśli state nie ma sekcji editor,
         // traktujemy go jako dawny serializeGalleryState().
         var editorState = state.editor || state;
@@ -12979,12 +13116,15 @@ export const createScene = function (engineArg, canvasArg) {
             restoreLocalLightState(state.localLights);
         }
 
+        ensureAllArtworkDisplayLights();
         refreshCommonLightingMaterialSupport();
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
         refreshAllCommonLocalLightTargets();
         refreshAllLocalSpotShadows();
         updateLocalLightsUi();
+
+        galleryStateApplying = false;
     }
 
     async function loadGalleryStateFromSupabase() {
