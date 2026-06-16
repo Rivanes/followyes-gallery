@@ -835,6 +835,7 @@ export const createScene = function (engineArg, canvasArg) {
     var artSpheres = [];
     var artworks = [];
     var artworkLights = [];
+    var artworkCreateCounter = 0;
 
     var lampCeilingY = -0.55;
     var lampCubeY = -1.2;
@@ -3905,6 +3906,66 @@ export const createScene = function (engineArg, canvasArg) {
     selectionSectionData.section.appendChild(selectedArtworkStatus);
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
     editorScroll.appendChild(selectionSectionData.section);
+
+    var artworkManageSectionData = createEditorSection("ARTWORKS");
+    var artworkManageActions = document.createElement("div");
+    artworkManageActions.className = "gallery-artwork-image-actions";
+
+    var artworkAddButton = document.createElement("button");
+    artworkAddButton.type = "button";
+    artworkAddButton.className = "gallery-editor-action-button is-primary";
+    artworkAddButton.innerText = "ADD ARTWORK";
+
+    var artworkDeleteSelectedButton = document.createElement("button");
+    artworkDeleteSelectedButton.type = "button";
+    artworkDeleteSelectedButton.className = "gallery-editor-action-button is-danger";
+    artworkDeleteSelectedButton.innerText = "DELETE SELECTED";
+
+    var artworkManageNote = document.createElement("p");
+    artworkManageNote.className = "gallery-artwork-image-note";
+    artworkManageNote.innerText = "Add creates a new artwork placeholder. Delete removes the selected artwork and its Storage image.";
+
+    artworkManageActions.appendChild(artworkAddButton);
+    artworkManageActions.appendChild(artworkDeleteSelectedButton);
+    artworkManageSectionData.section.appendChild(artworkManageActions);
+    artworkManageSectionData.section.appendChild(artworkManageNote);
+    editorScroll.appendChild(artworkManageSectionData.section);
+
+    function updateArtworkManagementUi() {
+        if (!artworkManageSectionData || !artworkManageSectionData.section) {
+            return;
+        }
+
+        artworkManageSectionData.section.classList.toggle(
+            "is-hidden",
+            !editMode
+        );
+
+        artworkAddButton.disabled = !editMode;
+        artworkDeleteSelectedButton.disabled = !editMode || selectedArtworks.length === 0;
+    }
+
+    artworkAddButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var artwork = addNewArtworkToScene();
+
+        if (artwork) {
+            notifyGalleryStatus("Added new artwork. Drag it on a wall, upload an image, then save state.");
+        }
+    };
+
+    artworkDeleteSelectedButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        deleteSelectedArtworksWithStorageDelete()
+            .catch(function (error) {
+                console.warn("Delete selected artworks error:", error);
+                notifyGalleryStatus("Artwork delete error.");
+            });
+    };
 
     var artworkImageSectionData = createEditorSection("ARTWORK IMAGE");
     artworkImageSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
@@ -8900,6 +8961,7 @@ export const createScene = function (engineArg, canvasArg) {
             colorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">" + colorName + "</span>";
         }
 
+        updateArtworkManagementUi();
         updateArtworkImageUi();
         updateArtworkTransformUi();
         updateAlignmentPanel();
@@ -11737,6 +11799,402 @@ export const createScene = function (engineArg, canvasArg) {
         refreshAllCommonLocalLightTargets();
     });
 
+
+    artworkCreateCounter = Math.max(artworkCreateCounter, artworks.length);
+
+    function updateArtworkCreateCounterFromName(name) {
+        var match = String(name || "").match(/^Artwork_(\d+)$/);
+
+        if (!match) {
+            return;
+        }
+
+        artworkCreateCounter = Math.max(
+            artworkCreateCounter,
+            Number(match[1]) + 1
+        );
+    }
+
+    function getNextArtworkCreateIndex() {
+        while (getArtworkByName("Artwork_" + artworkCreateCounter)) {
+            artworkCreateCounter += 1;
+        }
+
+        var index = artworkCreateCounter;
+        artworkCreateCounter += 1;
+
+        return index;
+    }
+
+    function getDefaultArtworkColor(index) {
+        if (artworkMaterials.length === 0) {
+            return new BABYLON.Color3(0.8, 0.05, 0.05);
+        }
+
+        return artworkMaterials[Math.abs(index) % artworkMaterials.length];
+    }
+
+    function createArtworkPlaceholderMaterial(index, baseColor) {
+        var material = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
+        var color = baseColor || getDefaultArtworkColor(index);
+
+        material.diffuseColor = color.clone ? color.clone() : color;
+        material.emissiveColor = color.clone ? color.clone() : color;
+        material.disableLighting = true;
+
+        return material;
+    }
+
+    function createArtworkDisplay(options) {
+        options = options || {};
+
+        var index = Number(options.index);
+
+        if (!isFinite(index)) {
+            index = getNextArtworkCreateIndex();
+        }
+
+        var artworkName = options.name || ("Artwork_" + index);
+
+        if (getArtworkByName(artworkName)) {
+            index = getNextArtworkCreateIndex();
+            artworkName = "Artwork_" + index;
+        }
+
+        var material = createArtworkPlaceholderMaterial(
+            index,
+            options.baseColor || getDefaultArtworkColor(index)
+        );
+
+        var artwork = BABYLON.MeshBuilder.CreateBox(
+            artworkName,
+            {
+                width: artworkWidth,
+                height: artworkHeight,
+                depth: artworkDepth
+            },
+            scene
+        );
+
+        artwork.position = options.position && options.position.clone
+            ? options.position.clone()
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        artwork.rotation = options.rotation && options.rotation.clone
+            ? options.rotation.clone()
+            : new BABYLON.Vector3(0, 0, 0);
+
+        artwork.material = material;
+        artwork.isPickable = true;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = null;
+        artwork.metadata.isDynamicArtwork = !options.isDefaultArtwork;
+        artwork.metadata.createdAt = options.createdAt || new Date().toISOString();
+
+        registerCommonShadowMesh(artwork, {
+            global: false,
+            local: false,
+            receive: false,
+            cast: false
+        });
+
+        artworks.push(artwork);
+        updateArtworkCreateCounterFromName(artwork.name);
+
+        createArtworkLight(artwork, index);
+
+        if (options.wallData) {
+            setArtworkWallMetadata(
+                artwork,
+                options.wallData.wallMesh || null,
+                options.wallData.wallAxis,
+                options.wallData.wallValue,
+                options.wallData.horizontalAxis
+            );
+        }
+
+        artwork.computeWorldMatrix(true);
+        updateArtworkLight(artwork);
+        refreshAllCommonLocalLightTargets();
+
+        return artwork;
+    }
+
+    function getDefaultNewArtworkReference() {
+        if (primaryArtwork && artworks.includes(primaryArtwork)) {
+            return primaryArtwork;
+        }
+
+        if (activeArtwork && artworks.includes(activeArtwork)) {
+            return activeArtwork;
+        }
+
+        return artworks.length > 0 ? artworks[artworks.length - 1] : null;
+    }
+
+    function placeNewArtworkNearReference(newArtwork, referenceArtwork) {
+        if (!newArtwork || !referenceArtwork) {
+            return false;
+        }
+
+        var wallData = getArtworkWallDataFromRotation(referenceArtwork);
+        var wallMesh = getWallMeshForArtwork(referenceArtwork);
+        var candidateRotation = new BABYLON.Vector3(
+            0,
+            referenceArtwork.rotation ? referenceArtwork.rotation.y : 0,
+            0
+        );
+
+        var horizontalAxis = wallData.horizontalAxis || "x";
+        var wallAxis = wallData.wallAxis || "z";
+        var wallValue = wallData.wallValue !== undefined
+            ? wallData.wallValue
+            : referenceArtwork.position[wallAxis];
+
+        var referenceHalf = getArtworkHalfSizeOnAxisForRotation(
+            referenceArtwork,
+            horizontalAxis,
+            referenceArtwork.rotation
+        );
+
+        var newHalf = getArtworkHalfSizeOnAxisForRotation(
+            newArtwork,
+            horizontalAxis,
+            candidateRotation
+        );
+
+        var step = referenceHalf + newHalf + 0.18;
+        var offsets = [step, -step, step * 2, -step * 2, step * 3, -step * 3, 0];
+
+        for (var i = 0; i < offsets.length; i++) {
+            var candidatePosition = referenceArtwork.position.clone();
+
+            candidatePosition[horizontalAxis] += offsets[i];
+            candidatePosition[wallAxis] = wallValue;
+
+            if (wallMesh) {
+                candidatePosition[horizontalAxis] = clampArtworkHorizontalByTargetSegment(
+                    newArtwork,
+                    candidatePosition[horizontalAxis],
+                    wallMesh,
+                    horizontalAxis,
+                    candidateRotation,
+                    wallAxis,
+                    wallValue
+                );
+
+                candidatePosition.y = clampArtworkYByWallBounds(
+                    newArtwork,
+                    candidatePosition.y,
+                    wallMesh
+                );
+            }
+
+            if (
+                !wouldArtworkOverlap(
+                    newArtwork,
+                    candidatePosition,
+                    wallAxis,
+                    wallValue,
+                    horizontalAxis
+                )
+            ) {
+                newArtwork.position.copyFrom(candidatePosition);
+                newArtwork.rotation = candidateRotation.clone();
+
+                setArtworkWallMetadata(
+                    newArtwork,
+                    wallMesh,
+                    wallAxis,
+                    wallValue,
+                    horizontalAxis
+                );
+
+                newArtwork.computeWorldMatrix(true);
+                updateArtworkLight(newArtwork);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function addNewArtworkToScene() {
+        var referenceArtwork = getDefaultNewArtworkReference();
+        var index = getNextArtworkCreateIndex();
+
+        var startPosition = referenceArtwork
+            ? referenceArtwork.position.clone()
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        var startRotation = referenceArtwork
+            ? new BABYLON.Vector3(0, referenceArtwork.rotation.y, 0)
+            : new BABYLON.Vector3(0, 0, 0);
+
+        var artwork = createArtworkDisplay({
+            index: index,
+            name: "Artwork_" + index,
+            position: startPosition,
+            rotation: startRotation,
+            isDefaultArtwork: false
+        });
+
+        if (referenceArtwork) {
+            placeNewArtworkNearReference(artwork, referenceArtwork);
+        } else {
+            setArtworkWallMetadata(
+                artwork,
+                null,
+                "z",
+                artwork.position.z,
+                "x"
+            );
+        }
+
+        selectArtwork(artwork, false);
+        updateEditHelpStatus();
+        updateLocalLightsUi();
+
+        return artwork;
+    }
+
+    function disposeArtworkMeshOnly(artwork) {
+        if (!artwork) {
+            return false;
+        }
+
+        removeArtworkImageFromMesh(artwork, true);
+        hideArtworkSelectionGlow(artwork);
+
+        if (
+            artwork.metadata &&
+            artwork.metadata.selectionGlowPlane &&
+            !artwork.metadata.selectionGlowPlane.isDisposed()
+        ) {
+            artwork.metadata.selectionGlowPlane.dispose();
+            artwork.metadata.selectionGlowPlane = null;
+        }
+
+        if (
+            artwork.metadata &&
+            artwork.metadata.spotLight
+        ) {
+            var localItem = getLocalLightItemByLight(artwork.metadata.spotLight);
+
+            if (localItem) {
+                disposeLocalLightItem(localItem);
+            } else {
+                if (artwork.metadata.spotLight.dispose) {
+                    artwork.metadata.spotLight.dispose();
+                }
+
+                if (
+                    artwork.metadata.lampMesh &&
+                    artwork.metadata.lampMesh.dispose
+                ) {
+                    artwork.metadata.lampMesh.dispose();
+                }
+            }
+        }
+
+        artworks = artworks.filter(function (candidate) {
+            return candidate !== artwork;
+        });
+
+        selectedArtworks = selectedArtworks.filter(function (candidate) {
+            return candidate !== artwork;
+        });
+
+        if (primaryArtwork === artwork) {
+            primaryArtwork = selectedArtworks.length > 0
+                ? selectedArtworks[selectedArtworks.length - 1]
+                : null;
+        }
+
+        if (referenceArtwork === artwork) {
+            referenceArtwork = selectedArtworks.length > 0
+                ? selectedArtworks[0]
+                : null;
+        }
+
+        if (activeArtwork === artwork) {
+            activeArtwork = primaryArtwork;
+        }
+
+        if (selectedArtwork === artwork) {
+            selectedArtwork = null;
+            isDraggingArtwork = false;
+        }
+
+        try {
+            artwork.dispose();
+        } catch (error) {
+            console.warn("Artwork dispose warning:", error);
+        }
+
+        refreshArtworkOutlines();
+        refreshArtworkLightExclusions();
+        refreshAllCommonLocalLightTargets();
+        updateLocalLightsUi();
+        updateEditHelpStatus();
+
+        return true;
+    }
+
+    async function deleteArtworkWithStorageDelete(artwork) {
+        if (!artwork) {
+            return false;
+        }
+
+        var imageState = getArtworkImageState(artwork);
+
+        if (imageState) {
+            var removedImage = await deleteArtworkImageFromSupabase(imageState);
+
+            if (!removedImage) {
+                return false;
+            }
+        }
+
+        return disposeArtworkMeshOnly(artwork);
+    }
+
+    async function deleteSelectedArtworksWithStorageDelete() {
+        if (!selectedArtworks.length) {
+            notifyGalleryStatus("Select an artwork to delete.");
+            return false;
+        }
+
+        var artworksToDelete = selectedArtworks.slice();
+        notifyGalleryStatus("Deleting selected artwork...");
+
+        var deletedCount = 0;
+
+        for (var i = 0; i < artworksToDelete.length; i++) {
+            var deleted = await deleteArtworkWithStorageDelete(artworksToDelete[i]);
+
+            if (deleted) {
+                deletedCount += 1;
+            }
+        }
+
+        selectedArtworks = [];
+        primaryArtwork = null;
+        referenceArtwork = null;
+        activeArtwork = null;
+        selectedArtwork = null;
+        isDraggingArtwork = false;
+
+        updateEditHelpStatus();
+        updateAlignmentPanel();
+
+        if (deletedCount > 0) {
+            notifyGalleryStatus("Deleted " + deletedCount + " artwork(s). Save state to keep the change.");
+        }
+
+        return deletedCount > 0;
+    }
+
     scene.onPointerDown = function (evt, pickResult) {
 
         if (isMobileViewerActive()) {
@@ -12197,6 +12655,74 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+
+    function ensureArtworkExistsForState(artworkState) {
+        if (!artworkState || !artworkState.name) {
+            return null;
+        }
+
+        var artwork = getArtworkByName(artworkState.name);
+
+        if (artwork) {
+            updateArtworkCreateCounterFromName(artwork.name);
+            return artwork;
+        }
+
+        var restoredIndex = artworkState.index !== undefined
+            ? Number(artworkState.index)
+            : NaN;
+
+        if (!isFinite(restoredIndex)) {
+            var nameMatch = String(artworkState.name).match(/^Artwork_(\d+)$/);
+            restoredIndex = nameMatch ? Number(nameMatch[1]) : getNextArtworkCreateIndex();
+        }
+
+        var restoredPosition = artworkState.position
+            ? vectorFromState(artworkState.position, new BABYLON.Vector3(0, -2.5, -4.8))
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+
+        var restoredRotation = artworkState.rotation
+            ? vectorFromState(artworkState.rotation, new BABYLON.Vector3(0, 0, 0))
+            : new BABYLON.Vector3(0, 0, 0);
+
+        artwork = createArtworkDisplay({
+            index: restoredIndex,
+            name: artworkState.name,
+            position: restoredPosition,
+            rotation: restoredRotation,
+            isDefaultArtwork: !artworkState.isDynamicArtwork,
+            createdAt: artworkState.createdAt || null
+        });
+
+        updateArtworkCreateCounterFromName(artwork.name);
+
+        return artwork;
+    }
+
+    function syncArtworkListToEditorState(editorState) {
+        if (!editorState || !Array.isArray(editorState.artworks)) {
+            return;
+        }
+
+        var expectedNames = editorState.artworks
+            .filter(function (artworkState) {
+                return !!(artworkState && artworkState.name);
+            })
+            .map(function (artworkState) {
+                return artworkState.name;
+            });
+
+        artworks.slice().forEach(function (artwork) {
+            if (expectedNames.indexOf(artwork.name) === -1) {
+                disposeArtworkMeshOnly(artwork);
+            }
+        });
+
+        editorState.artworks.forEach(function (artworkState) {
+            ensureArtworkExistsForState(artworkState);
+        });
+    }
+
     function serializeEditorState() {
         return {
             version: "Gallery_V0_10_editor",
@@ -12215,6 +12741,8 @@ export const createScene = function (engineArg, canvasArg) {
                 return {
                     name: artwork.name,
                     index: index,
+                    isDynamicArtwork: !!(artwork.metadata && artwork.metadata.isDynamicArtwork),
+                    createdAt: artwork.metadata && artwork.metadata.createdAt ? artwork.metadata.createdAt : null,
                     position: vectorToState(artwork.position),
                     rotation: vectorToState(artwork.rotation),
                     scaling: vectorToState(artwork.scaling),
@@ -12272,6 +12800,8 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (Array.isArray(editorState.artworks)) {
+            syncArtworkListToEditorState(editorState);
+
             editorState.artworks.forEach(function (artworkState) {
                 if (!artworkState) {
                     return;
@@ -12625,6 +13155,17 @@ export const createScene = function (engineArg, canvasArg) {
 
             return removeArtworkImageWithStorageDelete(artwork);
         },
+        addArtwork: function () {
+            return addNewArtworkToScene();
+        },
+        deleteArtwork: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return deleteArtworkWithStorageDelete(artwork);
+        },
+        deleteSelectedArtworks: deleteSelectedArtworksWithStorageDelete,
         getArtworkImageState: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
