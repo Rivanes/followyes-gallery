@@ -13037,16 +13037,27 @@ export const createScene = function (engineArg, canvasArg) {
 
                 applyMaterialStateToMesh(artwork, artworkState.material);
 
+                var savedArtworkTransform = null;
+
                 if (artworkState.artworkTransform) {
-                    setArtworkTransformState(artwork, artworkState.artworkTransform);
+                    savedArtworkTransform = artworkState.artworkTransform;
+                    setArtworkTransformState(artwork, savedArtworkTransform);
                 } else if (
                     artworkState.image &&
                     artworkState.image.transform
                 ) {
-                    setArtworkTransformState(artwork, artworkState.image.transform);
+                    savedArtworkTransform = artworkState.image.transform;
+                    setArtworkTransformState(artwork, savedArtworkTransform);
                 }
 
-                if (artworkState.image || artworkState.artworkImage || artworkState.imageUrl || artworkState.imagePath) {
+                var hasArtworkImageState = !!(
+                    artworkState.image ||
+                    artworkState.artworkImage ||
+                    artworkState.imageUrl ||
+                    artworkState.imagePath
+                );
+
+                if (hasArtworkImageState) {
                     applyArtworkImageState(
                         artwork,
                         artworkState.image || artworkState.artworkImage || {
@@ -13056,7 +13067,43 @@ export const createScene = function (engineArg, canvasArg) {
                         }
                     );
                 } else {
-                    removeArtworkImageFromMesh(artwork, true);
+                    // Stage 8P:
+                    // Placeholder bez tekstury też jest pełnoprawnym artworkiem.
+                    // Nie wolno przy loadzie resetować jego skali/rotacji tylko dlatego,
+                    // że image = null.
+                    // Usuwamy imagePlane tylko wtedy, gdy realnie istnieje po poprzednim stanie.
+                    if (
+                        artwork.metadata &&
+                        (
+                            artwork.metadata.artworkImage ||
+                            artwork.metadata.imagePlane ||
+                            artwork.metadata.imageMaterial
+                        )
+                    ) {
+                        removeArtworkImageFromMesh(artwork, true);
+                    }
+
+                    if (artworkState.position) {
+                        artwork.position.copyFrom(
+                            vectorFromState(artworkState.position, artwork.position)
+                        );
+                    }
+
+                    if (artworkState.rotation) {
+                        artwork.rotation.copyFrom(
+                            vectorFromState(artworkState.rotation, artwork.rotation)
+                        );
+                    }
+
+                    if (artworkState.scaling) {
+                        artwork.scaling.copyFrom(
+                            vectorFromState(artworkState.scaling, artwork.scaling)
+                        );
+                    }
+
+                    if (savedArtworkTransform) {
+                        setArtworkTransformState(artwork, savedArtworkTransform);
+                    }
                 }
 
                 artwork.computeWorldMatrix(true);

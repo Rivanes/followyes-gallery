@@ -229,3 +229,21 @@ Fix:
 The engine TXT has login disabled.
 The GitHub package has login enabled.
 SQL files are intentionally not included in this package.
+
+
+## Stage 8P Placeholder Save / Restore Fix
+
+Fixes new ADD ARTWORK placeholders losing transform state after Save/Load.
+
+Cause:
+- placeholder states were serialized correctly,
+- but `applyEditorState()` called `removeArtworkImageFromMesh()` for image-less placeholders,
+- which reset aspect ratio, scaling, rotation and artworkTransform.
+
+Fix:
+- image-less placeholders no longer reset transform on load,
+- if an imagePlane must be removed, saved position/rotation/scaling/artworkTransform are re-applied immediately.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+SQL files are intentionally not included in this package.
