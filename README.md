@@ -177,13 +177,3 @@ Uploaded-image artworks now use a dedicated white base material with slight emis
 When the image is removed, the original placeholder material is restored.
 
 SQL files are intentionally not included in this package.
-
-
-## Stage 8 Add / Delete Artwork
-
-Adds full artwork management:
-- `ADD ARTWORK` creates a new artwork placeholder/mesh with its own display light.
-- `DELETE SELECTED` removes the selected artwork mesh and its Storage image if present.
-- New/deleted artworks are saved and restored through `gallery_state`.
-
-SQL files are intentionally not included in this package.
