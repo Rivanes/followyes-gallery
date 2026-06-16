@@ -1350,7 +1350,10 @@ export const createScene = function (engineArg, canvasArg) {
     function getArtworkLightWashMaterial() {
         if (
             galleryArtworkLightWashMaterial &&
-            !galleryArtworkLightWashMaterial.isDisposed()
+            (
+                !galleryArtworkLightWashMaterial.isDisposed ||
+                !galleryArtworkLightWashMaterial.isDisposed()
+            )
         ) {
             return galleryArtworkLightWashMaterial;
         }
