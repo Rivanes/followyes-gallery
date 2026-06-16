@@ -11599,19 +11599,60 @@ export const createScene = function (engineArg, canvasArg) {
         refreshMainShadowRenderList();
     }
 
+    function disposeArtworkLightForArtwork(artwork) {
+        if (!artwork || !artwork.metadata) {
+            return;
+        }
+
+        var lampMesh = artwork.metadata.lampMesh || null;
+        var spotLight = artwork.metadata.spotLight || null;
+        var lightItem = spotLight
+            ? getLocalLightItemByLight(spotLight)
+            : null;
+
+        if (!lightItem && lampMesh) {
+            lightItem = localLightItems.find(function (item) {
+                return item && item.markerMesh === lampMesh;
+            }) || null;
+        }
+
+        if (!lightItem) {
+            lightItem = localLightItems.find(function (item) {
+                return item && item.ownerMesh === artwork;
+            }) || null;
+        }
+
+        if (lightItem) {
+            disposeLocalLightItem(lightItem);
+        } else {
+            artworkLights = artworkLights.filter(function (lightData) {
+                return !!(
+                    lightData &&
+                    lightData.artwork !== artwork &&
+                    lightData.lampMesh !== lampMesh &&
+                    lightData.spotLight !== spotLight
+                );
+            });
+
+            if (spotLight && spotLight.dispose) {
+                spotLight.dispose();
+            }
+
+            if (lampMesh && lampMesh.dispose) {
+                lampMesh.dispose();
+            }
+        }
+
+        artwork.metadata.lampMesh = null;
+        artwork.metadata.spotLight = null;
+    }
+
     function disposeArtworkDisplay(artwork) {
         if (!artwork) {
             return;
         }
 
-        var lightItem = artwork.metadata && artwork.metadata.spotLight
-            ? getLocalLightItemByLight(artwork.metadata.spotLight)
-            : null;
-
-        if (lightItem) {
-            disposeLocalLightItem(lightItem);
-        }
-
+        disposeArtworkLightForArtwork(artwork);
         removeArtworkImageFromMesh(artwork, true);
         hideArtworkSelectionGlow(artwork);
         removeArtworkFromShadowRegistries(artwork);
@@ -11642,6 +11683,8 @@ export const createScene = function (engineArg, canvasArg) {
         refreshArtworkLightExclusions();
         refreshAllCommonLocalLightTargets();
         refreshAllLocalSpotShadows();
+        updateLocalLightsUi();
+        schedulePersistLocalLightState(true);
         updateEditHelpStatus();
         updateAlignmentPanel();
 
