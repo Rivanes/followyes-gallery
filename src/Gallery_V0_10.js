@@ -857,6 +857,7 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkLights = [];
     var artworkCreateCounter = 0;
     var deletedArtworkNames = [];
+    var artworkAuthors = [];
 
     var lampCeilingY = -0.55;
     var lampCubeY = -1.2;
@@ -3887,7 +3888,7 @@ export const createScene = function (engineArg, canvasArg) {
             padding: 16px 18px;
             display: flex;
             flex-direction: column;
-            justify-content: center;
+            justify-content: flex-start;
         }
 
         .gallery-artwork-info-kicker {
@@ -3903,8 +3904,8 @@ export const createScene = function (engineArg, canvasArg) {
         .gallery-artwork-info-title {
             margin: 0;
             color: #2f2f2f;
-            font-size: 24px;
-            line-height: 1.1;
+            font-size: 20px;
+            line-height: 1.14;
             font-weight: 700;
             letter-spacing: -0.01em;
             overflow-wrap: anywhere;
@@ -3947,12 +3948,13 @@ export const createScene = function (engineArg, canvasArg) {
         .gallery-artwork-info-editor-photo-preview {
             position: relative;
             width: 100%;
-            aspect-ratio: 1 / 1;
+            min-height: 112px;
+            aspect-ratio: 1 / 0.84;
             border-radius: 16px;
             overflow: hidden;
             background: rgba(255, 255, 255, 0.34);
             border: 1px solid rgba(255, 255, 255, 0.76);
-            margin-bottom: 12px;
+            margin-bottom: 14px;
         }
 
         .gallery-artwork-info-editor-photo-preview img {
@@ -3984,6 +3986,35 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-artwork-info-field-group + .gallery-artwork-info-field-group {
             margin-top: 12px;
+        }
+
+        .gallery-artwork-info-artwork-fields {
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.45);
+        }
+
+        .gallery-artwork-info-author-tools {
+            display: grid;
+            gap: 10px;
+        }
+
+        .gallery-artwork-info-author-tools-note {
+            margin: 0;
+            color: #6c6c6c;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+
+        .gallery-artwork-info-author-found {
+            min-height: 40px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.10);
+            background: rgba(255, 255, 255, 0.22);
+            color: #4c4c4c;
+            font-size: 12px;
+            line-height: 1.35;
         }
 
         .gallery-artwork-info-textarea {
@@ -4307,6 +4338,11 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoUploadPhotoButton.className = "gallery-editor-action-button is-primary";
     artworkInfoUploadPhotoButton.innerText = "UPLOAD PHOTO";
 
+    var artworkInfoFindAuthorButton = document.createElement("button");
+    artworkInfoFindAuthorButton.type = "button";
+    artworkInfoFindAuthorButton.className = "gallery-editor-action-button is-primary";
+    artworkInfoFindAuthorButton.innerText = "FIND AUTHOR";
+
     var artworkInfoAuthorNameInput = createGalleryTextInputCompat("Author name");
     var artworkInfoTitleInput = createGalleryTextInputCompat("Artwork title");
     var artworkInfoDescriptionInput = document.createElement("textarea");
@@ -4331,6 +4367,16 @@ export const createScene = function (engineArg, canvasArg) {
 
     artworkInfoPhotoPreview.appendChild(artworkInfoPhotoPreviewImage);
     artworkInfoPhotoPreview.appendChild(artworkInfoPhotoPreviewPlaceholder);
+
+    var artworkInfoAuthorNameGroup = document.createElement("div");
+    artworkInfoAuthorNameGroup.className = "gallery-artwork-info-field-group";
+    var artworkInfoAuthorNameLabel = document.createElement("label");
+    artworkInfoAuthorNameLabel.className = "gallery-editor-field-label";
+    artworkInfoAuthorNameLabel.innerText = "AUTHOR NAME";
+    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameLabel);
+    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameInput);
+    artworkInfoAuthorCard.appendChild(artworkInfoAuthorNameGroup);
+
     artworkInfoAuthorCard.appendChild(artworkInfoPhotoPreview);
 
     var artworkInfoAuthorPhotoGroup = document.createElement("div");
@@ -4348,17 +4394,31 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoAuthorPhotoActions.appendChild(artworkInfoUploadPhotoButton);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoActions);
 
-    var artworkInfoAuthorNameGroup = document.createElement("div");
-    artworkInfoAuthorNameGroup.className = "gallery-artwork-info-field-group";
-    var artworkInfoAuthorNameLabel = document.createElement("label");
-    artworkInfoAuthorNameLabel.className = "gallery-editor-field-label";
-    artworkInfoAuthorNameLabel.innerText = "AUTHOR NAME";
-    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameLabel);
-    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameInput);
-    artworkInfoAuthorCard.appendChild(artworkInfoAuthorNameGroup);
-
     var artworkInfoDetailsCard = document.createElement("div");
     artworkInfoDetailsCard.className = "gallery-artwork-info-editor-card";
+
+    var artworkInfoAuthorTools = document.createElement("div");
+    artworkInfoAuthorTools.className = "gallery-artwork-info-author-tools";
+
+    var artworkInfoFindAuthorLabel = document.createElement("label");
+    artworkInfoFindAuthorLabel.className = "gallery-editor-field-label";
+    artworkInfoFindAuthorLabel.innerText = "FIND AUTHOR";
+    artworkInfoAuthorTools.appendChild(artworkInfoFindAuthorLabel);
+
+    var artworkInfoFindAuthorNote = document.createElement("p");
+    artworkInfoFindAuthorNote.className = "gallery-artwork-info-author-tools-note";
+    artworkInfoFindAuthorNote.innerText = "Looks for an existing author by name and reuses their photo.";
+    artworkInfoAuthorTools.appendChild(artworkInfoFindAuthorNote);
+
+    artworkInfoAuthorTools.appendChild(artworkInfoFindAuthorButton);
+
+    var artworkInfoAuthorFound = document.createElement("div");
+    artworkInfoAuthorFound.className = "gallery-artwork-info-author-found";
+    artworkInfoAuthorFound.innerText = "No author selected.";
+    artworkInfoAuthorTools.appendChild(artworkInfoAuthorFound);
+
+    var artworkInfoArtworkFields = document.createElement("div");
+    artworkInfoArtworkFields.className = "gallery-artwork-info-artwork-fields";
 
     var artworkInfoTitleGroup = document.createElement("div");
     artworkInfoTitleGroup.className = "gallery-artwork-info-field-group";
@@ -4367,7 +4427,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoTitleLabel.innerText = "ARTWORK TITLE";
     artworkInfoTitleGroup.appendChild(artworkInfoTitleLabel);
     artworkInfoTitleGroup.appendChild(artworkInfoTitleInput);
-    artworkInfoDetailsCard.appendChild(artworkInfoTitleGroup);
+    artworkInfoArtworkFields.appendChild(artworkInfoTitleGroup);
 
     var artworkInfoDescriptionGroup = document.createElement("div");
     artworkInfoDescriptionGroup.className = "gallery-artwork-info-field-group";
@@ -4376,7 +4436,10 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoDescriptionLabel.innerText = "DESCRIPTION";
     artworkInfoDescriptionGroup.appendChild(artworkInfoDescriptionLabel);
     artworkInfoDescriptionGroup.appendChild(artworkInfoDescriptionInput);
-    artworkInfoDetailsCard.appendChild(artworkInfoDescriptionGroup);
+    artworkInfoArtworkFields.appendChild(artworkInfoDescriptionGroup);
+
+    artworkInfoDetailsCard.appendChild(artworkInfoAuthorTools);
+    artworkInfoDetailsCard.appendChild(artworkInfoArtworkFields);
 
     artworkInfoEditorGrid.appendChild(artworkInfoAuthorCard);
     artworkInfoEditorGrid.appendChild(artworkInfoDetailsCard);
@@ -4432,6 +4495,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         artworkInfoAuthorPhotoInput.disabled = !isVisible;
         artworkInfoUploadPhotoButton.disabled = !isVisible;
+        artworkInfoFindAuthorButton.disabled = !isVisible;
         artworkInfoAuthorNameInput.disabled = !isVisible;
         artworkInfoTitleInput.disabled = !isVisible;
         artworkInfoDescriptionInput.disabled = !isVisible;
@@ -4462,11 +4526,214 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateAuthorFoundUi(getAuthorById(info.authorId) || getAuthorByName(info.authorName));
     }
 
     artworkInfoAuthorPhotoInput.addEventListener("input", function () {
         updateArtworkInfoEditorPhotoPreview(artworkInfoAuthorPhotoInput.value);
     });
+
+    function normalizeAuthorName(name) {
+        return String(name || "")
+            .trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+    }
+
+    function getAuthorIdFromName(name) {
+        var slug = normalizeAuthorName(name);
+
+        return slug ? "author-" + slug : "";
+    }
+
+    function normalizeAuthorRecord(author) {
+        author = author || {};
+
+        return {
+            id: String(author.id || getAuthorIdFromName(author.name || author.authorName || "")).trim(),
+            name: String(author.name || author.authorName || "").trim(),
+            photoUrl: String(author.photoUrl || author.authorPhotoUrl || "").trim(),
+            photoPath: String(author.photoPath || author.authorPhotoPath || "").trim(),
+            photoBucket: String(author.photoBucket || author.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
+            photoOriginalName: String(author.photoOriginalName || author.authorPhotoOriginalName || "").trim(),
+            photoMimeType: String(author.photoMimeType || author.authorPhotoMimeType || "").trim(),
+            photoSize: Number(author.photoSize || author.authorPhotoSize || 0) || 0,
+            photoUploadedAt: String(author.photoUploadedAt || author.authorPhotoUploadedAt || "").trim()
+        };
+    }
+
+    function getAuthorById(authorId) {
+        if (!authorId) {
+            return null;
+        }
+
+        for (var i = 0; i < artworkAuthors.length; i++) {
+            if (artworkAuthors[i] && artworkAuthors[i].id === authorId) {
+                return artworkAuthors[i];
+            }
+        }
+
+        return null;
+    }
+
+    function getAuthorByName(name) {
+        return getAuthorById(getAuthorIdFromName(name));
+    }
+
+    function upsertAuthorRecord(author) {
+        author = normalizeAuthorRecord(author);
+
+        if (!author.id) {
+            return null;
+        }
+
+        var existing = getAuthorById(author.id);
+
+        if (existing) {
+            Object.keys(author).forEach(function (key) {
+                if (author[key] !== "" && author[key] !== 0) {
+                    existing[key] = author[key];
+                }
+            });
+
+            return existing;
+        }
+
+        artworkAuthors.push(author);
+
+        return author;
+    }
+
+    function getArtworkCountForAuthor(authorId, exceptArtwork) {
+        if (!authorId) {
+            return 0;
+        }
+
+        var active = typeof getActiveArtworks === "function"
+            ? getActiveArtworks()
+            : artworks;
+
+        var count = 0;
+
+        active.forEach(function (artwork) {
+            if (!artwork || artwork === exceptArtwork || (artwork.isDisposed && artwork.isDisposed())) {
+                return;
+            }
+
+            var info = getArtworkInfoState(artwork);
+
+            if (info && info.authorId === authorId) {
+                count++;
+            }
+        });
+
+        return count;
+    }
+
+    function syncArtworkInfoWithAuthor(artwork, author) {
+        if (!artwork || !author) {
+            return null;
+        }
+
+        author = normalizeAuthorRecord(author);
+
+        var info = getArtworkInfoState(artwork);
+        info.authorId = author.id;
+        info.authorName = author.name || info.authorName;
+        info.authorPhotoUrl = author.photoUrl || info.authorPhotoUrl;
+        info.authorPhotoPath = author.photoPath || info.authorPhotoPath;
+        info.authorPhotoBucket = author.photoBucket || info.authorPhotoBucket;
+        info.authorPhotoOriginalName = author.photoOriginalName || info.authorPhotoOriginalName;
+        info.authorPhotoMimeType = author.photoMimeType || info.authorPhotoMimeType;
+        info.authorPhotoSize = author.photoSize || info.authorPhotoSize;
+        info.authorPhotoUploadedAt = author.photoUploadedAt || info.authorPhotoUploadedAt;
+
+        setArtworkInfoState(artwork, info);
+
+        return info;
+    }
+
+    function updateAuthorFoundUi(author) {
+        if (!artworkInfoAuthorFound) {
+            return;
+        }
+
+        if (!author) {
+            artworkInfoAuthorFound.innerText = "No existing author found.";
+            return;
+        }
+
+        artworkInfoAuthorFound.innerText = "Found: " + author.name + (author.photoUrl ? " — photo ready" : " — no photo yet");
+    }
+
+    function findAndApplyAuthorForCurrentArtwork() {
+        var artwork = getArtworkInfoUiTarget();
+
+        if (!artwork) {
+            notifyGalleryStatus("Select one artwork first.");
+            return null;
+        }
+
+        var authorName = artworkInfoAuthorNameInput.value.trim();
+
+        if (!authorName) {
+            notifyGalleryStatus("Type author name first.");
+            updateAuthorFoundUi(null);
+            return null;
+        }
+
+        var author = getAuthorByName(authorName);
+        var info = getArtworkInfoState(artwork);
+
+        info.authorId = getAuthorIdFromName(authorName);
+        info.authorName = authorName;
+
+        if (!author) {
+            setArtworkInfoState(artwork, info);
+            updateAuthorFoundUi(null);
+            notifyGalleryStatus("No existing author found. Upload a photo to create this author.");
+            return null;
+        }
+
+        syncArtworkInfoWithAuthor(artwork, author);
+
+        artworkInfoAuthorPhotoInput.value = author.photoUrl || "";
+        updateArtworkInfoEditorPhotoPreview(author.photoUrl || "");
+        updateArtworkInfoPopupContent(artwork);
+        updateAuthorFoundUi(author);
+
+        notifyGalleryStatus("Existing author applied. Save state to keep the change.");
+
+        return author;
+    }
+
+    async function cleanupUnusedAuthorPhotoIfNeeded(authorId, exceptArtwork) {
+        var author = getAuthorById(authorId);
+
+        if (!author) {
+            return;
+        }
+
+        var usageCount = getArtworkCountForAuthor(authorId, exceptArtwork);
+
+        if (usageCount > 0) {
+            return;
+        }
+
+        if (author.photoPath) {
+            await deleteAuthorPhotoFromSupabase({
+                authorPhotoPath: author.photoPath,
+                authorPhotoBucket: author.photoBucket
+            });
+        }
+
+        artworkAuthors = artworkAuthors.filter(function (item) {
+            return !(item && item.id === authorId);
+        });
+    }
 
     function createAuthorPhotoStoragePath(artwork, file) {
         var safeFileName = createSafeStorageFileName(file && file.name ? file.name : "author-photo.jpg");
@@ -4531,6 +4798,15 @@ export const createScene = function (engineArg, canvasArg) {
             return false;
         }
 
+        var authorNameForUpload = artworkInfoAuthorNameInput
+            ? artworkInfoAuthorNameInput.value.trim()
+            : "";
+
+        if (!authorNameForUpload) {
+            notifyGalleryStatus("Type author name before uploading photo.");
+            return false;
+        }
+
         var previousInfo = normalizeArtworkInfo(getArtworkInfoState(artwork));
         var info = normalizeArtworkInfo(previousInfo);
         var storagePath = createAuthorPhotoStoragePath(artwork, file);
@@ -4570,7 +4846,26 @@ export const createScene = function (engineArg, canvasArg) {
         info.authorPhotoSize = file.size || 0;
         info.authorPhotoUploadedAt = new Date().toISOString();
 
-        setArtworkInfoState(artwork, info);
+        info.authorName = authorNameForUpload;
+        info.authorId = getAuthorIdFromName(info.authorName);
+
+        var authorRecord = upsertAuthorRecord({
+            id: info.authorId,
+            name: info.authorName,
+            photoUrl: info.authorPhotoUrl,
+            photoPath: info.authorPhotoPath,
+            photoBucket: info.authorPhotoBucket,
+            photoOriginalName: info.authorPhotoOriginalName,
+            photoMimeType: info.authorPhotoMimeType,
+            photoSize: info.authorPhotoSize,
+            photoUploadedAt: info.authorPhotoUploadedAt
+        });
+
+        if (authorRecord) {
+            syncArtworkInfoWithAuthor(artwork, authorRecord);
+        } else {
+            setArtworkInfoState(artwork, info);
+        }
 
         if (artworkInfoAuthorPhotoInput) {
             artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
@@ -4578,6 +4873,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
         updateArtworkInfoPopupContent(artwork);
+        updateAuthorFoundUi(authorRecord);
 
         if (
             previousInfo.authorPhotoPath &&
@@ -4606,6 +4902,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         currentInfo.authorPhotoUrl = artworkInfoAuthorPhotoInput.value.trim();
         currentInfo.authorName = artworkInfoAuthorNameInput.value.trim();
+        currentInfo.authorId = getAuthorIdFromName(currentInfo.authorName);
         currentInfo.title = artworkInfoTitleInput.value.trim();
         currentInfo.description = artworkInfoDescriptionInput.value.trim();
 
@@ -4618,10 +4915,34 @@ export const createScene = function (engineArg, canvasArg) {
             currentInfo.authorPhotoUploadedAt = "";
         }
 
-        setArtworkInfoState(artwork, currentInfo);
+        if (currentInfo.authorId) {
+            var existingAuthor = getAuthorById(currentInfo.authorId);
+
+            if (existingAuthor && existingAuthor.photoUrl && !currentInfo.authorPhotoUrl) {
+                syncArtworkInfoWithAuthor(artwork, existingAuthor);
+                currentInfo = getArtworkInfoState(artwork);
+            } else {
+                upsertAuthorRecord({
+                    id: currentInfo.authorId,
+                    name: currentInfo.authorName,
+                    photoUrl: currentInfo.authorPhotoUrl,
+                    photoPath: currentInfo.authorPhotoPath,
+                    photoBucket: currentInfo.authorPhotoBucket,
+                    photoOriginalName: currentInfo.authorPhotoOriginalName,
+                    photoMimeType: currentInfo.authorPhotoMimeType,
+                    photoSize: currentInfo.authorPhotoSize,
+                    photoUploadedAt: currentInfo.authorPhotoUploadedAt
+                });
+
+                setArtworkInfoState(artwork, currentInfo);
+            }
+        } else {
+            setArtworkInfoState(artwork, currentInfo);
+        }
 
         updateArtworkInfoEditorPhotoPreview(currentInfo.authorPhotoUrl);
         updateArtworkInfoPopupContent(artwork);
+        updateAuthorFoundUi(getAuthorById(currentInfo.authorId));
         notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
     }
 
@@ -4645,6 +4966,12 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkInfoUi();
         updateArtworkInfoPopupContent(artwork);
         notifyGalleryStatus("Artwork info cleared. Save state to keep the change.");
+    };
+
+    artworkInfoFindAuthorButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        findAndApplyAuthorForCurrentArtwork();
     };
 
     artworkInfoUploadPhotoButton.onclick = function (event) {
@@ -13168,8 +13495,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         var infoState = getArtworkInfoState(artwork);
 
-        if (infoState && infoState.authorPhotoPath) {
-            await deleteAuthorPhotoFromSupabase(infoState);
+        if (infoState && infoState.authorId) {
+            await cleanupUnusedAuthorPhotoIfNeeded(infoState.authorId, artwork);
         }
 
         return deleteArtworkRuntimeNoLights(artwork);
@@ -13216,6 +13543,7 @@ export const createScene = function (engineArg, canvasArg) {
         info = info || {};
 
         return {
+            authorId: String(info.authorId || "").trim(),
             authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
             authorPhotoPath: String(info.authorPhotoPath || "").trim(),
             authorPhotoBucket: String(info.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
@@ -13852,6 +14180,9 @@ export const createScene = function (engineArg, canvasArg) {
                 };
             }),
             deletedArtworkNames: deletedArtworkNames.slice(),
+            authors: artworkAuthors.map(function (author) {
+                return normalizeAuthorRecord(author);
+            }),
             artworks: getActiveArtworks().map(function (artwork, index) {
                 var wallData = getArtworkWallDataFromRotation(artwork);
                 var wallMesh = getWallMeshForArtwork(artwork);
@@ -13918,6 +14249,14 @@ export const createScene = function (engineArg, canvasArg) {
             });
         }
 
+        artworkAuthors = Array.isArray(editorState.authors)
+            ? editorState.authors.map(function (author) {
+                return normalizeAuthorRecord(author);
+            }).filter(function (author) {
+                return !!(author && author.id);
+            })
+            : [];
+
         if (Array.isArray(editorState.artworks)) {
             applyDeletedArtworkNamesFromState(editorState);
 
@@ -13974,6 +14313,13 @@ export const createScene = function (engineArg, canvasArg) {
                     artwork,
                     artworkState.info || artworkState.artworkInfo || null
                 );
+
+                var restoredInfo = getArtworkInfoState(artwork);
+                var restoredAuthor = getAuthorById(restoredInfo.authorId) || getAuthorByName(restoredInfo.authorName);
+
+                if (restoredAuthor) {
+                    syncArtworkInfoWithAuthor(artwork, restoredAuthor);
+                }
 
                 var savedArtworkTransform = null;
 
@@ -14368,6 +14714,14 @@ export const createScene = function (engineArg, canvasArg) {
             updateArtworkInfoPopupContent(artwork);
 
             return getArtworkInfoState(artwork);
+        },
+        getAuthors: function () {
+            return artworkAuthors.map(function (author) {
+                return normalizeAuthorRecord(author);
+            });
+        },
+        findAuthorByName: function (name) {
+            return getAuthorByName(name);
         },
         getArtworkStorageSettings: function () {
             return {

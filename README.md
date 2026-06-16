@@ -360,3 +360,46 @@ Changes:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8S Artwork Info UI Reorder Fix
+
+Built from Stage 8R.
+
+Changes:
+- Popup artwork title is smaller and aligned to the top.
+- Editor ARTWORK INFO layout changed:
+  - left card: AUTHOR NAME first, then AUTHOR PHOTO URL, then UPLOAD PHOTO,
+  - right card: author photo preview at the top, artwork title and description below.
+- Keeps author photo upload to Supabase Storage.
+- Keeps Q9 popup DOM cleanup and Q5 popup behavior.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 8T Author Library / Reuse Author Photo
+
+Built from Stage 8S.
+
+Adds shared author records in `gallery_state`:
+- `editor.authors`
+
+Artwork info now stores:
+- `authorId`
+
+New flow:
+- Type AUTHOR NAME.
+- Click FIND AUTHOR to reuse an existing author photo.
+- If no author exists, upload photo once.
+- The uploaded photo becomes the shared author photo.
+- Other artworks with the same author can reuse it.
+- Deleting one artwork does not delete the author photo if another artwork still uses that author.
+- If no artwork uses the author anymore, the author record and uploaded photo are removed.
+
+UI:
+- left card: AUTHOR NAME, author photo preview, AUTHOR PHOTO URL, UPLOAD PHOTO.
+- right card: FIND AUTHOR, status, ARTWORK TITLE, DESCRIPTION.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
