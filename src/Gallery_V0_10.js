@@ -999,17 +999,7 @@ export const createScene = function (engineArg, canvasArg) {
             return includedMeshes;
         }
 
-        includedMeshes.push(ownerMesh);
-
         if (artworks.indexOf(ownerMesh) >= 0) {
-            if (
-                ownerMesh.metadata &&
-                ownerMesh.metadata.imagePlane &&
-                !ownerMesh.metadata.imagePlane.isDisposed()
-            ) {
-                includedMeshes.push(ownerMesh.metadata.imagePlane);
-            }
-
             var artworkWallMesh = getWallMeshForArtwork(ownerMesh);
 
             if (artworkWallMesh) {
@@ -1020,6 +1010,8 @@ export const createScene = function (engineArg, canvasArg) {
                 includedMeshes.push(floorMesh);
             });
         } else {
+            includedMeshes.push(ownerMesh);
+
             if (ownerMesh.metadata && ownerMesh.metadata.sculptureMesh) {
                 includedMeshes.push(ownerMesh.metadata.sculptureMesh);
             }
@@ -5173,6 +5165,17 @@ export const createScene = function (engineArg, canvasArg) {
             item.light.intensity = Math.max(0, Number(savedState.intensity));
         }
 
+        if (
+            item.displayCullingEnabled &&
+            item.maxDisplayLightIntensity !== null &&
+            item.maxDisplayLightIntensity !== undefined
+        ) {
+            item.light.intensity = Math.min(
+                item.light.intensity,
+                Number(item.maxDisplayLightIntensity)
+            );
+        }
+
         if (savedState.range !== undefined) {
             item.light.range = Math.max(0.1, Number(savedState.range));
         }
@@ -7061,6 +7064,9 @@ export const createScene = function (engineArg, canvasArg) {
             targetOptions: normalizeLocalTargetOptions(options.targetOptions),
             localShadowsEnabled: options.localShadowsEnabled !== false,
             displayCullingEnabled: options.displayCullingEnabled === true,
+            maxDisplayLightIntensity: options.maxDisplayLightIntensity !== undefined
+                ? Number(options.maxDisplayLightIntensity)
+                : null,
             userEnabled: options.userEnabled !== undefined
                 ? !!options.userEnabled
                 : (options.light.isEnabled ? options.light.isEnabled() : true),
@@ -11543,8 +11549,12 @@ export const createScene = function (engineArg, canvasArg) {
             new BABYLON.Vector3(0, lampCubeY, 0),
             new BABYLON.Vector3(0, -1, 0),
             {
+                intensity: 18,
+                range: 7.5,
+                angleDegrees: 42,
+                blend: 0.58,
                 diffuse: new BABYLON.Color3(1.0, 0.94, 0.82),
-                specular: new BABYLON.Color3(0.10, 0.08, 0.05)
+                specular: new BABYLON.Color3(0.025, 0.02, 0.012)
             }
         );
 
@@ -11571,7 +11581,8 @@ export const createScene = function (engineArg, canvasArg) {
             helperMaxRadius: unifiedSpot.range,
             helperSoftness: unifiedSpot.blend,
             localShadowsEnabled: false,
-            displayCullingEnabled: true
+            displayCullingEnabled: true,
+            maxDisplayLightIntensity: 22
         });
 
         refreshArtworkLightExclusions();
