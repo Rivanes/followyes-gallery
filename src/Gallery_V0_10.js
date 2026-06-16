@@ -11895,6 +11895,234 @@ export const createScene = function (engineArg, canvasArg) {
         return active.length ? active[active.length - 1] : null;
     }
 
+    function makeAlternatingOffsets(step, count) {
+        var offsets = [0];
+
+        for (var i = 1; i <= count; i++) {
+            offsets.push(step * i);
+            offsets.push(-step * i);
+        }
+
+        return offsets;
+    }
+
+    function getArtworkPlacementLimitsForWall(artwork, wallMesh, horizontalAxis, wallAxis, wallValue, targetRotation, referenceHorizontal) {
+        if (!wallMesh) {
+            return null;
+        }
+
+        var horizontalLimits = getImprovedWallHorizontalLimits(
+            wallMesh,
+            horizontalAxis,
+            wallAxis,
+            wallValue,
+            referenceHorizontal
+        );
+
+        var verticalLimits = getWallVerticalLimits(wallMesh);
+
+        if (!horizontalLimits || !verticalLimits) {
+            return null;
+        }
+
+        var halfWidth = getArtworkHalfSizeOnAxisForRotation(
+            artwork,
+            horizontalAxis,
+            targetRotation
+        );
+
+        var halfHeight = getArtworkHalfSizeOnAxis(artwork, "y");
+
+        var minHorizontal = horizontalLimits.min + halfWidth + artworkBoundsSafeMargin;
+        var maxHorizontal = horizontalLimits.max - halfWidth - artworkBoundsSafeMargin;
+        var minY = verticalLimits.minY + halfHeight + artworkBoundsSafeMargin;
+        var maxY = verticalLimits.maxY - halfHeight - artworkBoundsSafeMargin;
+
+        if (minHorizontal > maxHorizontal || minY > maxY) {
+            return null;
+        }
+
+        return {
+            minHorizontal: minHorizontal,
+            maxHorizontal: maxHorizontal,
+            minY: minY,
+            maxY: maxY,
+            halfWidth: halfWidth,
+            halfHeight: halfHeight
+        };
+    }
+
+    function tryPlaceArtworkCandidate(newArtwork, wallMesh, wallAxis, wallValue, horizontalAxis, targetRotation, horizontalValue, verticalValue, testedKeys) {
+        var key = horizontalValue.toFixed(3) + "|" + verticalValue.toFixed(3);
+
+        if (testedKeys[key]) {
+            return false;
+        }
+
+        testedKeys[key] = true;
+
+        var candidatePosition = newArtwork.position.clone();
+        candidatePosition[horizontalAxis] = horizontalValue;
+        candidatePosition[wallAxis] = wallValue;
+        candidatePosition.y = verticalValue;
+
+        if (
+            !wouldArtworkOverlap(
+                newArtwork,
+                candidatePosition,
+                wallAxis,
+                wallValue,
+                horizontalAxis
+            )
+        ) {
+            newArtwork.position.copyFrom(candidatePosition);
+            newArtwork.rotation.copyFrom(targetRotation);
+
+            setArtworkWallMetadata(
+                newArtwork,
+                wallMesh,
+                wallAxis,
+                wallValue,
+                horizontalAxis
+            );
+
+            newArtwork.computeWorldMatrix(true);
+            return true;
+        }
+
+        return false;
+    }
+
+    function findFreeArtworkPlacementOnWall(newArtwork, reference, wallMesh, wallAxis, wallValue, horizontalAxis, targetRotation) {
+        if (!newArtwork || !wallMesh) {
+            return false;
+        }
+
+        var limits = getArtworkPlacementLimitsForWall(
+            newArtwork,
+            wallMesh,
+            horizontalAxis,
+            wallAxis,
+            wallValue,
+            targetRotation,
+            reference ? reference.position[horizontalAxis] : newArtwork.position[horizontalAxis]
+        );
+
+        if (!limits) {
+            return false;
+        }
+
+        var horizontalStep = Math.max(
+            limits.halfWidth * 2 + 0.22,
+            0.45
+        );
+
+        var verticalStep = Math.max(
+            limits.halfHeight * 2 + 0.22,
+            0.45
+        );
+
+        var referenceHorizontal = reference
+            ? reference.position[horizontalAxis]
+            : (limits.minHorizontal + limits.maxHorizontal) / 2;
+
+        var referenceY = reference
+            ? reference.position.y
+            : (limits.minY + limits.maxY) / 2;
+
+        referenceHorizontal = BABYLON.Scalar.Clamp(
+            referenceHorizontal,
+            limits.minHorizontal,
+            limits.maxHorizontal
+        );
+
+        referenceY = BABYLON.Scalar.Clamp(
+            referenceY,
+            limits.minY,
+            limits.maxY
+        );
+
+        var testedKeys = {};
+        var horizontalOffsets = makeAlternatingOffsets(horizontalStep, 16);
+        var verticalOffsets = makeAlternatingOffsets(verticalStep, 10);
+
+        // Najpierw szukamy najbliżej obrazu referencyjnego:
+        // obok, potem wyżej/niżej, coraz dalej po ścianie.
+        for (var yIndex = 0; yIndex < verticalOffsets.length; yIndex++) {
+            var candidateY = BABYLON.Scalar.Clamp(
+                referenceY + verticalOffsets[yIndex],
+                limits.minY,
+                limits.maxY
+            );
+
+            for (var xIndex = 0; xIndex < horizontalOffsets.length; xIndex++) {
+                var candidateHorizontal = BABYLON.Scalar.Clamp(
+                    referenceHorizontal + horizontalOffsets[xIndex],
+                    limits.minHorizontal,
+                    limits.maxHorizontal
+                );
+
+                if (
+                    tryPlaceArtworkCandidate(
+                        newArtwork,
+                        wallMesh,
+                        wallAxis,
+                        wallValue,
+                        horizontalAxis,
+                        targetRotation,
+                        candidateHorizontal,
+                        candidateY,
+                        testedKeys
+                    )
+                ) {
+                    return true;
+                }
+            }
+        }
+
+        // Fallback: pełniejsze skanowanie ściany po siatce.
+        // Dzięki temu gdy obok obrazu nie ma miejsca, szukamy dalej na tej samej ścianie.
+        var rows = Math.max(
+            1,
+            Math.floor((limits.maxY - limits.minY) / verticalStep) + 1
+        );
+
+        var columns = Math.max(
+            1,
+            Math.floor((limits.maxHorizontal - limits.minHorizontal) / horizontalStep) + 1
+        );
+
+        for (var row = 0; row <= rows; row++) {
+            var gridY = rows === 0
+                ? (limits.minY + limits.maxY) / 2
+                : limits.maxY - ((limits.maxY - limits.minY) * row / rows);
+
+            for (var col = 0; col <= columns; col++) {
+                var gridHorizontal = columns === 0
+                    ? (limits.minHorizontal + limits.maxHorizontal) / 2
+                    : limits.minHorizontal + ((limits.maxHorizontal - limits.minHorizontal) * col / columns);
+
+                if (
+                    tryPlaceArtworkCandidate(
+                        newArtwork,
+                        wallMesh,
+                        wallAxis,
+                        wallValue,
+                        horizontalAxis,
+                        targetRotation,
+                        gridHorizontal,
+                        gridY,
+                        testedKeys
+                    )
+                ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     function placeArtworkNearReference(newArtwork, reference) {
         if (!newArtwork || !reference) {
             return false;
@@ -11914,68 +12142,20 @@ export const createScene = function (engineArg, canvasArg) {
             0
         );
 
-        var referenceHalf = getArtworkHalfSizeOnAxisForRotation(
-            reference,
-            horizontalAxis,
-            reference.rotation
-        );
+        newArtwork.rotation.copyFrom(candidateRotation);
 
-        var newHalf = getArtworkHalfSizeOnAxisForRotation(
-            newArtwork,
-            horizontalAxis,
-            candidateRotation
-        );
-
-        var baseStep = referenceHalf + newHalf + 0.18;
-        var offsets = [baseStep, -baseStep, baseStep * 2, -baseStep * 2, baseStep * 3, -baseStep * 3, 0];
-
-        for (var i = 0; i < offsets.length; i++) {
-            var candidatePosition = reference.position.clone();
-
-            candidatePosition[horizontalAxis] += offsets[i];
-            candidatePosition[wallAxis] = wallValue;
-
-            if (wallMesh) {
-                candidatePosition[horizontalAxis] = clampArtworkHorizontalByTargetSegment(
-                    newArtwork,
-                    candidatePosition[horizontalAxis],
-                    wallMesh,
-                    horizontalAxis,
-                    candidateRotation,
-                    wallAxis,
-                    wallValue
-                );
-
-                candidatePosition.y = clampArtworkYByWallBounds(
-                    newArtwork,
-                    candidatePosition.y,
-                    wallMesh
-                );
-            }
-
-            if (
-                !wouldArtworkOverlap(
-                    newArtwork,
-                    candidatePosition,
-                    wallAxis,
-                    wallValue,
-                    horizontalAxis
-                )
-            ) {
-                newArtwork.position.copyFrom(candidatePosition);
-                newArtwork.rotation.copyFrom(candidateRotation);
-
-                setArtworkWallMetadata(
-                    newArtwork,
-                    wallMesh,
-                    wallAxis,
-                    wallValue,
-                    horizontalAxis
-                );
-
-                newArtwork.computeWorldMatrix(true);
-                return true;
-            }
+        if (
+            findFreeArtworkPlacementOnWall(
+                newArtwork,
+                reference,
+                wallMesh,
+                wallAxis,
+                wallValue,
+                horizontalAxis,
+                candidateRotation
+            )
+        ) {
+            return true;
         }
 
         return false;
@@ -12001,8 +12181,10 @@ export const createScene = function (engineArg, canvasArg) {
             isDynamicArtwork: true
         });
 
+        var placed = false;
+
         if (reference) {
-            placeArtworkNearReference(artwork, reference);
+            placed = placeArtworkNearReference(artwork, reference);
         } else {
             setArtworkWallMetadata(
                 artwork,
@@ -12011,6 +12193,16 @@ export const createScene = function (engineArg, canvasArg) {
                 artwork.position.z,
                 "x"
             );
+            placed = true;
+        }
+
+        if (!placed) {
+            // Stage 8O:
+            // Jeżeli nie znaleziono wolnego miejsca, nie zostawiamy nowego obrazu
+            // w pozycji startowej, bo mógłby wejść na inny obraz i zostać zapisany.
+            deleteArtworkRuntimeNoLights(artwork);
+            notifyGalleryStatus("No free space found on this wall. Move or delete another artwork first.");
+            return null;
         }
 
         selectArtwork(artwork, false);
@@ -12068,16 +12260,15 @@ export const createScene = function (engineArg, canvasArg) {
             ? editorState.deletedArtworkNames.slice()
             : [];
 
-        deletedArtworkNames.forEach(function (artworkName) {
+        deletedArtworkNames.slice().forEach(function (artworkName) {
             var artwork = getArtworkByName(artworkName);
 
             if (artwork) {
-                artwork.metadata = artwork.metadata || {};
-                artwork.metadata.deletedArtwork = true;
-                artwork.setEnabled(false);
-                artwork.isVisible = false;
-                artwork.visibility = 0;
-                artwork.isPickable = false;
+                // Stage 8N:
+                // Bazowe placeholdery są tworzone na starcie sceny, więc po loadzie
+                // trzeba je faktycznie usunąć z aktywnego runtime, a nie tylko ukrywać.
+                // deleteArtworkRuntimeNoLights() nie dotyka ścian/podłogi/lamp.
+                deleteArtworkRuntimeNoLights(artwork);
             }
         });
     }

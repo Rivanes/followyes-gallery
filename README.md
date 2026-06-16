@@ -192,3 +192,40 @@ Removes automatic light generation from artworks and sculptures.
 The engine TXT has login disabled.
 The GitHub package has login enabled.
 SQL files are intentionally not included in this package.
+
+
+## Stage 8N Free Wall Placement Fix
+
+Improves ADD ARTWORK placement:
+- when there is no space directly next to the selected artwork,
+- it searches the same wall horizontally and vertically,
+- it no longer leaves the new artwork on top of another one.
+
+DELETE clarification/fix:
+- dynamic artworks are actually removed from runtime and state,
+- deleted base placeholders are removed from active runtime on load via `deletedArtworkNames`.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+SQL files are intentionally not included in this package.
+
+
+## Stage 8O Save State + Placement Abort Fix
+
+Verified that new artworks save and restore:
+- position,
+- rotation,
+- scaling,
+- wall metadata,
+- material,
+- image state,
+- artwork transform scale/rotation.
+
+Fix:
+- if ADD ARTWORK cannot find free space on the selected wall,
+- the newly created artwork is immediately removed,
+- so it cannot overlap another artwork or be saved in a bad position.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+SQL files are intentionally not included in this package.
