@@ -352,7 +352,9 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightingShadowsEnabled = true;
     var localSpotShadowMapSize = 1024;
     var localShadowRefreshThrottleMs = 90;
-    var commonLightingMaxSimultaneousLights = 24;
+    // Keep this conservative: high values can exceed WebGL texture-unit limits
+    // once PBR materials, environment maps and multiple shadow maps are active.
+    var commonLightingMaxSimultaneousLights = 6;
     var localShadowCasterMeshes = [];
     var localShadowReceiverMeshes = [];
 
