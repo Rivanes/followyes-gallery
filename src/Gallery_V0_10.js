@@ -48,6 +48,26 @@ export const createScene = function (engineArg, canvasArg) {
     var scene = new BABYLON.Scene(engine);
 
     // Czysci elementy UI po przeladowaniu sceny.
+    function cleanupArtworkInfoPopupDom() {
+        if (typeof document === "undefined") {
+            return;
+        }
+
+        [
+            "#galleryArtworkInfoPopup",
+            ".gallery-artwork-info-popup"
+        ].forEach(function (selector) {
+            document.querySelectorAll(selector).forEach(function (element) {
+                if (element && element.parentNode) {
+                    element.classList.remove("is-visible");
+                    element.parentNode.removeChild(element);
+                }
+            });
+        });
+    }
+
+    cleanupArtworkInfoPopupDom();
+
     [
         "customLoadingScreen",
         "customLoaderStyle",
@@ -3765,15 +3785,20 @@ export const createScene = function (engineArg, canvasArg) {
             left: 50%;
             bottom: 34px;
             transform: translateX(-50%);
-            width: min(380px, calc(100% - 32px));
-            padding: 14px;
-            border-radius: 18px;
-            border: 1px solid rgba(255, 255, 255, 0.16);
+            width: min(500px, calc(100% - 32px));
+            padding: 16px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.90);
             background:
-                linear-gradient(135deg, rgba(28, 30, 48, 0.92), rgba(16, 18, 32, 0.84));
-            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
-            backdrop-filter: blur(18px);
-            -webkit-backdrop-filter: blur(18px);
+                linear-gradient(145deg, rgba(255, 255, 255, 0.52), rgba(246, 245, 240, 0.24)),
+                rgba(255, 255, 255, 0.56);
+            box-shadow:
+                0 22px 54px rgba(0, 0, 0, 0.20),
+                inset 0 1px 0 rgba(255, 255, 255, 0.96),
+                inset 0 -1px 0 rgba(255, 255, 255, 0.28),
+                inset 0 0 30px rgba(255, 255, 255, 0.18);
+            backdrop-filter: blur(28px) saturate(1.20) brightness(1.04);
+            -webkit-backdrop-filter: blur(28px) saturate(1.20) brightness(1.04);
             z-index: 40;
             pointer-events: none;
             opacity: 0;
@@ -3789,18 +3814,44 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-artwork-info-popup-inner {
             display: grid;
-            grid-template-columns: 60px minmax(0, 1fr);
-            gap: 12px;
-            align-items: start;
+            grid-template-columns: 128px minmax(0, 1fr);
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .gallery-artwork-info-author-card,
+        .gallery-artwork-info-details-card {
+            min-width: 0;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.72);
+            background: rgba(255, 255, 255, 0.20);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+        }
+
+        .gallery-artwork-info-author-card {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-items: stretch;
+        }
+
+        .gallery-artwork-info-photo-frame {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.34);
+            border: 1px solid rgba(255, 255, 255, 0.76);
         }
 
         .gallery-artwork-info-author-photo {
-            width: 60px;
-            height: 60px;
-            border-radius: 16px;
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
             object-fit: cover;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.14);
             display: none;
         }
 
@@ -3808,58 +3859,171 @@ export const createScene = function (engineArg, canvasArg) {
             display: block;
         }
 
-        .gallery-artwork-info-text {
-            min-width: 0;
+        .gallery-artwork-info-author-photo-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            color: #6f6f6f;
+            font-size: 13px;
+            line-height: 1.25;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .gallery-artwork-info-author-name {
+            min-height: 20px;
+            color: #333333;
+            font-size: 15px;
+            line-height: 1.35;
+            font-weight: 700;
+            text-align: center;
+            overflow-wrap: anywhere;
+        }
+
+        .gallery-artwork-info-details-card {
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .gallery-artwork-info-kicker {
-            color: rgba(255, 255, 255, 0.55);
-            font-size: 10px;
+            margin: 0 0 6px;
+            color: #6a6a6a;
+            font-size: 11px;
+            line-height: 1.2;
+            font-weight: 800;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            margin-bottom: 4px;
         }
 
         .gallery-artwork-info-title {
-            color: rgba(255, 255, 255, 0.96);
-            font-size: 15px;
+            margin: 0;
+            color: #2f2f2f;
+            font-size: 24px;
+            line-height: 1.1;
             font-weight: 700;
-            line-height: 1.25;
-            margin-bottom: 4px;
-            word-break: break-word;
-        }
-
-        .gallery-artwork-info-author {
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 12px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            word-break: break-word;
+            letter-spacing: -0.01em;
+            overflow-wrap: anywhere;
         }
 
         .gallery-artwork-info-description {
-            color: rgba(255, 255, 255, 0.68);
-            font-size: 12px;
-            line-height: 1.45;
-            max-height: 88px;
+            margin: 10px 0 0;
+            color: #474747;
+            font-size: 14px;
+            line-height: 1.5;
+            max-height: 112px;
             overflow: hidden;
             white-space: pre-wrap;
             word-break: break-word;
         }
 
         .gallery-artwork-info-empty {
-            color: rgba(255, 255, 255, 0.52);
-            font-size: 12px;
+            margin: 4px 0 0;
+            color: #6f6f6f;
+            font-size: 13px;
             line-height: 1.45;
         }
 
+        .gallery-artwork-info-editor-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 14px;
+            align-items: stretch;
+        }
+
+        .gallery-artwork-info-editor-card {
+            min-width: 0;
+            padding: 12px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.68);
+            background: rgba(255, 255, 255, 0.20);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.60);
+        }
+
+        .gallery-artwork-info-editor-photo-preview {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.34);
+            border: 1px solid rgba(255, 255, 255, 0.76);
+            margin-bottom: 12px;
+        }
+
+        .gallery-artwork-info-editor-photo-preview img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        .gallery-artwork-info-editor-photo-preview img.is-visible {
+            display: block;
+        }
+
+        .gallery-artwork-info-editor-photo-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            color: #6f6f6f;
+            font-size: 13px;
+            line-height: 1.25;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .gallery-artwork-info-field-group + .gallery-artwork-info-field-group {
+            margin-top: 12px;
+        }
+
         .gallery-artwork-info-textarea {
-            min-height: 76px;
+            display: block;
+            width: 100%;
+            min-height: 110px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.13);
+            background: rgba(255, 255, 255, 0.24);
+            color: #303030;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 13px;
             resize: vertical;
-            line-height: 1.35;
+            line-height: 1.45;
+            outline: none;
+        }
+
+        .gallery-artwork-info-textarea:focus {
+            border-color: rgba(63, 127, 61, 0.45);
+            background: rgba(255, 255, 255, 0.36);
         }
 
         @media (max-width: 768px) {
+            .gallery-artwork-info-popup {
+                width: min(420px, calc(100% - 24px));
+                padding: 14px;
+                border-radius: 22px;
+            }
+
+            .gallery-artwork-info-popup-inner,
+            .gallery-artwork-info-editor-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .gallery-artwork-info-author-card,
+            .gallery-artwork-info-editor-card {
+                width: 100%;
+            }
+
             #galleryEditorPanel {
                 left: 18px;
                 right: 18px;
@@ -4123,13 +4287,99 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
 
+    function createGalleryTextInputCompat(placeholder) {
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "gallery-editor-text-input";
+        input.placeholder = placeholder || "";
+        return input;
+    }
+
     var artworkInfoSectionData = createEditorSection("ARTWORK INFO");
-    var artworkInfoAuthorPhotoInput = createTextInput("Author photo URL");
-    var artworkInfoAuthorNameInput = createTextInput("Author name");
-    var artworkInfoTitleInput = createTextInput("Artwork title");
+    var artworkInfoAuthorPhotoInput = createGalleryTextInputCompat("https://... image URL");
+    var artworkInfoAuthorPhotoFileInput = document.createElement("input");
+    artworkInfoAuthorPhotoFileInput.type = "file";
+    artworkInfoAuthorPhotoFileInput.accept = "image/jpeg,image/png,image/webp,image/avif";
+    artworkInfoAuthorPhotoFileInput.style.display = "none";
+
+    var artworkInfoUploadPhotoButton = document.createElement("button");
+    artworkInfoUploadPhotoButton.type = "button";
+    artworkInfoUploadPhotoButton.className = "gallery-editor-action-button is-primary";
+    artworkInfoUploadPhotoButton.innerText = "UPLOAD PHOTO";
+
+    var artworkInfoAuthorNameInput = createGalleryTextInputCompat("Author name");
+    var artworkInfoTitleInput = createGalleryTextInputCompat("Artwork title");
     var artworkInfoDescriptionInput = document.createElement("textarea");
-    artworkInfoDescriptionInput.className = "gallery-input gallery-artwork-info-textarea";
+    artworkInfoDescriptionInput.className = "gallery-artwork-info-textarea";
     artworkInfoDescriptionInput.placeholder = "Description";
+
+    var artworkInfoEditorGrid = document.createElement("div");
+    artworkInfoEditorGrid.className = "gallery-artwork-info-editor-grid";
+
+    var artworkInfoAuthorCard = document.createElement("div");
+    artworkInfoAuthorCard.className = "gallery-artwork-info-editor-card";
+
+    var artworkInfoPhotoPreview = document.createElement("div");
+    artworkInfoPhotoPreview.className = "gallery-artwork-info-editor-photo-preview";
+
+    var artworkInfoPhotoPreviewImage = document.createElement("img");
+    artworkInfoPhotoPreviewImage.alt = "Author photo preview";
+
+    var artworkInfoPhotoPreviewPlaceholder = document.createElement("div");
+    artworkInfoPhotoPreviewPlaceholder.className = "gallery-artwork-info-editor-photo-placeholder";
+    artworkInfoPhotoPreviewPlaceholder.innerText = "Author photo";
+
+    artworkInfoPhotoPreview.appendChild(artworkInfoPhotoPreviewImage);
+    artworkInfoPhotoPreview.appendChild(artworkInfoPhotoPreviewPlaceholder);
+    artworkInfoAuthorCard.appendChild(artworkInfoPhotoPreview);
+
+    var artworkInfoAuthorPhotoGroup = document.createElement("div");
+    artworkInfoAuthorPhotoGroup.className = "gallery-artwork-info-field-group";
+    var artworkInfoAuthorPhotoLabel = document.createElement("label");
+    artworkInfoAuthorPhotoLabel.className = "gallery-editor-field-label";
+    artworkInfoAuthorPhotoLabel.innerText = "AUTHOR PHOTO";
+    artworkInfoAuthorPhotoGroup.appendChild(artworkInfoAuthorPhotoLabel);
+    artworkInfoAuthorPhotoGroup.appendChild(artworkInfoAuthorPhotoInput);
+    artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoGroup);
+
+    var artworkInfoAuthorPhotoActions = document.createElement("div");
+    artworkInfoAuthorPhotoActions.className = "gallery-artwork-image-actions";
+    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr";
+    artworkInfoAuthorPhotoActions.appendChild(artworkInfoUploadPhotoButton);
+    artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoActions);
+
+    var artworkInfoAuthorNameGroup = document.createElement("div");
+    artworkInfoAuthorNameGroup.className = "gallery-artwork-info-field-group";
+    var artworkInfoAuthorNameLabel = document.createElement("label");
+    artworkInfoAuthorNameLabel.className = "gallery-editor-field-label";
+    artworkInfoAuthorNameLabel.innerText = "AUTHOR NAME";
+    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameLabel);
+    artworkInfoAuthorNameGroup.appendChild(artworkInfoAuthorNameInput);
+    artworkInfoAuthorCard.appendChild(artworkInfoAuthorNameGroup);
+
+    var artworkInfoDetailsCard = document.createElement("div");
+    artworkInfoDetailsCard.className = "gallery-artwork-info-editor-card";
+
+    var artworkInfoTitleGroup = document.createElement("div");
+    artworkInfoTitleGroup.className = "gallery-artwork-info-field-group";
+    var artworkInfoTitleLabel = document.createElement("label");
+    artworkInfoTitleLabel.className = "gallery-editor-field-label";
+    artworkInfoTitleLabel.innerText = "ARTWORK TITLE";
+    artworkInfoTitleGroup.appendChild(artworkInfoTitleLabel);
+    artworkInfoTitleGroup.appendChild(artworkInfoTitleInput);
+    artworkInfoDetailsCard.appendChild(artworkInfoTitleGroup);
+
+    var artworkInfoDescriptionGroup = document.createElement("div");
+    artworkInfoDescriptionGroup.className = "gallery-artwork-info-field-group";
+    var artworkInfoDescriptionLabel = document.createElement("label");
+    artworkInfoDescriptionLabel.className = "gallery-editor-field-label";
+    artworkInfoDescriptionLabel.innerText = "DESCRIPTION";
+    artworkInfoDescriptionGroup.appendChild(artworkInfoDescriptionLabel);
+    artworkInfoDescriptionGroup.appendChild(artworkInfoDescriptionInput);
+    artworkInfoDetailsCard.appendChild(artworkInfoDescriptionGroup);
+
+    artworkInfoEditorGrid.appendChild(artworkInfoAuthorCard);
+    artworkInfoEditorGrid.appendChild(artworkInfoDetailsCard);
 
     var artworkInfoActions = document.createElement("div");
     artworkInfoActions.className = "gallery-artwork-image-actions";
@@ -4150,13 +4400,25 @@ export const createScene = function (engineArg, canvasArg) {
 
     artworkInfoActions.appendChild(artworkInfoApplyButton);
     artworkInfoActions.appendChild(artworkInfoClearButton);
-    artworkInfoSectionData.section.appendChild(artworkInfoAuthorPhotoInput);
-    artworkInfoSectionData.section.appendChild(artworkInfoAuthorNameInput);
-    artworkInfoSectionData.section.appendChild(artworkInfoTitleInput);
-    artworkInfoSectionData.section.appendChild(artworkInfoDescriptionInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoAuthorPhotoFileInput);
+    artworkInfoSectionData.section.appendChild(artworkInfoEditorGrid);
     artworkInfoSectionData.section.appendChild(artworkInfoActions);
     artworkInfoSectionData.section.appendChild(artworkInfoNote);
     editorScroll.appendChild(artworkInfoSectionData.section);
+
+    function updateArtworkInfoEditorPhotoPreview(url) {
+        var hasPhoto = !!(url && String(url).trim());
+
+        if (hasPhoto) {
+            artworkInfoPhotoPreviewImage.src = String(url).trim();
+            artworkInfoPhotoPreviewImage.classList.add("is-visible");
+            artworkInfoPhotoPreviewPlaceholder.style.display = "none";
+        } else {
+            artworkInfoPhotoPreviewImage.removeAttribute("src");
+            artworkInfoPhotoPreviewImage.classList.remove("is-visible");
+            artworkInfoPhotoPreviewPlaceholder.style.display = "flex";
+        }
+    }
 
     function getArtworkInfoUiTarget() {
         return selectedArtworks.length === 1 ? selectedArtworks[0] : null;
@@ -4169,6 +4431,7 @@ export const createScene = function (engineArg, canvasArg) {
         artworkInfoSectionData.section.classList.toggle("is-hidden", !isVisible);
 
         artworkInfoAuthorPhotoInput.disabled = !isVisible;
+        artworkInfoUploadPhotoButton.disabled = !isVisible;
         artworkInfoAuthorNameInput.disabled = !isVisible;
         artworkInfoTitleInput.disabled = !isVisible;
         artworkInfoDescriptionInput.disabled = !isVisible;
@@ -4176,6 +4439,7 @@ export const createScene = function (engineArg, canvasArg) {
         artworkInfoClearButton.disabled = !isVisible;
 
         if (!isVisible) {
+            updateArtworkInfoEditorPhotoPreview("");
             return;
         }
 
@@ -4196,6 +4460,137 @@ export const createScene = function (engineArg, canvasArg) {
         if (document.activeElement !== artworkInfoDescriptionInput) {
             artworkInfoDescriptionInput.value = info.description;
         }
+
+        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+    }
+
+    artworkInfoAuthorPhotoInput.addEventListener("input", function () {
+        updateArtworkInfoEditorPhotoPreview(artworkInfoAuthorPhotoInput.value);
+    });
+
+    function createAuthorPhotoStoragePath(artwork, file) {
+        var safeFileName = createSafeStorageFileName(file && file.name ? file.name : "author-photo.jpg");
+        var artworkName = artwork && artwork.name
+            ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+            : "artwork";
+
+        return galleryArtworkStoragePrefix + "/authors/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+    }
+
+    async function deleteAuthorPhotoFromSupabase(info) {
+        info = normalizeArtworkInfo(info);
+
+        if (!info.authorPhotoPath) {
+            return true;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            return true;
+        }
+
+        var response = await client
+            .storage
+            .from(info.authorPhotoBucket || galleryArtworkStorageBucket)
+            .remove([info.authorPhotoPath]);
+
+        if (response.error) {
+            console.warn("Author photo delete warning:", response.error);
+            return false;
+        }
+
+        return true;
+    }
+
+    async function uploadAuthorPhotoForArtwork(artwork, file) {
+        if (!artwork || !file) {
+            notifyGalleryStatus("Select one artwork and choose an author photo.");
+            return false;
+        }
+
+        if (!galleryArtworkUploadEnabled) {
+            notifyGalleryStatus("Upload is disabled in this version.");
+            return false;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            notifyGalleryStatus("Supabase Storage is not configured.");
+            return false;
+        }
+
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Log in as editor to upload author photo.");
+            return false;
+        }
+
+        if (!file.type || file.type.indexOf("image/") !== 0) {
+            notifyGalleryStatus("Choose an image file.");
+            return false;
+        }
+
+        var previousInfo = normalizeArtworkInfo(getArtworkInfoState(artwork));
+        var info = normalizeArtworkInfo(previousInfo);
+        var storagePath = createAuthorPhotoStoragePath(artwork, file);
+
+        notifyGalleryStatus("Uploading author photo...");
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(storagePath, file, {
+                cacheControl: "3600",
+                upsert: false,
+                contentType: file.type
+            });
+
+        if (uploadResponse.error) {
+            var message = uploadResponse.error.message || "Unknown upload error";
+            console.warn("Author photo upload error:", uploadResponse.error);
+            notifyGalleryStatus("Author photo upload failed: " + message);
+            return false;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(storagePath);
+
+        info.authorPhotoUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+        info.authorPhotoPath = storagePath;
+        info.authorPhotoBucket = galleryArtworkStorageBucket;
+        info.authorPhotoOriginalName = file.name || "";
+        info.authorPhotoMimeType = file.type || "";
+        info.authorPhotoSize = file.size || 0;
+        info.authorPhotoUploadedAt = new Date().toISOString();
+
+        setArtworkInfoState(artwork, info);
+
+        if (artworkInfoAuthorPhotoInput) {
+            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+        }
+
+        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateArtworkInfoPopupContent(artwork);
+
+        if (
+            previousInfo.authorPhotoPath &&
+            previousInfo.authorPhotoPath !== storagePath
+        ) {
+            deleteAuthorPhotoFromSupabase(previousInfo)
+                .catch(function (error) {
+                    console.warn("Previous author photo delete warning:", error);
+                });
+        }
+
+        notifyGalleryStatus("Author photo uploaded. Save state to keep the change.");
+        return true;
     }
 
     function applyArtworkInfoFromUi() {
@@ -4206,13 +4601,26 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        setArtworkInfoState(artwork, {
-            authorPhotoUrl: artworkInfoAuthorPhotoInput.value,
-            authorName: artworkInfoAuthorNameInput.value,
-            title: artworkInfoTitleInput.value,
-            description: artworkInfoDescriptionInput.value
-        });
+        var currentInfo = normalizeArtworkInfo(getArtworkInfoState(artwork));
+        var previousPhotoUrl = currentInfo.authorPhotoUrl;
 
+        currentInfo.authorPhotoUrl = artworkInfoAuthorPhotoInput.value.trim();
+        currentInfo.authorName = artworkInfoAuthorNameInput.value.trim();
+        currentInfo.title = artworkInfoTitleInput.value.trim();
+        currentInfo.description = artworkInfoDescriptionInput.value.trim();
+
+        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            currentInfo.authorPhotoPath = "";
+            currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
+            currentInfo.authorPhotoOriginalName = "";
+            currentInfo.authorPhotoMimeType = "";
+            currentInfo.authorPhotoSize = 0;
+            currentInfo.authorPhotoUploadedAt = "";
+        }
+
+        setArtworkInfoState(artwork, currentInfo);
+
+        updateArtworkInfoEditorPhotoPreview(currentInfo.authorPhotoUrl);
         updateArtworkInfoPopupContent(artwork);
         notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
     }
@@ -4237,6 +4645,36 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkInfoUi();
         updateArtworkInfoPopupContent(artwork);
         notifyGalleryStatus("Artwork info cleared. Save state to keep the change.");
+    };
+
+    artworkInfoUploadPhotoButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!getArtworkInfoUiTarget()) {
+            notifyGalleryStatus("Select one artwork first.");
+            return;
+        }
+
+        artworkInfoAuthorPhotoFileInput.value = "";
+        artworkInfoAuthorPhotoFileInput.click();
+    };
+
+    artworkInfoAuthorPhotoFileInput.onchange = function () {
+        var artwork = getArtworkInfoUiTarget();
+        var file = artworkInfoAuthorPhotoFileInput.files && artworkInfoAuthorPhotoFileInput.files[0]
+            ? artworkInfoAuthorPhotoFileInput.files[0]
+            : null;
+
+        if (!artwork || !file) {
+            return;
+        }
+
+        uploadAuthorPhotoForArtwork(artwork, file)
+            .catch(function (error) {
+                console.warn("Author photo upload failed:", error);
+                notifyGalleryStatus("Author photo upload failed.");
+            });
     };
 
     var artworkTransformSectionData = createEditorSection("ARTWORK TRANSFORM");
@@ -8337,30 +8775,42 @@ export const createScene = function (engineArg, canvasArg) {
 
     appendGalleryUiElement(editHelpPanel);
 
+    cleanupArtworkInfoPopupDom();
+
     var artworkInfoPopup = document.createElement("div");
+    artworkInfoPopup.id = "galleryArtworkInfoPopup";
     artworkInfoPopup.className = "gallery-artwork-info-popup";
-    artworkInfoPopup.innerHTML = ""
-        + "<div class=\"gallery-artwork-info-popup-inner\">"
-        + "  <img class=\"gallery-artwork-info-author-photo\" alt=\"Author photo\" />"
-        + "  <div class=\"gallery-artwork-info-text\">"
-        + "    <div class=\"gallery-artwork-info-kicker\">Artwork info</div>"
-        + "    <div class=\"gallery-artwork-info-title\"></div>"
-        + "    <div class=\"gallery-artwork-info-author\"></div>"
-        + "    <div class=\"gallery-artwork-info-description\"></div>"
-        + "    <div class=\"gallery-artwork-info-empty\">No artwork information added yet.</div>"
-        + "  </div>"
-        + "</div>";
+    artworkInfoPopup.innerHTML = ''
+        + '<div class="gallery-artwork-info-popup-inner">'
+        + '  <div class="gallery-artwork-info-author-card">'
+        + '    <div class="gallery-artwork-info-photo-frame">'
+        + '      <img class="gallery-artwork-info-author-photo" alt="Author photo" />'
+        + '      <div class="gallery-artwork-info-author-photo-placeholder">Author photo</div>'
+        + '    </div>'
+        + '    <div class="gallery-artwork-info-author-name"></div>'
+        + '  </div>'
+        + '  <div class="gallery-artwork-info-details-card">'
+        + '    <div class="gallery-artwork-info-title"></div>'
+        + '    <div class="gallery-artwork-info-description"></div>'
+        + '    <div class="gallery-artwork-info-empty">No artwork information added yet.</div>'
+        + '  </div>'
+        + '</div>';
     appendGalleryUiElement(artworkInfoPopup);
 
     var artworkInfoPopupRefs = {
         photo: artworkInfoPopup.querySelector(".gallery-artwork-info-author-photo"),
+        photoPlaceholder: artworkInfoPopup.querySelector(".gallery-artwork-info-author-photo-placeholder"),
+        authorName: artworkInfoPopup.querySelector(".gallery-artwork-info-author-name"),
         title: artworkInfoPopup.querySelector(".gallery-artwork-info-title"),
-        author: artworkInfoPopup.querySelector(".gallery-artwork-info-author"),
         description: artworkInfoPopup.querySelector(".gallery-artwork-info-description"),
         empty: artworkInfoPopup.querySelector(".gallery-artwork-info-empty")
     };
 
     var currentArtworkInfoPopupMesh = null;
+
+    artworkInfoPopup.classList.remove("is-visible");
+    artworkInfoPopup.style.visibility = "hidden";
+    artworkInfoPopup.style.opacity = "0";
 
 
     function setEditorUiVisible(isVisible) {
@@ -9586,7 +10036,57 @@ export const createScene = function (engineArg, canvasArg) {
         updateEditHelpStatus();
     }
 
+    function clearEditMoveKeys() {
+        editMoveKeys.w = false;
+        editMoveKeys.a = false;
+        editMoveKeys.s = false;
+        editMoveKeys.d = false;
+    }
+
+    function isGalleryTextEditingElement(target) {
+        if (!target) {
+            return false;
+        }
+
+        var tagName = target.tagName ? target.tagName.toLowerCase() : "";
+
+        return !!(
+            target.isContentEditable ||
+            tagName === "input" ||
+            tagName === "textarea" ||
+            tagName === "select"
+        );
+    }
+
+    function stopGalleryTextEditingKeyboardBubble(event) {
+        if (!isGalleryTextEditingElement(event.target)) {
+            return;
+        }
+
+        clearEditMoveKeys();
+
+        if (event.stopPropagation) {
+            event.stopPropagation();
+        }
+    }
+
+    editHelpPanel.addEventListener("keydown", stopGalleryTextEditingKeyboardBubble);
+    editHelpPanel.addEventListener("keyup", stopGalleryTextEditingKeyboardBubble);
+    editHelpPanel.addEventListener("focusin", function (event) {
+        if (isGalleryTextEditingElement(event.target)) {
+            clearEditMoveKeys();
+        }
+    });
+    editHelpPanel.addEventListener("focusout", function () {
+        clearEditMoveKeys();
+    });
+
     window.addEventListener("keydown", function (event) {
+
+        if (isGalleryTextEditingElement(event.target)) {
+            clearEditMoveKeys();
+            return;
+        }
 
         var key = event.key.toLowerCase();
 
@@ -9600,6 +10100,11 @@ export const createScene = function (engineArg, canvasArg) {
     });
 
     window.addEventListener("keyup", function (event) {
+
+        if (isGalleryTextEditingElement(event.target)) {
+            clearEditMoveKeys();
+            return;
+        }
 
         var key = event.key.toLowerCase();
 
@@ -12661,6 +13166,12 @@ export const createScene = function (engineArg, canvasArg) {
             }
         }
 
+        var infoState = getArtworkInfoState(artwork);
+
+        if (infoState && infoState.authorPhotoPath) {
+            await deleteAuthorPhotoFromSupabase(infoState);
+        }
+
         return deleteArtworkRuntimeNoLights(artwork);
     }
 
@@ -12706,6 +13217,12 @@ export const createScene = function (engineArg, canvasArg) {
 
         return {
             authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
+            authorPhotoPath: String(info.authorPhotoPath || "").trim(),
+            authorPhotoBucket: String(info.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
+            authorPhotoOriginalName: String(info.authorPhotoOriginalName || "").trim(),
+            authorPhotoMimeType: String(info.authorPhotoMimeType || "").trim(),
+            authorPhotoSize: Number(info.authorPhotoSize || 0) || 0,
+            authorPhotoUploadedAt: String(info.authorPhotoUploadedAt || "").trim(),
             authorName: String(info.authorName || "").trim(),
             title: String(info.title || "").trim(),
             description: String(info.description || "").trim()
@@ -12792,20 +13309,28 @@ export const createScene = function (engineArg, canvasArg) {
             if (info.authorPhotoUrl) {
                 artworkInfoPopupRefs.photo.src = info.authorPhotoUrl;
                 artworkInfoPopupRefs.photo.classList.add("is-visible");
+
+                if (artworkInfoPopupRefs.photoPlaceholder) {
+                    artworkInfoPopupRefs.photoPlaceholder.style.display = "none";
+                }
             } else {
                 artworkInfoPopupRefs.photo.removeAttribute("src");
                 artworkInfoPopupRefs.photo.classList.remove("is-visible");
+
+                if (artworkInfoPopupRefs.photoPlaceholder) {
+                    artworkInfoPopupRefs.photoPlaceholder.style.display = hasInfo ? "flex" : "none";
+                }
             }
+        }
+
+        if (artworkInfoPopupRefs.authorName) {
+            artworkInfoPopupRefs.authorName.innerText = hasInfo ? (info.authorName || "Unknown author") : "";
+            artworkInfoPopupRefs.authorName.style.display = hasInfo ? "block" : "none";
         }
 
         if (artworkInfoPopupRefs.title) {
             artworkInfoPopupRefs.title.innerText = info.title || "Untitled artwork";
             artworkInfoPopupRefs.title.style.display = hasInfo ? "" : "none";
-        }
-
-        if (artworkInfoPopupRefs.author) {
-            artworkInfoPopupRefs.author.innerText = info.authorName ? ("by " + info.authorName) : "";
-            artworkInfoPopupRefs.author.style.display = info.authorName ? "" : "none";
         }
 
         if (artworkInfoPopupRefs.description) {
@@ -12828,6 +13353,8 @@ export const createScene = function (engineArg, canvasArg) {
             currentArtworkInfoPopupMesh = artwork;
         }
 
+        artworkInfoPopup.style.visibility = "";
+        artworkInfoPopup.style.opacity = "";
         artworkInfoPopup.classList.add("is-visible");
     }
 
@@ -12837,6 +13364,8 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         artworkInfoPopup.classList.remove("is-visible");
+        artworkInfoPopup.style.visibility = "hidden";
+        artworkInfoPopup.style.opacity = "0";
         currentArtworkInfoPopupMesh = null;
     }
 

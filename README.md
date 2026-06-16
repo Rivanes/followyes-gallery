@@ -264,3 +264,99 @@ Added:
 
 Note: author photo is URL-based in this stage (no Storage upload yet).
 TXT has login disabled. GitHub package has login enabled.
+
+
+## Stage 8Q1 Artwork Info Popup - createTextInput Fix
+
+Hotfix for GitHub/runtime error:
+`ReferenceError: createTextInput is not defined`
+
+Fix:
+- added `createGalleryTextInputCompat()`,
+- replaced Stage 8Q `createTextInput(...)` calls,
+- no `createTextInput(...)` calls remain.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+SQL files are intentionally not included.
+
+
+## Stage 8Q2 Artwork Info Popup UI Layout Fix
+- popup now uses the same frosted-glass visual language as the rest of the UI
+- popup split into two containers: left photo + author name, right artwork title + description
+- ARTWORK INFO editor section rebuilt into two cards with photo preview
+- engine TXT: login disabled
+- GitHub ZIP: login enabled
+
+
+## Stage 8Q3 Artwork Info Popup Quote Fix
+
+Hotfix for TXT parser error:
+`Unexpected identifier 'gallery'`
+
+Cause:
+- Stage 8Q2 had unescaped HTML class quotes inside a double-quoted JavaScript string.
+
+Fix:
+- Rebuilt the popup `innerHTML` block using single-quoted JavaScript strings.
+- Verified syntax using `node --check` on a `.js` copy.
+
+The engine TXT has login disabled.
+The GitHub package has login enabled.
+
+
+## Stage 8Q5 Q3 Base + WASD + Info Layout Fix
+
+Built from stable Stage 8Q3, not from Stage 8Q4.
+
+Kept:
+- Q3 popup behavior / positioning.
+- No Q4 projected anchor logic.
+
+Added:
+- WASD is disabled while typing in editor inputs/textareas.
+- ARTWORK INFO popup has two visual containers:
+  - left: author photo + author name,
+  - right: artwork title + description.
+- ARTWORK INFO editor section is rebuilt into two cards:
+  - left: author photo preview, author name, author photo URL,
+  - right: artwork title, description.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 8Q9 Q5 Popup DOM Cleanup Fix
+
+Built from Stage 8Q5.
+
+Fix:
+- removes stale `.gallery-artwork-info-popup` elements when the scene starts,
+- adds a fixed popup ID: `galleryArtworkInfoPopup`,
+- cleans any previous popup immediately before creating a new one,
+- explicitly hides the popup on init,
+- keeps Q5 popup distance and behavior,
+- keeps Q5 UI layout,
+- keeps WASD typing fix,
+- does not include Q6/Q7/Q8 experiments.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 8R Author Photo Upload + Popup Cleanup
+
+Built from working Stage 8Q9.
+
+Changes:
+- removed ARTWORK INFO kicker text from the popup,
+- swapped editor order: Author Photo first, Author Name below,
+- added author photo upload to Supabase Storage,
+- author photos are stored under `main/authors/...`,
+- author photo Storage metadata is saved in gallery_state,
+- deleting an artwork also attempts to delete its uploaded author photo,
+- keeps Q9 popup DOM cleanup,
+- keeps Q5 popup behavior/layout and WASD typing fix.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
