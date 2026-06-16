@@ -1220,6 +1220,7 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkWidth = 1.3;
     var artworkHeight = 0.9;
     var artworkDepth = 0.04;
+    var artworkCreateCounter = 0;
     var artworkWallOffset = 0.04;
     var artworkTransformScaleMin = 0.25;
     var artworkTransformScaleMax = 3.0;
@@ -2514,6 +2515,13 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-editor-status-line:last-child {
             margin-bottom: 0;
+        }
+
+        .gallery-editor-selection-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
         }
 
         .gallery-editor-align-grid {
@@ -3891,6 +3899,30 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
+    function setInlineStatusValue(element, labelText, valueText, options) {
+        if (!element) {
+            return null;
+        }
+
+        var config = options || {};
+        var valueElement = document.createElement(config.valueTag || "strong");
+
+        if (config.valueClass) {
+            valueElement.className = config.valueClass;
+        }
+
+        valueElement.textContent = valueText !== undefined && valueText !== null
+            ? String(valueText)
+            : "";
+
+        element.replaceChildren(
+            document.createTextNode(labelText || ""),
+            valueElement
+        );
+
+        return valueElement;
+    }
+
     var selectionSectionData = createEditorSection("SELECTION");
     var selectedArtworkStatus = document.createElement("p");
     selectedArtworkStatus.id = "editorSelectedArtworkStatus";
@@ -3902,8 +3934,26 @@ export const createScene = function (engineArg, canvasArg) {
     selectedArtworkCountStatus.className = "gallery-editor-status-line";
     selectedArtworkCountStatus.innerText = "Selected Count: 0";
 
+    var artworkManageActions = document.createElement("div");
+    artworkManageActions.className = "gallery-editor-selection-actions";
+
+    var addArtworkButton = document.createElement("button");
+    addArtworkButton.type = "button";
+    addArtworkButton.className = "gallery-editor-action-button is-primary";
+    addArtworkButton.innerText = "ADD ARTWORK";
+
+    var deleteSelectedArtworkButton = document.createElement("button");
+    deleteSelectedArtworkButton.type = "button";
+    deleteSelectedArtworkButton.className = "gallery-editor-action-button is-danger";
+    deleteSelectedArtworkButton.innerText = "DELETE SELECTED";
+    deleteSelectedArtworkButton.disabled = true;
+
+    artworkManageActions.appendChild(addArtworkButton);
+    artworkManageActions.appendChild(deleteSelectedArtworkButton);
+
     selectionSectionData.section.appendChild(selectedArtworkStatus);
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
+    selectionSectionData.section.appendChild(artworkManageActions);
     editorScroll.appendChild(selectionSectionData.section);
 
     var artworkImageSectionData = createEditorSection("ARTWORK IMAGE");
@@ -3911,7 +3961,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var artworkImageStatus = document.createElement("div");
     artworkImageStatus.className = "gallery-artwork-image-status";
-    artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+    setInlineStatusValue(artworkImageStatus, "Image: ", "None");
 
     var artworkImageUrlLabel = document.createElement("label");
     artworkImageUrlLabel.className = "gallery-editor-field-label";
@@ -4046,17 +4096,17 @@ export const createScene = function (engineArg, canvasArg) {
         artworkImageRemoveButton.disabled = !artwork || !imageState;
 
         if (!artwork) {
-            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+            setInlineStatusValue(artworkImageStatus, "Image: ", "None");
             artworkImageUrlInput.value = "";
             return;
         }
 
         if (imageState) {
             var label = imageState.originalName || imageState.imagePath || imageState.imageUrl || "Custom image";
-            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>";
+            setInlineStatusValue(artworkImageStatus, "Image: ", label);
             artworkImageUrlInput.value = imageState.imageUrl || "";
         } else {
-            artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
+            setInlineStatusValue(artworkImageStatus, "Image: ", "None");
             artworkImageUrlInput.value = "";
         }
     }
@@ -4232,6 +4282,28 @@ export const createScene = function (engineArg, canvasArg) {
             });
     };
 
+    addArtworkButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!editMode) {
+            return;
+        }
+
+        addEditorArtwork();
+    };
+
+    deleteSelectedArtworkButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!editMode || selectedArtworks.length === 0) {
+            return;
+        }
+
+        deleteSelectedEditorArtworks();
+    };
+
     var alignSectionData = createEditorSection("ALIGN");
     var artworkAlignPanel = document.createElement("div");
     artworkAlignPanel.id = "artworkAlignPanel";
@@ -4358,7 +4430,15 @@ export const createScene = function (engineArg, canvasArg) {
     var selectedWallColorStatus = document.createElement("div");
     selectedWallColorStatus.id = "editorSelectedWallColorStatus";
     selectedWallColorStatus.className = "gallery-editor-color-status";
-    selectedWallColorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">None</span>";
+    setInlineStatusValue(
+        selectedWallColorStatus,
+        "Selected Color: ",
+        "None",
+        {
+            valueTag: "span",
+            valueClass: "gallery-editor-accent-text"
+        }
+    );
 
     wallColorSectionData.section.appendChild(wallPalette);
     wallColorSectionData.section.appendChild(selectedWallColorStatus);
@@ -7678,9 +7758,12 @@ export const createScene = function (engineArg, canvasArg) {
 
             var nameWrap = document.createElement("div");
             nameWrap.className = "gallery-lighting-preset-name";
-            nameWrap.innerHTML = "Preset " + (index + 1) + "<span class=\"gallery-lighting-preset-status\">Empty</span>";
+            nameWrap.appendChild(document.createTextNode("Preset " + (index + 1)));
 
-            var status = nameWrap.querySelector(".gallery-lighting-preset-status");
+            var status = document.createElement("span");
+            status.className = "gallery-lighting-preset-status";
+            status.textContent = "Empty";
+            nameWrap.appendChild(status);
 
             var loadButton = document.createElement("button");
             loadButton.type = "button";
@@ -7775,18 +7858,15 @@ export const createScene = function (engineArg, canvasArg) {
 
     var localSelectedLine = document.createElement("span");
     localSelectedLine.className = "gallery-local-status-line";
-    localSelectedLine.innerHTML = "Selected Lights: <strong>0</strong>";
-    localLightUiRefs.selectedCountValue = localSelectedLine.querySelector("strong");
+    localLightUiRefs.selectedCountValue = setInlineStatusValue(localSelectedLine, "Selected Lights: ", "0");
 
     var localRegisteredLine = document.createElement("span");
     localRegisteredLine.className = "gallery-local-status-line";
-    localRegisteredLine.innerHTML = "Registered Lights: <strong>0</strong>";
-    localLightUiRefs.registeredCountValue = localRegisteredLine.querySelector("strong");
+    localLightUiRefs.registeredCountValue = setInlineStatusValue(localRegisteredLine, "Registered Lights: ", "0");
 
     var localActiveGroupLine = document.createElement("span");
     localActiveGroupLine.className = "gallery-local-status-line";
-    localActiveGroupLine.innerHTML = "Active Group: <strong>Group 1</strong>";
-    localLightUiRefs.activeGroupValue = localActiveGroupLine.querySelector("strong");
+    localLightUiRefs.activeGroupValue = setInlineStatusValue(localActiveGroupLine, "Active Group: ", "Group 1");
 
     localSelectionLines.appendChild(localSelectedLine);
     localSelectionLines.appendChild(localRegisteredLine);
@@ -8888,6 +8968,10 @@ export const createScene = function (engineArg, canvasArg) {
             countStatus.innerText = "Selected Count: " + selectedArtworks.length;
         }
 
+        if (deleteSelectedArtworkButton) {
+            deleteSelectedArtworkButton.disabled = !editMode || selectedArtworks.length === 0;
+        }
+
         if (colorStatus) {
             var colorName = "None";
 
@@ -8897,7 +8981,15 @@ export const createScene = function (engineArg, canvasArg) {
                     : selectedWallMaterial.name.replace("WallColor_", "");
             }
 
-            colorStatus.innerHTML = "Selected Color: <span class=\"gallery-editor-accent-text\">" + colorName + "</span>";
+            setInlineStatusValue(
+                colorStatus,
+                "Selected Color: ",
+                colorName,
+                {
+                    valueTag: "span",
+                    valueClass: "gallery-editor-accent-text"
+                }
+            );
         }
 
         updateArtworkImageUi();
@@ -11318,6 +11410,242 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkLight(artwork);
     }
 
+    function getArtworkIndexFromName(name) {
+        var match = String(name || "").match(/^Artwork_(\d+)$/);
+
+        if (!match) {
+            return null;
+        }
+
+        return Number(match[1]);
+    }
+
+    function getNextArtworkIndex(options) {
+        var preferredIndex = options && options.index !== undefined
+            ? Number(options.index)
+            : null;
+
+        if (!isFinite(preferredIndex) && options && options.name) {
+            preferredIndex = getArtworkIndexFromName(options.name);
+        }
+
+        if (!isFinite(preferredIndex)) {
+            preferredIndex = artworkCreateCounter;
+        }
+
+        preferredIndex = Math.max(0, Math.floor(preferredIndex));
+        artworkCreateCounter = Math.max(artworkCreateCounter, preferredIndex + 1);
+
+        return preferredIndex;
+    }
+
+    function createArtworkDisplay(options) {
+        options = options || {};
+
+        var index = getNextArtworkIndex(options);
+        var artworkName = options.name || ("Artwork_" + index);
+        var materialColor = artworkMaterials[index % artworkMaterials.length] || new BABYLON.Color3(0.8, 0.05, 0.05);
+        var mat = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
+
+        mat.diffuseColor = materialColor;
+        mat.emissiveColor = materialColor;
+        mat.disableLighting = true;
+
+        var artwork = BABYLON.MeshBuilder.CreateBox(
+            artworkName,
+            {
+                width: artworkWidth,
+                height: artworkHeight,
+                depth: artworkDepth
+            },
+            scene
+        );
+
+        artwork.position = options.position
+            ? options.position.clone()
+            : new BABYLON.Vector3(0, -2.5, -4.8);
+        artwork.rotation = options.rotation
+            ? options.rotation.clone()
+            : new BABYLON.Vector3(0, 0, 0);
+        artwork.scaling = options.scaling
+            ? options.scaling.clone()
+            : new BABYLON.Vector3(1, 1, 1);
+        artwork.material = mat;
+        artwork.isPickable = true;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = null;
+
+        if (options.wall) {
+            setArtworkWallMetadata(
+                artwork,
+                options.wall.wallMesh || null,
+                options.wall.wallAxis,
+                options.wall.wallValue,
+                options.wall.horizontalAxis
+            );
+        }
+
+        registerCommonShadowMesh(artwork, {
+            global: false,
+            local: false,
+            receive: false,
+            cast: false
+        });
+
+        artworks.push(artwork);
+        createArtworkLight(artwork, index);
+        refreshAllCommonLocalLightTargets();
+
+        return artwork;
+    }
+
+    function getEditorArtworkSpawnData() {
+        var sourceArtwork = primaryArtwork || selectedArtworks[0] || null;
+
+        if (sourceArtwork) {
+            var sourceWallData = getArtworkWallDataFromRotation(sourceArtwork);
+            var sourceWallMesh = getWallMeshForArtwork(sourceArtwork);
+            var position = sourceArtwork.position.clone();
+            var rotation = sourceArtwork.rotation.clone();
+            var horizontalAxis = sourceWallData ? sourceWallData.horizontalAxis : "x";
+            var spawnOffsets = [1.55, -1.55, 3.1, -3.1, 4.65, -4.65, 0];
+
+            for (var step = 0; step < spawnOffsets.length; step++) {
+                var candidatePosition = position.clone();
+                candidatePosition[horizontalAxis] += spawnOffsets[step];
+
+                if (sourceWallData && sourceWallMesh) {
+                    candidatePosition.y = clampArtworkYByWallBounds(
+                        sourceArtwork,
+                        candidatePosition.y,
+                        sourceWallMesh
+                    );
+                    candidatePosition[horizontalAxis] = clampArtworkHorizontalByWallBounds(
+                        sourceArtwork,
+                        candidatePosition[horizontalAxis],
+                        sourceWallMesh,
+                        sourceWallData.horizontalAxis,
+                        rotation,
+                        sourceWallData.wallAxis,
+                        sourceWallData.wallValue
+                    );
+                }
+
+                if (
+                    !sourceWallData ||
+                    !wouldArtworkOverlap(
+                        sourceArtwork,
+                        candidatePosition,
+                        sourceWallData.wallAxis,
+                        sourceWallData.wallValue,
+                        sourceWallData.horizontalAxis
+                    )
+                ) {
+                    position = candidatePosition;
+                    break;
+                }
+            }
+
+            return {
+                position: position,
+                rotation: rotation,
+                wall: sourceWallData
+                    ? {
+                        wallMesh: sourceWallMesh,
+                        wallAxis: sourceWallData.wallAxis,
+                        wallValue: sourceWallData.wallValue,
+                        horizontalAxis: sourceWallData.horizontalAxis
+                    }
+                    : null
+            };
+        }
+
+        return {
+            position: new BABYLON.Vector3(
+                -3 + (artworks.length % 5) * 1.5,
+                -2.5,
+                -4.8
+            ),
+            rotation: new BABYLON.Vector3(0, 0, 0),
+            wall: null
+        };
+    }
+
+    function addEditorArtwork() {
+        var spawnData = getEditorArtworkSpawnData();
+        var artwork = createArtworkDisplay(spawnData);
+
+        clearWallColorSelection();
+        selectArtwork(artwork, false);
+        updateEditHelpStatus();
+        notifyGalleryStatus("Dodano nowy obraz. Ustaw pozycje i zapisz stan galerii.");
+
+        return artwork;
+    }
+
+    function removeArtworkFromShadowRegistries(artwork) {
+        shadowCasterMeshes = shadowCasterMeshes.filter(function (mesh) {
+            return mesh !== artwork;
+        });
+        localShadowCasterMeshes = localShadowCasterMeshes.filter(function (mesh) {
+            return mesh !== artwork;
+        });
+        localShadowReceiverMeshes = localShadowReceiverMeshes.filter(function (mesh) {
+            return mesh !== artwork;
+        });
+
+        refreshMainShadowRenderList();
+    }
+
+    function disposeArtworkDisplay(artwork) {
+        if (!artwork) {
+            return;
+        }
+
+        var lightItem = artwork.metadata && artwork.metadata.spotLight
+            ? getLocalLightItemByLight(artwork.metadata.spotLight)
+            : null;
+
+        if (lightItem) {
+            disposeLocalLightItem(lightItem);
+        }
+
+        removeArtworkImageFromMesh(artwork, true);
+        hideArtworkSelectionGlow(artwork);
+        removeArtworkFromShadowRegistries(artwork);
+
+        artworks = artworks.filter(function (item) {
+            return item !== artwork;
+        });
+
+        if (artwork.dispose) {
+            artwork.dispose();
+        }
+    }
+
+    function deleteSelectedEditorArtworks() {
+        var itemsToDelete = selectedArtworks.slice();
+
+        itemsToDelete.forEach(function (artwork) {
+            disposeArtworkDisplay(artwork);
+        });
+
+        selectedArtworks = [];
+        primaryArtwork = null;
+        referenceArtwork = null;
+        activeArtwork = null;
+        selectedArtwork = null;
+        isDraggingArtwork = false;
+
+        refreshArtworkLightExclusions();
+        refreshAllCommonLocalLightTargets();
+        refreshAllLocalSpotShadows();
+        updateEditHelpStatus();
+        updateAlignmentPanel();
+
+        notifyGalleryStatus("Usunieto zaznaczone obrazy. Zapisz stan galerii, aby zachowac zmiane.");
+    }
+
     function focusCameraOnObject(targetMesh) {
 
         enterMobileFocusState();
@@ -11700,41 +12028,10 @@ export const createScene = function (engineArg, canvasArg) {
     ];
 
     artworkStartPositions.forEach((pos, index) => {
-
-        var mat = new BABYLON.StandardMaterial("ArtworkMat_" + index, scene);
-        mat.diffuseColor = artworkMaterials[index];
-        mat.emissiveColor = artworkMaterials[index];
-        mat.disableLighting = true;
-
-        var artwork = BABYLON.MeshBuilder.CreateBox(
-            "Artwork_" + index,
-            {
-                width: artworkWidth,
-                height: artworkHeight,
-                depth: artworkDepth
-            },
-            scene
-        );
-
-        artwork.position = pos;
-        artwork.material = mat;
-        artwork.isPickable = true;
-        artwork.metadata = artwork.metadata || {};
-        artwork.metadata.artworkImage = null;
-        // Obraz nie jest casterem cieni.
-        // Wczesniej obraz jako lokalny/globalny caster zostawial prostokatny cien na scianie
-        // i wymuszal drogie odswiezanie shadow map podczas przeciagania.
-        registerCommonShadowMesh(artwork, {
-            global: false,
-            local: false,
-            receive: false,
-            cast: false
+        createArtworkDisplay({
+            index: index,
+            position: pos
         });
-
-        artworks.push(artwork);
-
-        createArtworkLight(artwork, index);
-        refreshAllCommonLocalLightTargets();
     });
 
     scene.onPointerDown = function (evt, pickResult) {
@@ -12272,6 +12569,20 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (Array.isArray(editorState.artworks)) {
+            var savedArtworkNames = editorState.artworks
+                .filter(function (artworkState) {
+                    return !!artworkState && !!artworkState.name;
+                })
+                .map(function (artworkState) {
+                    return artworkState.name;
+                });
+
+            artworks.slice().forEach(function (artwork) {
+                if (savedArtworkNames.indexOf(artwork.name) === -1) {
+                    disposeArtworkDisplay(artwork);
+                }
+            });
+
             editorState.artworks.forEach(function (artworkState) {
                 if (!artworkState) {
                     return;
@@ -12284,7 +12595,27 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 if (!artwork) {
-                    return;
+                    artwork = createArtworkDisplay({
+                        name: artworkState.name || null,
+                        index: artworkState.index,
+                        position: artworkState.position
+                            ? vectorFromState(artworkState.position, new BABYLON.Vector3(0, -2.5, -4.8))
+                            : new BABYLON.Vector3(0, -2.5, -4.8),
+                        rotation: artworkState.rotation
+                            ? vectorFromState(artworkState.rotation, new BABYLON.Vector3(0, 0, 0))
+                            : new BABYLON.Vector3(0, 0, 0),
+                        scaling: artworkState.scaling
+                            ? vectorFromState(artworkState.scaling, new BABYLON.Vector3(1, 1, 1))
+                            : new BABYLON.Vector3(1, 1, 1),
+                        wall: artworkState.wall
+                            ? {
+                                wallMesh: getWallMeshByName(artworkState.wall.wallMeshName),
+                                wallAxis: artworkState.wall.wallAxis,
+                                wallValue: artworkState.wall.wallValue,
+                                horizontalAxis: artworkState.wall.horizontalAxis
+                            }
+                            : null
+                    });
                 }
 
                 if (artworkState.position) {
