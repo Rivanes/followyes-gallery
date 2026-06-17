@@ -436,18 +436,16 @@ The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
 
 
-## Stage 8T3 Dynamic Artwork Image Plane Fix
+## Stage 8T4 Direct Artwork Texture Fix
 
-Built from Stage 8T2.
+Built from Stage 8T2, not from Stage 8T3.
 
 Fix:
-- dynamic artworks created by ADD ARTWORK use the same upload state as base artworks,
-  but their image plane could end up on the wrong local side of the box,
-  leaving the red placeholder visible.
-- image planes are now positioned on the side closer to the camera.
-- artwork image plane material is unlit/emissive so it is not affected by local light limits.
-- base artwork material is forced to white when an image state is applied.
-- added GalleryApp.reapplyArtworkImage(nameOrIndex) helper.
+- rolls back the T3 camera-side imagePlane experiment,
+- applies artwork image texture directly to the artwork mesh material,
+- this removes the difference between base artworks and ADD ARTWORK dynamic artworks,
+- red placeholder cannot cover the image because it is replaced by the textured material,
+- keeps Stage 8T2 safe upload/load and author library.
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
