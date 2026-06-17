@@ -436,17 +436,15 @@ The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
 
 
-## Stage 8T5 Dual Image Plane Fix
+## Stage 8U Detached Image Plane Fix
 
-Built from Stage 8T2, not from Stage 8T3/T4.
+Built from Stage 8T2, not from T3/T4/T5.
 
 Fix:
-- restores the safe imagePlane-based rendering path,
-- adds a second image plane on the opposite local side of the artwork,
-- this avoids the dynamic ADD ARTWORK case where the red placeholder hides the image plane,
-- does not move planes based on camera,
-- does not apply the artwork texture directly to the box mesh,
-- image plane material is unlit/emissive so local light limits cannot darken it.
+- artwork image plane is detached from the red placeholder box and synced in world space,
+- image plane gets renderingGroupId = 2 and unlit/emissive material,
+- this avoids the dynamic artwork box covering the image texture,
+- no dual planes and no direct texture-on-box experiment,
+- keeps author library and safe load/upload from 8T2.
 
-The engine TXT has login disabled.
-The GitHub ZIP has login enabled.
+The engine TXT has login disabled. The GitHub ZIP has login enabled.

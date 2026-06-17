@@ -1335,62 +1335,61 @@ export const createScene = function (engineArg, canvasArg) {
         return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
     }
 
-    function getArtworkSecondaryImagePlane(artwork) {
-        if (!artwork) {
-            return null;
+    function getArtworkVisualNormal(artwork) {
+        if (!artwork || !artwork.getWorldMatrix) {
+            return new BABYLON.Vector3(0, 0, 1);
         }
 
-        artwork.metadata = artwork.metadata || {};
+        try {
+            artwork.computeWorldMatrix(true);
 
-        if (
-            artwork.metadata.imagePlaneBack &&
-            !artwork.metadata.imagePlaneBack.isDisposed()
-        ) {
-            return artwork.metadata.imagePlaneBack;
+            var normal = BABYLON.Vector3.TransformNormal(
+                new BABYLON.Vector3(0, 0, 1),
+                artwork.getWorldMatrix()
+            );
+
+            if (!normal || normal.lengthSquared() <= 0.0001) {
+                return new BABYLON.Vector3(0, 0, 1);
+            }
+
+            return normal.normalize();
+        } catch (error) {
+            console.warn("Artwork visual normal warning:", error);
+            return new BABYLON.Vector3(0, 0, 1);
         }
-
-        var imagePlaneBack = BABYLON.MeshBuilder.CreatePlane(
-            artwork.name + "_ImagePlane_Back",
-            {
-                width: artworkWidth,
-                height: artworkHeight
-            },
-            scene
-        );
-
-        imagePlaneBack.parent = artwork;
-        imagePlaneBack.position = new BABYLON.Vector3(0, 0, -artworkDepth * 0.56);
-        imagePlaneBack.rotation = BABYLON.Vector3.Zero();
-        imagePlaneBack.isPickable = false;
-        imagePlaneBack.metadata = imagePlaneBack.metadata || {};
-        imagePlaneBack.metadata.isArtworkImagePlane = true;
-        imagePlaneBack.metadata.isArtworkSecondaryImagePlane = true;
-
-        artwork.metadata.imagePlaneBack = imagePlaneBack;
-
-        return imagePlaneBack;
     }
 
-    function syncArtworkImagePlanes(artwork) {
-        if (!artwork || !artwork.metadata) {
+    function syncDetachedArtworkImagePlane(artwork) {
+        if (!artwork || !artwork.metadata || !artwork.metadata.imagePlane) {
             return;
         }
 
-        var frontPlane = artwork.metadata.imagePlane || null;
-        var backPlane = artwork.metadata.imagePlaneBack || null;
+        var imagePlane = artwork.metadata.imagePlane;
 
-        if (frontPlane && !frontPlane.isDisposed()) {
-            frontPlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
-            frontPlane.rotation = BABYLON.Vector3.Zero();
-            frontPlane.scaling.x = 1;
-            frontPlane.scaling.y = 1;
+        if (!imagePlane || (imagePlane.isDisposed && imagePlane.isDisposed())) {
+            return;
         }
 
-        if (backPlane && !backPlane.isDisposed()) {
-            backPlane.position = new BABYLON.Vector3(0, 0, -artworkDepth * 0.56);
-            backPlane.rotation = BABYLON.Vector3.Zero();
-            backPlane.scaling.x = 1;
-            backPlane.scaling.y = 1;
+        try {
+            artwork.computeWorldMatrix(true);
+
+            var normal = getArtworkVisualNormal(artwork);
+            var position = artwork.getAbsolutePosition
+                ? artwork.getAbsolutePosition()
+                : artwork.position;
+
+            imagePlane.parent = null;
+            imagePlane.position.copyFrom(position.add(normal.scale(artworkDepth * 1.25)));
+            imagePlane.rotationQuaternion = null;
+            imagePlane.rotation.copyFrom(artwork.rotation);
+            imagePlane.scaling.x = artwork.scaling.x;
+            imagePlane.scaling.y = artwork.scaling.y;
+            imagePlane.scaling.z = 1;
+            imagePlane.renderingGroupId = 2;
+            imagePlane.alwaysSelectAsActiveMesh = true;
+            imagePlane.computeWorldMatrix(true);
+        } catch (error) {
+            console.warn("Detached artwork image plane sync warning:", error);
         }
     }
 
@@ -1405,6 +1404,7 @@ export const createScene = function (engineArg, canvasArg) {
             artwork.metadata.imagePlane &&
             !artwork.metadata.imagePlane.isDisposed()
         ) {
+            syncDetachedArtworkImagePlane(artwork);
             return artwork.metadata.imagePlane;
         }
 
@@ -1417,14 +1417,20 @@ export const createScene = function (engineArg, canvasArg) {
             scene
         );
 
-        imagePlane.parent = artwork;
-        imagePlane.position = new BABYLON.Vector3(0, 0, artworkDepth * 0.56);
+        // Stage 8U:
+        // Image plane jest odpinany od artwork boxa i pozycjonowany w world space.
+        // To omija problem, w którym czerwony placeholder / dynamiczny box przykrywał teksturę.
+        imagePlane.parent = null;
+        imagePlane.position = BABYLON.Vector3.Zero();
         imagePlane.rotation = BABYLON.Vector3.Zero();
         imagePlane.isPickable = false;
+        imagePlane.renderingGroupId = 2;
+        imagePlane.alwaysSelectAsActiveMesh = true;
         imagePlane.metadata = imagePlane.metadata || {};
         imagePlane.metadata.isArtworkImagePlane = true;
 
         artwork.metadata.imagePlane = imagePlane;
+        syncDetachedArtworkImagePlane(artwork);
 
         return imagePlane;
     }
@@ -1598,7 +1604,7 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.scaling.z = 1;
         artwork.rotation.z = BABYLON.Tools.ToRadians(transformState.rotationDegrees);
 
-        syncArtworkImagePlanes(artwork);
+        syncDetachedArtworkImagePlane(artwork);
 
         artwork.computeWorldMatrix(true);
         updateArtworkLight(artwork);
@@ -1735,7 +1741,7 @@ export const createScene = function (engineArg, canvasArg) {
             resetArtworkTransformState(artwork);
         }
 
-        syncArtworkImagePlanes(artwork);
+        syncDetachedArtworkImagePlane(artwork);
     }
 
     function cloneArtworkMaterialColor(color) {
@@ -1931,15 +1937,7 @@ export const createScene = function (engineArg, canvasArg) {
             setArtworkTransformState(artwork, normalizedState.transform);
         }
 
-        // Stage 8T5:
-        // Wracamy do bezpiecznej sciezki imagePlane z T2, ale tworzymy dwa plane'y:
-        // jeden po lokalnym +Z i drugi po lokalnym -Z. Dzięki temu dynamiczne obrazy
-        // z ADD ARTWORK nie zostaja czerwone, jesli front mesha jest odwrocony.
-        applyArtworkImageBaseMaterial(artwork);
-
         var imagePlane = getArtworkImagePlane(artwork);
-        var imagePlaneBack = getArtworkSecondaryImagePlane(artwork);
-        syncArtworkImagePlanes(artwork);
         disposeArtworkImageMaterial(artwork);
 
         var imageMaterial = new BABYLON.StandardMaterial(
@@ -1966,7 +1964,7 @@ export const createScene = function (engineArg, canvasArg) {
                     normalizedState.fitMode || galleryArtworkDefaultFitMode
                 );
 
-                syncArtworkImagePlanes(artwork);
+                syncDetachedArtworkImagePlane(artwork);
                 artwork.computeWorldMatrix(true);
                 updateArtworkLight(artwork);
                 updateArtworkImageUi();
@@ -1986,11 +1984,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         imagePlane.material = imageMaterial;
         imagePlane.setEnabled(true);
-
-        if (imagePlaneBack) {
-            imagePlaneBack.material = imageMaterial;
-            imagePlaneBack.setEnabled(true);
-        }
+        syncDetachedArtworkImagePlane(artwork);
 
         artwork.metadata.imageMaterial = imageMaterial;
 
@@ -2009,25 +2003,19 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata = artwork.metadata || {};
         disposeArtworkImageMaterial(artwork);
 
-        ["imagePlane", "imagePlaneBack"].forEach(function (planeKey) {
-            var plane = artwork.metadata[planeKey];
-
-            if (!plane) {
-                return;
-            }
-
+        if (artwork.metadata.imagePlane) {
             if (shouldDisposePlane) {
                 try {
-                    plane.dispose();
+                    artwork.metadata.imagePlane.dispose();
                 } catch (error) {
-                    console.warn("Artwork image plane dispose warning:", planeKey, error);
+                    console.warn("Artwork image plane dispose warning:", error);
                 }
 
-                artwork.metadata[planeKey] = null;
+                artwork.metadata.imagePlane = null;
             } else {
-                plane.setEnabled(false);
+                artwork.metadata.imagePlane.setEnabled(false);
             }
-        });
+        }
 
         resetArtworkAspectRatioToDefault(artwork);
         restoreArtworkPlaceholderBaseMaterial(artwork);
@@ -2061,8 +2049,7 @@ export const createScene = function (engineArg, canvasArg) {
         try {
             applyArtworkImageBaseMaterial(artwork);
             getArtworkImagePlane(artwork);
-            getArtworkSecondaryImagePlane(artwork);
-            syncArtworkImagePlanes(artwork);
+            syncDetachedArtworkImagePlane(artwork);
         } catch (baseMaterialError) {
             console.warn("Artwork image base material fallback warning:", baseMaterialError);
         }
@@ -12520,6 +12507,7 @@ export const createScene = function (engineArg, canvasArg) {
 
 
     function updateArtworkLight(artwork) {
+        syncDetachedArtworkImagePlane(artwork);
         updateDisplaySpotLight(artwork);
     }
 
@@ -13549,18 +13537,15 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         var imagePlane = artwork.metadata.imagePlane || null;
-        var imagePlaneBack = artwork.metadata.imagePlaneBack || null;
         var imageMaterial = artwork.metadata.imageMaterial || null;
 
-        [imagePlane, imagePlaneBack].forEach(function (plane) {
-            if (plane && !plane.isDisposed()) {
-                try {
-                    plane.dispose();
-                } catch (error) {
-                    console.warn("Artwork image plane dispose warning:", error);
-                }
+        if (imagePlane && !imagePlane.isDisposed()) {
+            try {
+                imagePlane.dispose();
+            } catch (error) {
+                console.warn("Artwork image plane dispose warning:", error);
             }
-        });
+        }
 
         if (imageMaterial && imageMaterial.dispose) {
             try {
