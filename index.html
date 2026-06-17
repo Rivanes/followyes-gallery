@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Followyes Gallery V0_10</title>
+  <title>Berryboy Art Gallery V0_11</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -797,9 +797,9 @@
 
   <div id="appShell">
     <header id="siteHeader">
-      <a id="brand" href="#top" aria-label="Followyes Gallery, back to top">
+      <a id="brand" href="#top" aria-label="Berryboy Art Gallery, back to top">
         <span id="brandMark"></span>
-        <span>Followyes Gallery</span>
+        <span>Berryboy Art Gallery</span>
       </a>
 
       <div id="headerRight">
@@ -1009,8 +1009,8 @@
     </main>
 
     <footer id="siteFooter">
-      <span>Followyes Gallery</span>
-      <span>Gallery_V0_10</span>
+      <span>Berryboy Art Gallery</span>
+      <span>Gallery_V0_11</span>
     </footer>
   </div>
 
@@ -1115,7 +1115,7 @@
 
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-    import { createScene } from "./src/Gallery_V0_10.js";
+    import { createScene } from "./src/Gallery_V0_11.js";
 
     const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -1149,7 +1149,7 @@
     const authPasswordLabel = document.getElementById("authPasswordLabel");
 
     let currentSession = null;
-    let currentLang = localStorage.getItem("followyes_gallery_lang") || "en";
+    let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
     const uiText = {
       pl: {
         publicGallery: "Galeria publiczna",
@@ -1197,7 +1197,7 @@
 
     function applyLanguage(lang) {
       currentLang = lang === "en" ? "en" : "pl";
-      localStorage.setItem("followyes_gallery_lang", currentLang);
+      localStorage.setItem("berryboy_art_gallery_lang", currentLang);
       document.documentElement.setAttribute("lang", currentLang);
       document.documentElement.setAttribute("data-page-lang", currentLang);
 

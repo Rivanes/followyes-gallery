@@ -1,6 +1,6 @@
-# Followyes Gallery V0_10
+# Berryboy Art Gallery V0_11
 
-Wersja WEB z jednym plikiem silnika: `src/Gallery_V0_10.js`.
+Wersja WEB z jednym plikiem silnika: `src/Gallery_V0_11.js`.
 
 ## Model zapisu
 
@@ -12,7 +12,7 @@ Tak jak w działającej wersji V0_8, strona używa:
 - rekord: `id = main`
 - kolumna: `state`
 
-## Co zapisuje V0_10
+## Co zapisuje V0_11
 
 - ściany i kolory ścian,
 - obrazy: pozycja, rotacja, skala, metadata ściany, materiał,
@@ -56,7 +56,7 @@ Update note:
 - `#mobileViewerControls` z-index was lowered below `#siteHeader` (`8000`) while staying above the gallery canvas.
 - Previous fixes are preserved: gallery UI anchoring and middle-mouse camera rotation in Viewer/Edit mode.
 
-## V0_10 Supabase Artwork Upload Stage 1
+## V0_11 Supabase Artwork Upload Stage 1
 
 This package adds the first stage of real artwork image support:
 
@@ -80,7 +80,7 @@ Artwork paths already include `Date.now()`, so every upload gets a unique path.
 It also shows the Supabase Storage error message in the gallery toast and logs upload details to the browser console.
 
 
-## V0_10 Supabase Artwork Upload Stage 2 - Dynamic Aspect Ratio
+## V0_11 Supabase Artwork Upload Stage 2 - Dynamic Aspect Ratio
 
 This GitHub package includes:
 - Supabase artwork upload stage 1.
@@ -92,7 +92,7 @@ This GitHub package includes:
 SQL files are intentionally not included in this package.
 
 
-## V0_10 Supabase Artwork Upload Stage 3 - Artwork Scale + Rotation
+## V0_11 Supabase Artwork Upload Stage 3 - Artwork Scale + Rotation
 
 This GitHub package includes:
 - Stage 1 artwork upload to Supabase Storage.
@@ -106,7 +106,7 @@ This GitHub package includes:
 SQL files are intentionally not included in this package.
 
 
-## V0_10 Supabase Artwork Upload Stage 4 - Uniform Scale Slider + Rotation Slider
+## V0_11 Supabase Artwork Upload Stage 4 - Uniform Scale Slider + Rotation Slider
 
 This GitHub package includes:
 - Supabase artwork upload and dynamic aspect ratio.
@@ -670,3 +670,42 @@ Reason:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Berryboy Art Gallery V0_11 Release
+
+Release base:
+- Stage 9F Artwork Image Depth Occlusion Fix.
+
+This release marks the current stable working version after:
+- Supabase artwork upload/load,
+- dynamic artwork aspect ratio,
+- artwork scale/rotation,
+- add/delete artwork flow,
+- artwork info popup,
+- author library / FIND AUTHOR / shared author photo,
+- mobile/desktop popup distance and layout fixes,
+- Stage 8U1 material isDisposed fix,
+- Stage 9E viewer wall clipping / near-plane fix,
+- Stage 9F artwork image depth occlusion fix.
+
+Collision status:
+- Viewer Mode wall collision is included.
+- Props/artworks/sculptures collision remains intentionally disabled for now.
+- The rejected aggressive Stage 9 collision guard is not part of this release.
+
+Files:
+- Official web engine: `src/Gallery_V0_11.js`
+- Compatibility engine copy: `src/Gallery_V0_10.js`
+- GitHub ZIP has login enabled.
+- Engine TXT has login disabled.
+
+
+## Berryboy Art Gallery V0_11 Brand Name Fix
+
+Brand update:
+- The public gallery name is now `Berryboy Art Gallery`.
+- Technical global/localStorage names were also renamed to `BerryboyArtGallery...` / `berryboy_art_gallery...`.
+
+This is a naming/branding-only release based on V0_11.
+No artwork upload, collision, popup, author library, lighting, or Supabase logic was changed.
