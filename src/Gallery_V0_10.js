@@ -1977,6 +1977,48 @@ export const createScene = function (engineArg, canvasArg) {
         return true;
     }
 
+    function rememberArtworkImageStateWithoutDisplay(artwork, imageState) {
+        if (!artwork || !imageState) {
+            return false;
+        }
+
+        artwork.metadata = artwork.metadata || {};
+
+        var imageUrl = getArtworkImageUrlFromState(imageState);
+
+        artwork.metadata.artworkImage = Object.assign(
+            {
+                fitMode: galleryArtworkDefaultFitMode,
+                storageBucket: galleryArtworkStorageBucket
+            },
+            imageState || {},
+            {
+                imageUrl: imageUrl || imageState.imageUrl || imageState.publicUrl || ""
+            }
+        );
+
+        try {
+            applyArtworkImageBaseMaterial(artwork);
+        } catch (baseMaterialError) {
+            console.warn("Artwork image base material fallback warning:", baseMaterialError);
+        }
+
+        updateArtworkImageUi();
+        updateArtworkTransformUi();
+
+        return true;
+    }
+
+    function applyArtworkImageStateSafely(artwork, imageState, contextLabel) {
+        try {
+            return applyArtworkImageState(artwork, imageState);
+        } catch (error) {
+            console.warn("Artwork image display apply failed:", contextLabel || "", error);
+            rememberArtworkImageStateWithoutDisplay(artwork, imageState);
+            return false;
+        }
+    }
+
     async function uploadArtworkImageToSupabase(artwork, file) {
         if (!artwork || !file) {
             notifyGalleryStatus("Zaznacz jeden obraz i wybierz plik.");
@@ -2058,38 +2100,66 @@ export const createScene = function (engineArg, canvasArg) {
             uploadedAt: new Date().toISOString()
         };
 
-        applyArtworkImageState(artwork, uploadedImageState);
+        var displayedNow = applyArtworkImageStateSafely(
+            artwork,
+            uploadedImageState,
+            "after artwork upload"
+        );
 
-        // Stage 8T1:
-        // Supabase Storage potrafi zwrocic public URL zanim plik jest gotowy dla texture loadera.
-        // Drugi lekko opozniony apply nie zmienia state, tylko ponawia zaladowanie tekstury.
+        // Stage 8T2:
+        // Upload do Storage nie moze byc traktowany jako nieudany tylko dlatego,
+        // ze lokalne nalozenie tekstury rzucilo wyjatek. Metadata zostaje zapamietana,
+        // zeby Save State mial imagePath/imageUrl.
+        if (!displayedNow) {
+            notifyGalleryStatus("Wgrano plik, ale tekstura nie wskoczyla od razu. Zapisz stan lub sprobuj APPLY URL.");
+        }
+
+        // Ponawiamy probe wyswietlenia po chwili, ale bez rzucania bledem do upload catch.
         setTimeout(function () {
-            if (
-                artwork &&
-                artwork.metadata &&
-                artwork.metadata.artworkImage &&
-                artwork.metadata.artworkImage.imagePath === storagePath
-            ) {
-                applyArtworkImageState(artwork, uploadedImageState);
+            try {
+                if (
+                    artwork &&
+                    artwork.metadata &&
+                    artwork.metadata.artworkImage &&
+                    artwork.metadata.artworkImage.imagePath === storagePath
+                ) {
+                    applyArtworkImageStateSafely(
+                        artwork,
+                        uploadedImageState,
+                        "delayed artwork upload retry"
+                    );
+                }
+            } catch (delayedApplyError) {
+                console.warn("Delayed artwork image apply warning:", delayedApplyError);
             }
         }, 850);
 
-        var previousDeleteState = getArtworkStorageDeleteState(previousImageState);
+        var previousDeleteState = null;
+
+        try {
+            previousDeleteState = getArtworkStorageDeleteState(previousImageState);
+        } catch (deleteStateError) {
+            console.warn("Previous artwork delete state warning:", deleteStateError);
+        }
 
         if (
             previousDeleteState &&
             previousDeleteState.imagePath &&
             previousDeleteState.imagePath !== storagePath
         ) {
-            deleteArtworkImageFromSupabase(previousDeleteState)
-                .then(function (removedOldFile) {
-                    if (!removedOldFile) {
-                        console.warn("Previous artwork image was not removed from Storage:", previousDeleteState);
-                    }
-                })
-                .catch(function (error) {
-                    console.warn("Previous artwork image delete warning:", error);
-                });
+            try {
+                deleteArtworkImageFromSupabase(previousDeleteState)
+                    .then(function (removedOldFile) {
+                        if (!removedOldFile) {
+                            console.warn("Previous artwork image was not removed from Storage:", previousDeleteState);
+                        }
+                    })
+                    .catch(function (error) {
+                        console.warn("Previous artwork image delete warning:", error);
+                    });
+            } catch (previousDeleteError) {
+                console.warn("Previous artwork image delete startup warning:", previousDeleteError);
+            }
         }
 
         notifyGalleryStatus("Wgrano obraz. Zapisz stan galerii, aby zachowac zmiane.");
@@ -5220,8 +5290,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         uploadArtworkImageToSupabase(artwork, file)
             .catch(function (error) {
-                console.warn(error);
-                notifyGalleryStatus("Blad uploadu obrazu.");
+                console.warn("Artwork upload hard error:", error);
+                notifyGalleryStatus("Blad uploadu obrazu: " + (error && error.message ? error.message : "sprawdz konsole."));
             })
             .finally(function () {
                 artworkImageFileInput.value = "";

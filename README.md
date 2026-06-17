@@ -418,3 +418,19 @@ Fixes:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8T2 Artwork Upload Display Safe Fix
+
+Built from Stage 8T1.
+
+Fix:
+- upload success is no longer treated as failed if local texture display throws an exception,
+- uploaded image metadata is remembered even when texture display fails,
+- Save State can still store imagePath/imageUrl,
+- delayed display retry remains but is safe,
+- APPLY URL also uses safe texture apply,
+- upload catch now shows more detailed hard error message.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
