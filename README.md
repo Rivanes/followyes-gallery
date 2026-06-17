@@ -651,3 +651,22 @@ Changes:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 9F Artwork Image Depth Occlusion Fix
+
+Built from Stage 9E.
+
+Fix:
+- artwork image planes no longer force renderingGroupId = 2,
+- image planes use the normal scene render group so walls can occlude them,
+- keeps the detached image plane offset so the placeholder does not cover the artwork texture,
+- makes image material depth behavior explicit,
+- adds GalleryApp.getArtworkImagePlaneDepthDebug().
+
+Reason:
+- renderingGroupId = 2 helped avoid placeholder overdraw,
+- but on the web build it made artwork textures visible through walls.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.

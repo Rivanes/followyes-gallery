@@ -1782,6 +1782,21 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function getArtworkImageDepthSafeRenderingGroupId(artwork) {
+        // STAGE 9F:
+        // Artwork image planes must stay in the normal scene rendering group.
+        // renderingGroupId = 2 made images draw over walls on the web build.
+        if (
+            artwork &&
+            typeof artwork.renderingGroupId === "number" &&
+            artwork.renderingGroupId > 0
+        ) {
+            return artwork.renderingGroupId;
+        }
+
+        return 0;
+    }
+
     function syncDetachedArtworkImagePlane(artwork) {
         if (!artwork || !artwork.metadata || !artwork.metadata.imagePlane) {
             return;
@@ -1808,7 +1823,7 @@ export const createScene = function (engineArg, canvasArg) {
             imagePlane.scaling.x = artwork.scaling.x;
             imagePlane.scaling.y = artwork.scaling.y;
             imagePlane.scaling.z = 1;
-            imagePlane.renderingGroupId = 2;
+            imagePlane.renderingGroupId = getArtworkImageDepthSafeRenderingGroupId(artwork);
             imagePlane.alwaysSelectAsActiveMesh = true;
             imagePlane.computeWorldMatrix(true);
         } catch (error) {
@@ -1847,7 +1862,7 @@ export const createScene = function (engineArg, canvasArg) {
         imagePlane.position = BABYLON.Vector3.Zero();
         imagePlane.rotation = BABYLON.Vector3.Zero();
         imagePlane.isPickable = false;
-        imagePlane.renderingGroupId = 2;
+        imagePlane.renderingGroupId = getArtworkImageDepthSafeRenderingGroupId(artwork);
         imagePlane.alwaysSelectAsActiveMesh = true;
         imagePlane.metadata = imagePlane.metadata || {};
         imagePlane.metadata.isArtworkImagePlane = true;
@@ -2395,6 +2410,18 @@ export const createScene = function (engineArg, canvasArg) {
         imageMaterial.specularColor = new BABYLON.Color3(0.03, 0.03, 0.03);
         imageMaterial.backFaceCulling = false;
         imageMaterial.disableLighting = true;
+        imageMaterial.alpha = 1;
+
+        // Stage 9F:
+        // Obraz ma być normalnie zasłaniany przez ściany i geometrię sceny.
+        // Nie wymuszamy późniejszej grupy renderowania ani transparentnego passu.
+        if (imageMaterial.disableDepthWrite !== undefined) {
+            imageMaterial.disableDepthWrite = false;
+        }
+
+        if (imageMaterial.forceDepthWrite !== undefined) {
+            imageMaterial.forceDepthWrite = true;
+        }
 
         var texture = new BABYLON.Texture(
             imageUrl,
@@ -15754,6 +15781,28 @@ export const createScene = function (engineArg, canvasArg) {
             viewerWallLastSafeCameraPosition = camera.position.clone();
 
             return this.getViewerCollisionDebug();
+        },
+        getArtworkImagePlaneDepthDebug: function () {
+            return scene.meshes.filter(function (mesh) {
+                return !!(
+                    mesh &&
+                    mesh.metadata &&
+                    mesh.metadata.isArtworkImagePlane
+                );
+            }).map(function (mesh) {
+                return {
+                    name: mesh.name,
+                    renderingGroupId: mesh.renderingGroupId,
+                    enabled: mesh.isEnabled ? mesh.isEnabled() : false,
+                    material: mesh.material ? mesh.material.name : null,
+                    depthWriteDisabled: mesh.material && mesh.material.disableDepthWrite !== undefined
+                        ? !!mesh.material.disableDepthWrite
+                        : null,
+                    forceDepthWrite: mesh.material && mesh.material.forceDepthWrite !== undefined
+                        ? !!mesh.material.forceDepthWrite
+                        : null
+                };
+            });
         }
     };
 
