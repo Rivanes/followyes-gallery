@@ -535,3 +535,119 @@ Changes:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 9A Movement Restore / Collision Rollback
+
+Built from stable Stage 8Y.
+
+This rollback removes/rejects the Stage 9 Viewer Collision attempt because it broke camera walking / mobile movement.
+
+Kept from Stage 8Y:
+- working artwork image upload/load,
+- Stage 8U1 material isDisposed fix,
+- author library / FIND AUTHOR / shared author photo,
+- Q9 popup DOM cleanup,
+- Q5 popup behavior,
+- WASD disabled while typing,
+- mobile/desktop popup distance and width fixes.
+
+Removed / not included:
+- Stage 9 viewer collision system,
+- camera.checkCollisions toggling,
+- moveViewerCameraWithCollisions,
+- updateViewerCameraCollisionGuard,
+- collision debug helper.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 9B Viewer Built-in Collision Step 1
+
+Built from Stage 9A / stable Stage 8Y.
+
+This is a safer collision attempt than rejected Stage 9:
+- uses Babylon built-in collisions only,
+- no custom AABB guard,
+- no per-frame forced camera rollback,
+- no manual wall/object intersection test.
+
+Viewer Mode:
+- camera.checkCollisions = true
+
+Edit Mode:
+- camera.checkCollisions = false
+
+Registered collision targets:
+- walls,
+- props,
+- artworks,
+- pedestals/sculptures.
+
+Mobile joystick:
+- keeps existing floor boundary,
+- uses camera.moveWithCollisions only for accepted movement delta.
+
+Debug:
+- GalleryApp.getViewerCollisionDebug()
+- GalleryApp.setViewerCollisionTargets({ walls, props, artworks, sculptures })
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 9C Viewer Wall Raycast Block Fix
+
+Built from Stage 9B.
+
+Goal:
+- block walking through walls in Viewer Mode,
+- avoid breaking movement like rejected Stage 9.
+
+Changes:
+- collision targets are limited to walls only,
+- props/artworks/sculptures are disabled for this step,
+- adds a wall raycast blocker between last safe camera position and current camera position,
+- uses actual wall mesh ray hits instead of broad AABB,
+- adds sliding fallback on X/Z when movement crosses a wall,
+- works for desktop movement and mobile joystick because it resolves after movement.
+
+Debug:
+- GalleryApp.getViewerCollisionDebug()
+- GalleryApp.setViewerCollisionTargets({ walls, props, artworks, sculptures })
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 9D Viewer Wall Clipping Buffer Fix
+
+Built from Stage 9C.
+
+Changes:
+- wall blocker now stops the camera earlier,
+- adds a visual stop distance to avoid camera near-plane clipping through walls,
+- increases wall ray extra distance,
+- increases horizontal wall block radius,
+- adds proximity rays from the camera position to catch side/corner clipping,
+- still only blocks walls; props/artworks/sculptures remain disabled for this stage.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 9E Viewer Wall Clipping Near Plane Fix
+
+Built from Stage 9D.
+
+Changes:
+- reduces camera.minZ to 0.035 to limit visual near-plane clipping,
+- increases wall block radius,
+- increases wall ray extra distance,
+- increases visual stop distance,
+- adds diagonal proximity rays for wall corners,
+- still only blocks walls; props/artworks/sculptures remain disabled.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.

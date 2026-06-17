@@ -284,6 +284,10 @@ export const createScene = function (engineArg, canvasArg) {
     }, true);
 
     camera.speed = 0.3;
+    // STAGE 9E:
+    // Mniejszy near clipping plane ogranicza wizualne przecinanie ściany,
+    // gdy zwiedzający podejdzie bardzo blisko powierzchni.
+    camera.minZ = 0.035;
     camera.setTarget(new BABYLON.Vector3(0, 1, 0));
 
     scene.imageProcessingConfiguration.toneMappingEnabled = true;
@@ -858,6 +862,425 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkCreateCounter = 0;
     var deletedArtworkNames = [];
     var artworkAuthors = [];
+
+    // STAGE 9B - VIEWER BUILT-IN COLLISION STEP 1
+    // Poprzedni Stage 9 zepsul chodzenie, bo dodal agresywny custom guard
+    // i reczne cofanie kamery. Tutaj uzywamy tylko natywnego systemu Babylon:
+    // scene.collisionsEnabled + camera.checkCollisions + mesh.checkCollisions.
+    var viewerCollisionRadius = 0.34;
+    var viewerCollisionHeight = 0.72;
+    var viewerCollisionTargets = {
+        walls: true,
+        // Stage 9C: na tym etapie blokujemy tylko ściany.
+        // Obiekty, obrazy i rzeźby zostają wyłączone, żeby nie psuć chodzenia.
+        props: false,
+        artworks: false,
+        sculptures: false
+    };
+
+    var viewerWallBlockRadius = 0.72;
+    var viewerWallRayExtraDistance = 1.08;
+    var viewerWallVisualStopDistance = 0.82;
+    var viewerWallLastSafeCameraPosition = camera.position.clone();
+
+    scene.collisionsEnabled = true;
+    camera.ellipsoid = new BABYLON.Vector3(
+        viewerCollisionRadius,
+        viewerCollisionHeight,
+        viewerCollisionRadius
+    );
+    camera.ellipsoidOffset = new BABYLON.Vector3(0, 0, 0);
+
+    function isViewerCollisionActive() {
+        return !editMode;
+    }
+
+    function updateViewerCollisionMode() {
+        scene.collisionsEnabled = true;
+        camera.checkCollisions = isViewerCollisionActive();
+    }
+
+    function canUseViewerCollisionMesh(mesh) {
+        if (!mesh || mesh.name === "__root__") {
+            return false;
+        }
+
+        if (mesh.isDisposed && mesh.isDisposed()) {
+            return false;
+        }
+
+        if (mesh.metadata && mesh.metadata.deletedArtwork) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function isViewerCollisionTargetEnabled(type) {
+        if (type === "wall") {
+            return !!viewerCollisionTargets.walls;
+        }
+
+        if (type === "prop") {
+            return !!viewerCollisionTargets.props;
+        }
+
+        if (type === "artwork") {
+            return !!viewerCollisionTargets.artworks;
+        }
+
+        if (type === "pedestal" || type === "sculpture") {
+            return !!viewerCollisionTargets.sculptures;
+        }
+
+        return false;
+    }
+
+    function registerViewerCollisionMesh(mesh, type) {
+        type = type || "generic";
+
+        if (!canUseViewerCollisionMesh(mesh)) {
+            return;
+        }
+
+        mesh.metadata = mesh.metadata || {};
+
+        if (!isViewerCollisionTargetEnabled(type)) {
+            if (mesh.metadata.viewerCollisionType === type) {
+                mesh.metadata.viewerCollisionType = "";
+            }
+
+            mesh.checkCollisions = false;
+            return;
+        }
+
+        mesh.metadata.viewerCollisionType = type;
+        mesh.checkCollisions = true;
+    }
+
+    function unregisterViewerCollisionMesh(mesh) {
+        if (!mesh) {
+            return;
+        }
+
+        mesh.checkCollisions = false;
+
+        if (mesh.metadata) {
+            mesh.metadata.viewerCollisionType = "";
+        }
+    }
+
+    function refreshViewerCollisionMeshes() {
+        if (viewerCollisionTargets.walls) {
+            wallMeshes.forEach(function (mesh) {
+                registerViewerCollisionMesh(mesh, "wall");
+            });
+        }
+
+        if (viewerCollisionTargets.props) {
+            propMeshes.forEach(function (mesh) {
+                registerViewerCollisionMesh(mesh, "prop");
+            });
+        }
+
+        if (viewerCollisionTargets.artworks) {
+            getActiveArtworks().forEach(function (artwork) {
+                registerViewerCollisionMesh(artwork, "artwork");
+            });
+        }
+
+        if (viewerCollisionTargets.sculptures) {
+            artSpheres.forEach(function (displayMesh) {
+                registerViewerCollisionMesh(displayMesh, "pedestal");
+
+                if (
+                    displayMesh &&
+                    displayMesh.metadata &&
+                    displayMesh.metadata.sculptureMesh
+                ) {
+                    registerViewerCollisionMesh(displayMesh.metadata.sculptureMesh, "sculpture");
+                }
+            });
+        }
+    }
+
+    function moveCameraWithViewerCollisionIfActive(deltaVector) {
+        if (!deltaVector || deltaVector.lengthSquared() <= 0) {
+            return false;
+        }
+
+        if (isViewerCollisionActive() && camera.moveWithCollisions) {
+            camera.moveWithCollisions(deltaVector);
+            return true;
+        }
+
+        camera.position.addInPlace(deltaVector);
+        return true;
+    }
+
+    // STAGE 9C - WALL RAYCAST BLOCKER
+    // Natywne checkCollisions nie zatrzymało kamery na ścianach.
+    // Zamiast szerokiego AABB całego wall.gltf używamy raycastu po faktycznej geometrii ściany.
+    function isViewerWallBlockActive() {
+        return isViewerCollisionActive() && viewerCollisionTargets.walls;
+    }
+
+    function getViewerWallCollisionMeshes() {
+        return wallMeshes.filter(function (mesh) {
+            return canUseViewerCollisionMesh(mesh);
+        });
+    }
+
+    function getViewerHorizontalPerpendicular(direction) {
+        return new BABYLON.Vector3(-direction.z, 0, direction.x);
+    }
+
+    function isViewerWallHitBetweenPositions(fromPosition, toPosition) {
+        if (!isViewerWallBlockActive()) {
+            return false;
+        }
+
+        if (!fromPosition || !toPosition) {
+            return false;
+        }
+
+        var wallCollisionMeshes = getViewerWallCollisionMeshes();
+
+        if (!wallCollisionMeshes.length) {
+            return false;
+        }
+
+        var movement = toPosition.subtract(fromPosition);
+        movement.y = 0;
+
+        var movementLength = movement.length();
+
+        if (movementLength <= 0.0001) {
+            return false;
+        }
+
+        var direction = movement.normalize();
+        var perpendicular = getViewerHorizontalPerpendicular(direction);
+
+        if (perpendicular.lengthSquared() > 0) {
+            perpendicular.normalize();
+        }
+
+        // Stage 9D:
+        // Nie wystarczy sprawdzić, czy kamera PRZESZŁA przez ścianę.
+        // Musimy też zatrzymać ją wcześniej, bo inaczej near-plane kamery
+        // zaczyna clipować przez powierzchnię i widać wnętrze galerii przez ścianę.
+        var safetyDistance = Math.max(
+            viewerWallRayExtraDistance,
+            viewerWallVisualStopDistance
+        );
+
+        var offsets = [
+            BABYLON.Vector3.Zero(),
+            perpendicular.scale(viewerWallBlockRadius),
+            perpendicular.scale(-viewerWallBlockRadius),
+            perpendicular.scale(viewerWallBlockRadius * 0.5),
+            perpendicular.scale(-viewerWallBlockRadius * 0.5),
+            direction.scale(viewerWallBlockRadius * 0.35)
+        ];
+
+        for (var i = 0; i < offsets.length; i++) {
+            var origin = fromPosition.add(offsets[i]);
+            var target = toPosition.add(offsets[i]);
+            var rayDirection = target.subtract(origin);
+            rayDirection.y = 0;
+
+            var rayLength = rayDirection.length();
+
+            if (rayLength <= 0.0001) {
+                continue;
+            }
+
+            rayDirection.normalize();
+
+            var ray = new BABYLON.Ray(
+                origin,
+                rayDirection,
+                rayLength + safetyDistance
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (mesh) {
+                    return wallCollisionMeshes.indexOf(mesh) !== -1;
+                }
+            );
+
+            if (
+                hit &&
+                hit.hit &&
+                hit.pickedMesh &&
+                hit.distance <= rayLength + safetyDistance
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function isViewerWallTooCloseAtPosition(position, movementDirection) {
+        if (!isViewerWallBlockActive()) {
+            return false;
+        }
+
+        var wallCollisionMeshes = getViewerWallCollisionMeshes();
+
+        if (!wallCollisionMeshes.length || !position) {
+            return false;
+        }
+
+        var directions = [];
+
+        if (
+            movementDirection &&
+            movementDirection.lengthSquared &&
+            movementDirection.lengthSquared() > 0.0001
+        ) {
+            var forward = movementDirection.clone();
+            forward.y = 0;
+
+            if (forward.lengthSquared() > 0.0001) {
+                forward.normalize();
+                var side = getViewerHorizontalPerpendicular(forward);
+
+                if (side.lengthSquared() > 0.0001) {
+                    side.normalize();
+                }
+
+                directions.push(forward);
+                directions.push(side);
+                directions.push(side.scale(-1));
+            }
+        }
+
+        // Dodatkowe kierunki bezpieczeństwa. Dzięki temu clipping boczny przy narożnikach
+        // jest też wykrywany.
+        directions.push(new BABYLON.Vector3(1, 0, 0));
+        directions.push(new BABYLON.Vector3(-1, 0, 0));
+        directions.push(new BABYLON.Vector3(0, 0, 1));
+        directions.push(new BABYLON.Vector3(0, 0, -1));
+
+        // Stage 9E: dodatkowe raycasty po przekątnych pomagają przy narożnikach
+        // i cienkich krawędziach ścian, gdzie clipping jest najbardziej widoczny.
+        directions.push(new BABYLON.Vector3(1, 0, 1));
+        directions.push(new BABYLON.Vector3(1, 0, -1));
+        directions.push(new BABYLON.Vector3(-1, 0, 1));
+        directions.push(new BABYLON.Vector3(-1, 0, -1));
+
+        for (var i = 0; i < directions.length; i++) {
+            var direction = directions[i];
+
+            if (!direction || direction.lengthSquared() <= 0.0001) {
+                continue;
+            }
+
+            direction = direction.normalize();
+
+            var ray = new BABYLON.Ray(
+                position,
+                direction,
+                viewerWallVisualStopDistance
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (mesh) {
+                    return wallCollisionMeshes.indexOf(mesh) !== -1;
+                }
+            );
+
+            if (
+                hit &&
+                hit.hit &&
+                hit.pickedMesh &&
+                hit.distance <= viewerWallVisualStopDistance
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function isViewerCameraPositionSafeAgainstWalls(position) {
+        if (!viewerWallLastSafeCameraPosition) {
+            return true;
+        }
+
+        var movementDirection = position.subtract(viewerWallLastSafeCameraPosition);
+        movementDirection.y = 0;
+
+        if (
+            isViewerWallHitBetweenPositions(
+                viewerWallLastSafeCameraPosition,
+                position
+            )
+        ) {
+            return false;
+        }
+
+        if (isViewerWallTooCloseAtPosition(position, movementDirection)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function resolveViewerWallCollisionAfterMovement() {
+        if (!isViewerWallBlockActive()) {
+            viewerWallLastSafeCameraPosition = camera.position.clone();
+            return;
+        }
+
+        if (!viewerWallLastSafeCameraPosition) {
+            viewerWallLastSafeCameraPosition = camera.position.clone();
+            return;
+        }
+
+        var currentPosition = camera.position.clone();
+
+        if (isViewerCameraPositionSafeAgainstWalls(currentPosition)) {
+            viewerWallLastSafeCameraPosition = currentPosition;
+            return;
+        }
+
+        // Sliding fallback: jeżeli pełny ruch przeciął ścianę,
+        // próbujemy zachować tylko X albo tylko Z. Dzięki temu chodzenie wzdłuż ściany
+        // nie zamienia się w całkowite zablokowanie ruchu.
+        var slideX = new BABYLON.Vector3(
+            currentPosition.x,
+            viewerWallLastSafeCameraPosition.y,
+            viewerWallLastSafeCameraPosition.z
+        );
+
+        var slideZ = new BABYLON.Vector3(
+            viewerWallLastSafeCameraPosition.x,
+            viewerWallLastSafeCameraPosition.y,
+            currentPosition.z
+        );
+
+        if (!isViewerWallHitBetweenPositions(viewerWallLastSafeCameraPosition, slideX)) {
+            camera.position.copyFrom(slideX);
+            viewerWallLastSafeCameraPosition = camera.position.clone();
+            return;
+        }
+
+        if (!isViewerWallHitBetweenPositions(viewerWallLastSafeCameraPosition, slideZ)) {
+            camera.position.copyFrom(slideZ);
+            viewerWallLastSafeCameraPosition = camera.position.clone();
+            return;
+        }
+
+        camera.position.copyFrom(viewerWallLastSafeCameraPosition);
+    }
+
+    updateViewerCollisionMode();
 
     var lampCeilingY = -0.55;
     var lampCubeY = -1.2;
@@ -9638,6 +10061,7 @@ export const createScene = function (engineArg, canvasArg) {
             setEditorUiVisible(true);
 
             refreshMobileViewerMode();
+            updateViewerCollisionMode();
             setMobileViewerUiVisible(false);
 
             if (mobileViewerEnabled) {
@@ -9651,6 +10075,7 @@ export const createScene = function (engineArg, canvasArg) {
             clearEditSelection();
 
             refreshMobileViewerMode();
+            updateViewerCollisionMode();
 
             if (mobileViewerEnabled) {
                 camera.detachControl(canvas);
@@ -9680,6 +10105,7 @@ export const createScene = function (engineArg, canvasArg) {
             clearEditSelection();
 
             refreshMobileViewerMode();
+            updateViewerCollisionMode();
 
             if (mobileViewerEnabled) {
                 camera.detachControl(canvas);
@@ -9972,14 +10398,21 @@ export const createScene = function (engineArg, canvasArg) {
 
         forward.normalize();
 
-        var candidatePosition = camera.position.add(
-            forward.scale(mobileMoveSpeed * moveInput * delta)
-        );
+        var movementDelta = forward.scale(mobileMoveSpeed * moveInput * delta);
+        var candidatePosition = camera.position.add(movementDelta);
 
         // Mobile nie moze wyjechac poza galerie. Ruch jest akceptowany tylko tam,
         // gdzie pod kamera dalej znajduje sie floor mesh.
         if (isMobileCameraPositionOnFloor(candidatePosition)) {
-            camera.position.copyFrom(candidatePosition);
+            var beforeMove = camera.position.clone();
+
+            moveCameraWithViewerCollisionIfActive(movementDelta);
+
+            // Jeżeli natywna kolizja albo inny ruch wypchnie kamerę poza floor,
+            // cofamy tylko ten krok. To nie jest globalny guard, więc nie powinno blokować chodzenia.
+            if (!isMobileCameraPositionOnFloor(camera.position)) {
+                camera.position.copyFrom(beforeMove);
+            }
         }
     }
 
@@ -10316,6 +10749,10 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     setupMobileViewerControls();
+
+    scene.onBeforeRenderObservable.add(function () {
+        resolveViewerWallCollisionAfterMovement();
+    });
 
 
     scene.onBeforeRenderObservable.add(function () {
@@ -12911,6 +13348,7 @@ export const createScene = function (engineArg, canvasArg) {
             });
 
             updateMobileFloorBounds();
+            refreshViewerCollisionMeshes();
             refreshArtworkLightExclusions();
             refreshPedestalLightIncludedMeshes();
             refreshAllCommonLocalLightTargets();
@@ -12931,6 +13369,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             wallMeshes.forEach(mesh => {
                 mesh.isPickable = true;
+                registerViewerCollisionMesh(mesh, "wall");
 
                 registerCommonShadowMesh(mesh, {
                     global: true,
@@ -12941,6 +13380,7 @@ export const createScene = function (engineArg, canvasArg) {
             });
 
             console.log("Wall loaded", wallMeshes);
+            refreshViewerCollisionMeshes();
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
@@ -12959,6 +13399,7 @@ export const createScene = function (engineArg, canvasArg) {
 
                 if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) {
                     propMeshes.push(mesh);
+                    registerViewerCollisionMesh(mesh, "prop");
                 }
 
                 registerCommonShadowMesh(mesh, {
@@ -12969,6 +13410,7 @@ export const createScene = function (engineArg, canvasArg) {
                 });
             });
 
+            refreshViewerCollisionMeshes();
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
@@ -13060,6 +13502,7 @@ export const createScene = function (engineArg, canvasArg) {
         pedestalMat.diffuseColor = new BABYLON.Color3(0.66, 0.66, 0.66);
         pedestalMat.specularColor = new BABYLON.Color3(0.08, 0.08, 0.08);
         pedestal.material = pedestalMat;
+        registerViewerCollisionMesh(pedestal, "pedestal");
         registerCommonShadowMesh(pedestal, {
             global: true,
             local: true,
@@ -13090,6 +13533,7 @@ export const createScene = function (engineArg, canvasArg) {
         sculptureMat.diffuseColor = new BABYLON.Color3(0.56, 0.56, 0.54);
         sculptureMat.specularColor = new BABYLON.Color3(0.12, 0.12, 0.10);
         sculpture.material = sculptureMat;
+        registerViewerCollisionMesh(sculpture, "sculpture");
         registerCommonShadowMesh(sculpture, {
             global: true,
             local: true,
@@ -13152,6 +13596,7 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.isDynamicArtwork = false;
         artwork.metadata.deletedArtwork = false;
         updateArtworkCreateCounterFromName(artwork.name);
+        registerViewerCollisionMesh(artwork, "artwork");
         // Obraz nie jest casterem cieni.
         // Wczesniej obraz jako lokalny/globalny caster zostawial prostokatny cien na scianie
         // i wymuszal drogie odswiezanie shadow map podczas przeciagania.
@@ -13307,6 +13752,8 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.metadata.deletedArtwork = false;
         artwork.metadata.createdAt = options.createdAt || new Date().toISOString();
 
+        registerViewerCollisionMesh(artwork, "artwork");
+
         registerCommonShadowMesh(artwork, {
             global: false,
             local: false,
@@ -13334,6 +13781,7 @@ export const createScene = function (engineArg, canvasArg) {
         artwork.isVisible = true;
         artwork.visibility = 1;
         artwork.isPickable = true;
+        registerViewerCollisionMesh(artwork, "artwork");
     }
 
     function getReferenceArtworkForAdd() {
@@ -13821,6 +14269,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         detachArtworkSelectionForDelete(artwork);
+        unregisterViewerCollisionMesh(artwork);
         disposeArtworkImageOnly(artwork);
 
         artworks = artworks.filter(function (candidate) {
@@ -15246,6 +15695,65 @@ export const createScene = function (engineArg, canvasArg) {
                 prefix: galleryArtworkStoragePrefix,
                 defaultFitMode: galleryArtworkDefaultFitMode
             };
+        },
+        getViewerCollisionDebug: function () {
+            refreshViewerCollisionMeshes();
+
+            return {
+                active: isViewerCollisionActive(),
+                cameraCheckCollisions: !!camera.checkCollisions,
+                sceneCollisionsEnabled: !!scene.collisionsEnabled,
+                ellipsoid: camera.ellipsoid ? serializeVector3(camera.ellipsoid) : null,
+                targets: Object.assign({}, viewerCollisionTargets),
+                wallRaycastBlockActive: isViewerWallBlockActive(),
+                wallBlockRadius: viewerWallBlockRadius,
+                wallRayExtraDistance: viewerWallRayExtraDistance,
+                wallVisualStopDistance: viewerWallVisualStopDistance,
+                cameraMinZ: camera.minZ,
+                wallLastSafeCameraPosition: viewerWallLastSafeCameraPosition
+                    ? serializeVector3(viewerWallLastSafeCameraPosition)
+                    : null,
+                wallMeshes: wallMeshes.length,
+                activeWallCollisionMeshes: getViewerWallCollisionMeshes().length,
+                propMeshes: propMeshes.length,
+                artworks: getActiveArtworks().length,
+                sculptures: artSpheres.length,
+                collisionMeshes: scene.meshes.filter(function (mesh) {
+                    return !!(mesh && mesh.checkCollisions);
+                }).map(function (mesh) {
+                    return {
+                        name: mesh.name,
+                        type: mesh.metadata && mesh.metadata.viewerCollisionType
+                            ? mesh.metadata.viewerCollisionType
+                            : ""
+                    };
+                })
+            };
+        },
+        setViewerCollisionTargets: function (targets) {
+            targets = targets || {};
+
+            Object.keys(viewerCollisionTargets).forEach(function (key) {
+                if (targets[key] !== undefined) {
+                    viewerCollisionTargets[key] = !!targets[key];
+                }
+            });
+
+            scene.meshes.forEach(function (mesh) {
+                if (
+                    mesh &&
+                    mesh.metadata &&
+                    mesh.metadata.viewerCollisionType
+                ) {
+                    unregisterViewerCollisionMesh(mesh);
+                }
+            });
+
+            refreshViewerCollisionMeshes();
+            updateViewerCollisionMode();
+            viewerWallLastSafeCameraPosition = camera.position.clone();
+
+            return this.getViewerCollisionDebug();
         }
     };
 
