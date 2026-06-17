@@ -436,16 +436,17 @@ The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
 
 
-## Stage 8T4 Direct Artwork Texture Fix
+## Stage 8T5 Dual Image Plane Fix
 
-Built from Stage 8T2, not from Stage 8T3.
+Built from Stage 8T2, not from Stage 8T3/T4.
 
 Fix:
-- rolls back the T3 camera-side imagePlane experiment,
-- applies artwork image texture directly to the artwork mesh material,
-- this removes the difference between base artworks and ADD ARTWORK dynamic artworks,
-- red placeholder cannot cover the image because it is replaced by the textured material,
-- keeps Stage 8T2 safe upload/load and author library.
+- restores the safe imagePlane-based rendering path,
+- adds a second image plane on the opposite local side of the artwork,
+- this avoids the dynamic ADD ARTWORK case where the red placeholder hides the image plane,
+- does not move planes based on camera,
+- does not apply the artwork texture directly to the box mesh,
+- image plane material is unlit/emissive so local light limits cannot darken it.
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
