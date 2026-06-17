@@ -483,3 +483,22 @@ Distances:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8W Mobile Popup Distance + Compact Override
+
+Built from Stage 8V.
+
+Fixes:
+- mobile popup activation distance increased again,
+- mobile popup is forced into a compact two-column layout,
+- author photo no longer grows into a huge card on mobile,
+- popup is moved above mobile controls,
+- desktop remains unchanged.
+
+Distances:
+- Desktop Viewer/Edit: 3.4 / 4.4
+- Mobile Viewer/Edit: 7.25 / 8.0
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.

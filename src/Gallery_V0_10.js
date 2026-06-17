@@ -4197,6 +4197,115 @@ export const createScene = function (engineArg, canvasArg) {
             background: rgba(255, 255, 255, 0.36);
         }
 
+        /* Stage 8W final mobile popup override.
+           This block is intentionally late to win over earlier mobile rules. */
+        @media (max-width: 768px), (pointer: coarse) {
+            .gallery-artwork-info-popup {
+                left: 50% !important;
+                bottom: 108px !important;
+                width: min(340px, calc(100% - 24px)) !important;
+                max-height: 30vh !important;
+                padding: 10px !important;
+                border-radius: 18px !important;
+                overflow: hidden !important;
+            }
+
+            .gallery-artwork-info-popup.is-visible {
+                transform: translateX(-50%) translateY(-4px) !important;
+            }
+
+            .gallery-artwork-info-popup-inner {
+                display: grid !important;
+                grid-template-columns: 76px minmax(0, 1fr) !important;
+                gap: 8px !important;
+                align-items: stretch !important;
+            }
+
+            .gallery-artwork-info-author-card {
+                width: auto !important;
+                max-width: none !important;
+                padding: 7px !important;
+                gap: 6px !important;
+                border-radius: 14px !important;
+            }
+
+            .gallery-artwork-info-details-card {
+                padding: 9px 10px !important;
+                border-radius: 14px !important;
+                justify-content: flex-start !important;
+                min-width: 0 !important;
+            }
+
+            .gallery-artwork-info-photo-frame {
+                width: 100% !important;
+                max-width: 62px !important;
+                height: 62px !important;
+                aspect-ratio: auto !important;
+                margin: 0 auto !important;
+                border-radius: 12px !important;
+            }
+
+            .gallery-artwork-info-author-photo-placeholder {
+                padding: 4px !important;
+                font-size: 9px !important;
+                line-height: 1.12 !important;
+            }
+
+            .gallery-artwork-info-author-name {
+                min-height: 14px !important;
+                font-size: 10px !important;
+                line-height: 1.15 !important;
+                font-weight: 700 !important;
+            }
+
+            .gallery-artwork-info-title {
+                font-size: 14px !important;
+                line-height: 1.14 !important;
+                margin: 0 !important;
+            }
+
+            .gallery-artwork-info-description {
+                margin-top: 5px !important;
+                font-size: 10px !important;
+                line-height: 1.25 !important;
+                max-height: 36px !important;
+                overflow: hidden !important;
+            }
+
+            .gallery-artwork-info-empty {
+                font-size: 10px !important;
+                line-height: 1.25 !important;
+            }
+        }
+
+        @media (max-width: 420px), (pointer: coarse) {
+            .gallery-artwork-info-popup {
+                bottom: 104px !important;
+                width: min(326px, calc(100% - 18px)) !important;
+                max-height: 28vh !important;
+                padding: 9px !important;
+            }
+
+            .gallery-artwork-info-popup-inner {
+                grid-template-columns: 70px minmax(0, 1fr) !important;
+                gap: 7px !important;
+            }
+
+            .gallery-artwork-info-photo-frame {
+                max-width: 56px !important;
+                height: 56px !important;
+            }
+
+            .gallery-artwork-info-title {
+                font-size: 13px !important;
+            }
+
+            .gallery-artwork-info-description {
+                max-height: 32px !important;
+            }
+        }
+
+
         @media (max-width: 768px) {
             .gallery-artwork-info-popup {
                 left: 50%;
@@ -13863,7 +13972,10 @@ export const createScene = function (engineArg, canvasArg) {
         // Na mobile kamera zwykle stoi dalej od obrazu i ma inne FOV/sterowanie,
         // więc popup musi aktywować się z większego dystansu niż na desktopie.
         if (getArtworkInfoPopupMobileMode()) {
-            return editMode ? 5.2 : 4.35;
+            // Stage 8W:
+            // Na mobile kliknięcie / podejście do obrazu zostawia kamerę dalej niż desktop.
+            // Popup ma pokazywać się już z dystansu podobnego do kadru po kliknięciu obrazu.
+            return editMode ? 8.0 : 7.25;
         }
 
         return editMode ? 4.4 : 3.4;
