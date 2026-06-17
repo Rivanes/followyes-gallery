@@ -4199,6 +4199,109 @@ export const createScene = function (engineArg, canvasArg) {
 
         @media (max-width: 768px) {
             .gallery-artwork-info-popup {
+                left: 50%;
+                bottom: 18px;
+                width: min(360px, calc(100% - 22px));
+                padding: 12px;
+                border-radius: 20px;
+                max-height: 42vh;
+                overflow: hidden;
+            }
+
+            .gallery-artwork-info-popup.is-visible {
+                transform: translateX(-50%) translateY(-4px);
+            }
+
+            .gallery-artwork-info-popup-inner {
+                grid-template-columns: 92px minmax(0, 1fr);
+                gap: 10px;
+                align-items: stretch;
+            }
+
+            .gallery-artwork-info-author-card,
+            .gallery-artwork-info-details-card {
+                border-radius: 16px;
+            }
+
+            .gallery-artwork-info-author-card {
+                padding: 9px;
+                gap: 8px;
+            }
+
+            .gallery-artwork-info-details-card {
+                padding: 11px 12px;
+            }
+
+            .gallery-artwork-info-photo-frame {
+                border-radius: 13px;
+            }
+
+            .gallery-artwork-info-author-photo-placeholder {
+                padding: 7px;
+                font-size: 11px;
+            }
+
+            .gallery-artwork-info-author-name {
+                min-height: 16px;
+                font-size: 12px;
+                line-height: 1.22;
+            }
+
+            .gallery-artwork-info-title {
+                font-size: 16px;
+                line-height: 1.16;
+            }
+
+            .gallery-artwork-info-description {
+                margin-top: 7px;
+                font-size: 12px;
+                line-height: 1.34;
+                max-height: 58px;
+            }
+
+            .gallery-artwork-info-empty {
+                font-size: 12px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            .gallery-artwork-info-popup {
+                bottom: 12px;
+                width: calc(100% - 16px);
+                padding: 10px;
+                border-radius: 18px;
+                max-height: 40vh;
+            }
+
+            .gallery-artwork-info-popup-inner {
+                grid-template-columns: 78px minmax(0, 1fr);
+                gap: 8px;
+            }
+
+            .gallery-artwork-info-author-card {
+                padding: 8px;
+            }
+
+            .gallery-artwork-info-details-card {
+                padding: 10px;
+            }
+
+            .gallery-artwork-info-title {
+                font-size: 15px;
+            }
+
+            .gallery-artwork-info-description {
+                max-height: 48px;
+                font-size: 11px;
+            }
+
+            .gallery-artwork-info-author-name {
+                font-size: 11px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .gallery-artwork-info-popup {
                 width: min(420px, calc(100% - 24px));
                 padding: 14px;
                 border-radius: 22px;
@@ -13745,7 +13848,24 @@ export const createScene = function (engineArg, canvasArg) {
         );
     }
 
+    function getArtworkInfoPopupMobileMode() {
+        if (typeof window === "undefined") {
+            return false;
+        }
+
+        return window.matchMedia
+            ? window.matchMedia("(max-width: 768px), (pointer: coarse)").matches
+            : window.innerWidth <= 768;
+    }
+
     function getArtworkPopupDistance() {
+        // Stage 8V:
+        // Na mobile kamera zwykle stoi dalej od obrazu i ma inne FOV/sterowanie,
+        // więc popup musi aktywować się z większego dystansu niż na desktopie.
+        if (getArtworkInfoPopupMobileMode()) {
+            return editMode ? 5.2 : 4.35;
+        }
+
         return editMode ? 4.4 : 3.4;
     }
 
@@ -13858,6 +13978,13 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function updateArtworkInfoPopup() {
+        if (artworkInfoPopup) {
+            artworkInfoPopup.classList.toggle(
+                "is-mobile-popup",
+                getArtworkInfoPopupMobileMode()
+            );
+        }
+
         var artwork = getNearestArtworkForInfoPopup();
 
         if (!artwork) {

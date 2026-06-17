@@ -463,3 +463,23 @@ Fix:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8V Mobile Popup Distance + UI Fix
+
+Built from working Stage 8U1.
+
+Changes:
+- mobile popup has a larger activation distance,
+- mobile popup is smaller and more compact,
+- desktop popup behavior remains unchanged,
+- keeps Stage 8U1 material isDisposed fix,
+- keeps author library / FIND AUTHOR / shared author photo,
+- keeps Q9 popup DOM cleanup and Q5 popup behavior.
+
+Distances:
+- Desktop Viewer/Edit: 3.4 / 4.4
+- Mobile Viewer/Edit: 4.35 / 5.2
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
