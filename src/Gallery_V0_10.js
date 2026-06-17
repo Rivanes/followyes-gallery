@@ -1778,10 +1778,32 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
+    function isBabylonMaterialDisposedSafe(material) {
+        if (!material) {
+            return true;
+        }
+
+        if (typeof material.isDisposed === "function") {
+            return material.isDisposed();
+        }
+
+        if (typeof material.isDisposed === "boolean") {
+            return material.isDisposed;
+        }
+
+        if (typeof material._isDisposed === "boolean") {
+            return material._isDisposed;
+        }
+
+        // W tej wersji Babylon Material może nie mieć isDisposed().
+        // Jeśli obiekt istnieje i nie ma jawnej flagi disposed, traktujemy go jako aktywny.
+        return false;
+    }
+
     function getArtworkImageBaseMaterial() {
         if (
             galleryArtworkImageBaseMaterial &&
-            !galleryArtworkImageBaseMaterial.isDisposed()
+            !isBabylonMaterialDisposedSafe(galleryArtworkImageBaseMaterial)
         ) {
             return galleryArtworkImageBaseMaterial;
         }

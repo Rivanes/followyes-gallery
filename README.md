@@ -448,3 +448,18 @@ Fix:
 - keeps author library and safe load/upload from 8T2.
 
 The engine TXT has login disabled. The GitHub ZIP has login enabled.
+
+
+## Stage 8U1 Material isDisposed Fix
+
+Built from Stage 8U if available.
+
+Fix:
+- replaces unsafe `galleryArtworkImageBaseMaterial.isDisposed()` usage,
+- adds `isBabylonMaterialDisposedSafe(material)`,
+- material objects without `isDisposed()` no longer break artwork image apply,
+- fixes the console error:
+  `TypeError: galleryArtworkImageBaseMaterial.isDisposed is not a function`.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
