@@ -434,3 +434,20 @@ Fix:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8T3 Dynamic Artwork Image Plane Fix
+
+Built from Stage 8T2.
+
+Fix:
+- dynamic artworks created by ADD ARTWORK use the same upload state as base artworks,
+  but their image plane could end up on the wrong local side of the box,
+  leaving the red placeholder visible.
+- image planes are now positioned on the side closer to the camera.
+- artwork image plane material is unlit/emissive so it is not affected by local light limits.
+- base artwork material is forced to white when an image state is applied.
+- added GalleryApp.reapplyArtworkImage(nameOrIndex) helper.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.

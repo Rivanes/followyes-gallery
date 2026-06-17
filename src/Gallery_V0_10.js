@@ -1335,6 +1335,61 @@ export const createScene = function (engineArg, canvasArg) {
         return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
     }
 
+    function getArtworkImagePlaneVisibleSideSign(artwork) {
+        if (!artwork || !camera) {
+            return 1;
+        }
+
+        try {
+            artwork.computeWorldMatrix(true);
+
+            var cameraPosition = camera.globalPosition || camera.position;
+
+            if (!cameraPosition) {
+                return 1;
+            }
+
+            var matrix = artwork.getWorldMatrix();
+            var positivePoint = BABYLON.Vector3.TransformCoordinates(
+                new BABYLON.Vector3(0, 0, artworkDepth * 0.8),
+                matrix
+            );
+            var negativePoint = BABYLON.Vector3.TransformCoordinates(
+                new BABYLON.Vector3(0, 0, -artworkDepth * 0.8),
+                matrix
+            );
+
+            var positiveDistance = BABYLON.Vector3.Distance(cameraPosition, positivePoint);
+            var negativeDistance = BABYLON.Vector3.Distance(cameraPosition, negativePoint);
+
+            return positiveDistance <= negativeDistance ? 1 : -1;
+        } catch (error) {
+            console.warn("Artwork image plane side warning:", error);
+            return 1;
+        }
+    }
+
+    function positionArtworkImagePlaneOnVisibleSide(artwork, imagePlane) {
+        if (!artwork || !imagePlane) {
+            return;
+        }
+
+        var visibleSideSign = getArtworkImagePlaneVisibleSideSign(artwork);
+
+        imagePlane.position.z = visibleSideSign * artworkDepth * 0.82;
+        imagePlane.rotation = BABYLON.Vector3.Zero();
+
+        // Image plane ma być zawsze lekko przed placeholderem z punktu widzenia użytkownika.
+        imagePlane.renderingGroupId = 1;
+        imagePlane.alwaysSelectAsActiveMesh = true;
+
+        try {
+            imagePlane.computeWorldMatrix(true);
+        } catch (error) {
+            console.warn("Artwork image plane compute warning:", error);
+        }
+    }
+
     function getArtworkImagePlane(artwork) {
         if (!artwork) {
             return null;
@@ -1346,6 +1401,7 @@ export const createScene = function (engineArg, canvasArg) {
             artwork.metadata.imagePlane &&
             !artwork.metadata.imagePlane.isDisposed()
         ) {
+            positionArtworkImagePlaneOnVisibleSide(artwork, artwork.metadata.imagePlane);
             return artwork.metadata.imagePlane;
         }
 
@@ -1366,6 +1422,7 @@ export const createScene = function (engineArg, canvasArg) {
         imagePlane.metadata.isArtworkImagePlane = true;
 
         artwork.metadata.imagePlane = imagePlane;
+        positionArtworkImagePlaneOnVisibleSide(artwork, imagePlane);
 
         return imagePlane;
     }
@@ -1888,7 +1945,14 @@ export const createScene = function (engineArg, canvasArg) {
             setArtworkTransformState(artwork, normalizedState.transform);
         }
 
+        // Stage 8T3:
+        // Dynamiczne obrazy z ADD ARTWORK potrafily miec image plane po zlej stronie mesha
+        // albo placeholder dalej przykrywal teksture. Wymuszamy bialy base material i ustawiamy
+        // image plane po stronie widocznej dla kamery.
+        applyArtworkImageBaseMaterial(artwork);
+
         var imagePlane = getArtworkImagePlane(artwork);
+        positionArtworkImagePlaneOnVisibleSide(artwork, imagePlane);
         disposeArtworkImageMaterial(artwork);
 
         var imageMaterial = new BABYLON.StandardMaterial(
@@ -1897,10 +1961,10 @@ export const createScene = function (engineArg, canvasArg) {
         );
 
         imageMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
-        imageMaterial.emissiveColor = new BABYLON.Color3(0.16, 0.16, 0.16);
+        imageMaterial.emissiveColor = new BABYLON.Color3(1, 1, 1);
         imageMaterial.specularColor = new BABYLON.Color3(0.03, 0.03, 0.03);
         imageMaterial.backFaceCulling = false;
-        imageMaterial.disableLighting = false;
+        imageMaterial.disableLighting = true;
 
         var texture = new BABYLON.Texture(
             imageUrl,
@@ -1915,6 +1979,7 @@ export const createScene = function (engineArg, canvasArg) {
                     normalizedState.fitMode || galleryArtworkDefaultFitMode
                 );
 
+                positionArtworkImagePlaneOnVisibleSide(artwork, imagePlane);
                 artwork.computeWorldMatrix(true);
                 updateArtworkLight(artwork);
                 updateArtworkImageUi();
@@ -1931,8 +1996,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         imageMaterial.diffuseTexture = texture;
         imageMaterial.emissiveTexture = texture;
-
-        configureMaterialForCommonLighting(imageMaterial);
 
         imagePlane.material = imageMaterial;
         imagePlane.setEnabled(true);
@@ -1999,6 +2062,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         try {
             applyArtworkImageBaseMaterial(artwork);
+            var fallbackPlane = getArtworkImagePlane(artwork);
+            positionArtworkImagePlaneOnVisibleSide(artwork, fallbackPlane);
         } catch (baseMaterialError) {
             console.warn("Artwork image base material fallback warning:", baseMaterialError);
         }
@@ -14882,6 +14947,23 @@ export const createScene = function (engineArg, canvasArg) {
                 : getArtworkByName(artworkNameOrIndex);
 
             return getArtworkImageState(artwork);
+        },
+        reapplyArtworkImage: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            var imageState = getArtworkImageState(artwork);
+
+            if (!artwork || !imageState) {
+                return false;
+            }
+
+            return applyArtworkImageStateSafely(
+                artwork,
+                imageState,
+                "GalleryApp.reapplyArtworkImage"
+            );
         },
         getArtworkInfo: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
