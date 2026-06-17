@@ -502,3 +502,36 @@ Distances:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8X1 Mobile Popup Safe Fix
+
+Built from Stage 8W.
+
+This replaces the broken Stage 8X.
+
+Fix:
+- removes the raw CSS problem from Stage 8X,
+- mobile distance is equal in Viewer/Edit: 7.75,
+- mobile popup is moved higher: 156px / 150px,
+- mobile popup max-height reduced,
+- no CSS is appended after `return scene;`.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
+
+
+## Stage 8Y Popup Distance + Width Fix
+
+Built from Stage 8X1.
+
+Changes:
+- mobile popup distance reduced so the popup appears slightly later,
+- mobile distance is still identical in Viewer/Edit: 6.65,
+- desktop popup distance is identical in Viewer/Edit: 3.9,
+- desktop popup is wider: 640px max,
+- mobile compact popup layout remains,
+- upload/image/author systems are untouched.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
