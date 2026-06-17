@@ -2047,7 +2047,7 @@ export const createScene = function (engineArg, canvasArg) {
                 ? publicUrlResponse.data.publicUrl
                 : "";
 
-        applyArtworkImageState(artwork, {
+        var uploadedImageState = {
             imagePath: storagePath,
             imageUrl: publicUrl,
             storageBucket: galleryArtworkStorageBucket,
@@ -2056,7 +2056,23 @@ export const createScene = function (engineArg, canvasArg) {
             mimeType: file.type || null,
             fitMode: galleryArtworkDefaultFitMode,
             uploadedAt: new Date().toISOString()
-        });
+        };
+
+        applyArtworkImageState(artwork, uploadedImageState);
+
+        // Stage 8T1:
+        // Supabase Storage potrafi zwrocic public URL zanim plik jest gotowy dla texture loadera.
+        // Drugi lekko opozniony apply nie zmienia state, tylko ponawia zaladowanie tekstury.
+        setTimeout(function () {
+            if (
+                artwork &&
+                artwork.metadata &&
+                artwork.metadata.artworkImage &&
+                artwork.metadata.artworkImage.imagePath === storagePath
+            ) {
+                applyArtworkImageState(artwork, uploadedImageState);
+            }
+        }, 850);
 
         var previousDeleteState = getArtworkStorageDeleteState(previousImageState);
 
@@ -14249,13 +14265,18 @@ export const createScene = function (engineArg, canvasArg) {
             });
         }
 
-        artworkAuthors = Array.isArray(editorState.authors)
-            ? editorState.authors.map(function (author) {
-                return normalizeAuthorRecord(author);
-            }).filter(function (author) {
-                return !!(author && author.id);
-            })
-            : [];
+        try {
+            artworkAuthors = Array.isArray(editorState.authors)
+                ? editorState.authors.map(function (author) {
+                    return normalizeAuthorRecord(author);
+                }).filter(function (author) {
+                    return !!(author && author.id);
+                })
+                : [];
+        } catch (authorLoadError) {
+            console.warn("Author library load warning:", authorLoadError);
+            artworkAuthors = [];
+        }
 
         if (Array.isArray(editorState.artworks)) {
             applyDeletedArtworkNamesFromState(editorState);
@@ -14314,11 +14335,15 @@ export const createScene = function (engineArg, canvasArg) {
                     artworkState.info || artworkState.artworkInfo || null
                 );
 
-                var restoredInfo = getArtworkInfoState(artwork);
-                var restoredAuthor = getAuthorById(restoredInfo.authorId) || getAuthorByName(restoredInfo.authorName);
+                try {
+                    var restoredInfo = getArtworkInfoState(artwork);
+                    var restoredAuthor = getAuthorById(restoredInfo.authorId) || getAuthorByName(restoredInfo.authorName);
 
-                if (restoredAuthor) {
-                    syncArtworkInfoWithAuthor(artwork, restoredAuthor);
+                    if (restoredAuthor) {
+                        syncArtworkInfoWithAuthor(artwork, restoredAuthor);
+                    }
+                } catch (artworkAuthorRestoreError) {
+                    console.warn("Artwork author restore warning:", artworkAuthorRestoreError);
                 }
 
                 var savedArtworkTransform = null;
@@ -14342,14 +14367,18 @@ export const createScene = function (engineArg, canvasArg) {
                 );
 
                 if (hasArtworkImageState) {
-                    applyArtworkImageState(
-                        artwork,
-                        artworkState.image || artworkState.artworkImage || {
-                            imageUrl: artworkState.imageUrl || "",
-                            imagePath: artworkState.imagePath || "",
-                            fitMode: artworkState.fitMode || galleryArtworkDefaultFitMode
-                        }
-                    );
+                    try {
+                        applyArtworkImageState(
+                            artwork,
+                            artworkState.image || artworkState.artworkImage || {
+                                imageUrl: artworkState.imageUrl || "",
+                                imagePath: artworkState.imagePath || "",
+                                fitMode: artworkState.fitMode || galleryArtworkDefaultFitMode
+                            }
+                        );
+                    } catch (artworkImageApplyError) {
+                        console.warn("Artwork image apply warning:", artworkImageApplyError, artworkState);
+                    }
                 } else {
                     // Stage 8P:
                     // Placeholder bez tekstury też jest pełnoprawnym artworkiem.
@@ -14512,6 +14541,81 @@ export const createScene = function (engineArg, canvasArg) {
         updateLocalLightsUi();
     }
 
+    function cloneStateWithoutAuthorLibrary(state) {
+        var clone = null;
+
+        try {
+            clone = JSON.parse(JSON.stringify(state || {}));
+        } catch (error) {
+            console.warn("State clone warning:", error);
+            return null;
+        }
+
+        var editorState = clone && clone.editor ? clone.editor : clone;
+
+        if (editorState && typeof editorState === "object") {
+            editorState.authors = [];
+
+            if (Array.isArray(editorState.artworks)) {
+                editorState.artworks.forEach(function (artworkState) {
+                    if (
+                        artworkState &&
+                        artworkState.info &&
+                        typeof artworkState.info === "object"
+                    ) {
+                        artworkState.info.authorId = "";
+                    }
+
+                    if (
+                        artworkState &&
+                        artworkState.artworkInfo &&
+                        typeof artworkState.artworkInfo === "object"
+                    ) {
+                        artworkState.artworkInfo.authorId = "";
+                    }
+                });
+            }
+        }
+
+        return clone;
+    }
+
+    function tryApplyGalleryStateSafely(state) {
+        try {
+            applyGalleryState(state);
+            return {
+                ok: true,
+                usedFallback: false
+            };
+        } catch (error) {
+            console.warn("Saved gallery state apply failed:", error);
+        }
+
+        var fallbackState = cloneStateWithoutAuthorLibrary(state);
+
+        if (!fallbackState) {
+            return {
+                ok: false,
+                usedFallback: false
+            };
+        }
+
+        try {
+            artworkAuthors = [];
+            applyGalleryState(fallbackState);
+            return {
+                ok: true,
+                usedFallback: true
+            };
+        } catch (fallbackError) {
+            console.warn("Saved gallery state fallback apply failed:", fallbackError);
+            return {
+                ok: false,
+                usedFallback: true
+            };
+        }
+    }
+
     async function loadGalleryStateFromSupabase() {
         var client = window.gallerySupabase;
 
@@ -14556,8 +14660,19 @@ export const createScene = function (engineArg, canvasArg) {
             row.state &&
             Object.keys(row.state).length > 0
         ) {
-            applyGalleryState(row.state);
-            notifyGalleryStatus("Wczytano zapisany stan galerii. Lampy: " + getStateLightCount(row.state) + ".");
+            var applyResult = tryApplyGalleryStateSafely(row.state);
+
+            if (!applyResult.ok) {
+                notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu galerii.");
+                return false;
+            }
+
+            if (applyResult.usedFallback) {
+                notifyGalleryStatus("Wczytano stan galerii bez biblioteki autorow. Sprawdz ARTWORK INFO i zapisz ponownie.");
+            } else {
+                notifyGalleryStatus("Wczytano zapisany stan galerii. Lampy: " + getStateLightCount(row.state) + ".");
+            }
+
             return true;
         }
 

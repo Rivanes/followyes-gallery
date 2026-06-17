@@ -403,3 +403,18 @@ UI:
 
 The engine TXT has login disabled.
 The GitHub ZIP has login enabled.
+
+
+## Stage 8T1 Author Library Safe Load Fix
+
+Built from Stage 8T.
+
+Fixes:
+- saved state load is guarded against author-library errors,
+- if author library breaks loading, state is retried without `editor.authors` and `authorId` links,
+- per-artwork image apply errors no longer break the whole saved state load,
+- per-artwork author restore errors no longer break the whole saved state load,
+- artwork image upload gets a delayed second texture apply to handle Supabase public URL propagation delay.
+
+The engine TXT has login disabled.
+The GitHub ZIP has login enabled.
