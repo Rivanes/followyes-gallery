@@ -709,3 +709,68 @@ Brand update:
 
 This is a naming/branding-only release based on V0_11.
 No artwork upload, collision, popup, author library, lighting, or Supabase logic was changed.
+
+
+## V0_11 Roadmap Update
+
+Updated the roadmap section in `index.html` to match the accepted V0_10 → V0_11 project state.
+
+Updated sections:
+- TESTOWANE
+- KOLEJNE KROKI
+- POMYSŁY
+
+No engine logic was changed.
+
+
+## V0_11 Wall Segments Model Update
+
+Updated wall model import:
+- `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Wall_segments.glb`
+
+The wall model is now loaded from the new Berryboy Art Gallery assets repository.
+No engine logic was changed except the wall model URL/filename.
+
+
+## V0_11 Assets Update - No Floor
+
+Updated model imports from the new Berryboy Art Gallery assets repository, except Floor.
+
+Updated:
+- `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Wall_segments.glb`
+- `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Ceiling.glb`
+- `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Props.glb`
+
+Not changed:
+- Floor import stays exactly as it was in the uploaded package.
+
+Reason:
+- Floor.gltf/Floor.bin external texture setup is still being prepared and should not be touched in this package.
+
+
+## V0_11 Assets Update - Floor Folder
+
+Floor model is now loaded from:
+
+- `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Floor/Floor.gltf`
+
+Expected folder structure in the assets repository:
+
+```txt
+Models/
+  Floor/
+    Floor.gltf
+    Floor.bin
+    Concrete_basecolor.png
+    Concrete_normal.png
+    ...
+```
+
+Because `Floor.gltf`, `Floor.bin`, and floor textures are in the same folder, texture and buffer URIs inside `Floor.gltf` should be simple local filenames, for example:
+
+```json
+"uri": "Floor.bin"
+"uri": "Concrete_basecolor.png"
+```
+
+No gallery logic was changed except the Floor model URL.

@@ -3118,7 +3118,7 @@ function assetLoaded() {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/Floor/",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Floor/",
         "Floor.gltf",
         scene,
         function (meshes) {
@@ -3135,8 +3135,8 @@ function assetLoaded() {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/",
-        "wall.gltf",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
+        "Wall_segments.glb",
         scene,
         function (meshes) {
 
@@ -3154,8 +3154,8 @@ function assetLoaded() {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/",
-        "Went.gltf",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
+        "Props.glb",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
@@ -3168,8 +3168,8 @@ function assetLoaded() {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/",
-        "Roof.gltf",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
+        "Ceiling.glb",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
