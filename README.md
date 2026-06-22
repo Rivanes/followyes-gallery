@@ -1089,3 +1089,62 @@ GalleryApp.setLocalLightCameraCulling({
   maxTargetMeshSamples: 10
 })
 ```
+
+
+## V0_11 Stage 10H Wall Segment Alignment Group
+
+Fix:
+- alignment/bounds logic no longer treats a single `Wall_segment_0xx` as the whole wall.
+- when the current wall mesh is a wall segment, alignment uses all `Wall_segment_...` meshes on the same wall plane as one logical wall group.
+
+Affected logic:
+- Center horizontally on wall
+- Center vertically on wall
+- clamp to wall horizontal bounds
+- clamp to wall vertical bounds
+
+Not changed:
+- wall painting still works per individual segment.
+- local light targeting still works per individual segment.
+- Stage 10G beam-aware culling remains full camera view.
+- Stage 10E9 zero-touch delete remains unchanged.
+
+Debug:
+```js
+GalleryApp.getWallSegmentAlignmentGroupDebug()
+```
+
+
+## V0_11 Stage 10I Wall Segment Drag Group
+
+Fix:
+- dragging artwork on a segmented wall no longer clamps to the single picked `Wall_segment_0xx`.
+- `placeArtworkOnWall()` / drag clamp uses the Stage 10H wall segment alignment group bounds.
+- this treats all `Wall_segment_...` meshes on the same wall plane as one logical wall for dragging.
+
+Not changed:
+- painting remains per segment.
+- light targeting remains per segment.
+- Stage 10G full beam-aware culling remains.
+- Stage 10E9 zero-touch delete remains.
+
+
+## V0_11 Stage 10J Wall Segment Corner Guard
+
+Fix:
+- Stage 10H/10I grouped wall segments for alignment and dragging, but this could allow artwork to cross real wall corners.
+- Stage 10J keeps segment grouping, but only inside one continuous wall interval.
+
+Rule:
+- small seams between Wall_segment meshes are merged,
+- large gaps / corners / separate same-plane walls are not merged,
+- dragging and centering use the interval containing the picked point / artwork position.
+
+Important:
+- still does not clamp to every single segment.
+- only real breaks/corners stop the artwork.
+
+Debug:
+```js
+GalleryApp.getWallSegmentAlignmentGroupDebug()
+```

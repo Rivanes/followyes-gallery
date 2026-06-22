@@ -12858,10 +12858,282 @@ export const createScene = function (engineArg, canvasArg) {
         return 0;
     }
 
+    // STAGE 10H - WALL SEGMENT ALIGNMENT GROUP
+    // Po segmentacji ścian system wyrównywania nie może traktować pojedynczego
+    // Wall_segment_0xx jako całej ściany. Do bounds/center używamy grupy segmentów
+    // leżących na tej samej płaszczyźnie ściany.
+    var wallSegmentAlignmentGroupEnabled = true;
+    var wallSegmentAlignmentPlaneTolerance = 0.75;
+
+    // STAGE 10J - WALL SEGMENT CORNER GUARD
+    // Segmenty na jednej płaszczyźnie są traktowane jak jedna ściana,
+    // ale tylko w obrębie ciągłego odcinka. Narożniki / przerwy / końce ścian
+    // mają nadal blokować przesuwanie obrazu.
+    var wallSegmentAlignmentCornerGuardEnabled = true;
+    var wallSegmentAlignmentIntervalMergeTolerance = 0.22;
+
+    function isAlignmentWallSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Wall_segment_") === 0
+        );
+    }
+
+    function getWallSegmentMeshBounds(mesh) {
+        if (!mesh || !mesh.getBoundingInfo) {
+            return null;
+        }
+
+        mesh.computeWorldMatrix(true);
+
+        var box = mesh.getBoundingInfo().boundingBox;
+
+        return {
+            minX: Math.min(box.minimumWorld.x, box.maximumWorld.x),
+            maxX: Math.max(box.minimumWorld.x, box.maximumWorld.x),
+            minY: Math.min(box.minimumWorld.y, box.maximumWorld.y),
+            maxY: Math.max(box.minimumWorld.y, box.maximumWorld.y),
+            minZ: Math.min(box.minimumWorld.z, box.maximumWorld.z),
+            maxZ: Math.max(box.minimumWorld.z, box.maximumWorld.z)
+        };
+    }
+
+    function getWallSegmentApproxPlaneValue(mesh, wallAxis) {
+        var bounds = getWallSegmentMeshBounds(mesh);
+
+        if (!bounds) {
+            return null;
+        }
+
+        if (wallAxis === "x") {
+            return (bounds.minX + bounds.maxX) / 2;
+        }
+
+        if (wallAxis === "z") {
+            return (bounds.minZ + bounds.maxZ) / 2;
+        }
+
+        return null;
+    }
+
+    function mergeWallSegmentAlignmentIntervals(intervals) {
+        if (!intervals.length) {
+            return [];
+        }
+
+        intervals.sort(function (a, b) {
+            return a.min - b.min;
+        });
+
+        var merged = [];
+
+        intervals.forEach(function (interval) {
+            if (!merged.length) {
+                merged.push({
+                    min: interval.min,
+                    max: interval.max,
+                    minY: interval.minY,
+                    maxY: interval.maxY,
+                    segmentNames: interval.segmentNames.slice()
+                });
+                return;
+            }
+
+            var last = merged[merged.length - 1];
+
+            if (
+                !wallSegmentAlignmentCornerGuardEnabled ||
+                interval.min <= last.max + wallSegmentAlignmentIntervalMergeTolerance
+            ) {
+                last.max = Math.max(last.max, interval.max);
+                last.minY = Math.min(last.minY, interval.minY);
+                last.maxY = Math.max(last.maxY, interval.maxY);
+                last.segmentNames = last.segmentNames.concat(interval.segmentNames);
+            } else {
+                merged.push({
+                    min: interval.min,
+                    max: interval.max,
+                    minY: interval.minY,
+                    maxY: interval.maxY,
+                    segmentNames: interval.segmentNames.slice()
+                });
+            }
+        });
+
+        return merged;
+    }
+
+    function chooseWallSegmentAlignmentInterval(intervals, referenceValue) {
+        if (!intervals.length) {
+            return null;
+        }
+
+        if (referenceValue !== undefined && referenceValue !== null && isFinite(referenceValue)) {
+            for (var i = 0; i < intervals.length; i++) {
+                if (
+                    referenceValue >= intervals[i].min - wallSegmentAlignmentIntervalMergeTolerance &&
+                    referenceValue <= intervals[i].max + wallSegmentAlignmentIntervalMergeTolerance
+                ) {
+                    return intervals[i];
+                }
+            }
+
+            var nearest = intervals[0];
+            var nearestDistance = Number.POSITIVE_INFINITY;
+
+            intervals.forEach(function (interval) {
+                var center = (interval.min + interval.max) / 2;
+                var distance = Math.abs(center - referenceValue);
+
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearest = interval;
+                }
+            });
+
+            return nearest;
+        }
+
+        var largest = intervals[0];
+        var largestSize = largest.max - largest.min;
+
+        intervals.forEach(function (interval) {
+            var size = interval.max - interval.min;
+
+            if (size > largestSize) {
+                largestSize = size;
+                largest = interval;
+            }
+        });
+
+        return largest;
+    }
+
+    function getWallSegmentAlignmentGroupBounds(referenceWallMesh, wallAxis, wallValue, horizontalAxis, referenceValue) {
+        if (!wallSegmentAlignmentGroupEnabled || !isAlignmentWallSegmentMesh(referenceWallMesh)) {
+            return null;
+        }
+
+        if (!wallAxis && horizontalAxis) {
+            wallAxis = getWallAxisFromHorizontalAxis(horizontalAxis);
+        }
+
+        if (!wallAxis) {
+            var referenceBounds = getWallSegmentMeshBounds(referenceWallMesh);
+
+            if (!referenceBounds) {
+                return null;
+            }
+
+            var sizeX = Math.abs(referenceBounds.maxX - referenceBounds.minX);
+            var sizeZ = Math.abs(referenceBounds.maxZ - referenceBounds.minZ);
+            wallAxis = sizeX <= sizeZ ? "x" : "z";
+        }
+
+        if (wallValue === undefined || wallValue === null || !isFinite(wallValue)) {
+            wallValue = getWallSegmentApproxPlaneValue(referenceWallMesh, wallAxis);
+        }
+
+        if (wallValue === null) {
+            return null;
+        }
+
+        var intervals = [];
+
+        wallMeshes.forEach(function (mesh) {
+            if (!isAlignmentWallSegmentMesh(mesh)) {
+                return;
+            }
+
+            var meshPlaneValue = getWallSegmentApproxPlaneValue(mesh, wallAxis);
+
+            if (meshPlaneValue === null) {
+                return;
+            }
+
+            if (Math.abs(meshPlaneValue - wallValue) > wallSegmentAlignmentPlaneTolerance) {
+                return;
+            }
+
+            var bounds = getWallSegmentMeshBounds(mesh);
+
+            if (!bounds) {
+                return;
+            }
+
+            var minHorizontal;
+            var maxHorizontal;
+
+            if (horizontalAxis === "x") {
+                minHorizontal = bounds.minX;
+                maxHorizontal = bounds.maxX;
+            } else if (horizontalAxis === "z") {
+                minHorizontal = bounds.minZ;
+                maxHorizontal = bounds.maxZ;
+            } else {
+                return;
+            }
+
+            intervals.push({
+                min: minHorizontal,
+                max: maxHorizontal,
+                minY: bounds.minY,
+                maxY: bounds.maxY,
+                segmentNames: [mesh.name]
+            });
+        });
+
+        if (!intervals.length) {
+            return null;
+        }
+
+        var mergedIntervals = mergeWallSegmentAlignmentIntervals(intervals);
+        var selectedInterval = chooseWallSegmentAlignmentInterval(
+            mergedIntervals,
+            referenceValue
+        );
+
+        if (!selectedInterval) {
+            return null;
+        }
+
+        return {
+            min: selectedInterval.min,
+            max: selectedInterval.max,
+            minY: selectedInterval.minY,
+            maxY: selectedInterval.maxY,
+            wallAxis: wallAxis,
+            wallValue: wallValue,
+            horizontalAxis: horizontalAxis,
+            segmentCount: selectedInterval.segmentNames.length,
+            segmentNames: selectedInterval.segmentNames.slice(),
+            intervalCount: mergedIntervals.length,
+            selectedIntervalIndex: mergedIntervals.indexOf(selectedInterval),
+            referenceValue: referenceValue,
+            cornerGuardEnabled: wallSegmentAlignmentCornerGuardEnabled,
+            mergeTolerance: wallSegmentAlignmentIntervalMergeTolerance
+        };
+    }
+
     function getWallVerticalLimits(wallMesh) {
 
         if (!wallMesh) {
             return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            null,
+            null,
+            "x"
+        );
+
+        if (groupedBounds) {
+            return {
+                minY: groupedBounds.minY,
+                maxY: groupedBounds.maxY
+            };
         }
 
         wallMesh.computeWorldMatrix(true);
@@ -12902,6 +13174,21 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (!wallMesh) {
             return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            getWallAxisFromHorizontalAxis(horizontalAxis),
+            null,
+            horizontalAxis,
+            null
+        );
+
+        if (groupedBounds) {
+            return {
+                min: groupedBounds.min,
+                max: groupedBounds.max
+            };
         }
 
         wallMesh.computeWorldMatrix(true);
@@ -13277,6 +13564,18 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function getImprovedWallHorizontalLimits(wallMesh, horizontalAxis, wallAxis, wallValue, referenceValue) {
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            wallAxis,
+            wallValue,
+            horizontalAxis,
+            referenceValue
+        );
+
+        if (groupedBounds) {
+            return groupedBounds;
+        }
 
         return getWallSegmentBoundsFromGeometry(
             wallMesh,
@@ -13767,6 +14066,26 @@ export const createScene = function (engineArg, canvasArg) {
         var wallMesh = getWallMeshForArtwork(artwork);
 
         if (!wallMesh) {
+            return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            wallData.wallAxis,
+            wallData.wallValue,
+            wallData.horizontalAxis,
+            artwork.position[wallData.horizontalAxis]
+        );
+
+        if (groupedBounds) {
+            if (axisMode === "horizontal") {
+                return (groupedBounds.min + groupedBounds.max) / 2;
+            }
+
+            if (axisMode === "vertical") {
+                return (groupedBounds.minY + groupedBounds.maxY) / 2;
+            }
+
             return null;
         }
 
@@ -14513,6 +14832,10 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
 
+    // STAGE 10I - WALL SEGMENT DRAG GROUP
+    // Drag obrazu po ścianie też nie może traktować pojedynczego Wall_segment_0xx
+    // jako całej dostępnej ściany. Przy przesuwaniu używamy tej samej grupy
+    // segmentów co przy wyrównywaniu Stage 10H.
     function getPickedWallSegmentBounds(pickWall, normal, horizontalAxis) {
 
         if (!pickWall || !pickWall.pickedMesh || !pickWall.pickedPoint) {
@@ -14523,13 +14846,34 @@ export const createScene = function (engineArg, canvasArg) {
             horizontalAxis
         );
 
-        return getWallSegmentBoundsFromGeometry(
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
             pickWall.pickedMesh,
             wallAxis,
             pickWall.pickedPoint[wallAxis],
             horizontalAxis,
             pickWall.pickedPoint[horizontalAxis]
         );
+
+        if (groupedBounds) {
+            groupedBounds.source = "wallSegmentAlignmentGroup";
+            groupedBounds.pickedMeshName = pickWall.pickedMesh.name;
+            return groupedBounds;
+        }
+
+        var geometryBounds = getWallSegmentBoundsFromGeometry(
+            pickWall.pickedMesh,
+            wallAxis,
+            pickWall.pickedPoint[wallAxis],
+            horizontalAxis,
+            pickWall.pickedPoint[horizontalAxis]
+        );
+
+        if (geometryBounds) {
+            geometryBounds.source = "singleMeshGeometry";
+            geometryBounds.pickedMeshName = pickWall.pickedMesh.name;
+        }
+
+        return geometryBounds;
     }
 
     function clampArtworkToPickedWallSegment(artwork, candidatePosition, pickWall, normal, horizontalAxis, targetRotation) {
@@ -14711,6 +15055,13 @@ export const createScene = function (engineArg, canvasArg) {
             candidateWallAxis,
             candidateWallValue,
             candidateHorizontalAxis
+        );
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.wallSegmentDragGroupEnabled = !!(
+            pickWall &&
+            pickWall.pickedMesh &&
+            isAlignmentWallSegmentMesh(pickWall.pickedMesh)
         );
 
         updateArtworkLight(artwork);
@@ -17282,6 +17633,50 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getWallSegmentPaintDebug: function () {
             return getWallSegmentPaintDebug();
+        },
+        getWallSegmentAlignmentGroupDebug: function () {
+            var groups = [];
+
+            wallMeshes.forEach(function (mesh) {
+                if (!isAlignmentWallSegmentMesh(mesh)) {
+                    return;
+                }
+
+                var boundsX = getWallSegmentAlignmentGroupBounds(mesh, "x", null, "z");
+                var boundsZ = getWallSegmentAlignmentGroupBounds(mesh, "z", null, "x");
+
+                groups.push({
+                    meshName: mesh.name,
+                    xPlaneGroup: boundsX
+                        ? {
+                            segmentCount: boundsX.segmentCount,
+                            min: boundsX.min,
+                            max: boundsX.max,
+                            minY: boundsX.minY,
+                            maxY: boundsX.maxY
+                        }
+                        : null,
+                    zPlaneGroup: boundsZ
+                        ? {
+                            segmentCount: boundsZ.segmentCount,
+                            min: boundsZ.min,
+                            max: boundsZ.max,
+                            minY: boundsZ.minY,
+                            maxY: boundsZ.maxY
+                        }
+                        : null
+                });
+            });
+
+            return {
+                enabled: wallSegmentAlignmentGroupEnabled,
+                planeTolerance: wallSegmentAlignmentPlaneTolerance,
+                cornerGuardEnabled: wallSegmentAlignmentCornerGuardEnabled,
+                intervalMergeTolerance: wallSegmentAlignmentIntervalMergeTolerance,
+                wallSegments: groups.length,
+                dragUsesAlignmentGroup: true,
+                groups: groups
+            };
         },
         getWallSegmentLightTargetDebug: function () {
             return getWallSegmentLightTargetDebug();
