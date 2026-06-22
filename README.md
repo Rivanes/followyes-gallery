@@ -774,3 +774,21 @@ Because `Floor.gltf`, `Floor.bin`, and floor textures are in the same folder, te
 ```
 
 No gallery logic was changed except the Floor model URL.
+
+
+## V0_11 Stage 10A Wall Segment Painting
+
+Wall painting behavior changed for the segmented wall model.
+
+Before:
+- selecting a wall color and clicking any wall painted all wall meshes.
+
+Now:
+- selecting a wall color and clicking a wall paints only the clicked wall segment.
+- works with wall segment names like `Wall_segment_001` through `Wall_segment_071`.
+- save/load stores color per wall mesh/segment.
+
+Debug:
+- `GalleryApp.getWallSegmentPaintDebug()`
+
+No lighting target segmentation was changed in this stage.

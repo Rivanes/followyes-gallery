@@ -10069,6 +10069,39 @@ export const createScene = function (engineArg, canvasArg) {
         wallPalette.appendChild(swatch);
     });
 
+    // STAGE 10A - WALL SEGMENT PAINTING
+    // Po przejściu na Wall_segment_001 - Wall_segment_071 kolor/tekstura ściany
+    // ma być nakładana tylko na kliknięty segment, a nie na wszystkie wallMeshes.
+    function applyWallColorMaterialToSegment(wallMesh, material) {
+        if (!wallMesh || !material) {
+            return false;
+        }
+
+        wallMesh.material = material;
+        wallMesh.metadata = wallMesh.metadata || {};
+        wallMesh.metadata.wallSegmentColorName = getWallColorNameFromMaterial(material);
+        wallMesh.metadata.wallSegmentPaintedAt = new Date().toISOString();
+
+        configureMeshMaterialForMainShadows(wallMesh);
+        refreshCommonLightingMaterialSupport();
+        updateEditHelpStatus();
+
+        return true;
+    }
+
+    function getWallSegmentPaintDebug() {
+        return wallMeshes.map(function (wallMesh) {
+            return {
+                name: wallMesh.name,
+                materialName: wallMesh.material ? wallMesh.material.name : null,
+                colorName: getWallColorNameFromMaterial(wallMesh.material),
+                segmentColorName: wallMesh.metadata
+                    ? wallMesh.metadata.wallSegmentColorName || null
+                    : null
+            };
+        });
+    }
+
     editButton.onclick = function (event) {
         if (event) {
             event.preventDefault();
@@ -14645,7 +14678,7 @@ export const createScene = function (engineArg, canvasArg) {
                 }
             }
 
-            // TRYB EDYCJI = wybrany kolor naklada sie na caly model sciany.
+            // TRYB EDYCJI = wybrany kolor nakłada się tylko na kliknięty segment ściany.
             if (
                 editMode &&
                 selectedWallMaterial &&
@@ -14653,13 +14686,10 @@ export const createScene = function (engineArg, canvasArg) {
                 pickResult.hit &&
                 wallMeshes.includes(pickResult.pickedMesh)
             ) {
-                wallMeshes.forEach(function (wallMesh) {
-                    wallMesh.material = selectedWallMaterial;
-                    configureMeshMaterialForMainShadows(wallMesh);
-                });
-
-                refreshCommonLightingMaterialSupport();
-                updateEditHelpStatus();
+                applyWallColorMaterialToSegment(
+                    pickResult.pickedMesh,
+                    selectedWallMaterial
+                );
 
                 return;
             }
@@ -15052,7 +15082,11 @@ export const createScene = function (engineArg, canvasArg) {
                 return {
                     name: wallMesh.name,
                     materialName: wallMesh.material ? wallMesh.material.name : null,
-                    colorName: getWallColorNameFromMaterial(wallMesh.material)
+                    colorName: getWallColorNameFromMaterial(wallMesh.material),
+                    isSegment: wallMesh.name && wallMesh.name.indexOf("Wall_segment_") === 0,
+                    segmentColorName: wallMesh.metadata
+                        ? wallMesh.metadata.wallSegmentColorName || null
+                        : null
                 };
             }),
             deletedArtworkNames: deletedArtworkNames.slice(),
@@ -15120,6 +15154,8 @@ export const createScene = function (engineArg, canvasArg) {
 
                 if (wallMesh && colorName && wallColorMaterials[colorName]) {
                     wallMesh.material = wallColorMaterials[colorName];
+                    wallMesh.metadata = wallMesh.metadata || {};
+                    wallMesh.metadata.wallSegmentColorName = colorName;
                     configureMeshMaterialForMainShadows(wallMesh);
                 }
             });
@@ -15756,6 +15792,9 @@ export const createScene = function (engineArg, canvasArg) {
                     };
                 })
             };
+        },
+        getWallSegmentPaintDebug: function () {
+            return getWallSegmentPaintDebug();
         },
         setViewerCollisionTargets: function (targets) {
             targets = targets || {};
