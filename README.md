@@ -1064,3 +1064,28 @@ GalleryApp.refreshLocalLightWallSegmentTargets()
 Important:
 - Stage 10E9 zero-touch Delete Selected remains unchanged.
 - Delete Selected still does not refresh all targets.
+
+
+## V0_11 Stage 10G Beam-Aware Camera Light Culling
+
+Fix:
+- Camera culling no longer checks only the lamp/marker position.
+- A Local Light remains active when the camera sees:
+  - the light marker position,
+  - sampled points along a Spot beam,
+  - sampled Point light radius points,
+  - centers of currently targeted meshes,
+  - owner mesh center when available.
+
+Reason:
+- when looking at an artwork, the lamp can be behind the camera while its light/target is in front of the camera.
+- in that case the light must remain active.
+
+Debug:
+```js
+GalleryApp.getLocalLightCameraCullingDebug()
+GalleryApp.setLocalLightCameraCulling({
+  beamAwareEnabled: true,
+  maxTargetMeshSamples: 10
+})
+```

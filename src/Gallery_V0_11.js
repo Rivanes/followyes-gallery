@@ -1535,6 +1535,13 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightCameraCullingFadeOutSpeed = 5.0;
     var localLightCameraCullingSnapEpsilon = 0.003;
 
+    // STAGE 10G - BEAM / TARGET AWARE CAMERA CULLING
+    // Nie wystarczy sprawdzać pozycji lampy. Jeśli patrzymy na ścianę/obraz,
+    // który lampa oświetla, albo na promień/stożek światła, lampa ma zostać aktywna.
+    var localLightCameraCullingBeamAwareEnabled = true;
+    var localLightCameraCullingMaxTargetMeshSamples = 10;
+    var localLightCameraCullingPointLightSampleRadiusFactor = 0.35;
+
     function getLocalLightUserEnabled(item) {
         if (!item) {
             return false;
@@ -1582,6 +1589,123 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function isProjectedPointInsideCameraCullingViewport(point, viewportInfo) {
+        var projected = BABYLON.Vector3.Project(
+            point,
+            BABYLON.Matrix.Identity(),
+            scene.getTransformMatrix(),
+            viewportInfo.viewport
+        );
+
+        var inside =
+            projected.z >= 0 &&
+            projected.z <= 1 &&
+            projected.x >= viewportInfo.minX &&
+            projected.x <= viewportInfo.maxX &&
+            projected.y >= viewportInfo.minY &&
+            projected.y <= viewportInfo.maxY;
+
+        return {
+            inside: inside,
+            screenX: Math.round(projected.x),
+            screenY: Math.round(projected.y),
+            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z)
+        };
+    }
+
+    function addLocalLightCameraCullingSample(samples, label, point) {
+        if (!point || !isFinite(point.x) || !isFinite(point.y) || !isFinite(point.z)) {
+            return;
+        }
+
+        samples.push({
+            label: label,
+            point: point.clone ? point.clone() : point
+        });
+    }
+
+    function getLocalLightCameraCullingSamples(item) {
+        var samples = [];
+        var lightPosition = getLocalLightPosition(item);
+
+        addLocalLightCameraCullingSample(samples, "lightPosition", lightPosition);
+
+        if (
+            localLightCameraCullingBeamAwareEnabled &&
+            item &&
+            item.light
+        ) {
+            if (item.type === "spot" && item.light.direction) {
+                var direction = item.light.direction.clone();
+
+                if (direction.length() > 0.0001) {
+                    direction.normalize();
+
+                    var range = item.light.range && isFinite(item.light.range)
+                        ? item.light.range
+                        : 8;
+
+                    [0.20, 0.40, 0.65, 0.90].forEach(function (factor) {
+                        addLocalLightCameraCullingSample(
+                            samples,
+                            "spotBeam_" + factor,
+                            lightPosition.add(direction.scale(range * factor))
+                        );
+                    });
+                }
+            } else if (item.type === "point") {
+                var pointRange = item.light.range && isFinite(item.light.range)
+                    ? item.light.range
+                    : 8;
+
+                var radius = Math.max(
+                    0.5,
+                    pointRange * localLightCameraCullingPointLightSampleRadiusFactor
+                );
+
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_forward",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(0, 0, 1)).scale(radius))
+                );
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_right",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(1, 0, 0)).scale(radius))
+                );
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_left",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(-1, 0, 0)).scale(radius))
+                );
+            }
+
+            if (item.light.includedOnlyMeshes && item.light.includedOnlyMeshes.length) {
+                item.light.includedOnlyMeshes.slice(0, localLightCameraCullingMaxTargetMeshSamples).forEach(function (mesh, index) {
+                    if (!mesh || mesh.isDisposed && mesh.isDisposed()) {
+                        return;
+                    }
+
+                    addLocalLightCameraCullingSample(
+                        samples,
+                        "targetMesh_" + index + "_" + mesh.name,
+                        getMeshWorldCenter(mesh)
+                    );
+                });
+            }
+
+            if (item.ownerMesh) {
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "ownerMesh_" + item.ownerMesh.name,
+                    getMeshWorldCenter(item.ownerMesh)
+                );
+            }
+        }
+
+        return samples;
+    }
+
     function getLocalLightCameraCullingViewportData(item) {
         if (
             !item ||
@@ -1597,19 +1721,36 @@ export const createScene = function (engineArg, canvasArg) {
             };
         }
 
-        var position = getLocalLightPosition(item);
         var width = Math.max(1, engine.getRenderWidth());
         var height = Math.max(1, engine.getRenderHeight());
         var viewport = camera.viewport.toGlobal(width, height);
-        var projected;
+        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
+        var viewportInfo = {
+            viewport: viewport,
+            minX: width * margin,
+            maxX: width * (1 - margin),
+            minY: height * margin,
+            maxY: height * (1 - margin)
+        };
+
+        var samples = getLocalLightCameraCullingSamples(item);
+        var projectedSamples = [];
+        var firstInsideSample = null;
 
         try {
-            projected = BABYLON.Vector3.Project(
-                position,
-                BABYLON.Matrix.Identity(),
-                scene.getTransformMatrix(),
-                viewport
-            );
+            samples.forEach(function (sample) {
+                var projected = isProjectedPointInsideCameraCullingViewport(
+                    sample.point,
+                    viewportInfo
+                );
+
+                projected.label = sample.label;
+                projectedSamples.push(projected);
+
+                if (!firstInsideSample && projected.inside) {
+                    firstInsideSample = projected;
+                }
+            });
         } catch (error) {
             return {
                 inside: true,
@@ -1617,31 +1758,37 @@ export const createScene = function (engineArg, canvasArg) {
             };
         }
 
-        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
-        var minX = width * margin;
-        var maxX = width * (1 - margin);
-        var minY = height * margin;
-        var maxY = height * (1 - margin);
-
-        var inFront = projected.z >= 0 && projected.z <= 1;
-        var inside =
-            inFront &&
-            projected.x >= minX &&
-            projected.x <= maxX &&
-            projected.y >= minY &&
-            projected.y <= maxY;
+        var inside = !!firstInsideSample;
+        var fallbackSample = projectedSamples.length ? projectedSamples[0] : null;
 
         return {
             inside: inside,
-            reason: inside ? "insideCameraView" : "outsideCameraView",
-            screenX: Math.round(projected.x),
-            screenY: Math.round(projected.y),
-            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z),
-            minX: Math.round(minX),
-            maxX: Math.round(maxX),
-            minY: Math.round(minY),
-            maxY: Math.round(maxY),
-            viewScale: localLightCameraCullingViewScale
+            reason: inside
+                ? ("insideCameraView:" + firstInsideSample.label)
+                : "outsideCameraView",
+            matchedSampleLabel: firstInsideSample ? firstInsideSample.label : null,
+            screenX: firstInsideSample
+                ? firstInsideSample.screenX
+                : (fallbackSample ? fallbackSample.screenX : null),
+            screenY: firstInsideSample
+                ? firstInsideSample.screenY
+                : (fallbackSample ? fallbackSample.screenY : null),
+            screenZ: firstInsideSample
+                ? firstInsideSample.screenZ
+                : (fallbackSample ? fallbackSample.screenZ : null),
+            minX: Math.round(viewportInfo.minX),
+            maxX: Math.round(viewportInfo.maxX),
+            minY: Math.round(viewportInfo.minY),
+            maxY: Math.round(viewportInfo.maxY),
+            viewScale: localLightCameraCullingViewScale,
+            beamAware: localLightCameraCullingBeamAwareEnabled,
+            sampleCount: samples.length,
+            insideSampleCount: projectedSamples.filter(function (sample) {
+                return !!sample.inside;
+            }).length,
+            sampleLabels: projectedSamples.map(function (sample) {
+                return sample.label + ":" + (sample.inside ? "in" : "out");
+            })
         };
     }
 
@@ -1776,6 +1923,8 @@ export const createScene = function (engineArg, canvasArg) {
             smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
             fadeInSpeed: localLightCameraCullingFadeInSpeed,
             fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
+            beamAwareEnabled: localLightCameraCullingBeamAwareEnabled,
+            maxTargetMeshSamples: localLightCameraCullingMaxTargetMeshSamples,
             activeCount: localLightItems.filter(function (item) {
                 return item && item.light && item.light.isEnabled && item.light.isEnabled() && item.light.intensity > 0;
             }).length,
@@ -1870,6 +2019,17 @@ export const createScene = function (engineArg, canvasArg) {
             localLightCameraCullingFadeOutSpeed = Math.max(
                 0.1,
                 Number(options.fadeOutSpeed) || 5.0
+            );
+        }
+
+        if (options.beamAwareEnabled !== undefined) {
+            localLightCameraCullingBeamAwareEnabled = !!options.beamAwareEnabled;
+        }
+
+        if (options.maxTargetMeshSamples !== undefined) {
+            localLightCameraCullingMaxTargetMeshSamples = Math.max(
+                0,
+                Math.floor(Number(options.maxTargetMeshSamples) || 0)
             );
         }
 
