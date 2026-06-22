@@ -792,3 +792,20 @@ Debug:
 - `GalleryApp.getWallSegmentPaintDebug()`
 
 No lighting target segmentation was changed in this stage.
+
+
+## V0_11 Stage 10A1 Wall Segment Painting Guard
+
+Painting is now allowed only on meshes whose name starts with:
+
+```txt
+Wall_segment_
+```
+
+This blocks accidental painting on helper/extra meshes such as `Plane.011`.
+
+Debug:
+- `GalleryApp.getWallSegmentPaintDebug()`
+- each item now includes `paintable: true/false`
+
+No lighting target segmentation was changed in this stage.

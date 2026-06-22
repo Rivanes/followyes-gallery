@@ -10072,8 +10072,16 @@ export const createScene = function (engineArg, canvasArg) {
     // STAGE 10A - WALL SEGMENT PAINTING
     // Po przejściu na Wall_segment_001 - Wall_segment_071 kolor/tekstura ściany
     // ma być nakładana tylko na kliknięty segment, a nie na wszystkie wallMeshes.
+    function isPaintableWallSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Wall_segment_") === 0
+        );
+    }
+
     function applyWallColorMaterialToSegment(wallMesh, material) {
-        if (!wallMesh || !material) {
+        if (!wallMesh || !material || !isPaintableWallSegmentMesh(wallMesh)) {
             return false;
         }
 
@@ -10093,6 +10101,7 @@ export const createScene = function (engineArg, canvasArg) {
         return wallMeshes.map(function (wallMesh) {
             return {
                 name: wallMesh.name,
+                paintable: isPaintableWallSegmentMesh(wallMesh),
                 materialName: wallMesh.material ? wallMesh.material.name : null,
                 colorName: getWallColorNameFromMaterial(wallMesh.material),
                 segmentColorName: wallMesh.metadata
@@ -14684,7 +14693,8 @@ export const createScene = function (engineArg, canvasArg) {
                 selectedWallMaterial &&
                 !activeArtwork &&
                 pickResult.hit &&
-                wallMeshes.includes(pickResult.pickedMesh)
+                wallMeshes.includes(pickResult.pickedMesh) &&
+                isPaintableWallSegmentMesh(pickResult.pickedMesh)
             ) {
                 applyWallColorMaterialToSegment(
                     pickResult.pickedMesh,
@@ -15083,7 +15093,8 @@ export const createScene = function (engineArg, canvasArg) {
                     name: wallMesh.name,
                     materialName: wallMesh.material ? wallMesh.material.name : null,
                     colorName: getWallColorNameFromMaterial(wallMesh.material),
-                    isSegment: wallMesh.name && wallMesh.name.indexOf("Wall_segment_") === 0,
+                    isSegment: isPaintableWallSegmentMesh(wallMesh),
+                    paintable: isPaintableWallSegmentMesh(wallMesh),
                     segmentColorName: wallMesh.metadata
                         ? wallMesh.metadata.wallSegmentColorName || null
                         : null
@@ -15152,7 +15163,12 @@ export const createScene = function (engineArg, canvasArg) {
                         : null
                 );
 
-                if (wallMesh && colorName && wallColorMaterials[colorName]) {
+                if (
+                    wallMesh &&
+                    colorName &&
+                    wallColorMaterials[colorName] &&
+                    isPaintableWallSegmentMesh(wallMesh)
+                ) {
                     wallMesh.material = wallColorMaterials[colorName];
                     wallMesh.metadata = wallMesh.metadata || {};
                     wallMesh.metadata.wallSegmentColorName = colorName;
