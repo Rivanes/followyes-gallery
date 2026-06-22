@@ -1439,6 +1439,838 @@ export const createScene = function (engineArg, canvasArg) {
         });
     }
 
+    // STAGE 10B - WALL SEGMENT LIGHT TARGETING
+    // Teraz wall model jest podzielony na Wall_segment_001 - Wall_segment_071.
+    // Local Lights z targetem Walls nie powinny już trafiać we wszystkie wallMeshes,
+    // tylko w najbliższe segmenty ściany.
+    var localLightWallSegmentTargetingEnabled = true;
+    // STAGE 10C:
+    // Poprzednio limit 5 oznaczał: jedna lampa -> maksymalnie 5 segmentów.
+    // To dawało twarde odcięcia światła na granicach segmentów.
+    // Teraz limit oznacza: jeden segment -> maksymalnie 5 świateł.
+    var localLightWallSegmentMaxLightsPerSegment = 5;
+    var localLightWallSegmentTargetMaxCount = 14;
+    var localLightWallSegmentTargetRadius = 8.5;
+    var localLightWallSegmentSoftEdgeExtraRadius = 2.0;
+    var localLightWallSegmentBudgetPassActive = false;
+    var localLightWallSegmentBudgetMap = {};
+
+    function isLightingWallSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Wall_segment_") === 0
+        );
+    }
+
+    function getLightingWallSegmentMeshes() {
+        return wallMeshes.filter(function (mesh) {
+            return isLightingWallSegmentMesh(mesh);
+        });
+    }
+
+    function getMeshWorldCenter(mesh) {
+        if (!mesh || !mesh.getBoundingInfo) {
+            return mesh && mesh.position ? mesh.position.clone() : BABYLON.Vector3.Zero();
+        }
+
+        try {
+            mesh.computeWorldMatrix(true);
+
+            var boundingInfo = mesh.getBoundingInfo();
+
+            if (
+                boundingInfo &&
+                boundingInfo.boundingBox &&
+                boundingInfo.boundingBox.centerWorld
+            ) {
+                return boundingInfo.boundingBox.centerWorld.clone();
+            }
+        } catch (error) {
+            console.warn("Wall segment center warning:", error);
+        }
+
+        return mesh.position ? mesh.position.clone() : BABYLON.Vector3.Zero();
+    }
+
+    function getLocalLightPosition(item) {
+        if (item && item.light && item.light.position) {
+            return item.light.position.clone();
+        }
+
+        if (item && item.markerMesh && item.markerMesh.position) {
+            return item.markerMesh.position.clone();
+        }
+
+        if (item && item.ownerMesh && item.ownerMesh.position) {
+            return item.ownerMesh.position.clone();
+        }
+
+        return camera.position.clone();
+    }
+
+    // STAGE 10E - CAMERA VIEW LOCAL LIGHT CULLING TEST
+    // Test optymalizacji: Local Light działa tylko, gdy znajduje się w środkowej części widoku kamery.
+    // Na próbę ustawione na 2/3 kadru, żeby efekt był łatwy do zauważenia.
+    var localLightCameraCullingEnabled = true;
+    var localLightCameraCullingViewScale = 1.0; // STAGE 10E2 - full camera view
+    var localLightCameraCullingCheckEveryFrames = 1;
+    var localLightCameraCullingFrameCounter = 0;
+
+    // STAGE 10E3 - SMOOTH CAMERA LIGHT FADE
+    // Camera culling nie robi już natychmiastowego intensity 0 / userIntensity.
+    // Zamiast tego światło płynnie dochodzi do target intensity.
+    var localLightCameraCullingSmoothFadeEnabled = true;
+    var localLightCameraCullingFadeInSpeed = 7.5;
+    var localLightCameraCullingFadeOutSpeed = 5.0;
+    var localLightCameraCullingSnapEpsilon = 0.003;
+
+    function getLocalLightUserEnabled(item) {
+        if (!item) {
+            return false;
+        }
+
+        if (item.userEnabled !== undefined) {
+            return !!item.userEnabled;
+        }
+
+        if (item.light && item.light.isEnabled) {
+            item.userEnabled = !!item.light.isEnabled();
+            return item.userEnabled;
+        }
+
+        item.userEnabled = true;
+        return true;
+    }
+
+    // STAGE 10E1 - CAMERA CULLING WITHOUT LIGHT SETENABLED FLICKER
+    // Camera culling nie wyłącza już świateł przez setEnabled(true/false),
+    // bo to potrafi wymuszać przebudowę materiałów i wygląda jak przeładowanie tekstur.
+    // Zamiast tego światło zostaje enabled, a runtime intensity spada do 0.
+    function getLocalLightUserIntensity(item) {
+        if (!item || !item.light) {
+            return 0;
+        }
+
+        if (item.userIntensity !== undefined) {
+            return Number(item.userIntensity) || 0;
+        }
+
+        item.userIntensity = Number(item.light.intensity) || 0;
+        return item.userIntensity;
+    }
+
+    function setLocalLightUserIntensity(item, value) {
+        if (!item || !item.light) {
+            return;
+        }
+
+        item.userIntensity = Math.max(0, Number(value) || 0);
+
+        if (!item.cameraCulled && getLocalLightUserEnabled(item)) {
+            item.light.intensity = item.userIntensity;
+        }
+    }
+
+    function getLocalLightCameraCullingViewportData(item) {
+        if (
+            !item ||
+            !scene ||
+            !scene.getTransformMatrix ||
+            !engine ||
+            !engine.getRenderWidth ||
+            !engine.getRenderHeight
+        ) {
+            return {
+                inside: true,
+                reason: "missingSceneData"
+            };
+        }
+
+        var position = getLocalLightPosition(item);
+        var width = Math.max(1, engine.getRenderWidth());
+        var height = Math.max(1, engine.getRenderHeight());
+        var viewport = camera.viewport.toGlobal(width, height);
+        var projected;
+
+        try {
+            projected = BABYLON.Vector3.Project(
+                position,
+                BABYLON.Matrix.Identity(),
+                scene.getTransformMatrix(),
+                viewport
+            );
+        } catch (error) {
+            return {
+                inside: true,
+                reason: "projectionError"
+            };
+        }
+
+        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
+        var minX = width * margin;
+        var maxX = width * (1 - margin);
+        var minY = height * margin;
+        var maxY = height * (1 - margin);
+
+        var inFront = projected.z >= 0 && projected.z <= 1;
+        var inside =
+            inFront &&
+            projected.x >= minX &&
+            projected.x <= maxX &&
+            projected.y >= minY &&
+            projected.y <= maxY;
+
+        return {
+            inside: inside,
+            reason: inside ? "insideCameraView" : "outsideCameraView",
+            screenX: Math.round(projected.x),
+            screenY: Math.round(projected.y),
+            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z),
+            minX: Math.round(minX),
+            maxX: Math.round(maxX),
+            minY: Math.round(minY),
+            maxY: Math.round(maxY),
+            viewScale: localLightCameraCullingViewScale
+        };
+    }
+
+    function shouldLocalLightBeRuntimeEnabled(item) {
+        if (!getLocalLightUserEnabled(item)) {
+            return false;
+        }
+
+        if (!localLightCameraCullingEnabled) {
+            item.cameraCulled = false;
+            item._cameraCullingDebug = {
+                inside: true,
+                reason: "disabled"
+            };
+            return true;
+        }
+
+        var viewportData = getLocalLightCameraCullingViewportData(item);
+        item._cameraCullingDebug = viewportData;
+        item.cameraCulled = !viewportData.inside;
+
+        return viewportData.inside;
+    }
+
+    function getLocalLightRuntimeTargetIntensity(item) {
+        if (!item || !item.light) {
+            return 0;
+        }
+
+        var userEnabled = getLocalLightUserEnabled(item);
+        var runtimeEnabled = shouldLocalLightBeRuntimeEnabled(item);
+
+        if (!userEnabled) {
+            return 0;
+        }
+
+        return runtimeEnabled ? getLocalLightUserIntensity(item) : 0;
+    }
+
+    function applyLocalLightRuntimeEnabled(item) {
+        if (!item || !item.light) {
+            return;
+        }
+
+        var userEnabled = getLocalLightUserEnabled(item);
+        var targetIntensity = getLocalLightRuntimeTargetIntensity(item);
+
+        item.runtimeTargetIntensity = targetIntensity;
+
+        if (!userEnabled) {
+            if (item.light.setEnabled && item.light.isEnabled && item.light.isEnabled()) {
+                item.light.setEnabled(false);
+            }
+
+            item.light.intensity = 0;
+            item.runtimeCurrentIntensity = 0;
+            return;
+        }
+
+        if (item.light.setEnabled && item.light.isEnabled && !item.light.isEnabled()) {
+            item.light.setEnabled(true);
+        }
+
+        if (!localLightCameraCullingSmoothFadeEnabled) {
+            item.light.intensity = targetIntensity;
+            item.runtimeCurrentIntensity = targetIntensity;
+            return;
+        }
+
+        if (item.runtimeCurrentIntensity === undefined) {
+            item.runtimeCurrentIntensity = Number(item.light.intensity) || 0;
+        }
+    }
+
+    function updateLocalLightSmoothIntensity(item, deltaSeconds) {
+        if (!item || !item.light || !getLocalLightUserEnabled(item)) {
+            return;
+        }
+
+        var targetIntensity = item.runtimeTargetIntensity !== undefined
+            ? item.runtimeTargetIntensity
+            : getLocalLightRuntimeTargetIntensity(item);
+
+        var currentIntensity = Number(item.light.intensity) || 0;
+        var speed = targetIntensity > currentIntensity
+            ? localLightCameraCullingFadeInSpeed
+            : localLightCameraCullingFadeOutSpeed;
+
+        var alpha = 1 - Math.exp(-Math.max(0.0001, speed) * Math.max(0, deltaSeconds));
+        var nextIntensity = currentIntensity + (targetIntensity - currentIntensity) * alpha;
+
+        if (Math.abs(nextIntensity - targetIntensity) <= localLightCameraCullingSnapEpsilon) {
+            nextIntensity = targetIntensity;
+        }
+
+        item.runtimeCurrentIntensity = nextIntensity;
+        item.light.intensity = nextIntensity;
+    }
+
+    function updateLocalLightsCameraCulling(force) {
+        if (!localLightItems || !localLightItems.length) {
+            return;
+        }
+
+        localLightCameraCullingFrameCounter += 1;
+
+        var shouldRefreshCulling =
+            force ||
+            localLightCameraCullingCheckEveryFrames <= 1 ||
+            localLightCameraCullingFrameCounter % localLightCameraCullingCheckEveryFrames === 0;
+
+        var deltaSeconds = engine && engine.getDeltaTime
+            ? Math.min(0.1, engine.getDeltaTime() / 1000)
+            : 1 / 60;
+
+        localLightItems.forEach(function (item) {
+            if (shouldRefreshCulling) {
+                applyLocalLightRuntimeEnabled(item);
+            }
+
+            updateLocalLightSmoothIntensity(item, deltaSeconds);
+        });
+    }
+
+    function getLocalLightCameraCullingDebug() {
+        updateLocalLightsCameraCulling(true);
+
+        return {
+            enabled: localLightCameraCullingEnabled,
+            viewScale: localLightCameraCullingViewScale,
+            checkEveryFrames: localLightCameraCullingCheckEveryFrames,
+            smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
+            fadeInSpeed: localLightCameraCullingFadeInSpeed,
+            fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
+            activeCount: localLightItems.filter(function (item) {
+                return item && item.light && item.light.isEnabled && item.light.isEnabled() && item.light.intensity > 0;
+            }).length,
+            culledCount: localLightItems.filter(function (item) {
+                return !!(item && item.cameraCulled);
+            }).length,
+            softDeletedCount: localLightSoftDeletedItems.length,
+            reusePoolCount: localLightSoftDeletedItems.length,
+            cleanDisabledLightsAvailable: localLightSoftDeletedItems.length > 0,
+            zeroTouchDeleteMode: true,
+            reusePoolByType: {
+                spot: localLightSoftDeletedItems.filter(function (item) {
+                    return item && item.type === "spot";
+                }).length,
+                point: localLightSoftDeletedItems.filter(function (item) {
+                    return item && item.type === "point";
+                }).length
+            },
+            quarantineDummyMeshName: localLightQuarantineDummyMesh ? localLightQuarantineDummyMesh.name : null,
+            quarantinedLights: localLightSoftDeletedItems.map(function (item) {
+                return {
+                    id: item.id,
+                    name: item.name,
+                    type: item.type,
+                    lightExists: !!item.light,
+                    intensity: item.light ? item.light.intensity : null,
+                    zeroTouchDeleted: !!(item.light && item.light.metadata && item.light.metadata.zeroTouchDeleted),
+                    includedOnlyMeshNames: item.light && item.light.includedOnlyMeshes
+                        ? item.light.includedOnlyMeshes.map(function (mesh) {
+                            return mesh ? mesh.name : null;
+                        })
+                        : []
+                };
+            }),
+            lights: localLightItems.map(function (item) {
+                return {
+                    id: item.id,
+                    name: item.name,
+                    type: item.type,
+                    userEnabled: getLocalLightUserEnabled(item),
+                    runtimeEnabled: item.light && item.light.isEnabled
+                        ? item.light.isEnabled() && item.light.intensity > 0
+                        : false,
+                    actualLightEnabled: item.light && item.light.isEnabled
+                        ? item.light.isEnabled()
+                        : false,
+                    userIntensity: getLocalLightUserIntensity(item),
+                    runtimeTargetIntensity: item.runtimeTargetIntensity !== undefined
+                        ? item.runtimeTargetIntensity
+                        : null,
+                    runtimeIntensity: item.light ? item.light.intensity : null,
+                    cameraCulled: !!item.cameraCulled,
+                    cameraCulling: item._cameraCullingDebug || null
+                };
+            })
+        };
+    }
+
+    function setLocalLightCameraCullingDebugOptions(options) {
+        options = options || {};
+
+        if (options.enabled !== undefined) {
+            localLightCameraCullingEnabled = !!options.enabled;
+        }
+
+        if (options.viewScale !== undefined) {
+            localLightCameraCullingViewScale = Math.max(
+                0.1,
+                Math.min(1.0, Number(options.viewScale) || 0.66)
+            );
+        }
+
+        if (options.checkEveryFrames !== undefined) {
+            localLightCameraCullingCheckEveryFrames = Math.max(
+                1,
+                Math.floor(Number(options.checkEveryFrames) || 1)
+            );
+        }
+
+        if (options.smoothFadeEnabled !== undefined) {
+            localLightCameraCullingSmoothFadeEnabled = !!options.smoothFadeEnabled;
+        }
+
+        if (options.fadeInSpeed !== undefined) {
+            localLightCameraCullingFadeInSpeed = Math.max(
+                0.1,
+                Number(options.fadeInSpeed) || 7.5
+            );
+        }
+
+        if (options.fadeOutSpeed !== undefined) {
+            localLightCameraCullingFadeOutSpeed = Math.max(
+                0.1,
+                Number(options.fadeOutSpeed) || 5.0
+            );
+        }
+
+        updateLocalLightsCameraCulling(true);
+
+        return getLocalLightCameraCullingDebug();
+    }
+
+    function getLocalLightWallHitFromSpotRay(item, wallSegments) {
+        if (
+            !item ||
+            item.type !== "spot" ||
+            !item.light ||
+            !item.light.position ||
+            !item.light.direction ||
+            !wallSegments ||
+            !wallSegments.length
+        ) {
+            return null;
+        }
+
+        var direction = item.light.direction.clone();
+
+        if (direction.lengthSquared() <= 0.0001) {
+            return null;
+        }
+
+        direction.normalize();
+
+        var rayLength = item.light.range || 12;
+        var ray = new BABYLON.Ray(
+            item.light.position.clone(),
+            direction,
+            rayLength
+        );
+
+        var hit = scene.pickWithRay(
+            ray,
+            function (mesh) {
+                return wallSegments.indexOf(mesh) !== -1;
+            }
+        );
+
+        if (hit && hit.hit && hit.pickedMesh && hit.pickedPoint) {
+            return {
+                source: "spotRay",
+                point: hit.pickedPoint.clone(),
+                primaryMesh: hit.pickedMesh
+            };
+        }
+
+        return null;
+    }
+
+    function getLocalLightWallReference(item, wallSegments) {
+        var spotHit = getLocalLightWallHitFromSpotRay(item, wallSegments);
+
+        if (spotHit) {
+            return spotHit;
+        }
+
+        if (item && item.ownerMesh) {
+            var ownerWallMesh = getWallMeshForArtwork(item.ownerMesh);
+
+            if (isLightingWallSegmentMesh(ownerWallMesh)) {
+                return {
+                    source: "ownerWall",
+                    point: item.ownerMesh.position.clone(),
+                    primaryMesh: ownerWallMesh
+                };
+            }
+
+            if (item.ownerMesh.position) {
+                return {
+                    source: "ownerPosition",
+                    point: item.ownerMesh.position.clone(),
+                    primaryMesh: null
+                };
+            }
+        }
+
+        return {
+            source: "lightPosition",
+            point: getLocalLightPosition(item),
+            primaryMesh: null
+        };
+    }
+
+    function getWallSegmentDistanceToReference(mesh, referencePoint) {
+        if (!mesh || !referencePoint) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        return BABYLON.Vector3.Distance(
+            getMeshWorldCenter(mesh),
+            referencePoint
+        );
+    }
+
+    // STAGE 10D - FRONT-FACING WALL SEGMENT LIGHT FILTER
+    // Segment ściany powinien być targetowany tylko wtedy, gdy światło jest po jego frontowej stronie.
+    // To ogranicza przypadki, gdzie światło zza ściany zużywa budżet albo daje dziwne odcięcia.
+    var localLightWallSegmentFrontFacingFilterEnabled = true;
+    var localLightWallSegmentFrontFacingDotLimit = -0.08;
+
+    function isWallSegmentFrontFacingLocalLight(mesh, item) {
+        if (!localLightWallSegmentFrontFacingFilterEnabled) {
+            return true;
+        }
+
+        if (!mesh || !isLightingWallSegmentMesh(mesh)) {
+            return false;
+        }
+
+        var origin = getLocalLightPosition(item);
+        var target = getMeshWorldCenter(mesh);
+        var direction = target.subtract(origin);
+        var distance = direction.length();
+
+        if (distance <= 0.0001) {
+            return true;
+        }
+
+        direction.normalize();
+
+        try {
+            var ray = new BABYLON.Ray(
+                origin,
+                direction,
+                distance + 0.2
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (candidate) {
+                    return candidate === mesh;
+                }
+            );
+
+            if (!hit || !hit.hit || !hit.pickedMesh) {
+                return false;
+            }
+
+            if (!hit.getNormal) {
+                return true;
+            }
+
+            var normal = hit.getNormal(true, true);
+
+            if (!normal || normal.lengthSquared() <= 0.0001) {
+                return true;
+            }
+
+            normal.normalize();
+
+            // Ray direction idzie od światła do ściany.
+            // Frontowa strona ściany ma normalną skierowaną w stronę światła,
+            // więc normal dot direction powinien być ujemny.
+            var facingDot = BABYLON.Vector3.Dot(normal, direction);
+
+            return facingDot <= localLightWallSegmentFrontFacingDotLimit;
+        } catch (error) {
+            console.warn("Wall segment front-facing light filter warning:", error);
+            return true;
+        }
+    }
+
+    function addWallSegmentBudgetUse(mesh, item) {
+        if (!mesh || !isLightingWallSegmentMesh(mesh)) {
+            return false;
+        }
+
+        var key = mesh.name;
+
+        if (!localLightWallSegmentBudgetMap[key]) {
+            localLightWallSegmentBudgetMap[key] = [];
+        }
+
+        if (localLightWallSegmentBudgetMap[key].indexOf(item) !== -1) {
+            return true;
+        }
+
+        if (
+            localLightWallSegmentBudgetPassActive &&
+            localLightWallSegmentBudgetMap[key].length >= localLightWallSegmentMaxLightsPerSegment
+        ) {
+            return false;
+        }
+
+        localLightWallSegmentBudgetMap[key].push(item);
+        return true;
+    }
+
+    function getWallSegmentCandidateListForLocalLight(item, wallSegments) {
+        var reference = getLocalLightWallReference(item, wallSegments);
+        var referencePoint = reference && reference.point
+            ? reference.point
+            : getLocalLightPosition(item);
+
+        var radius = localLightWallSegmentTargetRadius;
+
+        if (item && item.light && item.light.range) {
+            radius = Math.max(
+                radius,
+                Math.min(item.light.range * 0.9, 10.0)
+            );
+        }
+
+        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
+
+        var candidates = wallSegments.map(function (mesh) {
+            var distance = getWallSegmentDistanceToReference(mesh, referencePoint);
+            var frontFacing = isWallSegmentFrontFacingLocalLight(mesh, item);
+
+            return {
+                mesh: mesh,
+                distance: distance,
+                frontFacing: frontFacing,
+                priority: distance <= radius ? 0 : 1
+            };
+        }).filter(function (candidate) {
+            if (!candidate.frontFacing) {
+                return false;
+            }
+
+            return (
+                candidate.distance <= softRadius ||
+                (
+                    reference &&
+                    reference.primaryMesh &&
+                    candidate.mesh === reference.primaryMesh
+                )
+            );
+        }).sort(function (a, b) {
+            if (a.priority !== b.priority) {
+                return a.priority - b.priority;
+            }
+
+            return a.distance - b.distance;
+        });
+
+        if (
+            reference &&
+            reference.primaryMesh &&
+            isLightingWallSegmentMesh(reference.primaryMesh) &&
+            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item)
+        ) {
+            var alreadyHasPrimary = candidates.some(function (candidate) {
+                return candidate.mesh === reference.primaryMesh;
+            });
+
+            if (!alreadyHasPrimary) {
+                candidates.unshift({
+                    mesh: reference.primaryMesh,
+                    distance: 0,
+                    frontFacing: true,
+                    priority: -1
+                });
+            }
+        }
+
+        return {
+            reference: reference,
+            referencePoint: referencePoint,
+            radius: radius,
+            softRadius: softRadius,
+            candidates: candidates
+        };
+    }
+
+    function addWallSegmentTargetsForLocalLight(targetList, item) {
+        if (!localLightWallSegmentTargetingEnabled) {
+            addMeshArrayUnique(targetList, wallMeshes);
+            return;
+        }
+
+        var wallSegments = getLightingWallSegmentMeshes();
+
+        // Fallback dla starego modelu bez segmentów.
+        if (!wallSegments.length) {
+            addMeshArrayUnique(targetList, wallMeshes);
+            return;
+        }
+
+        var candidateData = getWallSegmentCandidateListForLocalLight(item, wallSegments);
+        var candidates = candidateData.candidates;
+        var selectedSegments = [];
+
+        function addSegment(mesh) {
+            if (
+                mesh &&
+                isLightingWallSegmentMesh(mesh) &&
+                selectedSegments.indexOf(mesh) === -1 &&
+                addWallSegmentBudgetUse(mesh, item)
+            ) {
+                selectedSegments.push(mesh);
+            }
+        }
+
+        // Primary segment jest najważniejszy, ale też szanuje budżet segmentu.
+        if (
+            candidateData.reference &&
+            candidateData.reference.primaryMesh &&
+            isLightingWallSegmentMesh(candidateData.reference.primaryMesh)
+        ) {
+            addSegment(candidateData.reference.primaryMesh);
+        }
+
+        candidates.forEach(function (candidate) {
+            if (selectedSegments.length >= localLightWallSegmentTargetMaxCount) {
+                return;
+            }
+
+            addSegment(candidate.mesh);
+        });
+
+        // Fallback awaryjny: jeśli budżet zablokował wszystko, bierzemy najbliższy segment.
+        // To zapobiega sytuacji, w której aktywna lampa z targetem Walls nie świeci na żadną ścianę.
+        if (!selectedSegments.length && candidates.length) {
+            selectedSegments.push(candidates[0].mesh);
+        }
+
+        item._wallSegmentTargetDebug = {
+            mode: "segmentLightBudget",
+            source: candidateData.reference ? candidateData.reference.source : "unknown",
+            referencePoint: candidateData.referencePoint ? serializeVector3(candidateData.referencePoint) : null,
+            radius: candidateData.radius,
+            softRadius: candidateData.softRadius,
+            frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
+            frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            candidateCountAfterFrontFilter: candidates.length,
+            targetCount: selectedSegments.length,
+            targetNames: selectedSegments.map(function (mesh) {
+                return mesh.name;
+            })
+        };
+
+        addMeshArrayUnique(targetList, selectedSegments);
+    }
+
+    function getWallSegmentLightTargetDebug() {
+        refreshAllCommonLocalLightTargets();
+
+        var segmentLightMap = {};
+
+        getLightingWallSegmentMeshes().forEach(function (segment) {
+            segmentLightMap[segment.name] = {
+                segment: segment.name,
+                lightCount: 0,
+                lights: []
+            };
+        });
+
+        var lightDebug = localLightItems.map(function (item) {
+            var included = item && item.light && item.light.includedOnlyMeshes
+                ? item.light.includedOnlyMeshes
+                : [];
+
+            var wallTargets = included.filter(function (mesh) {
+                return isLightingWallSegmentMesh(mesh);
+            });
+
+            wallTargets.forEach(function (mesh) {
+                if (!segmentLightMap[mesh.name]) {
+                    segmentLightMap[mesh.name] = {
+                        segment: mesh.name,
+                        lightCount: 0,
+                        lights: []
+                    };
+                }
+
+                segmentLightMap[mesh.name].lightCount += 1;
+                segmentLightMap[mesh.name].lights.push(item.name || item.id || item.light.name);
+            });
+
+            return {
+                id: item.id,
+                name: item.name,
+                type: item.type,
+                enabled: getLocalLightUserEnabled(item),
+                runtimeEnabled: item.light && item.light.isEnabled
+                    ? item.light.isEnabled()
+                    : false,
+                cameraCulled: !!item.cameraCulled,
+                cameraCulling: item._cameraCullingDebug || null,
+                wallTargetCount: wallTargets.length,
+                wallTargetNames: wallTargets.map(function (mesh) {
+                    return mesh.name;
+                }),
+                wallTargetDebug: item._wallSegmentTargetDebug || null
+            };
+        });
+
+        return {
+            enabled: localLightWallSegmentTargetingEnabled,
+            segmentCount: getLightingWallSegmentMeshes().length,
+            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            targetRadius: localLightWallSegmentTargetRadius,
+            softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
+            frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
+            frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            lights: lightDebug,
+            segments: Object.keys(segmentLightMap).sort().map(function (name) {
+                return segmentLightMap[name];
+            })
+        };
+    }
+
     function getDefaultLocalTargetOptions() {
         return {
             floor: true,
@@ -1518,7 +2350,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (getLocalTargetOption(item, "walls")) {
-            addMeshArrayUnique(includedMeshes, wallMeshes);
+            addWallSegmentTargetsForLocalLight(includedMeshes, item);
         }
 
         if (getLocalTargetOption(item, "ceiling")) {
@@ -1567,9 +2399,14 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function refreshAllCommonLocalLightTargets() {
+        localLightWallSegmentBudgetMap = {};
+        localLightWallSegmentBudgetPassActive = true;
+
         localLightItems.forEach(function (item) {
             applyCommonLocalLightTargets(item);
         });
+
+        localLightWallSegmentBudgetPassActive = false;
     }
 
     function updateDisplaySpotLight(ownerMesh) {
@@ -6752,9 +7589,9 @@ export const createScene = function (engineArg, canvasArg) {
             ownerMeshName: item.ownerMesh ? item.ownerMesh.name : null,
             hasOwner: !!item.ownerMesh,
             manualTransformOverride: !!item.manualTransformOverride,
-            enabled: item.light.isEnabled ? item.light.isEnabled() : true,
+            enabled: getLocalLightUserEnabled(item),
             color: getLocalLightStateColor(item),
-            intensity: Number(item.light.intensity) || 0,
+            intensity: getLocalLightUserIntensity(item),
             range: Number(item.light.range) || 0,
             targetOptions: normalizeLocalTargetOptions(item.targetOptions),
             position: serializeVector3(item.markerMesh.position),
@@ -6880,7 +7717,7 @@ export const createScene = function (engineArg, canvasArg) {
         item.targetOptions = normalizeLocalTargetOptions(savedState.targetOptions);
 
         if (item.light.setEnabled) {
-            item.light.setEnabled(savedState.enabled !== false);
+            item.userEnabled = savedState.enabled !== false;
         }
 
         var color = hexToColor3(savedState.color || getLocalLightStateColor(item));
@@ -6889,8 +7726,11 @@ export const createScene = function (engineArg, canvasArg) {
         updateLocalLightMarkerColor(item, color);
 
         if (savedState.intensity !== undefined) {
-            item.light.intensity = Math.max(0, Number(savedState.intensity));
+            item.userIntensity = Math.max(0, Number(savedState.intensity));
+            item.light.intensity = item.userIntensity;
         }
+
+        applyLocalLightRuntimeEnabled(item);
 
         if (savedState.range !== undefined) {
             item.light.range = Math.max(0.1, Number(savedState.range));
@@ -7262,14 +8102,15 @@ export const createScene = function (engineArg, canvasArg) {
             var needsGeometryUpdate = false;
 
             if (key === "enabled") {
-                item.light.setEnabled(!!value);
+                item.userEnabled = !!value;
+                applyLocalLightRuntimeEnabled(item);
             } else if (key === "color") {
                 var color = hexToColor3(value);
                 item.light.diffuse = color;
                 item.light.specular = color.scale(item.type === "point" ? 0.12 : 0.10);
                 updateLocalLightMarkerColor(item, color);
             } else if (key === "intensity") {
-                item.light.intensity = Math.max(0, Number(value));
+                setLocalLightUserIntensity(item, value);
             } else if (key === "range") {
                 item.light.range = Math.max(0.1, Number(value));
                 needsGeometryUpdate = true;
@@ -7487,7 +8328,7 @@ export const createScene = function (engineArg, canvasArg) {
             var enabledState = getMixedBoolState(
                 allItems,
                 function (item) {
-                    return item.light.isEnabled();
+                    return getLocalLightUserEnabled(item);
                 },
                 true
             );
@@ -7519,7 +8360,7 @@ export const createScene = function (engineArg, canvasArg) {
             var intensityState = getMixedNumberState(
                 allItems,
                 function (item) {
-                    return item.light.intensity;
+                    return getLocalLightUserIntensity(item);
                 },
                 0,
                 0.001
@@ -8043,6 +8884,367 @@ export const createScene = function (engineArg, canvasArg) {
         });
     }
 
+    // STAGE 10E4 - SOFT DELETE LOCAL LIGHTS
+    // Usuwanie światła przez light.dispose() usuwa je z listy świateł sceny i może
+    // wymuszać przebudowę shaderów/materiałów. To wygląda jak przeładowanie tekstur.
+    // Delete z UI robi więc soft-delete: światło zostaje technicznie w scenie,
+    // ale ma intensity 0, nie jest widoczne w UI, nie jest targetowane i nie zapisuje się.
+    var localLightSoftDeletedItems = [];
+    var localLightQuarantineDummyMesh = null;
+
+    function getLocalLightQuarantineDummyMesh() {
+        if (localLightQuarantineDummyMesh && !localLightQuarantineDummyMesh.isDisposed()) {
+            return localLightQuarantineDummyMesh;
+        }
+
+        // STAGE 10E5 - LIGHT QUARANTINE DUMMY TARGET
+        // Ukryty dummy mesh służy jako jedyny target dla usuniętych lamp.
+        // Dzięki temu soft-deleted light nie świeci na prawdziwe ściany/obrazy/podłogę
+        // i nie zajmuje ich budżetu targetowania.
+        localLightQuarantineDummyMesh = BABYLON.MeshBuilder.CreateBox(
+            "berryboy_local_light_quarantine_dummy",
+            {
+                size: 0.01
+            },
+            scene
+        );
+
+        localLightQuarantineDummyMesh.position = new BABYLON.Vector3(0, -9999, 0);
+        localLightQuarantineDummyMesh.isVisible = false;
+        localLightQuarantineDummyMesh.visibility = 0;
+        localLightQuarantineDummyMesh.isPickable = false;
+        localLightQuarantineDummyMesh.checkCollisions = false;
+        localLightQuarantineDummyMesh.metadata = {
+            role: "localLightQuarantineDummy",
+            hiddenHelper: true
+        };
+
+        return localLightQuarantineDummyMesh;
+    }
+
+    function hideLocalLightEditorMeshesForSoftDelete(item) {
+        [
+            item ? item.markerMesh : null,
+            item ? item.helperMesh : null,
+            item ? item.targetMesh : null,
+            item ? item.rootNode : null
+        ].forEach(function (mesh) {
+            if (!mesh) {
+                return;
+            }
+
+            // STAGE 10E9 - ZERO TOUCH LIGHT DELETE
+            // Przy zwykłym Delete Selected nie zmieniamy enabled-state mesha.
+            // Chowanie ma być wizualne, bez zmian w grafie sceny.
+            if (mesh.isVisible !== undefined) {
+                mesh.isVisible = false;
+            }
+
+            if (mesh.visibility !== undefined) {
+                mesh.visibility = 0;
+            }
+
+            if (mesh.isPickable !== undefined) {
+                mesh.isPickable = false;
+            }
+
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.softDeletedLocalLight = true;
+        });
+
+        if (item && item.helperMeshes && item.helperMeshes.length) {
+            item.helperMeshes.forEach(function (helperMesh) {
+                if (!helperMesh) {
+                    return;
+                }
+
+                if (helperMesh.isVisible !== undefined) {
+                    helperMesh.isVisible = false;
+                }
+
+                if (helperMesh.visibility !== undefined) {
+                    helperMesh.visibility = 0;
+                }
+
+                if (helperMesh.isPickable !== undefined) {
+                    helperMesh.isPickable = false;
+                }
+            });
+        }
+    }
+
+    function softDeleteLocalLightItem(item) {
+        if (!item || item.softDeleted) {
+            return false;
+        }
+
+        if (
+            localLightHighlightLayer &&
+            localLightHighlightLayer.removeMesh &&
+            item.markerMesh
+        ) {
+            localLightHighlightLayer.removeMesh(item.markerMesh);
+        }
+
+        if (localLightGizmoAttachedItem === item) {
+            detachLocalLightGizmo();
+        }
+
+        item.softDeleted = true;
+        item.selected = false;
+        item.userEnabled = false;
+        item.userIntensity = 0;
+        item.runtimeTargetIntensity = 0;
+        item.runtimeCurrentIntensity = 0;
+        item.cameraCulled = true;
+
+        if (item.light) {
+            item._zeroTouchDeleteOriginalIncludedOnlyMeshes = item.light.includedOnlyMeshes
+                ? item.light.includedOnlyMeshes.slice()
+                : [];
+            item._zeroTouchDeleteOriginalExcludedMeshes = item.light.excludedMeshes
+                ? item.light.excludedMeshes.slice()
+                : [];
+
+            item.light.intensity = 0;
+            item.light.metadata = item.light.metadata || {};
+            item.light.metadata.softDeletedLocalLight = true;
+            item.light.metadata.zeroTouchDeleted = true;
+
+            // STAGE 10E9:
+            // Nie zmieniamy enabled-state, nie robimy dispose i nie przepinamy targetów.
+            // W poprzednich wersjach nawet przepięcie includedOnlyMeshes na dummy
+            // mogło powodować przebudowę materiałów. Tu zmieniamy tylko intensity.
+        }
+
+        hideLocalLightEditorMeshesForSoftDelete(item);
+
+        // STAGE 10E9:
+        // Nie robimy disposeLocalLightHelper(item) przy zwykłym Delete Selected.
+        // Helpery są ukryte, ale ich geometria zostaje do reuse albo ręcznego cleanupu.
+        // Nie odświeżamy też globalnych targetów świateł.
+
+        if (item.ownerMesh && item.ownerMesh.metadata) {
+            if (item.ownerMesh.metadata.lampMesh === item.markerMesh) {
+                item.ownerMesh.metadata.lampMesh = null;
+            }
+
+            if (item.ownerMesh.metadata.spotLight === item.light) {
+                item.ownerMesh.metadata.spotLight = null;
+            }
+        }
+
+        artworkLights = artworkLights.filter(function (lightData) {
+            return lightData.lampMesh !== item.markerMesh && lightData.spotLight !== item.light;
+        });
+
+        localLightItems = localLightItems.filter(function (localLightItem) {
+            return localLightItem !== item;
+        });
+
+        selectedLocalLights = selectedLocalLights.filter(function (selectedItem) {
+            return selectedItem !== item;
+        });
+
+        removeLocalLightIdFromGroups(item.id);
+
+        if (localLightSoftDeletedItems.indexOf(item) === -1) {
+            localLightSoftDeletedItems.push(item);
+        }
+
+        return true;
+    }
+
+    // STAGE 10E7 - NO DISPOSE LIGHT REUSE POOL
+    // Skoro light.dispose() dalej powoduje przeładowanie materiałów,
+    // Delete Selected nie robi żadnego hard dispose w trakcie sesji.
+    // Zamiast tego usunięte lampy są trzymane w kwarantannie i odzyskiwane
+    // przy tworzeniu nowej lampy tego samego typu.
+    function takeLocalLightFromReusePool(type) {
+        var item = null;
+
+        localLightSoftDeletedItems = localLightSoftDeletedItems.filter(function (candidate) {
+            if (!item && candidate && candidate.type === type && !candidate.hardDisposed) {
+                item = candidate;
+                return false;
+            }
+
+            return true;
+        });
+
+        return item;
+    }
+
+    function reactivateLocalLightFromReusePool(type, position, direction, createIndex) {
+        var item = takeLocalLightFromReusePool(type);
+
+        if (!item || !item.light || !item.markerMesh) {
+            return null;
+        }
+
+        var isPoint = type === "point";
+        var idPrefix = isPoint ? "LocalPointLight_" : "LocalSpotLight_";
+        var markerPrefix = isPoint ? "LocalPointMarker_" : "LocalSpotMarker_";
+        var displayPrefix = isPoint ? "Point Light " : "Spot Light ";
+        var id = idPrefix + createIndex;
+
+        item.id = id;
+        item.name = displayPrefix + createIndex;
+        item.type = type;
+        item.softDeleted = false;
+        item.selected = false;
+        item.userEnabled = true;
+        item.cameraCulled = false;
+        item.runtimeTargetIntensity = 0;
+        item.runtimeCurrentIntensity = 0;
+        item.targetOptions = normalizeLocalTargetOptions(null);
+        item.localShadowGenerator = null;
+        item.helperMesh = null;
+        item.helperMeshes = [];
+
+        item.light.name = id;
+        item.light.position.copyFrom(position);
+        item.light.intensity = isPoint ? 2.0 : unifiedSpotDefaults.intensity;
+        item.userIntensity = item.light.intensity;
+        item.light.range = isPoint ? 8 : unifiedSpotDefaults.range;
+        item.light.diffuse = isPoint
+            ? new BABYLON.Color3(0.78, 0.90, 1.0)
+            : new BABYLON.Color3(1.0, 0.92, 0.74);
+        item.light.specular = isPoint
+            ? new BABYLON.Color3(0.08, 0.09, 0.10)
+            : new BABYLON.Color3(0.10, 0.08, 0.05);
+        item.light.includedOnlyMeshes = [];
+        item.light.excludedMeshes = [];
+
+        if (!isPoint && direction && item.light.direction) {
+            item.light.direction.copyFrom(direction);
+            forceStandardSpotFalloff(item.light);
+            item.light.angle = BABYLON.Tools.ToRadians(unifiedSpotDefaults.angleDegrees);
+            item.light.exponent = getExponentFromSpotBlend(unifiedSpotDefaults.blend);
+            item.helperLength = item.light.range;
+            item.helperMaxRadius = item.light.range;
+            item.helperSoftness = unifiedSpotDefaults.blend;
+        } else if (isPoint) {
+            item.helperMaxRadius = item.light.range;
+        }
+
+        item.light.metadata = item.light.metadata || {};
+        item.light.metadata.softDeletedLocalLight = false;
+        item.light.metadata.reusedFromLocalLightPool = true;
+        item.light.metadata.quarantinedToDummyMesh = null;
+
+        item.markerMesh.name = markerPrefix + createIndex;
+        item.markerMesh.position.copyFrom(position);
+        item.markerMesh.isPickable = editMode;
+        item.markerMesh.isVisible = true;
+        if (item.markerMesh.setEnabled) {
+            item.markerMesh.setEnabled(true);
+        }
+        item.markerMesh.metadata = item.markerMesh.metadata || {};
+        item.markerMesh.metadata.localLightId = id;
+        item.markerMesh.metadata.softDeletedLocalLight = false;
+        item.markerMesh.metadata.reusedFromLocalLightPool = true;
+
+        if (!isPoint && direction && item.markerMesh.lookAt) {
+            item.markerMesh.lookAt(position.add(direction));
+        }
+
+        if (item.rootNode && item.rootNode.setEnabled) {
+            item.rootNode.setEnabled(true);
+        }
+
+        localLightItems.push(item);
+
+        refreshCommonLightingMaterialSupport();
+        applyCommonLocalLightTargets(item);
+        disableLocalPointLightShadow(item);
+        ensureCommonLightShadowLogic(item);
+        updateLocalLightHelper(item);
+        applyLocalLightRuntimeEnabled(item);
+        updateLocalLightsUi();
+
+        return item;
+    }
+
+    // STAGE 10E8 - SAFE MANUAL CLEAN DISABLED LIGHTS BUTTON
+    // Standardowy Delete Selected nadal NIE robi light.dispose(), żeby nie było flickera.
+    // Ten helper jest odpalany tylko ręcznie z przycisku CLEAN DISABLED LIGHTS.
+    // Czyści wyłącznie lampy z puli/kwarantanny, nigdy aktywne lampy.
+    function safeDisposeObjectForDisabledLocalLightCleanup(object, label) {
+        if (!object || !object.dispose) {
+            return;
+        }
+
+        try {
+            object.dispose();
+        } catch (error) {
+            console.warn("Clean disabled local light warning [" + label + "]:", error);
+        }
+    }
+
+    function cleanDisabledLocalLightPool() {
+        var itemsToClean = localLightSoftDeletedItems.slice();
+        var cleanedCount = 0;
+
+        itemsToClean.forEach(function (item) {
+            if (!item || !item.softDeleted || item.hardDisposed) {
+                return;
+            }
+
+            if (
+                localLightHighlightLayer &&
+                localLightHighlightLayer.removeMesh &&
+                item.markerMesh
+            ) {
+                try {
+                    localLightHighlightLayer.removeMesh(item.markerMesh);
+                } catch (error) {
+                    console.warn("Clean disabled local highlight warning:", error);
+                }
+            }
+
+            if (localLightGizmoAttachedItem === item) {
+                detachLocalLightGizmo();
+            }
+
+            disposeLocalLightHelper(item);
+
+            if (item.localShadowGenerator && item.localShadowGenerator.dispose) {
+                safeDisposeObjectForDisabledLocalLightCleanup(
+                    item.localShadowGenerator,
+                    "shadowGenerator"
+                );
+            }
+
+            safeDisposeObjectForDisabledLocalLightCleanup(item.light, "light");
+            safeDisposeObjectForDisabledLocalLightCleanup(item.markerMesh, "markerMesh");
+            safeDisposeObjectForDisabledLocalLightCleanup(item.targetMesh, "targetMesh");
+            safeDisposeObjectForDisabledLocalLightCleanup(item.helperMesh, "helperMesh");
+            safeDisposeObjectForDisabledLocalLightCleanup(item.rootNode, "rootNode");
+
+            item.light = null;
+            item.markerMesh = null;
+            item.targetMesh = null;
+            item.helperMesh = null;
+            item.rootNode = null;
+            item.localShadowGenerator = null;
+            item.hardDisposed = true;
+
+            cleanedCount += 1;
+        });
+
+        localLightSoftDeletedItems = localLightSoftDeletedItems.filter(function (item) {
+            return !!(item && !item.hardDisposed);
+        });
+
+        updateLocalLightsUi();
+
+        return {
+            cleanedCount: cleanedCount,
+            remainingReusePoolCount: localLightSoftDeletedItems.length
+        };
+    }
+
     function disposeLocalLightItem(item) {
         if (!item) {
             return;
@@ -8110,7 +9312,7 @@ export const createScene = function (engineArg, canvasArg) {
         var itemsToDelete = selectedLocalLights.slice();
 
         itemsToDelete.forEach(function (item) {
-            disposeLocalLightItem(item);
+            softDeleteLocalLightItem(item);
         });
 
         selectedLocalLights = [];
@@ -8589,7 +9791,8 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        item.light.setEnabled(!!isEnabled);
+        item.userEnabled = !!isEnabled;
+        applyLocalLightRuntimeEnabled(item);
 
         if (item.type === "point") {
             disableLocalPointLightShadow(item);
@@ -8627,7 +9830,7 @@ export const createScene = function (engineArg, canvasArg) {
             localLightSoloState.enabledById = {};
             localLightItems.forEach(function (item) {
                 if (item && item.light && item.light.isEnabled) {
-                    localLightSoloState.enabledById[item.id] = item.light.isEnabled();
+                    localLightSoloState.enabledById[item.id] = getLocalLightUserEnabled(item);
                 }
             });
         }
@@ -8766,7 +9969,12 @@ export const createScene = function (engineArg, canvasArg) {
             helperSoftness: options.helperSoftness !== undefined ? options.helperSoftness : 0.45,
             targetOptions: normalizeLocalTargetOptions(options.targetOptions),
             localShadowGenerator: null,
-            selected: false
+            selected: false,
+            userEnabled: options.light && options.light.isEnabled
+                ? !!options.light.isEnabled()
+                : true,
+            userIntensity: options.light ? Number(options.light.intensity) || 0 : 0,
+            cameraCulled: false
         };
 
         options.markerMesh.isPickable = editMode;
@@ -8781,6 +9989,7 @@ export const createScene = function (engineArg, canvasArg) {
         disableLocalPointLightShadow(item);
         ensureCommonLightShadowLogic(item);
         updateLocalLightHelper(item);
+        applyLocalLightRuntimeEnabled(item);
 
         updateLocalLightsUi();
 
@@ -8896,6 +10105,13 @@ export const createScene = function (engineArg, canvasArg) {
         var position = getLocalLightSpawnPosition();
         var direction = getLocalLightSpawnDirection();
 
+        var reusedItem = reactivateLocalLightFromReusePool("spot", position, direction, localLightCreateCounter);
+        if (reusedItem) {
+            selectLocalLightItem(reusedItem, false);
+            schedulePersistLocalLightState(true);
+            return;
+        }
+
         var markerMesh = BABYLON.MeshBuilder.CreateBox(
             "LocalSpotMarker_" + localLightCreateCounter,
             {
@@ -8945,6 +10161,13 @@ export const createScene = function (engineArg, canvasArg) {
         localLightCreateCounter += 1;
 
         var position = getLocalLightSpawnPosition();
+
+        var reusedItem = reactivateLocalLightFromReusePool("point", position, null, localLightCreateCounter);
+        if (reusedItem) {
+            selectLocalLightItem(reusedItem, false);
+            schedulePersistLocalLightState(true);
+            return;
+        }
 
         var markerMesh = BABYLON.MeshBuilder.CreateSphere(
             "LocalPointMarker_" + localLightCreateCounter,
@@ -9626,9 +10849,36 @@ export const createScene = function (engineArg, canvasArg) {
         deleteSelectedLocalLights();
     };
 
+    var localCleanDisabledLightsButton = createLocalToolButton("Clean Disabled Lights", "is-danger", "!");
+    localCleanDisabledLightsButton.title = "Hard-clean quarantined/deleted lights from memory. This may cause a short material reload.";
+    localCleanDisabledLightsButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!localLightSoftDeletedItems.length) {
+            console.info("No disabled local lights to clean.");
+            return;
+        }
+
+        var message = "Clean " + localLightSoftDeletedItems.length + " disabled Local Light(s) from memory? This may cause a short material reload.";
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(message);
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        var result = cleanDisabledLocalLightPool();
+        console.info("Clean Disabled Lights:", result);
+    };
+
     localCreateGrid.appendChild(localAddSpotButton);
     localCreateGrid.appendChild(localAddPointButton);
     localCreateGrid.appendChild(localDeleteSelectedButton);
+    localCreateGrid.appendChild(localCleanDisabledLightsButton);
     localCreateSection.appendChild(localCreateGrid);
     localLightingContent.appendChild(localCreateSection);
 
@@ -10821,6 +12071,10 @@ export const createScene = function (engineArg, canvasArg) {
 
     scene.onBeforeRenderObservable.add(function () {
         resolveViewerWallCollisionAfterMovement();
+    });
+
+    scene.onBeforeRenderObservable.add(function () {
+        updateLocalLightsCameraCulling(false);
     });
 
 
@@ -15811,6 +17065,18 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getWallSegmentPaintDebug: function () {
             return getWallSegmentPaintDebug();
+        },
+        getWallSegmentLightTargetDebug: function () {
+            return getWallSegmentLightTargetDebug();
+        },
+        getLocalLightCameraCullingDebug: function () {
+            return getLocalLightCameraCullingDebug();
+        },
+        setLocalLightCameraCulling: function (options) {
+            return setLocalLightCameraCullingDebugOptions(options);
+        },
+        cleanDisabledLocalLights: function () {
+            return cleanDisabledLocalLightPool();
         },
         setViewerCollisionTargets: function (targets) {
             targets = targets || {};

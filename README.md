@@ -809,3 +809,232 @@ Debug:
 - each item now includes `paintable: true/false`
 
 No lighting target segmentation was changed in this stage.
+
+
+## V0_11 Stage 10B Wall Segment Light Targeting
+
+Local Lights target `Walls` now affects only the nearest wall segments instead of all wall meshes.
+
+Before:
+- `Walls` added all wallMeshes to `includedOnlyMeshes`.
+
+Now:
+- `Walls` adds only nearby meshes named `Wall_segment_...`.
+- Default max segments per light: 5.
+- Default segment search radius: 4.8.
+- For spot lights, a ray in the spot direction is used to find the primary wall segment.
+- For artwork-owned lights, the artwork wall segment is used as the primary target.
+
+Debug:
+- `GalleryApp.getWallSegmentLightTargetDebug()`
+
+This stage does not change the UI, save/load format, or wall painting behavior.
+
+
+## V0_11 Stage 10C Wall Segment Light Budget
+
+Fixes hard lighting cuts between wall segments.
+
+Stage 10B used:
+- one light → max 5 wall segments
+
+Stage 10C changes the rule to:
+- one wall segment → max 5 lights
+
+Lights can now affect a wider group of neighboring wall segments to reduce visible hard cutoffs, while each segment keeps a light budget.
+
+Debug:
+- `GalleryApp.getWallSegmentLightTargetDebug()`
+
+Look at:
+- `maxLightsPerSegment`
+- per-segment `lightCount`
+- per-light `wallTargetCount`
+
+
+## V0_11 Stage 10D Front-Facing Wall Segment Light Budget
+
+Fix:
+- wall segments are now targeted only when the light is on the front side of the segment.
+- this prevents lights from behind a wall from consuming the segment light budget or producing strange lighting cuts.
+
+Kept:
+- Stage 10C rule: one wall segment can receive max 5 lights.
+- a light can still affect multiple neighboring front-facing segments to avoid hard edges.
+
+Debug:
+- `GalleryApp.getWallSegmentLightTargetDebug()`
+
+Look for:
+- `frontFacingFilterEnabled`
+- `frontFacingDotLimit`
+- `candidateCountAfterFrontFilter`
+
+
+## V0_11 Stage 10E Camera View Local Light Culling Test
+
+Test optimization:
+- Local Lights are runtime-enabled only when their position is inside the middle part of the camera view.
+- For testing, the active area is intentionally narrow: 2/3 of the viewport.
+
+Default:
+- `localLightCameraCullingEnabled = true`
+- `localLightCameraCullingViewScale = 0.66`
+
+Important:
+- saved `enabled` state is preserved separately as `userEnabled`.
+- camera culling changes runtime light state only.
+- save/load should not accidentally save a camera-culled light as disabled.
+
+Debug:
+- `GalleryApp.getLocalLightCameraCullingDebug()`
+- `GalleryApp.setLocalLightCameraCulling({ enabled: true, viewScale: 0.66 })`
+
+Final tuning idea:
+- if this works, increase `viewScale` to around `0.95` or `1.0`.
+
+## V0_11 Stage 10E2 Full View Camera Culling
+
+Update:
+- camera-view light culling now uses the full camera viewport.
+- `localLightCameraCullingViewScale` changed from `0.66` to `1.0`.
+- Stage 10E1 intensity-based culling remains unchanged.
+
+Effect:
+- lights should stay active anywhere inside the visible camera frame.
+- they should only fade to intensity `0` when they leave the full viewport.
+
+
+## V0_11 Stage 10E3 Camera Light Smooth Fade
+
+Update:
+- camera culling no longer snaps light intensity directly between `0` and `userIntensity`.
+- each Local Light smoothly interpolates toward `runtimeTargetIntensity`.
+
+Defaults:
+- `localLightCameraCullingSmoothFadeEnabled = true`
+- `localLightCameraCullingFadeInSpeed = 7.5`
+- `localLightCameraCullingFadeOutSpeed = 5.0`
+
+Debug / tuning:
+```js
+GalleryApp.setLocalLightCameraCulling({
+  enabled: true,
+  viewScale: 1.0,
+  smoothFadeEnabled: true,
+  fadeInSpeed: 7.5,
+  fadeOutSpeed: 5.0
+})
+```
+
+
+## V0_11 Stage 10E4 Soft Delete Local Lights
+
+Fix:
+- deleting a Local Light from the UI no longer calls `light.dispose()`.
+- UI delete now uses soft-delete:
+  - light remains technically in scene,
+  - intensity becomes 0,
+  - editor marker/helper meshes are hidden,
+  - item is removed from active UI/state lists,
+  - item is not saved as an active light.
+
+Reason:
+- physically removing lights from the Babylon scene can rebuild materials/shaders and looks like texture reload flicker.
+
+Note:
+- this keeps deleted light objects in memory during the current session.
+- this is acceptable for the current editor workflow and avoids visual flicker.
+
+
+## V0_11 Stage 10E5 Light Quarantine / Dummy Target
+
+Update over Stage 10E4:
+- soft-deleted lights are no longer just intensity `0`.
+- they are quarantined to a hidden dummy mesh:
+  - `includedOnlyMeshes = [berryboy_local_light_quarantine_dummy]`
+  - `intensity = 0`
+- this prevents deleted lights from targeting real gallery meshes.
+
+Helper cleanup:
+- editor helper meshes are hidden/disabled.
+- local light helper geometry is disposed through `disposeLocalLightHelper(item)`.
+- gizmo/highlight is detached/removed.
+- marker/root/target/helper objects are non-pickable.
+
+Reason:
+- avoid material/shader rebuild flicker from `light.dispose()`,
+- while also preventing deleted lights from polluting real wall/artwork/pedestal target space.
+
+
+## V0_11 Stage 10E7 No Dispose Light Reuse Pool
+
+Final delete strategy after testing:
+- `light.dispose()` causes material/texture reload flicker even with delay.
+- Delete Selected therefore does not physically dispose local lights during the session.
+- Deleted lights are quarantined to a hidden dummy mesh and reused when a new light of the same type is created.
+
+Delete Selected:
+- intensity `0`
+- `includedOnlyMeshes = [berryboy_local_light_quarantine_dummy]`
+- helpers/markers/targets hidden/non-pickable
+- removed from active UI/state list
+- not saved as active
+
+Create Spot / Point:
+- first checks the reuse pool
+- reuses a quarantined light of the same type when available
+- resets position, intensity, range, color, target options and helper geometry
+
+This avoids flicker and prevents unbounded scene pollution in normal edit workflows.
+
+
+## V0_11 Stage 10E8 Clean Disabled Lights Button
+
+Update:
+- Added a safe manual cleanup button in Local Lights:
+  - `Clean Disabled Lights`
+- Normal `Delete Selected` still avoids flicker:
+  - no `light.dispose()`
+  - deleted lights go to quarantine/reuse pool
+- `Clean Disabled Lights` is intentional hard cleanup:
+  - disposes only quarantined/deleted lights
+  - never disposes active lights
+  - may cause a short material reload, by design
+
+Console API:
+```js
+GalleryApp.cleanDisabledLocalLights()
+```
+
+Debug:
+```js
+GalleryApp.getLocalLightCameraCullingDebug()
+```
+
+Useful fields:
+- `reusePoolCount`
+- `cleanDisabledLightsAvailable`
+- `reusePoolByType`
+
+
+## V0_11 Stage 10E9 Zero Touch Light Delete
+
+Fix attempt after Stage 10E8:
+- deleting still caused material/texture reload.
+- likely cause: changing light target lists (`includedOnlyMeshes`) and/or refreshing global local light targets.
+
+New normal Delete Selected behavior:
+- only sets `light.intensity = 0`.
+- does not call `light.dispose()`.
+- does not change light enabled-state.
+- does not change `includedOnlyMeshes`.
+- does not refresh all local light targets.
+- does not dispose helper geometry.
+- hides marker/helper visuals without changing mesh enabled-state.
+- keeps the light in the reuse pool.
+
+Tradeoff:
+- deleted lights may still have their previous includedOnlyMeshes while intensity is 0.
+- this is intentional to avoid shader/material rebuilds during regular editing.
+- use `Clean Disabled Lights` manually when you accept one deliberate reload to clean memory.
