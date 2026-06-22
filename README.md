@@ -1038,3 +1038,29 @@ Tradeoff:
 - deleted lights may still have their previous includedOnlyMeshes while intensity is 0.
 - this is intentional to avoid shader/material rebuilds during regular editing.
 - use `Clean Disabled Lights` manually when you accept one deliberate reload to clean memory.
+
+
+## V0_11 Stage 10F Dynamic Wall Segment Retargeting
+
+Fix:
+- Local Lights no longer keep the first wall segment assignment forever after being moved.
+- When a Local Light is moved or rotated with the gizmo, wall segment targets are recalculated.
+- The rule remains:
+  - one wall segment can receive max 5 lights
+  - not one light fixed to 5 old segments
+
+Implementation:
+- `syncLocalLightTransformFromMarker()` requests retargeting on drag and drag-end.
+- Retargeting is throttled during drag.
+- On drag-end it is forced.
+- Since the budget is per wall segment, active Local Lights are recalculated together.
+
+Debug:
+```js
+GalleryApp.getWallSegmentLightTargetDebug()
+GalleryApp.refreshLocalLightWallSegmentTargets()
+```
+
+Important:
+- Stage 10E9 zero-touch Delete Selected remains unchanged.
+- Delete Selected still does not refresh all targets.

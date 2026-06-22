@@ -1455,6 +1455,16 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightWallSegmentBudgetPassActive = false;
     var localLightWallSegmentBudgetMap = {};
 
+    // STAGE 10F - DYNAMIC WALL SEGMENT RETARGETING WHILE MOVING LOCAL LIGHTS
+    // Lampa nie może zostać przypisana raz na stałe do starych segmentów.
+    // Podczas przesuwania/rotacji ręcznej targetowanie segmentów ma być przeliczane,
+    // ale nadal obowiązuje zasada: jeden segment -> maksymalnie 5 świateł.
+    var localLightDynamicWallRetargetEnabled = true;
+    var localLightDynamicWallRetargetThrottleMs = 80;
+    var localLightDynamicWallRetargetLastTime = 0;
+    var localLightDynamicWallRetargetCount = 0;
+    var localLightDynamicWallRetargetLastReason = null;
+
     function isLightingWallSegmentMesh(mesh) {
         return !!(
             mesh &&
@@ -2190,6 +2200,10 @@ export const createScene = function (engineArg, canvasArg) {
             softRadius: candidateData.softRadius,
             frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
             frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            dynamicRetargetEnabled: localLightDynamicWallRetargetEnabled,
+            dynamicRetargetThrottleMs: localLightDynamicWallRetargetThrottleMs,
+            dynamicRetargetCount: localLightDynamicWallRetargetCount,
+            dynamicRetargetLastReason: localLightDynamicWallRetargetLastReason,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
             maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
             candidateCountAfterFrontFilter: candidates.length,
@@ -2403,10 +2417,47 @@ export const createScene = function (engineArg, canvasArg) {
         localLightWallSegmentBudgetPassActive = true;
 
         localLightItems.forEach(function (item) {
+            if (!item || item.softDeleted) {
+                return;
+            }
+
             applyCommonLocalLightTargets(item);
         });
 
         localLightWallSegmentBudgetPassActive = false;
+    }
+
+    function requestDynamicWallSegmentRetargetForLocalLight(item, force, reason) {
+        if (!localLightDynamicWallRetargetEnabled) {
+            return;
+        }
+
+        if (!item || item.softDeleted || !item.light) {
+            return;
+        }
+
+        if (!item.targetOptions || item.targetOptions.walls !== true) {
+            return;
+        }
+
+        var now = Date.now();
+
+        if (
+            !force &&
+            localLightDynamicWallRetargetThrottleMs > 0 &&
+            now - localLightDynamicWallRetargetLastTime < localLightDynamicWallRetargetThrottleMs
+        ) {
+            return;
+        }
+
+        localLightDynamicWallRetargetLastTime = now;
+        localLightDynamicWallRetargetLastReason = reason || "unknown";
+        localLightDynamicWallRetargetCount += 1;
+
+        // Budżet jest per segment, więc przy zmianie pozycji jednej lampy
+        // najbezpieczniej przeliczyć całą aktywną pulę Local Lights.
+        // To NIE jest używane przy Delete Selected; delete w Stage 10E9 pozostaje zero-touch.
+        refreshAllCommonLocalLightTargets();
     }
 
     function updateDisplaySpotLight(ownerMesh) {
@@ -8612,6 +8663,12 @@ export const createScene = function (engineArg, canvasArg) {
 
         updateLocalLightHelper(item);
         updateLocalLightVisualState(item);
+
+        requestDynamicWallSegmentRetargetForLocalLight(
+            item,
+            !!forceShadowRefresh,
+            forceShadowRefresh ? "dragEnd" : "drag"
+        );
 
         if (item.type === "spot") {
             requestLocalSpotShadowRefresh(item, !!forceShadowRefresh);
@@ -17067,6 +17124,10 @@ export const createScene = function (engineArg, canvasArg) {
             return getWallSegmentPaintDebug();
         },
         getWallSegmentLightTargetDebug: function () {
+            return getWallSegmentLightTargetDebug();
+        },
+        refreshLocalLightWallSegmentTargets: function () {
+            refreshAllCommonLocalLightTargets();
             return getWallSegmentLightTargetDebug();
         },
         getLocalLightCameraCullingDebug: function () {
