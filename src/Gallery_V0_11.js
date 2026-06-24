@@ -2877,25 +2877,62 @@ export const createScene = function (engineArg, canvasArg) {
             ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
             : "artwork";
 
-        return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        // STAGE 11C - STORAGE FOLDERS
+        // Nowe oryginały artworków trafiają do czytelnego folderu Original.
+        return galleryArtworkStoragePrefix + "/artworks/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
     }
 
 
-    function createArtworkVariantStoragePath(originalPath, variantName, extension) {
+    function getStorageVariantFolderName(variantName) {
         var safeVariant = String(variantName || "variant").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+
+        if (safeVariant === "web") {
+            return "Desktop";
+        }
+
+        if (safeVariant === "mobile") {
+            return "Mobile";
+        }
+
+        if (safeVariant === "preview") {
+            return "Preview";
+        }
+
+        return safeVariant || "Variant";
+    }
+
+    function getImageStorageCategoryFromPath(originalPath) {
+        var sourcePath = String(originalPath || "");
+
+        if (
+            sourcePath.indexOf("/authors/") !== -1 ||
+            sourcePath.indexOf("authors/") === 0
+        ) {
+            return "authors";
+        }
+
+        return "artworks";
+    }
+
+    function createArtworkVariantStoragePath(originalPath, variantName, extension) {
         var safeExtension = String(extension || galleryArtworkImageVariantExtension || "webp").replace(/[^a-z0-9]+/gi, "").toLowerCase() || "webp";
         var sourcePath = String(originalPath || "");
         var slashIndex = sourcePath.lastIndexOf("/");
-        var directory = slashIndex !== -1 ? sourcePath.slice(0, slashIndex) : galleryArtworkStoragePrefix;
         var fileName = slashIndex !== -1 ? sourcePath.slice(slashIndex + 1) : sourcePath;
+        var category = getImageStorageCategoryFromPath(sourcePath);
+        var folderName = getStorageVariantFolderName(variantName);
 
         if (!fileName) {
-            fileName = "artwork-image-" + Date.now() + ".jpg";
+            fileName = "image-" + Date.now() + ".jpg";
         }
 
         var baseName = fileName.replace(/\.[^/.]+$/, "");
 
-        return directory + "/variants/" + baseName + "-" + safeVariant + "." + safeExtension;
+        // STAGE 11C - STORAGE FOLDERS
+        // Warianty idą do czytelnych folderów:
+        // main/artworks/Desktop, main/artworks/Mobile, main/artworks/Preview
+        // main/authors/Desktop,  main/authors/Mobile,  main/authors/Preview
+        return galleryArtworkStoragePrefix + "/" + category + "/" + folderName + "/" + baseName + "." + safeExtension;
     }
 
     function loadImageElementFromBlob(blob) {
@@ -6979,7 +7016,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
-    artworkImageNote.innerText = "Upload creates web/mobile/preview image variants in Supabase Storage. Mobile loads the smaller variant.";
+    artworkImageNote.innerText = "Upload creates Original/Desktop/Mobile/Preview files in Supabase Storage. Mobile loads the smaller variant.";
 
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
@@ -6993,6 +7030,138 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageSectionData.section.appendChild(artworkImageActions);
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
+
+    // STAGE 11C - GLOBAL IMAGE OPTIMIZATION UI
+    // Dodatkowa sekcja jest widoczna bez szukania przycisku w środku konkretnego pola.
+    // Rebuild działa globalnie na wszystkie brakujące warianty.
+    var imageOptimizationSectionData = createEditorSection("IMAGE OPTIMIZATION");
+
+    var imageOptimizationNote = document.createElement("p");
+    imageOptimizationNote.className = "gallery-artwork-image-note";
+    imageOptimizationNote.innerText = "Creates Desktop/Mobile/Preview versions in Supabase Storage for existing artwork images and author photos.";
+
+    var imageOptimizationActions = document.createElement("div");
+    imageOptimizationActions.className = "gallery-artwork-image-actions is-two";
+
+    var imageOptimizationArtworkButton = document.createElement("button");
+    imageOptimizationArtworkButton.type = "button";
+    imageOptimizationArtworkButton.className = "gallery-editor-action-button is-primary";
+    imageOptimizationArtworkButton.innerText = "REBUILD ARTWORK VARIANTS";
+
+    var imageOptimizationAuthorButton = document.createElement("button");
+    imageOptimizationAuthorButton.type = "button";
+    imageOptimizationAuthorButton.className = "gallery-editor-action-button is-primary";
+    imageOptimizationAuthorButton.innerText = "REBUILD AUTHOR VARIANTS";
+
+    imageOptimizationActions.appendChild(imageOptimizationArtworkButton);
+    imageOptimizationActions.appendChild(imageOptimizationAuthorButton);
+    imageOptimizationSectionData.section.appendChild(imageOptimizationNote);
+    imageOptimizationSectionData.section.appendChild(imageOptimizationActions);
+    editorScroll.appendChild(imageOptimizationSectionData.section);
+
+    function runArtworkImageVariantsRebuildFromUi() {
+        var missingCount = getActiveArtworks().filter(function (candidate) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
+        }).length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("All artwork images already have Desktop/Mobile variants.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild artwork image variants for " + missingCount + " image(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllArtworkImageVariants()
+            .then(function (result) {
+                console.info("Artwork image variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Artwork variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("No artwork variants to rebuild. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild artwork image variants error:", error);
+                notifyGalleryStatus("Artwork variants rebuild failed.");
+            })
+            .finally(function () {
+                updateArtworkImageUi();
+                updateArtworkTransformUi();
+            });
+    }
+
+    function runAuthorPhotoVariantsRebuildFromUi() {
+        var missingCount = getAuthorRecordsNeedingPhotoVariants().length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("All author photos already have Desktop/Mobile variants.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild author photo variants for " + missingCount + " author(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllAuthorPhotoVariants()
+            .then(function (result) {
+                console.info("Author photo variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Author variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("No author variants to rebuild. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild author photo variants error:", error);
+                notifyGalleryStatus("Author variants rebuild failed.");
+            })
+            .finally(function () {
+                updateArtworkInfoUi();
+                updateArtworkTransformUi();
+            });
+    }
+
+    imageOptimizationArtworkButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runArtworkImageVariantsRebuildFromUi();
+    };
+
+    imageOptimizationAuthorButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runAuthorPhotoVariantsRebuildFromUi();
+    };
 
     function createGalleryTextInputCompat(placeholder) {
         var input = document.createElement("input");
@@ -7470,7 +7639,9 @@ export const createScene = function (engineArg, canvasArg) {
             ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
             : "artwork";
 
-        return galleryArtworkStoragePrefix + "/authors/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        // STAGE 11C - STORAGE FOLDERS
+        // Nowe oryginały zdjęć autorów trafiają do czytelnego folderu Original.
+        return galleryArtworkStoragePrefix + "/authors/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
     }
 
     async function deleteAuthorPhotoFromSupabase(info) {
@@ -7779,49 +7950,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoRebuildAuthorPhotoVariantsButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
-
-        var missingCount = getAuthorRecordsNeedingPhotoVariants().length;
-
-        if (!missingCount) {
-            notifyGalleryStatus("All author photos already have web/mobile variants.");
-            return;
-        }
-
-        var confirmed = true;
-
-        if (typeof window !== "undefined" && window.confirm) {
-            confirmed = window.confirm(
-                "Rebuild author photo variants for " + missingCount + " author(s)? This can take a while."
-            );
-        }
-
-        if (!confirmed) {
-            return;
-        }
-
-        rebuildAllAuthorPhotoVariants()
-            .then(function (result) {
-                console.info("Author photo variants rebuild:", result);
-
-                if (result.rebuilt > 0) {
-                    return saveGalleryStateToSupabase()
-                        .then(function () {
-                            notifyGalleryStatus("Author photo variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
-                            return result;
-                        });
-                }
-
-                notifyGalleryStatus("No author photos to rebuild. Failed: " + result.failed + ".");
-                return result;
-            })
-            .catch(function (error) {
-                console.warn("Rebuild author photo variants error:", error);
-                notifyGalleryStatus("Author photo variants rebuild failed.");
-            })
-            .finally(function () {
-                updateArtworkInfoUi();
-                updateArtworkTransformUi();
-            });
+        runAuthorPhotoVariantsRebuildFromUi();
     };
 
     artworkInfoUploadPhotoButton.onclick = function (event) {
@@ -8073,51 +8202,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageRebuildVariantsButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
-
-        var missingCount = getActiveArtworks().filter(function (candidate) {
-            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
-        }).length;
-
-        if (!missingCount) {
-            notifyGalleryStatus("Wszystkie obrazy maja juz warianty web/mobile.");
-            return;
-        }
-
-        var confirmed = true;
-
-        if (typeof window !== "undefined" && window.confirm) {
-            confirmed = window.confirm(
-                "Rebuild image variants for " + missingCount + " artwork image(s)? This can take a while."
-            );
-        }
-
-        if (!confirmed) {
-            return;
-        }
-
-        rebuildAllArtworkImageVariants()
-            .then(function (result) {
-                console.info("Artwork image variants rebuild:", result);
-
-                if (result.rebuilt > 0) {
-                    return saveGalleryStateToSupabase()
-                        .then(function () {
-                            notifyGalleryStatus("Warianty obrazow gotowe i zapisane. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
-                            return result;
-                        });
-                }
-
-                notifyGalleryStatus("Brak obrazow do przebudowy wariantow. Failed: " + result.failed + ".");
-                return result;
-            })
-            .catch(function (error) {
-                console.warn("Rebuild image variants error:", error);
-                notifyGalleryStatus("Blad przebudowy wariantow obrazow.");
-            })
-            .finally(function () {
-                updateArtworkImageUi();
-                updateArtworkTransformUi();
-            });
+        runArtworkImageVariantsRebuildFromUi();
     };
 
     artworkImageApplyUrlButton.onclick = function (event) {

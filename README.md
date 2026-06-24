@@ -1210,3 +1210,28 @@ GalleryApp.rebuildAllAuthorPhotoVariants()
 GalleryApp.rebuildAuthorPhotoVariants("author-name-or-id")
 GalleryApp.getAuthorPhotoVariantDebug()
 ```
+
+
+## V0_11 Stage 11C Image Optimization UI + Storage Folders
+
+Fix:
+- Rebuild buttons are now also available in a visible global section: `IMAGE OPTIMIZATION`.
+- Storage paths are organized by type and variant folders.
+
+New Storage structure for new uploads:
+```txt
+main/artworks/Original/
+main/artworks/Desktop/
+main/artworks/Mobile/
+main/artworks/Preview/
+
+main/authors/Original/
+main/authors/Desktop/
+main/authors/Mobile/
+main/authors/Preview/
+```
+
+Notes:
+- Existing files are not moved.
+- Existing files get new variants generated into the new Desktop/Mobile/Preview folders during rebuild.
+- Delete uses saved paths, so it removes original + variants regardless of old/new folder layout.

@@ -1535,6 +1535,13 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightCameraCullingFadeOutSpeed = 5.0;
     var localLightCameraCullingSnapEpsilon = 0.003;
 
+    // STAGE 10G - BEAM / TARGET AWARE CAMERA CULLING
+    // Nie wystarczy sprawdzać pozycji lampy. Jeśli patrzymy na ścianę/obraz,
+    // który lampa oświetla, albo na promień/stożek światła, lampa ma zostać aktywna.
+    var localLightCameraCullingBeamAwareEnabled = true;
+    var localLightCameraCullingMaxTargetMeshSamples = 10;
+    var localLightCameraCullingPointLightSampleRadiusFactor = 0.35;
+
     function getLocalLightUserEnabled(item) {
         if (!item) {
             return false;
@@ -1582,6 +1589,123 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function isProjectedPointInsideCameraCullingViewport(point, viewportInfo) {
+        var projected = BABYLON.Vector3.Project(
+            point,
+            BABYLON.Matrix.Identity(),
+            scene.getTransformMatrix(),
+            viewportInfo.viewport
+        );
+
+        var inside =
+            projected.z >= 0 &&
+            projected.z <= 1 &&
+            projected.x >= viewportInfo.minX &&
+            projected.x <= viewportInfo.maxX &&
+            projected.y >= viewportInfo.minY &&
+            projected.y <= viewportInfo.maxY;
+
+        return {
+            inside: inside,
+            screenX: Math.round(projected.x),
+            screenY: Math.round(projected.y),
+            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z)
+        };
+    }
+
+    function addLocalLightCameraCullingSample(samples, label, point) {
+        if (!point || !isFinite(point.x) || !isFinite(point.y) || !isFinite(point.z)) {
+            return;
+        }
+
+        samples.push({
+            label: label,
+            point: point.clone ? point.clone() : point
+        });
+    }
+
+    function getLocalLightCameraCullingSamples(item) {
+        var samples = [];
+        var lightPosition = getLocalLightPosition(item);
+
+        addLocalLightCameraCullingSample(samples, "lightPosition", lightPosition);
+
+        if (
+            localLightCameraCullingBeamAwareEnabled &&
+            item &&
+            item.light
+        ) {
+            if (item.type === "spot" && item.light.direction) {
+                var direction = item.light.direction.clone();
+
+                if (direction.length() > 0.0001) {
+                    direction.normalize();
+
+                    var range = item.light.range && isFinite(item.light.range)
+                        ? item.light.range
+                        : 8;
+
+                    [0.20, 0.40, 0.65, 0.90].forEach(function (factor) {
+                        addLocalLightCameraCullingSample(
+                            samples,
+                            "spotBeam_" + factor,
+                            lightPosition.add(direction.scale(range * factor))
+                        );
+                    });
+                }
+            } else if (item.type === "point") {
+                var pointRange = item.light.range && isFinite(item.light.range)
+                    ? item.light.range
+                    : 8;
+
+                var radius = Math.max(
+                    0.5,
+                    pointRange * localLightCameraCullingPointLightSampleRadiusFactor
+                );
+
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_forward",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(0, 0, 1)).scale(radius))
+                );
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_right",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(1, 0, 0)).scale(radius))
+                );
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "pointRadius_left",
+                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(-1, 0, 0)).scale(radius))
+                );
+            }
+
+            if (item.light.includedOnlyMeshes && item.light.includedOnlyMeshes.length) {
+                item.light.includedOnlyMeshes.slice(0, localLightCameraCullingMaxTargetMeshSamples).forEach(function (mesh, index) {
+                    if (!mesh || mesh.isDisposed && mesh.isDisposed()) {
+                        return;
+                    }
+
+                    addLocalLightCameraCullingSample(
+                        samples,
+                        "targetMesh_" + index + "_" + mesh.name,
+                        getMeshWorldCenter(mesh)
+                    );
+                });
+            }
+
+            if (item.ownerMesh) {
+                addLocalLightCameraCullingSample(
+                    samples,
+                    "ownerMesh_" + item.ownerMesh.name,
+                    getMeshWorldCenter(item.ownerMesh)
+                );
+            }
+        }
+
+        return samples;
+    }
+
     function getLocalLightCameraCullingViewportData(item) {
         if (
             !item ||
@@ -1597,19 +1721,36 @@ export const createScene = function (engineArg, canvasArg) {
             };
         }
 
-        var position = getLocalLightPosition(item);
         var width = Math.max(1, engine.getRenderWidth());
         var height = Math.max(1, engine.getRenderHeight());
         var viewport = camera.viewport.toGlobal(width, height);
-        var projected;
+        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
+        var viewportInfo = {
+            viewport: viewport,
+            minX: width * margin,
+            maxX: width * (1 - margin),
+            minY: height * margin,
+            maxY: height * (1 - margin)
+        };
+
+        var samples = getLocalLightCameraCullingSamples(item);
+        var projectedSamples = [];
+        var firstInsideSample = null;
 
         try {
-            projected = BABYLON.Vector3.Project(
-                position,
-                BABYLON.Matrix.Identity(),
-                scene.getTransformMatrix(),
-                viewport
-            );
+            samples.forEach(function (sample) {
+                var projected = isProjectedPointInsideCameraCullingViewport(
+                    sample.point,
+                    viewportInfo
+                );
+
+                projected.label = sample.label;
+                projectedSamples.push(projected);
+
+                if (!firstInsideSample && projected.inside) {
+                    firstInsideSample = projected;
+                }
+            });
         } catch (error) {
             return {
                 inside: true,
@@ -1617,31 +1758,37 @@ export const createScene = function (engineArg, canvasArg) {
             };
         }
 
-        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
-        var minX = width * margin;
-        var maxX = width * (1 - margin);
-        var minY = height * margin;
-        var maxY = height * (1 - margin);
-
-        var inFront = projected.z >= 0 && projected.z <= 1;
-        var inside =
-            inFront &&
-            projected.x >= minX &&
-            projected.x <= maxX &&
-            projected.y >= minY &&
-            projected.y <= maxY;
+        var inside = !!firstInsideSample;
+        var fallbackSample = projectedSamples.length ? projectedSamples[0] : null;
 
         return {
             inside: inside,
-            reason: inside ? "insideCameraView" : "outsideCameraView",
-            screenX: Math.round(projected.x),
-            screenY: Math.round(projected.y),
-            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z),
-            minX: Math.round(minX),
-            maxX: Math.round(maxX),
-            minY: Math.round(minY),
-            maxY: Math.round(maxY),
-            viewScale: localLightCameraCullingViewScale
+            reason: inside
+                ? ("insideCameraView:" + firstInsideSample.label)
+                : "outsideCameraView",
+            matchedSampleLabel: firstInsideSample ? firstInsideSample.label : null,
+            screenX: firstInsideSample
+                ? firstInsideSample.screenX
+                : (fallbackSample ? fallbackSample.screenX : null),
+            screenY: firstInsideSample
+                ? firstInsideSample.screenY
+                : (fallbackSample ? fallbackSample.screenY : null),
+            screenZ: firstInsideSample
+                ? firstInsideSample.screenZ
+                : (fallbackSample ? fallbackSample.screenZ : null),
+            minX: Math.round(viewportInfo.minX),
+            maxX: Math.round(viewportInfo.maxX),
+            minY: Math.round(viewportInfo.minY),
+            maxY: Math.round(viewportInfo.maxY),
+            viewScale: localLightCameraCullingViewScale,
+            beamAware: localLightCameraCullingBeamAwareEnabled,
+            sampleCount: samples.length,
+            insideSampleCount: projectedSamples.filter(function (sample) {
+                return !!sample.inside;
+            }).length,
+            sampleLabels: projectedSamples.map(function (sample) {
+                return sample.label + ":" + (sample.inside ? "in" : "out");
+            })
         };
     }
 
@@ -1776,6 +1923,8 @@ export const createScene = function (engineArg, canvasArg) {
             smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
             fadeInSpeed: localLightCameraCullingFadeInSpeed,
             fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
+            beamAwareEnabled: localLightCameraCullingBeamAwareEnabled,
+            maxTargetMeshSamples: localLightCameraCullingMaxTargetMeshSamples,
             activeCount: localLightItems.filter(function (item) {
                 return item && item.light && item.light.isEnabled && item.light.isEnabled() && item.light.intensity > 0;
             }).length,
@@ -1870,6 +2019,17 @@ export const createScene = function (engineArg, canvasArg) {
             localLightCameraCullingFadeOutSpeed = Math.max(
                 0.1,
                 Number(options.fadeOutSpeed) || 5.0
+            );
+        }
+
+        if (options.beamAwareEnabled !== undefined) {
+            localLightCameraCullingBeamAwareEnabled = !!options.beamAwareEnabled;
+        }
+
+        if (options.maxTargetMeshSamples !== undefined) {
+            localLightCameraCullingMaxTargetMeshSamples = Math.max(
+                0,
+                Math.floor(Number(options.maxTargetMeshSamples) || 0)
             );
         }
 
@@ -2574,9 +2734,54 @@ export const createScene = function (engineArg, canvasArg) {
         return artwork.metadata.artworkImage || null;
     }
 
-    function getArtworkImageUrlFromState(imageState) {
+    function isArtworkMobileTextureDevice() {
+        if (typeof window === "undefined") {
+            return false;
+        }
+
+        var userAgent = navigator && navigator.userAgent
+            ? navigator.userAgent
+            : "";
+
+        var mobileByAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
+        var mobileByWidth = window.innerWidth !== undefined && window.innerWidth <= 768;
+        var mobileByTouch = navigator && navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024;
+
+        return !!(mobileByAgent || mobileByWidth || mobileByTouch);
+    }
+
+    function getPublicArtworkUrlFromPath(imagePath, storageBucket) {
+        if (!imagePath || !window.gallerySupabase || !window.gallerySupabase.storage) {
+            return "";
+        }
+
+        try {
+            var publicUrlResponse = window.gallerySupabase
+                .storage
+                .from(storageBucket || galleryArtworkStorageBucket)
+                .getPublicUrl(imagePath);
+
+            if (
+                publicUrlResponse &&
+                publicUrlResponse.data &&
+                publicUrlResponse.data.publicUrl
+            ) {
+                return publicUrlResponse.data.publicUrl;
+            }
+        } catch (error) {
+            console.warn("Artwork public URL warning:", error);
+        }
+
+        return "";
+    }
+
+    function getArtworkOriginalImageUrlFromState(imageState) {
         if (!imageState) {
             return "";
+        }
+
+        if (imageState.imageUrlOriginal) {
+            return imageState.imageUrlOriginal;
         }
 
         if (imageState.imageUrl) {
@@ -2587,26 +2792,55 @@ export const createScene = function (engineArg, canvasArg) {
             return imageState.publicUrl;
         }
 
-        if (imageState.imagePath && window.gallerySupabase && window.gallerySupabase.storage) {
-            try {
-                var publicUrlResponse = window.gallerySupabase
-                    .storage
-                    .from(imageState.storageBucket || galleryArtworkStorageBucket)
-                    .getPublicUrl(imageState.imagePath);
-
-                if (
-                    publicUrlResponse &&
-                    publicUrlResponse.data &&
-                    publicUrlResponse.data.publicUrl
-                ) {
-                    return publicUrlResponse.data.publicUrl;
-                }
-            } catch (error) {
-                console.warn("Artwork public URL warning:", error);
-            }
+        if (imageState.imagePath) {
+            return getPublicArtworkUrlFromPath(
+                imageState.imagePath,
+                imageState.storageBucket || galleryArtworkStorageBucket
+            );
         }
 
         return "";
+    }
+
+    function getArtworkImageUrlFromState(imageState) {
+        if (!imageState) {
+            return "";
+        }
+
+        var isMobile = isArtworkMobileTextureDevice();
+
+        if (isMobile && imageState.imageUrlMobile) {
+            return imageState.imageUrlMobile;
+        }
+
+        if (!isMobile && imageState.imageUrlWeb) {
+            return imageState.imageUrlWeb;
+        }
+
+        if (imageState.imageUrlWeb) {
+            return imageState.imageUrlWeb;
+        }
+
+        if (imageState.imageUrlMobile) {
+            return imageState.imageUrlMobile;
+        }
+
+        if (imageState.imageUrlPreview) {
+            return imageState.imageUrlPreview;
+        }
+
+        return getArtworkOriginalImageUrlFromState(imageState);
+    }
+
+    function getArtworkTextureNoMipmap(imageState) {
+        return !!(
+            imageState &&
+            isArtworkMobileTextureDevice() &&
+            (
+                imageState.imageUrlMobile ||
+                imageState.imagePathMobile
+            )
+        );
     }
 
     function createSafeStorageFileName(fileName) {
@@ -2643,7 +2877,687 @@ export const createScene = function (engineArg, canvasArg) {
             ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
             : "artwork";
 
-        return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        // STAGE 11C - STORAGE FOLDERS
+        // Nowe oryginały artworków trafiają do czytelnego folderu Original.
+        return galleryArtworkStoragePrefix + "/artworks/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+    }
+
+
+    function getStorageVariantFolderName(variantName) {
+        var safeVariant = String(variantName || "variant").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+
+        if (safeVariant === "web") {
+            return "Desktop";
+        }
+
+        if (safeVariant === "mobile") {
+            return "Mobile";
+        }
+
+        if (safeVariant === "preview") {
+            return "Preview";
+        }
+
+        return safeVariant || "Variant";
+    }
+
+    function getImageStorageCategoryFromPath(originalPath) {
+        var sourcePath = String(originalPath || "");
+
+        if (
+            sourcePath.indexOf("/authors/") !== -1 ||
+            sourcePath.indexOf("authors/") === 0
+        ) {
+            return "authors";
+        }
+
+        return "artworks";
+    }
+
+    function createArtworkVariantStoragePath(originalPath, variantName, extension) {
+        var safeExtension = String(extension || galleryArtworkImageVariantExtension || "webp").replace(/[^a-z0-9]+/gi, "").toLowerCase() || "webp";
+        var sourcePath = String(originalPath || "");
+        var slashIndex = sourcePath.lastIndexOf("/");
+        var fileName = slashIndex !== -1 ? sourcePath.slice(slashIndex + 1) : sourcePath;
+        var category = getImageStorageCategoryFromPath(sourcePath);
+        var folderName = getStorageVariantFolderName(variantName);
+
+        if (!fileName) {
+            fileName = "image-" + Date.now() + ".jpg";
+        }
+
+        var baseName = fileName.replace(/\.[^/.]+$/, "");
+
+        // STAGE 11C - STORAGE FOLDERS
+        // Warianty idą do czytelnych folderów:
+        // main/artworks/Desktop, main/artworks/Mobile, main/artworks/Preview
+        // main/authors/Desktop,  main/authors/Mobile,  main/authors/Preview
+        return galleryArtworkStoragePrefix + "/" + category + "/" + folderName + "/" + baseName + "." + safeExtension;
+    }
+
+    function loadImageElementFromBlob(blob) {
+        return new Promise(function (resolve, reject) {
+            var image = new Image();
+            var objectUrl = URL.createObjectURL(blob);
+
+            image.onload = function () {
+                URL.revokeObjectURL(objectUrl);
+                resolve(image);
+            };
+
+            image.onerror = function (error) {
+                URL.revokeObjectURL(objectUrl);
+                reject(error);
+            };
+
+            image.src = objectUrl;
+        });
+    }
+
+    function canvasToBlobSafe(canvas, mimeType, quality) {
+        return new Promise(function (resolve, reject) {
+            if (!canvas || !canvas.toBlob) {
+                reject(new Error("Canvas toBlob is not supported."));
+                return;
+            }
+
+            canvas.toBlob(
+                function (blob) {
+                    if (blob) {
+                        resolve({
+                            blob: blob,
+                            mimeType: blob.type || mimeType
+                        });
+                        return;
+                    }
+
+                    if (mimeType !== "image/jpeg") {
+                        canvas.toBlob(
+                            function (fallbackBlob) {
+                                if (fallbackBlob) {
+                                    resolve({
+                                        blob: fallbackBlob,
+                                        mimeType: fallbackBlob.type || "image/jpeg"
+                                    });
+                                } else {
+                                    reject(new Error("Canvas fallback toBlob returned empty blob."));
+                                }
+                            },
+                            "image/jpeg",
+                            quality
+                        );
+                        return;
+                    }
+
+                    reject(new Error("Canvas toBlob returned empty blob."));
+                },
+                mimeType,
+                quality
+            );
+        });
+    }
+
+    async function createArtworkImageVariantBlob(sourceBlob, variantName, settings) {
+        var image = await loadImageElementFromBlob(sourceBlob);
+        var sourceWidth = image.naturalWidth || image.width || 1;
+        var sourceHeight = image.naturalHeight || image.height || 1;
+        var maxSide = settings && settings.maxSide ? settings.maxSide : 1024;
+        var scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+        var targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+        var targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+        var canvas = document.createElement("canvas");
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        var context = canvas.getContext("2d", {
+            alpha: true,
+            desynchronized: true
+        });
+
+        if (!context) {
+            throw new Error("Cannot create 2D canvas context.");
+        }
+
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+        var encoded = await canvasToBlobSafe(
+            canvas,
+            galleryArtworkImageVariantFormat,
+            settings && settings.quality !== undefined ? settings.quality : 0.8
+        );
+
+        var extension = encoded.mimeType === "image/jpeg"
+            ? "jpg"
+            : galleryArtworkImageVariantExtension;
+
+        return {
+            name: variantName,
+            blob: encoded.blob,
+            mimeType: encoded.mimeType,
+            extension: extension,
+            width: targetWidth,
+            height: targetHeight,
+            size: encoded.blob.size || 0,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight
+        };
+    }
+
+    async function uploadArtworkVariantBlob(client, originalPath, variantName, variantBlobData) {
+        var variantPath = createArtworkVariantStoragePath(
+            originalPath,
+            variantName,
+            variantBlobData.extension
+        );
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(variantPath, variantBlobData.blob, {
+                cacheControl: "31536000",
+                upsert: true,
+                contentType: variantBlobData.mimeType
+            });
+
+        if (uploadResponse.error) {
+            throw uploadResponse.error;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(variantPath);
+
+        var publicUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+
+        return {
+            path: variantPath,
+            url: publicUrl,
+            width: variantBlobData.width,
+            height: variantBlobData.height,
+            size: variantBlobData.size,
+            mimeType: variantBlobData.mimeType
+        };
+    }
+
+    async function createAndUploadArtworkImageVariants(artwork, sourceBlob, originalPath, client) {
+        if (!galleryArtworkImageVariantsEnabled || !sourceBlob || !client || !client.storage) {
+            return {};
+        }
+
+        var variantState = {
+            imageVariantsGeneratedAt: new Date().toISOString()
+        };
+
+        var variantNames = ["web", "mobile", "preview"];
+
+        for (var i = 0; i < variantNames.length; i++) {
+            var variantName = variantNames[i];
+            var settings = galleryArtworkImageVariantSettings[variantName];
+
+            try {
+                var variantBlobData = await createArtworkImageVariantBlob(
+                    sourceBlob,
+                    variantName,
+                    settings
+                );
+
+                var uploadedVariant = await uploadArtworkVariantBlob(
+                    client,
+                    originalPath,
+                    variantName,
+                    variantBlobData
+                );
+
+                var keySuffix = variantName.charAt(0).toUpperCase() + variantName.slice(1);
+
+                variantState["imagePath" + keySuffix] = uploadedVariant.path;
+                variantState["imageUrl" + keySuffix] = uploadedVariant.url;
+                variantState["imageWidth" + keySuffix] = uploadedVariant.width;
+                variantState["imageHeight" + keySuffix] = uploadedVariant.height;
+                variantState["imageSize" + keySuffix] = uploadedVariant.size;
+                variantState["imageMimeType" + keySuffix] = uploadedVariant.mimeType;
+            } catch (variantError) {
+                console.warn("Artwork image variant generation/upload failed:", {
+                    artwork: artwork ? artwork.name : null,
+                    variantName: variantName,
+                    error: variantError
+                });
+                variantState["imageVariantError" + variantName.charAt(0).toUpperCase() + variantName.slice(1)] =
+                    variantError && variantError.message ? variantError.message : String(variantError);
+            }
+        }
+
+        return variantState;
+    }
+
+    function artworkImageStateNeedsVariants(imageState) {
+        return !!(
+            imageState &&
+            getArtworkOriginalImageUrlFromState(imageState) &&
+            (
+                !imageState.imageUrlWeb ||
+                !imageState.imageUrlMobile ||
+                !imageState.imageUrlPreview
+            )
+        );
+    }
+
+    async function fetchArtworkImageBlobForVariantRebuild(imageState) {
+        var sourceUrl = getArtworkOriginalImageUrlFromState(imageState);
+
+        if (!sourceUrl) {
+            throw new Error("Missing source image URL.");
+        }
+
+        var response = await fetch(sourceUrl, {
+            mode: "cors",
+            cache: "reload"
+        });
+
+        if (!response.ok) {
+            throw new Error("Cannot fetch source image: " + response.status);
+        }
+
+        return response.blob();
+    }
+
+    async function rebuildArtworkImageVariants(artwork) {
+        var imageState = getArtworkImageState(artwork);
+
+        if (!artwork || !imageState) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: "missingArtworkOrImage"
+            };
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            throw new Error("Supabase Storage is not configured.");
+        }
+
+        var originalPath = imageState.imagePath || getArtworkStoragePathFromPublicUrl(
+            imageState.imageUrl || imageState.publicUrl || "",
+            imageState.storageBucket || galleryArtworkStorageBucket
+        );
+
+        if (!originalPath) {
+            originalPath = createArtworkStoragePath(artwork, {
+                name: imageState.originalName || artwork.name + "-rebuild.jpg"
+            });
+        }
+
+        var sourceBlob = await fetchArtworkImageBlobForVariantRebuild(imageState);
+        var variantState = await createAndUploadArtworkImageVariants(
+            artwork,
+            sourceBlob,
+            originalPath,
+            client
+        );
+
+        var rebuiltState = Object.assign(
+            {},
+            imageState,
+            variantState,
+            {
+                imageUrlOriginal: imageState.imageUrlOriginal || imageState.imageUrl || imageState.publicUrl || "",
+                imagePath: imageState.imagePath || originalPath,
+                storageBucket: imageState.storageBucket || galleryArtworkStorageBucket,
+                variantsRebuiltAt: new Date().toISOString()
+            }
+        );
+
+        applyArtworkImageStateSafely(
+            artwork,
+            rebuiltState,
+            "rebuild artwork image variants"
+        );
+
+        return {
+            ok: true,
+            skipped: false,
+            artwork: artwork.name,
+            hasWeb: !!rebuiltState.imageUrlWeb,
+            hasMobile: !!rebuiltState.imageUrlMobile,
+            hasPreview: !!rebuiltState.imageUrlPreview
+        };
+    }
+
+    async function rebuildAllArtworkImageVariants() {
+        var activeArtworks = getActiveArtworks().filter(function (artwork) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(artwork));
+        });
+
+        var result = {
+            total: activeArtworks.length,
+            rebuilt: 0,
+            failed: 0,
+            skipped: 0,
+            items: []
+        };
+
+        for (var i = 0; i < activeArtworks.length; i++) {
+            var artwork = activeArtworks[i];
+
+            notifyGalleryStatus("Rebuild image variants " + (i + 1) + "/" + activeArtworks.length + "...");
+
+            try {
+                var itemResult = await rebuildArtworkImageVariants(artwork);
+                result.items.push(itemResult);
+
+                if (itemResult && itemResult.ok) {
+                    result.rebuilt += 1;
+                } else {
+                    result.skipped += 1;
+                }
+            } catch (error) {
+                console.warn("Artwork variant rebuild failed:", artwork ? artwork.name : null, error);
+                result.failed += 1;
+                result.items.push({
+                    ok: false,
+                    artwork: artwork ? artwork.name : null,
+                    error: error && error.message ? error.message : String(error)
+                });
+            }
+        }
+
+        updateArtworkImageUi();
+        updateArtworkTransformUi();
+
+        return result;
+    }
+
+
+    function copyImageVariantStateToAuthorPhotoState(variantState) {
+        variantState = variantState || {};
+
+        var mapped = {
+            authorPhotoVariantsGeneratedAt: variantState.imageVariantsGeneratedAt || new Date().toISOString()
+        };
+
+        [
+            "Web",
+            "Mobile",
+            "Preview"
+        ].forEach(function (suffix) {
+            if (variantState["imagePath" + suffix]) {
+                mapped["authorPhotoPath" + suffix] = variantState["imagePath" + suffix];
+            }
+
+            if (variantState["imageUrl" + suffix]) {
+                mapped["authorPhotoUrl" + suffix] = variantState["imageUrl" + suffix];
+            }
+
+            if (variantState["imageWidth" + suffix]) {
+                mapped["authorPhotoWidth" + suffix] = variantState["imageWidth" + suffix];
+            }
+
+            if (variantState["imageHeight" + suffix]) {
+                mapped["authorPhotoHeight" + suffix] = variantState["imageHeight" + suffix];
+            }
+
+            if (variantState["imageSize" + suffix]) {
+                mapped["authorPhotoSize" + suffix] = variantState["imageSize" + suffix];
+            }
+
+            if (variantState["imageMimeType" + suffix]) {
+                mapped["authorPhotoMimeType" + suffix] = variantState["imageMimeType" + suffix];
+            }
+        });
+
+        return mapped;
+    }
+
+    async function createAndUploadAuthorPhotoVariants(sourceBlob, originalPath, client) {
+        if (!galleryAuthorPhotoVariantsEnabled || !sourceBlob || !client || !client.storage) {
+            return {};
+        }
+
+        var originalArtworkVariantSettings = galleryArtworkImageVariantSettings;
+
+        // Reuse the same generic canvas/upload code from artwork variants,
+        // but with smaller max sizes for author photos.
+        galleryArtworkImageVariantSettings = galleryAuthorPhotoVariantSettings;
+
+        try {
+            var genericState = await createAndUploadArtworkImageVariants(
+                null,
+                sourceBlob,
+                originalPath,
+                client
+            );
+
+            return copyImageVariantStateToAuthorPhotoState(genericState);
+        } finally {
+            galleryArtworkImageVariantSettings = originalArtworkVariantSettings;
+        }
+    }
+
+    function getBestAuthorPhotoUrlFromInfo(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+
+        if (isArtworkMobileTextureDevice() && data.authorPhotoUrlMobile) {
+            return data.authorPhotoUrlMobile;
+        }
+
+        if (isArtworkMobileTextureDevice() && data.photoUrlMobile) {
+            return data.photoUrlMobile;
+        }
+
+        if (!isArtworkMobileTextureDevice() && data.authorPhotoUrlWeb) {
+            return data.authorPhotoUrlWeb;
+        }
+
+        if (!isArtworkMobileTextureDevice() && data.photoUrlWeb) {
+            return data.photoUrlWeb;
+        }
+
+        return (
+            data.authorPhotoUrlWeb ||
+            data.photoUrlWeb ||
+            data.authorPhotoUrlMobile ||
+            data.photoUrlMobile ||
+            data.authorPhotoUrlPreview ||
+            data.photoUrlPreview ||
+            data.authorPhotoUrlOriginal ||
+            data.photoUrlOriginal ||
+            data.authorPhotoUrl ||
+            data.photoUrl ||
+            ""
+        );
+    }
+
+    function getOriginalAuthorPhotoUrlFromInfo(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+
+        return (
+            data.authorPhotoUrlOriginal ||
+            data.photoUrlOriginal ||
+            data.authorPhotoUrl ||
+            data.photoUrl ||
+            ""
+        );
+    }
+
+    function getAuthorPhotoPathsForDelete(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+        var paths = [];
+
+        [
+            data.authorPhotoPath,
+            data.photoPath,
+            data.authorPhotoPathWeb,
+            data.photoPathWeb,
+            data.authorPhotoPathMobile,
+            data.photoPathMobile,
+            data.authorPhotoPathPreview,
+            data.photoPathPreview
+        ].forEach(function (path) {
+            if (path && paths.indexOf(path) === -1) {
+                paths.push(path);
+            }
+        });
+
+        return paths;
+    }
+
+    function authorPhotoStateNeedsVariants(data) {
+        data = data || {};
+
+        return !!(
+            getOriginalAuthorPhotoUrlFromInfo(data) &&
+            (
+                !data.authorPhotoUrlWeb && !data.photoUrlWeb ||
+                !data.authorPhotoUrlMobile && !data.photoUrlMobile ||
+                !data.authorPhotoUrlPreview && !data.photoUrlPreview
+            )
+        );
+    }
+
+    function getAuthorRecordsNeedingPhotoVariants() {
+        return artworkAuthors.filter(function (author) {
+            return authorPhotoStateNeedsVariants(author);
+        });
+    }
+
+    function syncAllArtworksForAuthor(author) {
+        if (!author || !author.id) {
+            return;
+        }
+
+        getActiveArtworks().forEach(function (artwork) {
+            var info = getArtworkInfoState(artwork);
+
+            if (info && info.authorId === author.id) {
+                syncArtworkInfoWithAuthor(artwork, author);
+            }
+        });
+    }
+
+    async function fetchAuthorPhotoBlobForVariantRebuild(author) {
+        var sourceUrl = getOriginalAuthorPhotoUrlFromInfo(author);
+
+        if (!sourceUrl) {
+            throw new Error("Missing author source photo URL.");
+        }
+
+        var response = await fetch(sourceUrl, {
+            mode: "cors",
+            cache: "reload"
+        });
+
+        if (!response.ok) {
+            throw new Error("Cannot fetch author source photo: " + response.status);
+        }
+
+        return response.blob();
+    }
+
+    async function rebuildAuthorPhotoVariants(authorIdOrName) {
+        var author = getAuthorById(authorIdOrName) || getAuthorByName(authorIdOrName);
+
+        if (!author) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: "authorNotFound"
+            };
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            throw new Error("Supabase Storage is not configured.");
+        }
+
+        var originalPath = author.photoPath || createAuthorPhotoStoragePath(
+            null,
+            {
+                name: (author.name || author.id || "author") + "-rebuild.jpg"
+            }
+        );
+
+        var sourceBlob = await fetchAuthorPhotoBlobForVariantRebuild(author);
+        var variantState = await createAndUploadAuthorPhotoVariants(
+            sourceBlob,
+            originalPath,
+            client
+        );
+
+        var updatedAuthor = upsertAuthorRecord(Object.assign(
+            {},
+            author,
+            variantState,
+            {
+                photoUrlOriginal: author.photoUrlOriginal || author.photoUrl || "",
+                photoPath: author.photoPath || originalPath,
+                photoBucket: author.photoBucket || galleryArtworkStorageBucket,
+                photoVariantsRebuiltAt: new Date().toISOString()
+            }
+        ));
+
+        syncAllArtworksForAuthor(updatedAuthor);
+
+        return {
+            ok: true,
+            skipped: false,
+            author: updatedAuthor ? updatedAuthor.name : author.name,
+            hasWeb: !!(updatedAuthor && updatedAuthor.photoUrlWeb),
+            hasMobile: !!(updatedAuthor && updatedAuthor.photoUrlMobile),
+            hasPreview: !!(updatedAuthor && updatedAuthor.photoUrlPreview)
+        };
+    }
+
+    async function rebuildAllAuthorPhotoVariants() {
+        var authors = getAuthorRecordsNeedingPhotoVariants();
+
+        var result = {
+            total: authors.length,
+            rebuilt: 0,
+            failed: 0,
+            skipped: 0,
+            items: []
+        };
+
+        for (var i = 0; i < authors.length; i++) {
+            var author = authors[i];
+
+            notifyGalleryStatus("Rebuild author photo variants " + (i + 1) + "/" + authors.length + "...");
+
+            try {
+                var itemResult = await rebuildAuthorPhotoVariants(author.id);
+                result.items.push(itemResult);
+
+                if (itemResult && itemResult.ok) {
+                    result.rebuilt += 1;
+                } else {
+                    result.skipped += 1;
+                }
+            } catch (error) {
+                console.warn("Author photo variant rebuild failed:", author ? author.name : null, error);
+                result.failed += 1;
+                result.items.push({
+                    ok: false,
+                    author: author ? author.name : null,
+                    error: error && error.message ? error.message : String(error)
+                });
+            }
+        }
+
+        updateArtworkInfoUi();
+        updateArtworkInfoPopupContent(getArtworkInfoUiTarget());
+
+        return result;
     }
 
     function getArtworkVisualNormal(artwork) {
@@ -3314,7 +4228,7 @@ export const createScene = function (engineArg, canvasArg) {
         var texture = new BABYLON.Texture(
             imageUrl,
             scene,
-            false,
+            getArtworkTextureNoMipmap(normalizedState),
             true,
             BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
             function () {
@@ -3460,7 +4374,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         var previousImageState = getArtworkImageState(artwork);
         var storagePath = createArtworkStoragePath(artwork, file);
-        notifyGalleryStatus("Wgrywam obraz...");
+        notifyGalleryStatus("Wgrywam obraz i kompresuje warianty...");
 
         var uploadResponse = await client
             .storage
@@ -3500,16 +4414,34 @@ export const createScene = function (engineArg, canvasArg) {
                 ? publicUrlResponse.data.publicUrl
                 : "";
 
-        var uploadedImageState = {
-            imagePath: storagePath,
-            imageUrl: publicUrl,
-            storageBucket: galleryArtworkStorageBucket,
-            originalName: file.name || null,
-            size: file.size || null,
-            mimeType: file.type || null,
-            fitMode: galleryArtworkDefaultFitMode,
-            uploadedAt: new Date().toISOString()
-        };
+        var variantState = {};
+
+        try {
+            variantState = await createAndUploadArtworkImageVariants(
+                artwork,
+                file,
+                storagePath,
+                client
+            );
+        } catch (variantBuildError) {
+            console.warn("Artwork image variants warning:", variantBuildError);
+            notifyGalleryStatus("Wgrano oryginal, ale warianty web/mobile nie powstaly. Sprawdz konsole.");
+        }
+
+        var uploadedImageState = Object.assign(
+            {
+                imagePath: storagePath,
+                imageUrl: publicUrl,
+                imageUrlOriginal: publicUrl,
+                storageBucket: galleryArtworkStorageBucket,
+                originalName: file.name || null,
+                size: file.size || null,
+                mimeType: file.type || null,
+                fitMode: galleryArtworkDefaultFitMode,
+                uploadedAt: new Date().toISOString()
+            },
+            variantState || {}
+        );
 
         var displayedNow = applyArtworkImageStateSafely(
             artwork,
@@ -3573,7 +4505,7 @@ export const createScene = function (engineArg, canvasArg) {
             }
         }
 
-        notifyGalleryStatus("Wgrano obraz. Zapisz stan galerii, aby zachowac zmiane.");
+        notifyGalleryStatus("Wgrano obraz i warianty. Zapisz stan galerii, aby zachowac zmiane.");
         return true;
     }
 
@@ -3625,8 +4557,21 @@ export const createScene = function (engineArg, canvasArg) {
             return null;
         }
 
+        var imagePaths = [imagePath];
+
+        [
+            imageState.imagePathWeb,
+            imageState.imagePathMobile,
+            imageState.imagePathPreview
+        ].forEach(function (variantPath) {
+            if (variantPath && imagePaths.indexOf(variantPath) === -1) {
+                imagePaths.push(variantPath);
+            }
+        });
+
         return {
             imagePath: imagePath,
+            imagePaths: imagePaths,
             storageBucket: bucketName
         };
     }
@@ -3645,15 +4590,20 @@ export const createScene = function (engineArg, canvasArg) {
             return true;
         }
 
+        var pathsToRemove = deleteState.imagePaths && deleteState.imagePaths.length
+            ? deleteState.imagePaths
+            : [deleteState.imagePath];
+
         var removeResponse = await client
             .storage
             .from(deleteState.storageBucket)
-            .remove([deleteState.imagePath]);
+            .remove(pathsToRemove);
 
         if (removeResponse.error) {
             console.warn("Artwork Storage delete error:", {
                 bucket: deleteState.storageBucket,
                 path: deleteState.imagePath,
+                paths: pathsToRemove,
                 originalState: imageState,
                 error: removeResponse.error
             });
@@ -3892,6 +4842,49 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryArtworkStoragePrefix = "main";
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
+
+    // STAGE 11A - ARTWORK IMAGE VARIANTS / MOBILE TEXTURE BUDGET
+    // Upload jednego pliku tworzy automatycznie warianty:
+    // - web: desktop
+    // - mobile: telefon
+    // - preview: lekka miniatura/fallback
+    // W gallery_state zapisujemy URL/path wariantów, telefon nie musi ładować oryginałów.
+    var galleryArtworkImageVariantsEnabled = true;
+    var galleryArtworkImageVariantFormat = "image/webp";
+    var galleryArtworkImageVariantExtension = "webp";
+    var galleryArtworkImageVariantSettings = {
+        web: {
+            maxSide: 2048,
+            quality: 0.82
+        },
+        mobile: {
+            maxSide: 1024,
+            quality: 0.78
+        },
+        preview: {
+            maxSide: 384,
+            quality: 0.70
+        }
+    };
+
+    // STAGE 11B - AUTHOR PHOTO VARIANTS
+    // Zdjęcia autorów też muszą mieć warianty, bo duże portrety mogą zabić mobile
+    // nawet wtedy, gdy obrazy na ścianach są już skompresowane.
+    var galleryAuthorPhotoVariantsEnabled = true;
+    var galleryAuthorPhotoVariantSettings = {
+        web: {
+            maxSide: 1024,
+            quality: 0.82
+        },
+        mobile: {
+            maxSide: 512,
+            quality: 0.78
+        },
+        preview: {
+            maxSide: 256,
+            quality: 0.70
+        }
+    };
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 
@@ -5231,6 +6224,10 @@ export const createScene = function (engineArg, canvasArg) {
             grid-template-columns: repeat(3, minmax(0, 1fr));
         }
 
+        .gallery-artwork-image-actions.is-four {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .gallery-editor-action-button {
             appearance: none;
             min-height: 40px;
@@ -5994,7 +6991,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageFileInput.style.display = "none";
 
     var artworkImageActions = document.createElement("div");
-    artworkImageActions.className = "gallery-artwork-image-actions is-three";
+    artworkImageActions.className = "gallery-artwork-image-actions is-four";
 
     var artworkImageUploadButton = document.createElement("button");
     artworkImageUploadButton.type = "button";
@@ -6011,13 +7008,20 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageRemoveButton.className = "gallery-editor-action-button is-danger";
     artworkImageRemoveButton.innerText = "REMOVE";
 
+    var artworkImageRebuildVariantsButton = document.createElement("button");
+    artworkImageRebuildVariantsButton.type = "button";
+    artworkImageRebuildVariantsButton.className = "gallery-editor-action-button";
+    artworkImageRebuildVariantsButton.innerText = "REBUILD VARIANTS";
+    artworkImageRebuildVariantsButton.title = "Create web/mobile/preview versions for existing uploaded artwork images.";
+
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
-    artworkImageNote.innerText = "Upload saves the file in Supabase Storage. Gallery state stores only the URL/path.";
+    artworkImageNote.innerText = "Upload creates Original/Desktop/Mobile/Preview files in Supabase Storage. Mobile loads the smaller variant.";
 
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
     artworkImageActions.appendChild(artworkImageRemoveButton);
+    artworkImageActions.appendChild(artworkImageRebuildVariantsButton);
 
     artworkImageSectionData.section.appendChild(artworkImageStatus);
     artworkImageSectionData.section.appendChild(artworkImageUrlLabel);
@@ -6026,6 +7030,138 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageSectionData.section.appendChild(artworkImageActions);
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
+
+    // STAGE 11C - GLOBAL IMAGE OPTIMIZATION UI
+    // Dodatkowa sekcja jest widoczna bez szukania przycisku w środku konkretnego pola.
+    // Rebuild działa globalnie na wszystkie brakujące warianty.
+    var imageOptimizationSectionData = createEditorSection("IMAGE OPTIMIZATION");
+
+    var imageOptimizationNote = document.createElement("p");
+    imageOptimizationNote.className = "gallery-artwork-image-note";
+    imageOptimizationNote.innerText = "Creates Desktop/Mobile/Preview versions in Supabase Storage for existing artwork images and author photos.";
+
+    var imageOptimizationActions = document.createElement("div");
+    imageOptimizationActions.className = "gallery-artwork-image-actions is-two";
+
+    var imageOptimizationArtworkButton = document.createElement("button");
+    imageOptimizationArtworkButton.type = "button";
+    imageOptimizationArtworkButton.className = "gallery-editor-action-button is-primary";
+    imageOptimizationArtworkButton.innerText = "REBUILD ARTWORK VARIANTS";
+
+    var imageOptimizationAuthorButton = document.createElement("button");
+    imageOptimizationAuthorButton.type = "button";
+    imageOptimizationAuthorButton.className = "gallery-editor-action-button is-primary";
+    imageOptimizationAuthorButton.innerText = "REBUILD AUTHOR VARIANTS";
+
+    imageOptimizationActions.appendChild(imageOptimizationArtworkButton);
+    imageOptimizationActions.appendChild(imageOptimizationAuthorButton);
+    imageOptimizationSectionData.section.appendChild(imageOptimizationNote);
+    imageOptimizationSectionData.section.appendChild(imageOptimizationActions);
+    editorScroll.appendChild(imageOptimizationSectionData.section);
+
+    function runArtworkImageVariantsRebuildFromUi() {
+        var missingCount = getActiveArtworks().filter(function (candidate) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
+        }).length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("All artwork images already have Desktop/Mobile variants.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild artwork image variants for " + missingCount + " image(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllArtworkImageVariants()
+            .then(function (result) {
+                console.info("Artwork image variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Artwork variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("No artwork variants to rebuild. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild artwork image variants error:", error);
+                notifyGalleryStatus("Artwork variants rebuild failed.");
+            })
+            .finally(function () {
+                updateArtworkImageUi();
+                updateArtworkTransformUi();
+            });
+    }
+
+    function runAuthorPhotoVariantsRebuildFromUi() {
+        var missingCount = getAuthorRecordsNeedingPhotoVariants().length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("All author photos already have Desktop/Mobile variants.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild author photo variants for " + missingCount + " author(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllAuthorPhotoVariants()
+            .then(function (result) {
+                console.info("Author photo variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Author variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("No author variants to rebuild. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild author photo variants error:", error);
+                notifyGalleryStatus("Author variants rebuild failed.");
+            })
+            .finally(function () {
+                updateArtworkInfoUi();
+                updateArtworkTransformUi();
+            });
+    }
+
+    imageOptimizationArtworkButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runArtworkImageVariantsRebuildFromUi();
+    };
+
+    imageOptimizationAuthorButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runAuthorPhotoVariantsRebuildFromUi();
+    };
 
     function createGalleryTextInputCompat(placeholder) {
         var input = document.createElement("input");
@@ -6097,10 +7233,17 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoAuthorPhotoGroup.appendChild(artworkInfoAuthorPhotoInput);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoGroup);
 
+    var artworkInfoRebuildAuthorPhotoVariantsButton = document.createElement("button");
+    artworkInfoRebuildAuthorPhotoVariantsButton.type = "button";
+    artworkInfoRebuildAuthorPhotoVariantsButton.className = "gallery-editor-action-button";
+    artworkInfoRebuildAuthorPhotoVariantsButton.innerText = "REBUILD AUTHOR VARIANTS";
+    artworkInfoRebuildAuthorPhotoVariantsButton.title = "Create web/mobile/preview versions for existing author photos.";
+
     var artworkInfoAuthorPhotoActions = document.createElement("div");
     artworkInfoAuthorPhotoActions.className = "gallery-artwork-image-actions";
-    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr";
+    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr 1fr";
     artworkInfoAuthorPhotoActions.appendChild(artworkInfoUploadPhotoButton);
+    artworkInfoAuthorPhotoActions.appendChild(artworkInfoRebuildAuthorPhotoVariantsButton);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoActions);
 
     var artworkInfoDetailsCard = document.createElement("div");
@@ -6204,6 +7347,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         artworkInfoAuthorPhotoInput.disabled = !isVisible;
         artworkInfoUploadPhotoButton.disabled = !isVisible;
+        artworkInfoRebuildAuthorPhotoVariantsButton.disabled = !getAuthorRecordsNeedingPhotoVariants().length;
         artworkInfoFindAuthorButton.disabled = !isVisible;
         artworkInfoAuthorNameInput.disabled = !isVisible;
         artworkInfoTitleInput.disabled = !isVisible;
@@ -6219,7 +7363,7 @@ export const createScene = function (engineArg, canvasArg) {
         var info = getArtworkInfoState(artwork);
 
         if (document.activeElement !== artworkInfoAuthorPhotoInput) {
-            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+            artworkInfoAuthorPhotoInput.value = getOriginalAuthorPhotoUrlFromInfo(info);
         }
 
         if (document.activeElement !== artworkInfoAuthorNameInput) {
@@ -6234,7 +7378,7 @@ export const createScene = function (engineArg, canvasArg) {
             artworkInfoDescriptionInput.value = info.description;
         }
 
-        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
         updateAuthorFoundUi(getAuthorById(info.authorId) || getAuthorByName(info.authorName));
     }
 
@@ -6265,12 +7409,33 @@ export const createScene = function (engineArg, canvasArg) {
             id: String(author.id || getAuthorIdFromName(author.name || author.authorName || "")).trim(),
             name: String(author.name || author.authorName || "").trim(),
             photoUrl: String(author.photoUrl || author.authorPhotoUrl || "").trim(),
+            photoUrlOriginal: String(author.photoUrlOriginal || author.authorPhotoUrlOriginal || author.photoUrl || author.authorPhotoUrl || "").trim(),
+            photoUrlWeb: String(author.photoUrlWeb || author.authorPhotoUrlWeb || "").trim(),
+            photoUrlMobile: String(author.photoUrlMobile || author.authorPhotoUrlMobile || "").trim(),
+            photoUrlPreview: String(author.photoUrlPreview || author.authorPhotoUrlPreview || "").trim(),
             photoPath: String(author.photoPath || author.authorPhotoPath || "").trim(),
+            photoPathWeb: String(author.photoPathWeb || author.authorPhotoPathWeb || "").trim(),
+            photoPathMobile: String(author.photoPathMobile || author.authorPhotoPathMobile || "").trim(),
+            photoPathPreview: String(author.photoPathPreview || author.authorPhotoPathPreview || "").trim(),
             photoBucket: String(author.photoBucket || author.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
             photoOriginalName: String(author.photoOriginalName || author.authorPhotoOriginalName || "").trim(),
             photoMimeType: String(author.photoMimeType || author.authorPhotoMimeType || "").trim(),
+            photoMimeTypeWeb: String(author.photoMimeTypeWeb || author.authorPhotoMimeTypeWeb || "").trim(),
+            photoMimeTypeMobile: String(author.photoMimeTypeMobile || author.authorPhotoMimeTypeMobile || "").trim(),
+            photoMimeTypePreview: String(author.photoMimeTypePreview || author.authorPhotoMimeTypePreview || "").trim(),
             photoSize: Number(author.photoSize || author.authorPhotoSize || 0) || 0,
-            photoUploadedAt: String(author.photoUploadedAt || author.authorPhotoUploadedAt || "").trim()
+            photoSizeWeb: Number(author.photoSizeWeb || author.authorPhotoSizeWeb || 0) || 0,
+            photoSizeMobile: Number(author.photoSizeMobile || author.authorPhotoSizeMobile || 0) || 0,
+            photoSizePreview: Number(author.photoSizePreview || author.authorPhotoSizePreview || 0) || 0,
+            photoWidthWeb: Number(author.photoWidthWeb || author.authorPhotoWidthWeb || 0) || 0,
+            photoHeightWeb: Number(author.photoHeightWeb || author.authorPhotoHeightWeb || 0) || 0,
+            photoWidthMobile: Number(author.photoWidthMobile || author.authorPhotoWidthMobile || 0) || 0,
+            photoHeightMobile: Number(author.photoHeightMobile || author.authorPhotoHeightMobile || 0) || 0,
+            photoWidthPreview: Number(author.photoWidthPreview || author.authorPhotoWidthPreview || 0) || 0,
+            photoHeightPreview: Number(author.photoHeightPreview || author.authorPhotoHeightPreview || 0) || 0,
+            photoUploadedAt: String(author.photoUploadedAt || author.authorPhotoUploadedAt || "").trim(),
+            photoVariantsGeneratedAt: String(author.photoVariantsGeneratedAt || author.authorPhotoVariantsGeneratedAt || "").trim(),
+            photoVariantsRebuiltAt: String(author.photoVariantsRebuiltAt || author.authorPhotoVariantsRebuiltAt || "").trim()
         };
     }
 
@@ -6353,12 +7518,33 @@ export const createScene = function (engineArg, canvasArg) {
         info.authorId = author.id;
         info.authorName = author.name || info.authorName;
         info.authorPhotoUrl = author.photoUrl || info.authorPhotoUrl;
+        info.authorPhotoUrlOriginal = author.photoUrlOriginal || author.photoUrl || info.authorPhotoUrlOriginal;
+        info.authorPhotoUrlWeb = author.photoUrlWeb || info.authorPhotoUrlWeb;
+        info.authorPhotoUrlMobile = author.photoUrlMobile || info.authorPhotoUrlMobile;
+        info.authorPhotoUrlPreview = author.photoUrlPreview || info.authorPhotoUrlPreview;
         info.authorPhotoPath = author.photoPath || info.authorPhotoPath;
+        info.authorPhotoPathWeb = author.photoPathWeb || info.authorPhotoPathWeb;
+        info.authorPhotoPathMobile = author.photoPathMobile || info.authorPhotoPathMobile;
+        info.authorPhotoPathPreview = author.photoPathPreview || info.authorPhotoPathPreview;
         info.authorPhotoBucket = author.photoBucket || info.authorPhotoBucket;
         info.authorPhotoOriginalName = author.photoOriginalName || info.authorPhotoOriginalName;
         info.authorPhotoMimeType = author.photoMimeType || info.authorPhotoMimeType;
+        info.authorPhotoMimeTypeWeb = author.photoMimeTypeWeb || info.authorPhotoMimeTypeWeb;
+        info.authorPhotoMimeTypeMobile = author.photoMimeTypeMobile || info.authorPhotoMimeTypeMobile;
+        info.authorPhotoMimeTypePreview = author.photoMimeTypePreview || info.authorPhotoMimeTypePreview;
         info.authorPhotoSize = author.photoSize || info.authorPhotoSize;
+        info.authorPhotoSizeWeb = author.photoSizeWeb || info.authorPhotoSizeWeb;
+        info.authorPhotoSizeMobile = author.photoSizeMobile || info.authorPhotoSizeMobile;
+        info.authorPhotoSizePreview = author.photoSizePreview || info.authorPhotoSizePreview;
+        info.authorPhotoWidthWeb = author.photoWidthWeb || info.authorPhotoWidthWeb;
+        info.authorPhotoHeightWeb = author.photoHeightWeb || info.authorPhotoHeightWeb;
+        info.authorPhotoWidthMobile = author.photoWidthMobile || info.authorPhotoWidthMobile;
+        info.authorPhotoHeightMobile = author.photoHeightMobile || info.authorPhotoHeightMobile;
+        info.authorPhotoWidthPreview = author.photoWidthPreview || info.authorPhotoWidthPreview;
+        info.authorPhotoHeightPreview = author.photoHeightPreview || info.authorPhotoHeightPreview;
         info.authorPhotoUploadedAt = author.photoUploadedAt || info.authorPhotoUploadedAt;
+        info.authorPhotoVariantsGeneratedAt = author.photoVariantsGeneratedAt || info.authorPhotoVariantsGeneratedAt;
+        info.authorPhotoVariantsRebuiltAt = author.photoVariantsRebuiltAt || info.authorPhotoVariantsRebuiltAt;
 
         setArtworkInfoState(artwork, info);
 
@@ -6409,8 +7595,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         syncArtworkInfoWithAuthor(artwork, author);
 
-        artworkInfoAuthorPhotoInput.value = author.photoUrl || "";
-        updateArtworkInfoEditorPhotoPreview(author.photoUrl || "");
+        artworkInfoAuthorPhotoInput.value = author.photoUrlOriginal || author.photoUrl || "";
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(author));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(author);
 
@@ -6432,9 +7618,12 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        if (author.photoPath) {
+        if (author.photoPath || author.photoPathWeb || author.photoPathMobile || author.photoPathPreview) {
             await deleteAuthorPhotoFromSupabase({
                 authorPhotoPath: author.photoPath,
+                authorPhotoPathWeb: author.photoPathWeb,
+                authorPhotoPathMobile: author.photoPathMobile,
+                authorPhotoPathPreview: author.photoPathPreview,
                 authorPhotoBucket: author.photoBucket
             });
         }
@@ -6450,13 +7639,17 @@ export const createScene = function (engineArg, canvasArg) {
             ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
             : "artwork";
 
-        return galleryArtworkStoragePrefix + "/authors/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        // STAGE 11C - STORAGE FOLDERS
+        // Nowe oryginały zdjęć autorów trafiają do czytelnego folderu Original.
+        return galleryArtworkStoragePrefix + "/authors/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
     }
 
     async function deleteAuthorPhotoFromSupabase(info) {
-        info = normalizeArtworkInfo(info);
+        info = Object.assign({}, info || {});
 
-        if (!info.authorPhotoPath) {
+        var pathsToRemove = getAuthorPhotoPathsForDelete(info);
+
+        if (!pathsToRemove.length) {
             return true;
         }
 
@@ -6468,8 +7661,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         var response = await client
             .storage
-            .from(info.authorPhotoBucket || galleryArtworkStorageBucket)
-            .remove([info.authorPhotoPath]);
+            .from(info.authorPhotoBucket || info.photoBucket || galleryArtworkStorageBucket)
+            .remove(pathsToRemove);
 
         if (response.error) {
             console.warn("Author photo delete warning:", response.error);
@@ -6520,7 +7713,7 @@ export const createScene = function (engineArg, canvasArg) {
         var info = normalizeArtworkInfo(previousInfo);
         var storagePath = createAuthorPhotoStoragePath(artwork, file);
 
-        notifyGalleryStatus("Uploading author photo...");
+        notifyGalleryStatus("Uploading author photo and creating variants...");
 
         var uploadResponse = await client
             .storage
@@ -6548,26 +7741,67 @@ export const createScene = function (engineArg, canvasArg) {
             publicUrlResponse.data.publicUrl
                 ? publicUrlResponse.data.publicUrl
                 : "";
-        info.authorPhotoPath = storagePath;
-        info.authorPhotoBucket = galleryArtworkStorageBucket;
-        info.authorPhotoOriginalName = file.name || "";
-        info.authorPhotoMimeType = file.type || "";
-        info.authorPhotoSize = file.size || 0;
-        info.authorPhotoUploadedAt = new Date().toISOString();
 
-        info.authorName = authorNameForUpload;
-        info.authorId = getAuthorIdFromName(info.authorName);
+        var authorVariantState = {};
+
+        try {
+            authorVariantState = await createAndUploadAuthorPhotoVariants(
+                file,
+                storagePath,
+                client
+            );
+        } catch (authorVariantError) {
+            console.warn("Author photo variants warning:", authorVariantError);
+            notifyGalleryStatus("Author photo uploaded, but web/mobile variants failed. Check console.");
+        }
+
+        info = Object.assign(
+            info,
+            {
+                authorPhotoUrl: info.authorPhotoUrl,
+                authorPhotoUrlOriginal: info.authorPhotoUrl,
+                authorPhotoPath: storagePath,
+                authorPhotoBucket: galleryArtworkStorageBucket,
+                authorPhotoOriginalName: file.name || "",
+                authorPhotoMimeType: file.type || "",
+                authorPhotoSize: file.size || 0,
+                authorPhotoUploadedAt: new Date().toISOString(),
+                authorName: authorNameForUpload,
+                authorId: getAuthorIdFromName(authorNameForUpload)
+            },
+            authorVariantState || {}
+        );
 
         var authorRecord = upsertAuthorRecord({
             id: info.authorId,
             name: info.authorName,
             photoUrl: info.authorPhotoUrl,
+            photoUrlOriginal: info.authorPhotoUrlOriginal,
+            photoUrlWeb: info.authorPhotoUrlWeb,
+            photoUrlMobile: info.authorPhotoUrlMobile,
+            photoUrlPreview: info.authorPhotoUrlPreview,
             photoPath: info.authorPhotoPath,
+            photoPathWeb: info.authorPhotoPathWeb,
+            photoPathMobile: info.authorPhotoPathMobile,
+            photoPathPreview: info.authorPhotoPathPreview,
             photoBucket: info.authorPhotoBucket,
             photoOriginalName: info.authorPhotoOriginalName,
             photoMimeType: info.authorPhotoMimeType,
+            photoMimeTypeWeb: info.authorPhotoMimeTypeWeb,
+            photoMimeTypeMobile: info.authorPhotoMimeTypeMobile,
+            photoMimeTypePreview: info.authorPhotoMimeTypePreview,
             photoSize: info.authorPhotoSize,
-            photoUploadedAt: info.authorPhotoUploadedAt
+            photoSizeWeb: info.authorPhotoSizeWeb,
+            photoSizeMobile: info.authorPhotoSizeMobile,
+            photoSizePreview: info.authorPhotoSizePreview,
+            photoWidthWeb: info.authorPhotoWidthWeb,
+            photoHeightWeb: info.authorPhotoHeightWeb,
+            photoWidthMobile: info.authorPhotoWidthMobile,
+            photoHeightMobile: info.authorPhotoHeightMobile,
+            photoWidthPreview: info.authorPhotoWidthPreview,
+            photoHeightPreview: info.authorPhotoHeightPreview,
+            photoUploadedAt: info.authorPhotoUploadedAt,
+            photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt
         });
 
         if (authorRecord) {
@@ -6577,10 +7811,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (artworkInfoAuthorPhotoInput) {
-            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrlOriginal || info.authorPhotoUrl;
         }
 
-        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(authorRecord);
 
@@ -6594,7 +7828,7 @@ export const createScene = function (engineArg, canvasArg) {
                 });
         }
 
-        notifyGalleryStatus("Author photo uploaded. Save state to keep the change.");
+        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Save state to keep the change.");
         return true;
     }
 
@@ -6616,12 +7850,27 @@ export const createScene = function (engineArg, canvasArg) {
         currentInfo.description = artworkInfoDescriptionInput.value.trim();
 
         if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            currentInfo.authorPhotoUrlOriginal = currentInfo.authorPhotoUrl;
+            currentInfo.authorPhotoUrlWeb = "";
+            currentInfo.authorPhotoUrlMobile = "";
+            currentInfo.authorPhotoUrlPreview = "";
             currentInfo.authorPhotoPath = "";
+            currentInfo.authorPhotoPathWeb = "";
+            currentInfo.authorPhotoPathMobile = "";
+            currentInfo.authorPhotoPathPreview = "";
             currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
             currentInfo.authorPhotoOriginalName = "";
             currentInfo.authorPhotoMimeType = "";
+            currentInfo.authorPhotoMimeTypeWeb = "";
+            currentInfo.authorPhotoMimeTypeMobile = "";
+            currentInfo.authorPhotoMimeTypePreview = "";
             currentInfo.authorPhotoSize = 0;
+            currentInfo.authorPhotoSizeWeb = 0;
+            currentInfo.authorPhotoSizeMobile = 0;
+            currentInfo.authorPhotoSizePreview = 0;
             currentInfo.authorPhotoUploadedAt = "";
+            currentInfo.authorPhotoVariantsGeneratedAt = "";
+            currentInfo.authorPhotoVariantsRebuiltAt = "";
         }
 
         if (currentInfo.authorId) {
@@ -6635,12 +7884,27 @@ export const createScene = function (engineArg, canvasArg) {
                     id: currentInfo.authorId,
                     name: currentInfo.authorName,
                     photoUrl: currentInfo.authorPhotoUrl,
+                    photoUrlOriginal: currentInfo.authorPhotoUrlOriginal || currentInfo.authorPhotoUrl,
+                    photoUrlWeb: currentInfo.authorPhotoUrlWeb,
+                    photoUrlMobile: currentInfo.authorPhotoUrlMobile,
+                    photoUrlPreview: currentInfo.authorPhotoUrlPreview,
                     photoPath: currentInfo.authorPhotoPath,
+                    photoPathWeb: currentInfo.authorPhotoPathWeb,
+                    photoPathMobile: currentInfo.authorPhotoPathMobile,
+                    photoPathPreview: currentInfo.authorPhotoPathPreview,
                     photoBucket: currentInfo.authorPhotoBucket,
                     photoOriginalName: currentInfo.authorPhotoOriginalName,
                     photoMimeType: currentInfo.authorPhotoMimeType,
+                    photoMimeTypeWeb: currentInfo.authorPhotoMimeTypeWeb,
+                    photoMimeTypeMobile: currentInfo.authorPhotoMimeTypeMobile,
+                    photoMimeTypePreview: currentInfo.authorPhotoMimeTypePreview,
                     photoSize: currentInfo.authorPhotoSize,
-                    photoUploadedAt: currentInfo.authorPhotoUploadedAt
+                    photoSizeWeb: currentInfo.authorPhotoSizeWeb,
+                    photoSizeMobile: currentInfo.authorPhotoSizeMobile,
+                    photoSizePreview: currentInfo.authorPhotoSizePreview,
+                    photoUploadedAt: currentInfo.authorPhotoUploadedAt,
+                    photoVariantsGeneratedAt: currentInfo.authorPhotoVariantsGeneratedAt,
+                    photoVariantsRebuiltAt: currentInfo.authorPhotoVariantsRebuiltAt
                 });
 
                 setArtworkInfoState(artwork, currentInfo);
@@ -6649,7 +7913,7 @@ export const createScene = function (engineArg, canvasArg) {
             setArtworkInfoState(artwork, currentInfo);
         }
 
-        updateArtworkInfoEditorPhotoPreview(currentInfo.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(getAuthorById(currentInfo.authorId));
         notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
@@ -6681,6 +7945,12 @@ export const createScene = function (engineArg, canvasArg) {
         event.preventDefault();
         event.stopPropagation();
         findAndApplyAuthorForCurrentArtwork();
+    };
+
+    artworkInfoRebuildAuthorPhotoVariantsButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runAuthorPhotoVariantsRebuildFromUi();
     };
 
     artworkInfoUploadPhotoButton.onclick = function (event) {
@@ -6796,6 +8066,9 @@ export const createScene = function (engineArg, canvasArg) {
         artworkImageUploadButton.disabled = !artwork;
         artworkImageApplyUrlButton.disabled = !artwork;
         artworkImageRemoveButton.disabled = !artwork || !imageState;
+        artworkImageRebuildVariantsButton.disabled = !getActiveArtworks().some(function (candidate) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
+        });
 
         if (!artwork) {
             artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
@@ -6805,8 +8078,11 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (imageState) {
             var label = imageState.originalName || imageState.imagePath || imageState.imageUrl || "Custom image";
-            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>";
-            artworkImageUrlInput.value = imageState.imageUrl || "";
+            var variantInfo = imageState.imageUrlMobile && imageState.imageUrlWeb
+                ? " <span style=\"opacity:.75\">(variants ready)</span>"
+                : " <span style=\"opacity:.75\">(variants missing)</span>";
+            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>" + variantInfo;
+            artworkImageUrlInput.value = imageState.imageUrlOriginal || imageState.imageUrl || "";
         } else {
             artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
             artworkImageUrlInput.value = "";
@@ -6923,6 +8199,12 @@ export const createScene = function (engineArg, canvasArg) {
             });
     };
 
+    artworkImageRebuildVariantsButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        runArtworkImageVariantsRebuildFromUi();
+    };
+
     artworkImageApplyUrlButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -6942,6 +8224,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         applyArtworkImageState(artwork, {
             imageUrl: imageUrl,
+            imageUrlOriginal: imageUrl,
             fitMode: galleryArtworkDefaultFitMode,
             source: "manual-url",
             updatedAt: new Date().toISOString()
@@ -12698,10 +13981,282 @@ export const createScene = function (engineArg, canvasArg) {
         return 0;
     }
 
+    // STAGE 10H - WALL SEGMENT ALIGNMENT GROUP
+    // Po segmentacji ścian system wyrównywania nie może traktować pojedynczego
+    // Wall_segment_0xx jako całej ściany. Do bounds/center używamy grupy segmentów
+    // leżących na tej samej płaszczyźnie ściany.
+    var wallSegmentAlignmentGroupEnabled = true;
+    var wallSegmentAlignmentPlaneTolerance = 0.75;
+
+    // STAGE 10J - WALL SEGMENT CORNER GUARD
+    // Segmenty na jednej płaszczyźnie są traktowane jak jedna ściana,
+    // ale tylko w obrębie ciągłego odcinka. Narożniki / przerwy / końce ścian
+    // mają nadal blokować przesuwanie obrazu.
+    var wallSegmentAlignmentCornerGuardEnabled = true;
+    var wallSegmentAlignmentIntervalMergeTolerance = 0.22;
+
+    function isAlignmentWallSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Wall_segment_") === 0
+        );
+    }
+
+    function getWallSegmentMeshBounds(mesh) {
+        if (!mesh || !mesh.getBoundingInfo) {
+            return null;
+        }
+
+        mesh.computeWorldMatrix(true);
+
+        var box = mesh.getBoundingInfo().boundingBox;
+
+        return {
+            minX: Math.min(box.minimumWorld.x, box.maximumWorld.x),
+            maxX: Math.max(box.minimumWorld.x, box.maximumWorld.x),
+            minY: Math.min(box.minimumWorld.y, box.maximumWorld.y),
+            maxY: Math.max(box.minimumWorld.y, box.maximumWorld.y),
+            minZ: Math.min(box.minimumWorld.z, box.maximumWorld.z),
+            maxZ: Math.max(box.minimumWorld.z, box.maximumWorld.z)
+        };
+    }
+
+    function getWallSegmentApproxPlaneValue(mesh, wallAxis) {
+        var bounds = getWallSegmentMeshBounds(mesh);
+
+        if (!bounds) {
+            return null;
+        }
+
+        if (wallAxis === "x") {
+            return (bounds.minX + bounds.maxX) / 2;
+        }
+
+        if (wallAxis === "z") {
+            return (bounds.minZ + bounds.maxZ) / 2;
+        }
+
+        return null;
+    }
+
+    function mergeWallSegmentAlignmentIntervals(intervals) {
+        if (!intervals.length) {
+            return [];
+        }
+
+        intervals.sort(function (a, b) {
+            return a.min - b.min;
+        });
+
+        var merged = [];
+
+        intervals.forEach(function (interval) {
+            if (!merged.length) {
+                merged.push({
+                    min: interval.min,
+                    max: interval.max,
+                    minY: interval.minY,
+                    maxY: interval.maxY,
+                    segmentNames: interval.segmentNames.slice()
+                });
+                return;
+            }
+
+            var last = merged[merged.length - 1];
+
+            if (
+                !wallSegmentAlignmentCornerGuardEnabled ||
+                interval.min <= last.max + wallSegmentAlignmentIntervalMergeTolerance
+            ) {
+                last.max = Math.max(last.max, interval.max);
+                last.minY = Math.min(last.minY, interval.minY);
+                last.maxY = Math.max(last.maxY, interval.maxY);
+                last.segmentNames = last.segmentNames.concat(interval.segmentNames);
+            } else {
+                merged.push({
+                    min: interval.min,
+                    max: interval.max,
+                    minY: interval.minY,
+                    maxY: interval.maxY,
+                    segmentNames: interval.segmentNames.slice()
+                });
+            }
+        });
+
+        return merged;
+    }
+
+    function chooseWallSegmentAlignmentInterval(intervals, referenceValue) {
+        if (!intervals.length) {
+            return null;
+        }
+
+        if (referenceValue !== undefined && referenceValue !== null && isFinite(referenceValue)) {
+            for (var i = 0; i < intervals.length; i++) {
+                if (
+                    referenceValue >= intervals[i].min - wallSegmentAlignmentIntervalMergeTolerance &&
+                    referenceValue <= intervals[i].max + wallSegmentAlignmentIntervalMergeTolerance
+                ) {
+                    return intervals[i];
+                }
+            }
+
+            var nearest = intervals[0];
+            var nearestDistance = Number.POSITIVE_INFINITY;
+
+            intervals.forEach(function (interval) {
+                var center = (interval.min + interval.max) / 2;
+                var distance = Math.abs(center - referenceValue);
+
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearest = interval;
+                }
+            });
+
+            return nearest;
+        }
+
+        var largest = intervals[0];
+        var largestSize = largest.max - largest.min;
+
+        intervals.forEach(function (interval) {
+            var size = interval.max - interval.min;
+
+            if (size > largestSize) {
+                largestSize = size;
+                largest = interval;
+            }
+        });
+
+        return largest;
+    }
+
+    function getWallSegmentAlignmentGroupBounds(referenceWallMesh, wallAxis, wallValue, horizontalAxis, referenceValue) {
+        if (!wallSegmentAlignmentGroupEnabled || !isAlignmentWallSegmentMesh(referenceWallMesh)) {
+            return null;
+        }
+
+        if (!wallAxis && horizontalAxis) {
+            wallAxis = getWallAxisFromHorizontalAxis(horizontalAxis);
+        }
+
+        if (!wallAxis) {
+            var referenceBounds = getWallSegmentMeshBounds(referenceWallMesh);
+
+            if (!referenceBounds) {
+                return null;
+            }
+
+            var sizeX = Math.abs(referenceBounds.maxX - referenceBounds.minX);
+            var sizeZ = Math.abs(referenceBounds.maxZ - referenceBounds.minZ);
+            wallAxis = sizeX <= sizeZ ? "x" : "z";
+        }
+
+        if (wallValue === undefined || wallValue === null || !isFinite(wallValue)) {
+            wallValue = getWallSegmentApproxPlaneValue(referenceWallMesh, wallAxis);
+        }
+
+        if (wallValue === null) {
+            return null;
+        }
+
+        var intervals = [];
+
+        wallMeshes.forEach(function (mesh) {
+            if (!isAlignmentWallSegmentMesh(mesh)) {
+                return;
+            }
+
+            var meshPlaneValue = getWallSegmentApproxPlaneValue(mesh, wallAxis);
+
+            if (meshPlaneValue === null) {
+                return;
+            }
+
+            if (Math.abs(meshPlaneValue - wallValue) > wallSegmentAlignmentPlaneTolerance) {
+                return;
+            }
+
+            var bounds = getWallSegmentMeshBounds(mesh);
+
+            if (!bounds) {
+                return;
+            }
+
+            var minHorizontal;
+            var maxHorizontal;
+
+            if (horizontalAxis === "x") {
+                minHorizontal = bounds.minX;
+                maxHorizontal = bounds.maxX;
+            } else if (horizontalAxis === "z") {
+                minHorizontal = bounds.minZ;
+                maxHorizontal = bounds.maxZ;
+            } else {
+                return;
+            }
+
+            intervals.push({
+                min: minHorizontal,
+                max: maxHorizontal,
+                minY: bounds.minY,
+                maxY: bounds.maxY,
+                segmentNames: [mesh.name]
+            });
+        });
+
+        if (!intervals.length) {
+            return null;
+        }
+
+        var mergedIntervals = mergeWallSegmentAlignmentIntervals(intervals);
+        var selectedInterval = chooseWallSegmentAlignmentInterval(
+            mergedIntervals,
+            referenceValue
+        );
+
+        if (!selectedInterval) {
+            return null;
+        }
+
+        return {
+            min: selectedInterval.min,
+            max: selectedInterval.max,
+            minY: selectedInterval.minY,
+            maxY: selectedInterval.maxY,
+            wallAxis: wallAxis,
+            wallValue: wallValue,
+            horizontalAxis: horizontalAxis,
+            segmentCount: selectedInterval.segmentNames.length,
+            segmentNames: selectedInterval.segmentNames.slice(),
+            intervalCount: mergedIntervals.length,
+            selectedIntervalIndex: mergedIntervals.indexOf(selectedInterval),
+            referenceValue: referenceValue,
+            cornerGuardEnabled: wallSegmentAlignmentCornerGuardEnabled,
+            mergeTolerance: wallSegmentAlignmentIntervalMergeTolerance
+        };
+    }
+
     function getWallVerticalLimits(wallMesh) {
 
         if (!wallMesh) {
             return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            null,
+            null,
+            "x"
+        );
+
+        if (groupedBounds) {
+            return {
+                minY: groupedBounds.minY,
+                maxY: groupedBounds.maxY
+            };
         }
 
         wallMesh.computeWorldMatrix(true);
@@ -12742,6 +14297,21 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (!wallMesh) {
             return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            getWallAxisFromHorizontalAxis(horizontalAxis),
+            null,
+            horizontalAxis,
+            null
+        );
+
+        if (groupedBounds) {
+            return {
+                min: groupedBounds.min,
+                max: groupedBounds.max
+            };
         }
 
         wallMesh.computeWorldMatrix(true);
@@ -13117,6 +14687,18 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function getImprovedWallHorizontalLimits(wallMesh, horizontalAxis, wallAxis, wallValue, referenceValue) {
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            wallAxis,
+            wallValue,
+            horizontalAxis,
+            referenceValue
+        );
+
+        if (groupedBounds) {
+            return groupedBounds;
+        }
 
         return getWallSegmentBoundsFromGeometry(
             wallMesh,
@@ -13607,6 +15189,26 @@ export const createScene = function (engineArg, canvasArg) {
         var wallMesh = getWallMeshForArtwork(artwork);
 
         if (!wallMesh) {
+            return null;
+        }
+
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
+            wallMesh,
+            wallData.wallAxis,
+            wallData.wallValue,
+            wallData.horizontalAxis,
+            artwork.position[wallData.horizontalAxis]
+        );
+
+        if (groupedBounds) {
+            if (axisMode === "horizontal") {
+                return (groupedBounds.min + groupedBounds.max) / 2;
+            }
+
+            if (axisMode === "vertical") {
+                return (groupedBounds.minY + groupedBounds.maxY) / 2;
+            }
+
             return null;
         }
 
@@ -14353,6 +15955,10 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
 
+    // STAGE 10I - WALL SEGMENT DRAG GROUP
+    // Drag obrazu po ścianie też nie może traktować pojedynczego Wall_segment_0xx
+    // jako całej dostępnej ściany. Przy przesuwaniu używamy tej samej grupy
+    // segmentów co przy wyrównywaniu Stage 10H.
     function getPickedWallSegmentBounds(pickWall, normal, horizontalAxis) {
 
         if (!pickWall || !pickWall.pickedMesh || !pickWall.pickedPoint) {
@@ -14363,13 +15969,34 @@ export const createScene = function (engineArg, canvasArg) {
             horizontalAxis
         );
 
-        return getWallSegmentBoundsFromGeometry(
+        var groupedBounds = getWallSegmentAlignmentGroupBounds(
             pickWall.pickedMesh,
             wallAxis,
             pickWall.pickedPoint[wallAxis],
             horizontalAxis,
             pickWall.pickedPoint[horizontalAxis]
         );
+
+        if (groupedBounds) {
+            groupedBounds.source = "wallSegmentAlignmentGroup";
+            groupedBounds.pickedMeshName = pickWall.pickedMesh.name;
+            return groupedBounds;
+        }
+
+        var geometryBounds = getWallSegmentBoundsFromGeometry(
+            pickWall.pickedMesh,
+            wallAxis,
+            pickWall.pickedPoint[wallAxis],
+            horizontalAxis,
+            pickWall.pickedPoint[horizontalAxis]
+        );
+
+        if (geometryBounds) {
+            geometryBounds.source = "singleMeshGeometry";
+            geometryBounds.pickedMeshName = pickWall.pickedMesh.name;
+        }
+
+        return geometryBounds;
     }
 
     function clampArtworkToPickedWallSegment(artwork, candidatePosition, pickWall, normal, horizontalAxis, targetRotation) {
@@ -14551,6 +16178,13 @@ export const createScene = function (engineArg, canvasArg) {
             candidateWallAxis,
             candidateWallValue,
             candidateHorizontalAxis
+        );
+
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.wallSegmentDragGroupEnabled = !!(
+            pickWall &&
+            pickWall.pickedMesh &&
+            isAlignmentWallSegmentMesh(pickWall.pickedMesh)
         );
 
         updateArtworkLight(artwork);
@@ -15746,12 +17380,33 @@ export const createScene = function (engineArg, canvasArg) {
         return {
             authorId: String(info.authorId || "").trim(),
             authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
+            authorPhotoUrlOriginal: String(info.authorPhotoUrlOriginal || info.authorPhotoUrl || "").trim(),
+            authorPhotoUrlWeb: String(info.authorPhotoUrlWeb || "").trim(),
+            authorPhotoUrlMobile: String(info.authorPhotoUrlMobile || "").trim(),
+            authorPhotoUrlPreview: String(info.authorPhotoUrlPreview || "").trim(),
             authorPhotoPath: String(info.authorPhotoPath || "").trim(),
+            authorPhotoPathWeb: String(info.authorPhotoPathWeb || "").trim(),
+            authorPhotoPathMobile: String(info.authorPhotoPathMobile || "").trim(),
+            authorPhotoPathPreview: String(info.authorPhotoPathPreview || "").trim(),
             authorPhotoBucket: String(info.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
             authorPhotoOriginalName: String(info.authorPhotoOriginalName || "").trim(),
             authorPhotoMimeType: String(info.authorPhotoMimeType || "").trim(),
+            authorPhotoMimeTypeWeb: String(info.authorPhotoMimeTypeWeb || "").trim(),
+            authorPhotoMimeTypeMobile: String(info.authorPhotoMimeTypeMobile || "").trim(),
+            authorPhotoMimeTypePreview: String(info.authorPhotoMimeTypePreview || "").trim(),
             authorPhotoSize: Number(info.authorPhotoSize || 0) || 0,
+            authorPhotoSizeWeb: Number(info.authorPhotoSizeWeb || 0) || 0,
+            authorPhotoSizeMobile: Number(info.authorPhotoSizeMobile || 0) || 0,
+            authorPhotoSizePreview: Number(info.authorPhotoSizePreview || 0) || 0,
+            authorPhotoWidthWeb: Number(info.authorPhotoWidthWeb || 0) || 0,
+            authorPhotoHeightWeb: Number(info.authorPhotoHeightWeb || 0) || 0,
+            authorPhotoWidthMobile: Number(info.authorPhotoWidthMobile || 0) || 0,
+            authorPhotoHeightMobile: Number(info.authorPhotoHeightMobile || 0) || 0,
+            authorPhotoWidthPreview: Number(info.authorPhotoWidthPreview || 0) || 0,
+            authorPhotoHeightPreview: Number(info.authorPhotoHeightPreview || 0) || 0,
             authorPhotoUploadedAt: String(info.authorPhotoUploadedAt || "").trim(),
+            authorPhotoVariantsGeneratedAt: String(info.authorPhotoVariantsGeneratedAt || "").trim(),
+            authorPhotoVariantsRebuiltAt: String(info.authorPhotoVariantsRebuiltAt || "").trim(),
             authorName: String(info.authorName || "").trim(),
             title: String(info.title || "").trim(),
             description: String(info.description || "").trim()
@@ -15856,8 +17511,10 @@ export const createScene = function (engineArg, canvasArg) {
         var hasInfo = hasArtworkInfo(info);
 
         if (artworkInfoPopupRefs.photo) {
-            if (info.authorPhotoUrl) {
-                artworkInfoPopupRefs.photo.src = info.authorPhotoUrl;
+            var popupAuthorPhotoUrl = getBestAuthorPhotoUrlFromInfo(info);
+
+            if (popupAuthorPhotoUrl) {
+                artworkInfoPopupRefs.photo.src = popupAuthorPhotoUrl;
                 artworkInfoPopupRefs.photo.classList.add("is-visible");
 
                 if (artworkInfoPopupRefs.photoPlaceholder) {
@@ -17011,6 +18668,33 @@ export const createScene = function (engineArg, canvasArg) {
                 source: "GalleryApp"
             });
         },
+        rebuildArtworkImageVariants: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return rebuildArtworkImageVariants(artwork);
+        },
+        rebuildAllArtworkImageVariants: function () {
+            return rebuildAllArtworkImageVariants();
+        },
+        getArtworkImageVariantDebug: function () {
+            return getActiveArtworks().map(function (artwork) {
+                var imageState = getArtworkImageState(artwork);
+
+                return {
+                    name: artwork.name,
+                    hasImage: !!imageState,
+                    needsVariants: artworkImageStateNeedsVariants(imageState),
+                    selectedUrl: getArtworkImageUrlFromState(imageState),
+                    mobileDevice: isArtworkMobileTextureDevice(),
+                    imageUrl: imageState ? imageState.imageUrl || "" : "",
+                    imageUrlWeb: imageState ? imageState.imageUrlWeb || "" : "",
+                    imageUrlMobile: imageState ? imageState.imageUrlMobile || "" : "",
+                    imageUrlPreview: imageState ? imageState.imageUrlPreview || "" : ""
+                };
+            });
+        },
         removeArtworkImage: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
@@ -17075,6 +18759,30 @@ export const createScene = function (engineArg, canvasArg) {
                 return normalizeAuthorRecord(author);
             });
         },
+        rebuildAuthorPhotoVariants: function (authorIdOrName) {
+            return rebuildAuthorPhotoVariants(authorIdOrName);
+        },
+        rebuildAllAuthorPhotoVariants: function () {
+            return rebuildAllAuthorPhotoVariants();
+        },
+        getAuthorPhotoVariantDebug: function () {
+            return artworkAuthors.map(function (author) {
+                author = normalizeAuthorRecord(author);
+
+                return {
+                    id: author.id,
+                    name: author.name,
+                    needsVariants: authorPhotoStateNeedsVariants(author),
+                    mobileDevice: isArtworkMobileTextureDevice(),
+                    selectedUrl: getBestAuthorPhotoUrlFromInfo(author),
+                    photoUrl: author.photoUrl,
+                    photoUrlWeb: author.photoUrlWeb,
+                    photoUrlMobile: author.photoUrlMobile,
+                    photoUrlPreview: author.photoUrlPreview,
+                    deletePaths: getAuthorPhotoPathsForDelete(author)
+                };
+            });
+        },
         findAuthorByName: function (name) {
             return getAuthorByName(name);
         },
@@ -17122,6 +18830,50 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getWallSegmentPaintDebug: function () {
             return getWallSegmentPaintDebug();
+        },
+        getWallSegmentAlignmentGroupDebug: function () {
+            var groups = [];
+
+            wallMeshes.forEach(function (mesh) {
+                if (!isAlignmentWallSegmentMesh(mesh)) {
+                    return;
+                }
+
+                var boundsX = getWallSegmentAlignmentGroupBounds(mesh, "x", null, "z");
+                var boundsZ = getWallSegmentAlignmentGroupBounds(mesh, "z", null, "x");
+
+                groups.push({
+                    meshName: mesh.name,
+                    xPlaneGroup: boundsX
+                        ? {
+                            segmentCount: boundsX.segmentCount,
+                            min: boundsX.min,
+                            max: boundsX.max,
+                            minY: boundsX.minY,
+                            maxY: boundsX.maxY
+                        }
+                        : null,
+                    zPlaneGroup: boundsZ
+                        ? {
+                            segmentCount: boundsZ.segmentCount,
+                            min: boundsZ.min,
+                            max: boundsZ.max,
+                            minY: boundsZ.minY,
+                            maxY: boundsZ.maxY
+                        }
+                        : null
+                });
+            });
+
+            return {
+                enabled: wallSegmentAlignmentGroupEnabled,
+                planeTolerance: wallSegmentAlignmentPlaneTolerance,
+                cornerGuardEnabled: wallSegmentAlignmentCornerGuardEnabled,
+                intervalMergeTolerance: wallSegmentAlignmentIntervalMergeTolerance,
+                wallSegments: groups.length,
+                dragUsesAlignmentGroup: true,
+                groups: groups
+            };
         },
         getWallSegmentLightTargetDebug: function () {
             return getWallSegmentLightTargetDebug();
