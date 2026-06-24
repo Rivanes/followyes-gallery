@@ -2714,6 +2714,14 @@ export const createScene = function (engineArg, canvasArg) {
     var artworkWidth = 1.3;
     var artworkHeight = 0.9;
     var artworkDepth = 0.04;
+
+    // STAGE 11F - ARTWORK IMAGE PLANE SURFACE OFFSET FIX
+    // Detached imagePlane ma siedzieć prawie na froncie boxa obrazu.
+    // Wcześniej był odsunięty zbyt daleko od powierzchni i z boku było widać szczelinę.
+    // Zostaje tylko mały epsilon, żeby uniknąć z-fightingu.
+    var artworkImagePlaneSurfaceEpsilon = 0.003;
+    var artworkImagePlanePickableForPopup = true;
+
     var artworkWallOffset = 0.04;
     var artworkTransformScaleMin = 0.25;
     var artworkTransformScaleMax = 3.0;
@@ -3618,11 +3626,21 @@ export const createScene = function (engineArg, canvasArg) {
                 ? artwork.getAbsolutePosition()
                 : artwork.position;
 
+            var artworkDepthScale = artwork.scaling && isFinite(artwork.scaling.z)
+                ? Math.abs(artwork.scaling.z)
+                : 1;
+
+            var imagePlaneSurfaceOffset =
+                (artworkDepth * artworkDepthScale * 0.5) +
+                artworkImagePlaneSurfaceEpsilon;
+
             imagePlane.parent = null;
-            imagePlane.position.copyFrom(position.add(normal.scale(artworkDepth * 1.25)));
+            imagePlane.position.copyFrom(position.add(normal.scale(imagePlaneSurfaceOffset)));
             imagePlane.rotationQuaternion = null;
             imagePlane.rotation.copyFrom(artwork.rotation);
-            imagePlane.scaling.x = artwork.scaling.x;
+            // STAGE 11G - ARTWORK IMAGE MIRROR FIX
+            // Negative X flips only the displayed texture plane, not the physical artwork box.
+            imagePlane.scaling.x = -Math.abs(artwork.scaling.x || 1);
             imagePlane.scaling.y = artwork.scaling.y;
             imagePlane.scaling.z = 1;
             imagePlane.renderingGroupId = getArtworkImageDepthSafeRenderingGroupId(artwork);
@@ -3663,11 +3681,21 @@ export const createScene = function (engineArg, canvasArg) {
         imagePlane.parent = null;
         imagePlane.position = BABYLON.Vector3.Zero();
         imagePlane.rotation = BABYLON.Vector3.Zero();
-        imagePlane.isPickable = false;
+        // Stage 11F:
+        // Pozwala center-ray popupowi trafiać dokładnie w widoczną grafikę.
+        // Standardowa selekcja obrazów i tak działa na artwork boxie.
+        imagePlane.isPickable = artworkImagePlanePickableForPopup;
+
+        // STAGE 11G - ARTWORK IMAGE MIRROR FIX
+        // Plane był wizualnie lustrzany względem fizycznego boxa obrazu.
+        // Odwracamy front-facing side imagePlane przez skalę X, bez ruszania boxa i bez zmiany położenia obrazu.
+        imagePlane.scaling.x = -Math.abs(imagePlane.scaling.x || 1);
+
         imagePlane.renderingGroupId = getArtworkImageDepthSafeRenderingGroupId(artwork);
         imagePlane.alwaysSelectAsActiveMesh = true;
         imagePlane.metadata = imagePlane.metadata || {};
         imagePlane.metadata.isArtworkImagePlane = true;
+        imagePlane.metadata.parentArtworkName = artwork.name;
 
         artwork.metadata.imagePlane = imagePlane;
         syncDetachedArtworkImagePlane(artwork);
@@ -12551,41 +12579,60 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    // STAGE 11G - WALL COLOR PATHS
+    // Nowe tekstury ścian są w repo assetów:
+    // https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/wall_color/basecolor_*.png
+    var wallColorTextureBaseUrl = "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/wall_color/";
+
+    function getWallColorTextureUrl(fileName) {
+        return wallColorTextureBaseUrl + fileName;
+    }
+
     var wallColors = [
-        {
-            name: "blue",
-            label: "Blue",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_b.png"
-        },
         {
             name: "black",
             label: "Black",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_black.png"
+            url: getWallColorTextureUrl("basecolor_black.png")
+        },
+        {
+            name: "blue",
+            label: "Blue",
+            url: getWallColorTextureUrl("basecolor_blue.png")
+        },
+        {
+            name: "cyan",
+            label: "Cyan",
+            url: getWallColorTextureUrl("basecolor_cyan.png")
         },
         {
             name: "green",
             label: "Green",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_g.png"
+            url: getWallColorTextureUrl("basecolor_green.png")
+        },
+        {
+            name: "orange",
+            label: "Orange",
+            url: getWallColorTextureUrl("basecolor_orange.png")
+        },
+        {
+            name: "purple",
+            label: "Purple",
+            url: getWallColorTextureUrl("basecolor_purple.png")
         },
         {
             name: "red",
             label: "Red",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_r.png"
-        },
-        {
-            name: "steel",
-            label: "Steel",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_steel_b.png"
+            url: getWallColorTextureUrl("basecolor_red.png")
         },
         {
             name: "white",
             label: "White",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_w.png"
+            url: getWallColorTextureUrl("basecolor_white.png")
         },
         {
-            name: "yellowish",
-            label: "Yellowish",
-            url: "https://raw.githubusercontent.com/Rivanes/babylon-assets/main/ColorTexture/Substance_graph_basecolor_yellowish.png"
+            name: "yellow",
+            label: "Yellow",
+            url: getWallColorTextureUrl("basecolor_yellow.png")
         }
     ];
 
@@ -16342,10 +16389,15 @@ export const createScene = function (engineArg, canvasArg) {
         }
     );
 
+    // STAGE 11H - WALL GLTF ASSET PATH UPDATE
+    // Ściany są teraz ładowane z folderu Models/Wall jako GLTF + BIN + tekstury.
+    // Dzięki temu GitHub raw sam dociąga pliki powiązane z Wall_segments.gltf.
+    var wallModelRootUrl = "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Wall/";
+
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
-        "Wall_segments.glb",
+        wallModelRootUrl,
+        "Wall_segments.gltf",
         scene,
         function (meshes) {
 
@@ -16355,6 +16407,11 @@ export const createScene = function (engineArg, canvasArg) {
                 mesh.isPickable = true;
                 registerViewerCollisionMesh(mesh, "wall");
 
+                if (mesh.material) {
+                    configureMaterialForCommonLighting(mesh.material);
+                    configureMeshMaterialForMainShadows(mesh);
+                }
+
                 registerCommonShadowMesh(mesh, {
                     global: true,
                     local: true,
@@ -16363,10 +16420,26 @@ export const createScene = function (engineArg, canvasArg) {
                 });
             });
 
-            console.log("Wall loaded", wallMeshes);
+            console.log("Wall GLTF loaded", {
+                rootUrl: wallModelRootUrl,
+                file: "Wall_segments.gltf",
+                meshes: wallMeshes
+            });
             refreshViewerCollisionMeshes();
+            refreshCommonLightingMaterialSupport();
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
+
+            assetLoaded();
+        },
+        null,
+        function (scene, message, exception) {
+            console.error("Wall GLTF load failed:", {
+                rootUrl: wallModelRootUrl,
+                file: "Wall_segments.gltf",
+                message: message,
+                exception: exception
+            });
 
             assetLoaded();
         }
@@ -17455,10 +17528,13 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (
             mesh.metadata &&
-            mesh.metadata.isArtworkImagePlane &&
-            mesh.name
+            mesh.metadata.isArtworkImagePlane
         ) {
-            var baseName = mesh.name.replace(/_ImagePlane$/, "");
+            var baseName = mesh.metadata.parentArtworkName || (
+                mesh.name
+                    ? mesh.name.replace(/_ImagePlane$/, "")
+                    : ""
+            );
 
             for (var i = 0; i < artworks.length; i++) {
                 if (artworks[i] && artworks[i].name === baseName) {
@@ -18895,7 +18971,12 @@ export const createScene = function (engineArg, canvasArg) {
             return Object.assign(
                 {
                     centerRayEnabled: artworkInfoPopupCenterRayEnabled,
-                    popupDistance: getArtworkPopupDistance()
+                    popupDistance: getArtworkPopupDistance(),
+                    imagePlaneSurfaceEpsilon: artworkImagePlaneSurfaceEpsilon,
+                    imagePlanePickableForPopup: artworkImagePlanePickableForPopup,
+                    wallColorTextureBaseUrl: wallColorTextureBaseUrl,
+                    wallModelRootUrl: typeof wallModelRootUrl !== "undefined" ? wallModelRootUrl : "",
+                    artworkImagePlaneMirrorFix: true
                 },
                 artworkInfoPopupLastTargetDebug || {}
             );

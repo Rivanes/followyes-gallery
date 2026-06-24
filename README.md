@@ -1266,3 +1266,69 @@ GalleryApp.getArtworkInfoPopupTargetDebug()
 GalleryApp.setArtworkInfoPopupCenterRay(true)
 GalleryApp.setArtworkInfoPopupCenterRay(false)
 ```
+
+
+## V0_11 Stage 11F Artwork Image Plane Surface Offset Fix
+
+Fix:
+- detached artwork image plane was too far from the physical artwork box.
+- the visible image now sits close to the front surface of the artwork box.
+- the offset is based on half artwork depth plus a tiny epsilon to avoid z-fighting.
+
+Also:
+- image plane stores parent artwork name.
+- image plane is pickable for the center-ray popup so popup ray hits the visible image area.
+
+
+## V0_11 Stage 11G Wall Color Paths + Artwork Image Mirror Fix
+
+Changes:
+- Wall color textures now load from the new asset repo folder:
+  `https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/wall_color/`
+- Added new wall colors from the new folder.
+- Fixed mirrored artwork images by flipping only the detached imagePlane, not the artwork box.
+
+Wall colors:
+- black
+- blue
+- cyan
+- green
+- orange
+- purple
+- red
+- white
+- yellow
+
+Important:
+- physical artwork mesh transform is unchanged.
+- imagePlane remains detached and close to surface from Stage 11F.
+- center-ray popup still works with imagePlane.
+
+
+## V0_11 Stage 11H Wall GLTF Asset Path Update
+
+Wall model path changed from:
+```txt
+Models/Wall_segments.glb
+```
+
+to:
+```txt
+Models/Wall/Wall_segments.gltf
+```
+
+Related files should live next to the GLTF:
+```txt
+Models/Wall/Wall_segments.bin
+Models/Wall/DefaultMaterial_Base_color.png
+Models/Wall/DefaultMaterial_Metallic.png-DefaultMaterial_Roughness.png
+Models/Wall/DefaultMaterial_Normal_OpenGL.png
+Models/Wall/Substance_graph_ambientocclusion.png
+Models/Wall/Substance_graph_normal.png
+Models/Wall/Substance_graph_roughness.png
+```
+
+Segment logic is unchanged:
+- wall painting still requires `Wall_segment_...`
+- light targeting still requires `Wall_segment_...`
+- alignment/drag/corner guard still use the segment grouping logic
