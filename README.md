@@ -1148,3 +1148,65 @@ Debug:
 ```js
 GalleryApp.getWallSegmentAlignmentGroupDebug()
 ```
+
+
+## V0_11 Stage 11A Artwork Image Variants / Mobile Texture Budget
+
+Fix:
+- mobile devices should not load full-size artwork originals as WebGL textures.
+- upload now creates web/mobile/preview variants automatically.
+- existing uploaded images can be processed with `REBUILD VARIANTS`.
+
+Variants:
+- web: max side 2048 px
+- mobile: max side 1024 px
+- preview: max side 384 px
+- format: WebP with JPEG fallback when canvas WebP is unavailable
+
+State fields:
+- `imageUrlOriginal`
+- `imageUrlWeb`
+- `imageUrlMobile`
+- `imageUrlPreview`
+- corresponding `imagePath...`, size, dimensions and mime fields
+
+Runtime selection:
+- mobile loads `imageUrlMobile` when available.
+- desktop loads `imageUrlWeb` when available.
+- fallback remains original URL.
+
+Admin UI:
+- ARTWORK IMAGE section gets `REBUILD VARIANTS`.
+- it rebuilds variants for existing artwork images that do not have web/mobile/preview yet.
+- after rebuild it saves gallery state to Supabase.
+
+Console:
+```js
+GalleryApp.rebuildAllArtworkImageVariants()
+GalleryApp.rebuildArtworkImageVariants("Artwork_1")
+GalleryApp.getArtworkImageVariantDebug()
+```
+
+
+## V0_11 Stage 11B Author Photo Variants
+
+Extends Stage 11A:
+- author photos also get web/mobile/preview variants.
+- mobile popup/editor loads smaller author photo variants.
+- existing author photos can be rebuilt.
+- deleting/removing unused author photos removes original + all generated variants.
+
+Author photo variants:
+- web: max side 1024 px
+- mobile: max side 512 px
+- preview: max side 256 px
+
+Admin UI:
+- `REBUILD AUTHOR VARIANTS`
+
+Console:
+```js
+GalleryApp.rebuildAllAuthorPhotoVariants()
+GalleryApp.rebuildAuthorPhotoVariants("author-name-or-id")
+GalleryApp.getAuthorPhotoVariantDebug()
+```
