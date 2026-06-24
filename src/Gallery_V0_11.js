@@ -12639,12 +12639,18 @@ export const createScene = function (engineArg, canvasArg) {
     wallColors.forEach(function (colorData) {
 
         var material = new BABYLON.PBRMaterial("WallColor_" + colorData.name, scene);
-        material.albedoTexture = new BABYLON.Texture(colorData.url, scene);
+        var wallColorTexture = new BABYLON.Texture(colorData.url, scene);
+
+        material.albedoTexture = wallColorTexture;
         material.roughness = 0.85;
         material.metallic = 0;
         configureMaterialForCommonLighting(material);
         material.metadata = material.metadata || {};
         material.metadata.uiName = colorData.label;
+        material.metadata.wallColorName = colorData.name;
+        material.metadata.wallColorTextureUrl = colorData.url;
+        material.metadata.wallColorTexture = wallColorTexture;
+        material.metadata.wallPaintSelector = true;
 
         wallColorMaterials[colorData.name] = material;
 
@@ -12687,15 +12693,170 @@ export const createScene = function (engineArg, canvasArg) {
         );
     }
 
+    function normalizeWallColorName(colorName) {
+        colorName = String(colorName || "").trim();
+
+        if (colorName === "yellowish") {
+            return "yellow";
+        }
+
+        if (colorName === "steel") {
+            return "cyan";
+        }
+
+        return colorName;
+    }
+
+    function getWallPaintColorDataFromMaterial(material) {
+        if (!material) {
+            return null;
+        }
+
+        material.metadata = material.metadata || {};
+
+        var colorName = normalizeWallColorName(
+            material.metadata.wallColorName ||
+            getWallColorNameFromMaterial(material)
+        );
+
+        if (!colorName) {
+            return null;
+        }
+
+        var colorTexture =
+            material.metadata.wallColorTexture ||
+            material.albedoTexture ||
+            material.diffuseTexture ||
+            null;
+
+        if (!colorTexture && material.metadata.wallColorTextureUrl) {
+            colorTexture = new BABYLON.Texture(
+                material.metadata.wallColorTextureUrl,
+                scene
+            );
+            material.metadata.wallColorTexture = colorTexture;
+        }
+
+        return {
+            name: colorName,
+            texture: colorTexture,
+            url: material.metadata.wallColorTextureUrl || null,
+            label: material.metadata.uiName || colorName
+        };
+    }
+
+    function getOrCreateWallSegmentPaintMaterial(wallMesh) {
+        wallMesh.metadata = wallMesh.metadata || {};
+
+        if (
+            wallMesh.metadata.wallSegmentPaintMaterial &&
+            !(wallMesh.metadata.wallSegmentPaintMaterial.isDisposed && wallMesh.metadata.wallSegmentPaintMaterial.isDisposed())
+        ) {
+            return wallMesh.metadata.wallSegmentPaintMaterial;
+        }
+
+        var sourceMaterial = wallMesh.material || null;
+        var paintMaterial = null;
+
+        if (sourceMaterial && sourceMaterial.clone) {
+            paintMaterial = sourceMaterial.clone(
+                wallMesh.name + "_BaseColorPaintMaterial"
+            );
+        }
+
+        if (!paintMaterial) {
+            paintMaterial = new BABYLON.PBRMaterial(
+                wallMesh.name + "_BaseColorPaintMaterial",
+                scene
+            );
+            paintMaterial.roughness = 0.85;
+            paintMaterial.metallic = 0;
+        }
+
+        paintMaterial.metadata = Object.assign(
+            {},
+            sourceMaterial && sourceMaterial.metadata ? sourceMaterial.metadata : {},
+            paintMaterial.metadata || {},
+            {
+                wallBaseColorOnlyPaintMaterial: true,
+                wallSegmentSourceMaterialName: sourceMaterial && sourceMaterial.name
+                    ? sourceMaterial.name
+                    : ""
+            }
+        );
+
+        wallMesh.metadata.wallSegmentBaseMaterialName = sourceMaterial && sourceMaterial.name
+            ? sourceMaterial.name
+            : "";
+        wallMesh.metadata.wallSegmentPaintMaterial = paintMaterial;
+        wallMesh.material = paintMaterial;
+
+        return paintMaterial;
+    }
+
+    function applyWallBaseColorOnlyToMaterial(targetMaterial, colorData) {
+        if (!targetMaterial || !colorData || !colorData.texture) {
+            return false;
+        }
+
+        // STAGE 11J - WALL PAINT BASE COLOR ONLY FIX
+        // Malowanie ściany nie może wymieniać całego materiału.
+        // Zmieniamy tylko base color / albedo texture, a normal/roughness/metallic/AO zostają z modelu.
+        if (targetMaterial.albedoTexture !== undefined) {
+            targetMaterial.albedoTexture = colorData.texture;
+        }
+
+        if (targetMaterial.diffuseTexture !== undefined) {
+            targetMaterial.diffuseTexture = colorData.texture;
+        }
+
+        if (targetMaterial.baseTexture !== undefined) {
+            targetMaterial.baseTexture = colorData.texture;
+        }
+
+        if (targetMaterial.albedoColor) {
+            targetMaterial.albedoColor = BABYLON.Color3.White();
+        }
+
+        if (targetMaterial.diffuseColor) {
+            targetMaterial.diffuseColor = BABYLON.Color3.White();
+        }
+
+        targetMaterial.metadata = targetMaterial.metadata || {};
+        targetMaterial.metadata.wallColorName = colorData.name;
+        targetMaterial.metadata.uiName = colorData.label;
+        targetMaterial.metadata.wallColorTextureUrl = colorData.url;
+        targetMaterial.metadata.wallBaseColorOnlyPaintMaterial = true;
+
+        return true;
+    }
+
     function applyWallColorMaterialToSegment(wallMesh, material) {
         if (!wallMesh || !material || !isPaintableWallSegmentMesh(wallMesh)) {
             return false;
         }
 
-        wallMesh.material = material;
+        var colorData = getWallPaintColorDataFromMaterial(material);
+
+        if (!colorData || !colorData.texture) {
+            console.warn("Wall paint skipped: missing base color texture", {
+                wall: wallMesh ? wallMesh.name : null,
+                material: material ? material.name : null
+            });
+            return false;
+        }
+
+        var paintMaterial = getOrCreateWallSegmentPaintMaterial(wallMesh);
+
+        if (!applyWallBaseColorOnlyToMaterial(paintMaterial, colorData)) {
+            return false;
+        }
+
+        wallMesh.material = paintMaterial;
         wallMesh.metadata = wallMesh.metadata || {};
-        wallMesh.metadata.wallSegmentColorName = getWallColorNameFromMaterial(material);
+        wallMesh.metadata.wallSegmentColorName = colorData.name;
         wallMesh.metadata.wallSegmentPaintedAt = new Date().toISOString();
+        wallMesh.metadata.wallSegmentPaintMode = "baseColorOnly";
 
         configureMeshMaterialForMainShadows(wallMesh);
         refreshCommonLightingMaterialSupport();
@@ -12713,6 +12874,18 @@ export const createScene = function (engineArg, canvasArg) {
                 colorName: getWallColorNameFromMaterial(wallMesh.material),
                 segmentColorName: wallMesh.metadata
                     ? wallMesh.metadata.wallSegmentColorName || null
+                    : null,
+                paintMode: wallMesh.metadata
+                    ? wallMesh.metadata.wallSegmentPaintMode || null
+                    : null,
+                baseMaterialName: wallMesh.metadata
+                    ? wallMesh.metadata.wallSegmentBaseMaterialName || null
+                    : null,
+                hasNormalTexture: !!(wallMesh.material && (wallMesh.material.bumpTexture || wallMesh.material.normalTexture)),
+                hasRoughnessTexture: !!(wallMesh.material && (wallMesh.material.metallicTexture || wallMesh.material.roughnessTexture)),
+                hasAmbientTexture: !!(wallMesh.material && wallMesh.material.ambientTexture),
+                albedoTextureUrl: wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture.url || null
                     : null
             };
         });
@@ -17804,6 +17977,13 @@ export const createScene = function (engineArg, canvasArg) {
 
             evt.preventDefault();
 
+            // STAGE 11I - IMAGE PLANE EDIT SELECTION PASS-THROUGH
+            // Po Stage 11F widoczna grafika imagePlane jest pickable dla center-ray popupu.
+            // Kliknięcie w grafikę ma jednak działać jak kliknięcie w fizyczny Artwork_XX.
+            var pickedArtworkMesh = pickResult.hit
+                ? getArtworkFromPopupPickMesh(pickResult.pickedMesh)
+                : null;
+
             var pickedLocalLightItem = pickResult.hit
                 ? getLocalLightItemByMesh(pickResult.pickedMesh)
                 : null;
@@ -17824,7 +18004,7 @@ export const createScene = function (engineArg, canvasArg) {
             if (isLocalLightsPanelActive()) {
                 if (
                     pickResult.hit &&
-                    artworks.includes(pickResult.pickedMesh)
+                    pickedArtworkMesh
                 ) {
                     clearLocalLightSelection();
                     setLightingContentMode("main");
@@ -17862,9 +18042,9 @@ export const createScene = function (engineArg, canvasArg) {
             if (
                 editMode &&
                 pickResult.hit &&
-                artworks.includes(pickResult.pickedMesh)
+                pickedArtworkMesh
             ) {
-                var clickedArtwork = pickResult.pickedMesh;
+                var clickedArtwork = pickedArtworkMesh;
                 var currentClickTime = Date.now();
 
                 var isDoubleClick =
@@ -17944,9 +18124,9 @@ export const createScene = function (engineArg, canvasArg) {
             if (
                 !editMode &&
                 pickResult.hit &&
-                artworks.includes(pickResult.pickedMesh)
+                pickedArtworkMesh
             ) {
-                focusCameraOnObject(pickResult.pickedMesh);
+                focusCameraOnObject(pickedArtworkMesh);
                 return;
             }
 
@@ -18190,12 +18370,16 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function getWallColorNameFromMaterial(material) {
-        if (!material || !material.name) {
+        if (!material) {
             return null;
         }
 
-        if (material.name.indexOf("WallColor_") === 0) {
-            return material.name.replace("WallColor_", "");
+        if (material.metadata && material.metadata.wallColorName) {
+            return normalizeWallColorName(material.metadata.wallColorName);
+        }
+
+        if (material.name && material.name.indexOf("WallColor_") === 0) {
+            return normalizeWallColorName(material.name.replace("WallColor_", ""));
         }
 
         return null;
@@ -18309,10 +18493,14 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 var wallMesh = getWallMeshByName(wallState.name);
-                var colorName = wallState.colorName || (
-                    wallState.materialName && wallState.materialName.indexOf("WallColor_") === 0
-                        ? wallState.materialName.replace("WallColor_", "")
-                        : null
+                var colorName = normalizeWallColorName(
+                    wallState.segmentColorName ||
+                    wallState.colorName ||
+                    (
+                        wallState.materialName && wallState.materialName.indexOf("WallColor_") === 0
+                            ? wallState.materialName.replace("WallColor_", "")
+                            : null
+                    )
                 );
 
                 if (
@@ -18321,10 +18509,10 @@ export const createScene = function (engineArg, canvasArg) {
                     wallColorMaterials[colorName] &&
                     isPaintableWallSegmentMesh(wallMesh)
                 ) {
-                    wallMesh.material = wallColorMaterials[colorName];
-                    wallMesh.metadata = wallMesh.metadata || {};
-                    wallMesh.metadata.wallSegmentColorName = colorName;
-                    configureMeshMaterialForMainShadows(wallMesh);
+                    applyWallColorMaterialToSegment(
+                        wallMesh,
+                        wallColorMaterials[colorName]
+                    );
                 }
             });
         }
@@ -18976,7 +19164,8 @@ export const createScene = function (engineArg, canvasArg) {
                     imagePlanePickableForPopup: artworkImagePlanePickableForPopup,
                     wallColorTextureBaseUrl: wallColorTextureBaseUrl,
                     wallModelRootUrl: typeof wallModelRootUrl !== "undefined" ? wallModelRootUrl : "",
-                    artworkImagePlaneMirrorFix: true
+                    artworkImagePlaneMirrorFix: true,
+                    imagePlaneEditSelectionPassthrough: true
                 },
                 artworkInfoPopupLastTargetDebug || {}
             );

@@ -1332,3 +1332,39 @@ Segment logic is unchanged:
 - wall painting still requires `Wall_segment_...`
 - light targeting still requires `Wall_segment_...`
 - alignment/drag/corner guard still use the segment grouping logic
+
+
+## V0_11 Stage 11I Image Plane Edit Selection Pass-through
+
+Fix:
+- Stage 11F made the visible artwork image plane pickable for the center-ray popup.
+- That caused clicks to hit `Artwork_XX_ImagePlane` instead of `Artwork_XX`.
+- Edit selection now maps imagePlane clicks back to their parent artwork.
+
+Affected:
+- Edit Mode artwork selection
+- Edit Mode artwork drag start
+- Local Lights panel switching back to artwork edit
+- Viewer Mode click-to-focus
+
+Not changed:
+- imagePlane remains pickable for center-ray popup.
+- Stage 11F surface offset remains.
+- Stage 11G wall color paths and mirror fix remain.
+- Stage 11H wall GLTF path remains.
+
+
+## V0_11 Stage 11J Wall Paint Base Color Only Fix
+
+Fix:
+- Wall segment painting no longer replaces the whole wall material.
+- Painting changes only the base color / albedo texture.
+- Original wall material channels are preserved:
+  - normal map
+  - roughness / metallic roughness
+  - ambient occlusion
+  - lighting/shadow compatibility
+
+State:
+- saved `segmentColorName` is restored through the same base-color-only paint path.
+- old saved color names `yellowish` and `steel` are normalized to `yellow` and `cyan`.
