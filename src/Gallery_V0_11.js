@@ -2734,9 +2734,54 @@ export const createScene = function (engineArg, canvasArg) {
         return artwork.metadata.artworkImage || null;
     }
 
-    function getArtworkImageUrlFromState(imageState) {
+    function isArtworkMobileTextureDevice() {
+        if (typeof window === "undefined") {
+            return false;
+        }
+
+        var userAgent = navigator && navigator.userAgent
+            ? navigator.userAgent
+            : "";
+
+        var mobileByAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
+        var mobileByWidth = window.innerWidth !== undefined && window.innerWidth <= 768;
+        var mobileByTouch = navigator && navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024;
+
+        return !!(mobileByAgent || mobileByWidth || mobileByTouch);
+    }
+
+    function getPublicArtworkUrlFromPath(imagePath, storageBucket) {
+        if (!imagePath || !window.gallerySupabase || !window.gallerySupabase.storage) {
+            return "";
+        }
+
+        try {
+            var publicUrlResponse = window.gallerySupabase
+                .storage
+                .from(storageBucket || galleryArtworkStorageBucket)
+                .getPublicUrl(imagePath);
+
+            if (
+                publicUrlResponse &&
+                publicUrlResponse.data &&
+                publicUrlResponse.data.publicUrl
+            ) {
+                return publicUrlResponse.data.publicUrl;
+            }
+        } catch (error) {
+            console.warn("Artwork public URL warning:", error);
+        }
+
+        return "";
+    }
+
+    function getArtworkOriginalImageUrlFromState(imageState) {
         if (!imageState) {
             return "";
+        }
+
+        if (imageState.imageUrlOriginal) {
+            return imageState.imageUrlOriginal;
         }
 
         if (imageState.imageUrl) {
@@ -2747,26 +2792,55 @@ export const createScene = function (engineArg, canvasArg) {
             return imageState.publicUrl;
         }
 
-        if (imageState.imagePath && window.gallerySupabase && window.gallerySupabase.storage) {
-            try {
-                var publicUrlResponse = window.gallerySupabase
-                    .storage
-                    .from(imageState.storageBucket || galleryArtworkStorageBucket)
-                    .getPublicUrl(imageState.imagePath);
-
-                if (
-                    publicUrlResponse &&
-                    publicUrlResponse.data &&
-                    publicUrlResponse.data.publicUrl
-                ) {
-                    return publicUrlResponse.data.publicUrl;
-                }
-            } catch (error) {
-                console.warn("Artwork public URL warning:", error);
-            }
+        if (imageState.imagePath) {
+            return getPublicArtworkUrlFromPath(
+                imageState.imagePath,
+                imageState.storageBucket || galleryArtworkStorageBucket
+            );
         }
 
         return "";
+    }
+
+    function getArtworkImageUrlFromState(imageState) {
+        if (!imageState) {
+            return "";
+        }
+
+        var isMobile = isArtworkMobileTextureDevice();
+
+        if (isMobile && imageState.imageUrlMobile) {
+            return imageState.imageUrlMobile;
+        }
+
+        if (!isMobile && imageState.imageUrlWeb) {
+            return imageState.imageUrlWeb;
+        }
+
+        if (imageState.imageUrlWeb) {
+            return imageState.imageUrlWeb;
+        }
+
+        if (imageState.imageUrlMobile) {
+            return imageState.imageUrlMobile;
+        }
+
+        if (imageState.imageUrlPreview) {
+            return imageState.imageUrlPreview;
+        }
+
+        return getArtworkOriginalImageUrlFromState(imageState);
+    }
+
+    function getArtworkTextureNoMipmap(imageState) {
+        return !!(
+            imageState &&
+            isArtworkMobileTextureDevice() &&
+            (
+                imageState.imageUrlMobile ||
+                imageState.imagePathMobile
+            )
+        );
     }
 
     function createSafeStorageFileName(fileName) {
@@ -2804,6 +2878,649 @@ export const createScene = function (engineArg, canvasArg) {
             : "artwork";
 
         return galleryArtworkStoragePrefix + "/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+    }
+
+
+    function createArtworkVariantStoragePath(originalPath, variantName, extension) {
+        var safeVariant = String(variantName || "variant").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+        var safeExtension = String(extension || galleryArtworkImageVariantExtension || "webp").replace(/[^a-z0-9]+/gi, "").toLowerCase() || "webp";
+        var sourcePath = String(originalPath || "");
+        var slashIndex = sourcePath.lastIndexOf("/");
+        var directory = slashIndex !== -1 ? sourcePath.slice(0, slashIndex) : galleryArtworkStoragePrefix;
+        var fileName = slashIndex !== -1 ? sourcePath.slice(slashIndex + 1) : sourcePath;
+
+        if (!fileName) {
+            fileName = "artwork-image-" + Date.now() + ".jpg";
+        }
+
+        var baseName = fileName.replace(/\.[^/.]+$/, "");
+
+        return directory + "/variants/" + baseName + "-" + safeVariant + "." + safeExtension;
+    }
+
+    function loadImageElementFromBlob(blob) {
+        return new Promise(function (resolve, reject) {
+            var image = new Image();
+            var objectUrl = URL.createObjectURL(blob);
+
+            image.onload = function () {
+                URL.revokeObjectURL(objectUrl);
+                resolve(image);
+            };
+
+            image.onerror = function (error) {
+                URL.revokeObjectURL(objectUrl);
+                reject(error);
+            };
+
+            image.src = objectUrl;
+        });
+    }
+
+    function canvasToBlobSafe(canvas, mimeType, quality) {
+        return new Promise(function (resolve, reject) {
+            if (!canvas || !canvas.toBlob) {
+                reject(new Error("Canvas toBlob is not supported."));
+                return;
+            }
+
+            canvas.toBlob(
+                function (blob) {
+                    if (blob) {
+                        resolve({
+                            blob: blob,
+                            mimeType: blob.type || mimeType
+                        });
+                        return;
+                    }
+
+                    if (mimeType !== "image/jpeg") {
+                        canvas.toBlob(
+                            function (fallbackBlob) {
+                                if (fallbackBlob) {
+                                    resolve({
+                                        blob: fallbackBlob,
+                                        mimeType: fallbackBlob.type || "image/jpeg"
+                                    });
+                                } else {
+                                    reject(new Error("Canvas fallback toBlob returned empty blob."));
+                                }
+                            },
+                            "image/jpeg",
+                            quality
+                        );
+                        return;
+                    }
+
+                    reject(new Error("Canvas toBlob returned empty blob."));
+                },
+                mimeType,
+                quality
+            );
+        });
+    }
+
+    async function createArtworkImageVariantBlob(sourceBlob, variantName, settings) {
+        var image = await loadImageElementFromBlob(sourceBlob);
+        var sourceWidth = image.naturalWidth || image.width || 1;
+        var sourceHeight = image.naturalHeight || image.height || 1;
+        var maxSide = settings && settings.maxSide ? settings.maxSide : 1024;
+        var scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+        var targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+        var targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+        var canvas = document.createElement("canvas");
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        var context = canvas.getContext("2d", {
+            alpha: true,
+            desynchronized: true
+        });
+
+        if (!context) {
+            throw new Error("Cannot create 2D canvas context.");
+        }
+
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+        var encoded = await canvasToBlobSafe(
+            canvas,
+            galleryArtworkImageVariantFormat,
+            settings && settings.quality !== undefined ? settings.quality : 0.8
+        );
+
+        var extension = encoded.mimeType === "image/jpeg"
+            ? "jpg"
+            : galleryArtworkImageVariantExtension;
+
+        return {
+            name: variantName,
+            blob: encoded.blob,
+            mimeType: encoded.mimeType,
+            extension: extension,
+            width: targetWidth,
+            height: targetHeight,
+            size: encoded.blob.size || 0,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight
+        };
+    }
+
+    async function uploadArtworkVariantBlob(client, originalPath, variantName, variantBlobData) {
+        var variantPath = createArtworkVariantStoragePath(
+            originalPath,
+            variantName,
+            variantBlobData.extension
+        );
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(variantPath, variantBlobData.blob, {
+                cacheControl: "31536000",
+                upsert: true,
+                contentType: variantBlobData.mimeType
+            });
+
+        if (uploadResponse.error) {
+            throw uploadResponse.error;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(variantPath);
+
+        var publicUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+
+        return {
+            path: variantPath,
+            url: publicUrl,
+            width: variantBlobData.width,
+            height: variantBlobData.height,
+            size: variantBlobData.size,
+            mimeType: variantBlobData.mimeType
+        };
+    }
+
+    async function createAndUploadArtworkImageVariants(artwork, sourceBlob, originalPath, client) {
+        if (!galleryArtworkImageVariantsEnabled || !sourceBlob || !client || !client.storage) {
+            return {};
+        }
+
+        var variantState = {
+            imageVariantsGeneratedAt: new Date().toISOString()
+        };
+
+        var variantNames = ["web", "mobile", "preview"];
+
+        for (var i = 0; i < variantNames.length; i++) {
+            var variantName = variantNames[i];
+            var settings = galleryArtworkImageVariantSettings[variantName];
+
+            try {
+                var variantBlobData = await createArtworkImageVariantBlob(
+                    sourceBlob,
+                    variantName,
+                    settings
+                );
+
+                var uploadedVariant = await uploadArtworkVariantBlob(
+                    client,
+                    originalPath,
+                    variantName,
+                    variantBlobData
+                );
+
+                var keySuffix = variantName.charAt(0).toUpperCase() + variantName.slice(1);
+
+                variantState["imagePath" + keySuffix] = uploadedVariant.path;
+                variantState["imageUrl" + keySuffix] = uploadedVariant.url;
+                variantState["imageWidth" + keySuffix] = uploadedVariant.width;
+                variantState["imageHeight" + keySuffix] = uploadedVariant.height;
+                variantState["imageSize" + keySuffix] = uploadedVariant.size;
+                variantState["imageMimeType" + keySuffix] = uploadedVariant.mimeType;
+            } catch (variantError) {
+                console.warn("Artwork image variant generation/upload failed:", {
+                    artwork: artwork ? artwork.name : null,
+                    variantName: variantName,
+                    error: variantError
+                });
+                variantState["imageVariantError" + variantName.charAt(0).toUpperCase() + variantName.slice(1)] =
+                    variantError && variantError.message ? variantError.message : String(variantError);
+            }
+        }
+
+        return variantState;
+    }
+
+    function artworkImageStateNeedsVariants(imageState) {
+        return !!(
+            imageState &&
+            getArtworkOriginalImageUrlFromState(imageState) &&
+            (
+                !imageState.imageUrlWeb ||
+                !imageState.imageUrlMobile ||
+                !imageState.imageUrlPreview
+            )
+        );
+    }
+
+    async function fetchArtworkImageBlobForVariantRebuild(imageState) {
+        var sourceUrl = getArtworkOriginalImageUrlFromState(imageState);
+
+        if (!sourceUrl) {
+            throw new Error("Missing source image URL.");
+        }
+
+        var response = await fetch(sourceUrl, {
+            mode: "cors",
+            cache: "reload"
+        });
+
+        if (!response.ok) {
+            throw new Error("Cannot fetch source image: " + response.status);
+        }
+
+        return response.blob();
+    }
+
+    async function rebuildArtworkImageVariants(artwork) {
+        var imageState = getArtworkImageState(artwork);
+
+        if (!artwork || !imageState) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: "missingArtworkOrImage"
+            };
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            throw new Error("Supabase Storage is not configured.");
+        }
+
+        var originalPath = imageState.imagePath || getArtworkStoragePathFromPublicUrl(
+            imageState.imageUrl || imageState.publicUrl || "",
+            imageState.storageBucket || galleryArtworkStorageBucket
+        );
+
+        if (!originalPath) {
+            originalPath = createArtworkStoragePath(artwork, {
+                name: imageState.originalName || artwork.name + "-rebuild.jpg"
+            });
+        }
+
+        var sourceBlob = await fetchArtworkImageBlobForVariantRebuild(imageState);
+        var variantState = await createAndUploadArtworkImageVariants(
+            artwork,
+            sourceBlob,
+            originalPath,
+            client
+        );
+
+        var rebuiltState = Object.assign(
+            {},
+            imageState,
+            variantState,
+            {
+                imageUrlOriginal: imageState.imageUrlOriginal || imageState.imageUrl || imageState.publicUrl || "",
+                imagePath: imageState.imagePath || originalPath,
+                storageBucket: imageState.storageBucket || galleryArtworkStorageBucket,
+                variantsRebuiltAt: new Date().toISOString()
+            }
+        );
+
+        applyArtworkImageStateSafely(
+            artwork,
+            rebuiltState,
+            "rebuild artwork image variants"
+        );
+
+        return {
+            ok: true,
+            skipped: false,
+            artwork: artwork.name,
+            hasWeb: !!rebuiltState.imageUrlWeb,
+            hasMobile: !!rebuiltState.imageUrlMobile,
+            hasPreview: !!rebuiltState.imageUrlPreview
+        };
+    }
+
+    async function rebuildAllArtworkImageVariants() {
+        var activeArtworks = getActiveArtworks().filter(function (artwork) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(artwork));
+        });
+
+        var result = {
+            total: activeArtworks.length,
+            rebuilt: 0,
+            failed: 0,
+            skipped: 0,
+            items: []
+        };
+
+        for (var i = 0; i < activeArtworks.length; i++) {
+            var artwork = activeArtworks[i];
+
+            notifyGalleryStatus("Rebuild image variants " + (i + 1) + "/" + activeArtworks.length + "...");
+
+            try {
+                var itemResult = await rebuildArtworkImageVariants(artwork);
+                result.items.push(itemResult);
+
+                if (itemResult && itemResult.ok) {
+                    result.rebuilt += 1;
+                } else {
+                    result.skipped += 1;
+                }
+            } catch (error) {
+                console.warn("Artwork variant rebuild failed:", artwork ? artwork.name : null, error);
+                result.failed += 1;
+                result.items.push({
+                    ok: false,
+                    artwork: artwork ? artwork.name : null,
+                    error: error && error.message ? error.message : String(error)
+                });
+            }
+        }
+
+        updateArtworkImageUi();
+        updateArtworkTransformUi();
+
+        return result;
+    }
+
+
+    function copyImageVariantStateToAuthorPhotoState(variantState) {
+        variantState = variantState || {};
+
+        var mapped = {
+            authorPhotoVariantsGeneratedAt: variantState.imageVariantsGeneratedAt || new Date().toISOString()
+        };
+
+        [
+            "Web",
+            "Mobile",
+            "Preview"
+        ].forEach(function (suffix) {
+            if (variantState["imagePath" + suffix]) {
+                mapped["authorPhotoPath" + suffix] = variantState["imagePath" + suffix];
+            }
+
+            if (variantState["imageUrl" + suffix]) {
+                mapped["authorPhotoUrl" + suffix] = variantState["imageUrl" + suffix];
+            }
+
+            if (variantState["imageWidth" + suffix]) {
+                mapped["authorPhotoWidth" + suffix] = variantState["imageWidth" + suffix];
+            }
+
+            if (variantState["imageHeight" + suffix]) {
+                mapped["authorPhotoHeight" + suffix] = variantState["imageHeight" + suffix];
+            }
+
+            if (variantState["imageSize" + suffix]) {
+                mapped["authorPhotoSize" + suffix] = variantState["imageSize" + suffix];
+            }
+
+            if (variantState["imageMimeType" + suffix]) {
+                mapped["authorPhotoMimeType" + suffix] = variantState["imageMimeType" + suffix];
+            }
+        });
+
+        return mapped;
+    }
+
+    async function createAndUploadAuthorPhotoVariants(sourceBlob, originalPath, client) {
+        if (!galleryAuthorPhotoVariantsEnabled || !sourceBlob || !client || !client.storage) {
+            return {};
+        }
+
+        var originalArtworkVariantSettings = galleryArtworkImageVariantSettings;
+
+        // Reuse the same generic canvas/upload code from artwork variants,
+        // but with smaller max sizes for author photos.
+        galleryArtworkImageVariantSettings = galleryAuthorPhotoVariantSettings;
+
+        try {
+            var genericState = await createAndUploadArtworkImageVariants(
+                null,
+                sourceBlob,
+                originalPath,
+                client
+            );
+
+            return copyImageVariantStateToAuthorPhotoState(genericState);
+        } finally {
+            galleryArtworkImageVariantSettings = originalArtworkVariantSettings;
+        }
+    }
+
+    function getBestAuthorPhotoUrlFromInfo(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+
+        if (isArtworkMobileTextureDevice() && data.authorPhotoUrlMobile) {
+            return data.authorPhotoUrlMobile;
+        }
+
+        if (isArtworkMobileTextureDevice() && data.photoUrlMobile) {
+            return data.photoUrlMobile;
+        }
+
+        if (!isArtworkMobileTextureDevice() && data.authorPhotoUrlWeb) {
+            return data.authorPhotoUrlWeb;
+        }
+
+        if (!isArtworkMobileTextureDevice() && data.photoUrlWeb) {
+            return data.photoUrlWeb;
+        }
+
+        return (
+            data.authorPhotoUrlWeb ||
+            data.photoUrlWeb ||
+            data.authorPhotoUrlMobile ||
+            data.photoUrlMobile ||
+            data.authorPhotoUrlPreview ||
+            data.photoUrlPreview ||
+            data.authorPhotoUrlOriginal ||
+            data.photoUrlOriginal ||
+            data.authorPhotoUrl ||
+            data.photoUrl ||
+            ""
+        );
+    }
+
+    function getOriginalAuthorPhotoUrlFromInfo(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+
+        return (
+            data.authorPhotoUrlOriginal ||
+            data.photoUrlOriginal ||
+            data.authorPhotoUrl ||
+            data.photoUrl ||
+            ""
+        );
+    }
+
+    function getAuthorPhotoPathsForDelete(infoOrAuthor) {
+        var data = infoOrAuthor || {};
+        var paths = [];
+
+        [
+            data.authorPhotoPath,
+            data.photoPath,
+            data.authorPhotoPathWeb,
+            data.photoPathWeb,
+            data.authorPhotoPathMobile,
+            data.photoPathMobile,
+            data.authorPhotoPathPreview,
+            data.photoPathPreview
+        ].forEach(function (path) {
+            if (path && paths.indexOf(path) === -1) {
+                paths.push(path);
+            }
+        });
+
+        return paths;
+    }
+
+    function authorPhotoStateNeedsVariants(data) {
+        data = data || {};
+
+        return !!(
+            getOriginalAuthorPhotoUrlFromInfo(data) &&
+            (
+                !data.authorPhotoUrlWeb && !data.photoUrlWeb ||
+                !data.authorPhotoUrlMobile && !data.photoUrlMobile ||
+                !data.authorPhotoUrlPreview && !data.photoUrlPreview
+            )
+        );
+    }
+
+    function getAuthorRecordsNeedingPhotoVariants() {
+        return artworkAuthors.filter(function (author) {
+            return authorPhotoStateNeedsVariants(author);
+        });
+    }
+
+    function syncAllArtworksForAuthor(author) {
+        if (!author || !author.id) {
+            return;
+        }
+
+        getActiveArtworks().forEach(function (artwork) {
+            var info = getArtworkInfoState(artwork);
+
+            if (info && info.authorId === author.id) {
+                syncArtworkInfoWithAuthor(artwork, author);
+            }
+        });
+    }
+
+    async function fetchAuthorPhotoBlobForVariantRebuild(author) {
+        var sourceUrl = getOriginalAuthorPhotoUrlFromInfo(author);
+
+        if (!sourceUrl) {
+            throw new Error("Missing author source photo URL.");
+        }
+
+        var response = await fetch(sourceUrl, {
+            mode: "cors",
+            cache: "reload"
+        });
+
+        if (!response.ok) {
+            throw new Error("Cannot fetch author source photo: " + response.status);
+        }
+
+        return response.blob();
+    }
+
+    async function rebuildAuthorPhotoVariants(authorIdOrName) {
+        var author = getAuthorById(authorIdOrName) || getAuthorByName(authorIdOrName);
+
+        if (!author) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: "authorNotFound"
+            };
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            throw new Error("Supabase Storage is not configured.");
+        }
+
+        var originalPath = author.photoPath || createAuthorPhotoStoragePath(
+            null,
+            {
+                name: (author.name || author.id || "author") + "-rebuild.jpg"
+            }
+        );
+
+        var sourceBlob = await fetchAuthorPhotoBlobForVariantRebuild(author);
+        var variantState = await createAndUploadAuthorPhotoVariants(
+            sourceBlob,
+            originalPath,
+            client
+        );
+
+        var updatedAuthor = upsertAuthorRecord(Object.assign(
+            {},
+            author,
+            variantState,
+            {
+                photoUrlOriginal: author.photoUrlOriginal || author.photoUrl || "",
+                photoPath: author.photoPath || originalPath,
+                photoBucket: author.photoBucket || galleryArtworkStorageBucket,
+                photoVariantsRebuiltAt: new Date().toISOString()
+            }
+        ));
+
+        syncAllArtworksForAuthor(updatedAuthor);
+
+        return {
+            ok: true,
+            skipped: false,
+            author: updatedAuthor ? updatedAuthor.name : author.name,
+            hasWeb: !!(updatedAuthor && updatedAuthor.photoUrlWeb),
+            hasMobile: !!(updatedAuthor && updatedAuthor.photoUrlMobile),
+            hasPreview: !!(updatedAuthor && updatedAuthor.photoUrlPreview)
+        };
+    }
+
+    async function rebuildAllAuthorPhotoVariants() {
+        var authors = getAuthorRecordsNeedingPhotoVariants();
+
+        var result = {
+            total: authors.length,
+            rebuilt: 0,
+            failed: 0,
+            skipped: 0,
+            items: []
+        };
+
+        for (var i = 0; i < authors.length; i++) {
+            var author = authors[i];
+
+            notifyGalleryStatus("Rebuild author photo variants " + (i + 1) + "/" + authors.length + "...");
+
+            try {
+                var itemResult = await rebuildAuthorPhotoVariants(author.id);
+                result.items.push(itemResult);
+
+                if (itemResult && itemResult.ok) {
+                    result.rebuilt += 1;
+                } else {
+                    result.skipped += 1;
+                }
+            } catch (error) {
+                console.warn("Author photo variant rebuild failed:", author ? author.name : null, error);
+                result.failed += 1;
+                result.items.push({
+                    ok: false,
+                    author: author ? author.name : null,
+                    error: error && error.message ? error.message : String(error)
+                });
+            }
+        }
+
+        updateArtworkInfoUi();
+        updateArtworkInfoPopupContent(getArtworkInfoUiTarget());
+
+        return result;
     }
 
     function getArtworkVisualNormal(artwork) {
@@ -3474,7 +4191,7 @@ export const createScene = function (engineArg, canvasArg) {
         var texture = new BABYLON.Texture(
             imageUrl,
             scene,
-            false,
+            getArtworkTextureNoMipmap(normalizedState),
             true,
             BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
             function () {
@@ -3620,7 +4337,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         var previousImageState = getArtworkImageState(artwork);
         var storagePath = createArtworkStoragePath(artwork, file);
-        notifyGalleryStatus("Wgrywam obraz...");
+        notifyGalleryStatus("Wgrywam obraz i kompresuje warianty...");
 
         var uploadResponse = await client
             .storage
@@ -3660,16 +4377,34 @@ export const createScene = function (engineArg, canvasArg) {
                 ? publicUrlResponse.data.publicUrl
                 : "";
 
-        var uploadedImageState = {
-            imagePath: storagePath,
-            imageUrl: publicUrl,
-            storageBucket: galleryArtworkStorageBucket,
-            originalName: file.name || null,
-            size: file.size || null,
-            mimeType: file.type || null,
-            fitMode: galleryArtworkDefaultFitMode,
-            uploadedAt: new Date().toISOString()
-        };
+        var variantState = {};
+
+        try {
+            variantState = await createAndUploadArtworkImageVariants(
+                artwork,
+                file,
+                storagePath,
+                client
+            );
+        } catch (variantBuildError) {
+            console.warn("Artwork image variants warning:", variantBuildError);
+            notifyGalleryStatus("Wgrano oryginal, ale warianty web/mobile nie powstaly. Sprawdz konsole.");
+        }
+
+        var uploadedImageState = Object.assign(
+            {
+                imagePath: storagePath,
+                imageUrl: publicUrl,
+                imageUrlOriginal: publicUrl,
+                storageBucket: galleryArtworkStorageBucket,
+                originalName: file.name || null,
+                size: file.size || null,
+                mimeType: file.type || null,
+                fitMode: galleryArtworkDefaultFitMode,
+                uploadedAt: new Date().toISOString()
+            },
+            variantState || {}
+        );
 
         var displayedNow = applyArtworkImageStateSafely(
             artwork,
@@ -3733,7 +4468,7 @@ export const createScene = function (engineArg, canvasArg) {
             }
         }
 
-        notifyGalleryStatus("Wgrano obraz. Zapisz stan galerii, aby zachowac zmiane.");
+        notifyGalleryStatus("Wgrano obraz i warianty. Zapisz stan galerii, aby zachowac zmiane.");
         return true;
     }
 
@@ -3785,8 +4520,21 @@ export const createScene = function (engineArg, canvasArg) {
             return null;
         }
 
+        var imagePaths = [imagePath];
+
+        [
+            imageState.imagePathWeb,
+            imageState.imagePathMobile,
+            imageState.imagePathPreview
+        ].forEach(function (variantPath) {
+            if (variantPath && imagePaths.indexOf(variantPath) === -1) {
+                imagePaths.push(variantPath);
+            }
+        });
+
         return {
             imagePath: imagePath,
+            imagePaths: imagePaths,
             storageBucket: bucketName
         };
     }
@@ -3805,15 +4553,20 @@ export const createScene = function (engineArg, canvasArg) {
             return true;
         }
 
+        var pathsToRemove = deleteState.imagePaths && deleteState.imagePaths.length
+            ? deleteState.imagePaths
+            : [deleteState.imagePath];
+
         var removeResponse = await client
             .storage
             .from(deleteState.storageBucket)
-            .remove([deleteState.imagePath]);
+            .remove(pathsToRemove);
 
         if (removeResponse.error) {
             console.warn("Artwork Storage delete error:", {
                 bucket: deleteState.storageBucket,
                 path: deleteState.imagePath,
+                paths: pathsToRemove,
                 originalState: imageState,
                 error: removeResponse.error
             });
@@ -4052,6 +4805,49 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryArtworkStoragePrefix = "main";
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
+
+    // STAGE 11A - ARTWORK IMAGE VARIANTS / MOBILE TEXTURE BUDGET
+    // Upload jednego pliku tworzy automatycznie warianty:
+    // - web: desktop
+    // - mobile: telefon
+    // - preview: lekka miniatura/fallback
+    // W gallery_state zapisujemy URL/path wariantów, telefon nie musi ładować oryginałów.
+    var galleryArtworkImageVariantsEnabled = true;
+    var galleryArtworkImageVariantFormat = "image/webp";
+    var galleryArtworkImageVariantExtension = "webp";
+    var galleryArtworkImageVariantSettings = {
+        web: {
+            maxSide: 2048,
+            quality: 0.82
+        },
+        mobile: {
+            maxSide: 1024,
+            quality: 0.78
+        },
+        preview: {
+            maxSide: 384,
+            quality: 0.70
+        }
+    };
+
+    // STAGE 11B - AUTHOR PHOTO VARIANTS
+    // Zdjęcia autorów też muszą mieć warianty, bo duże portrety mogą zabić mobile
+    // nawet wtedy, gdy obrazy na ścianach są już skompresowane.
+    var galleryAuthorPhotoVariantsEnabled = true;
+    var galleryAuthorPhotoVariantSettings = {
+        web: {
+            maxSide: 1024,
+            quality: 0.82
+        },
+        mobile: {
+            maxSide: 512,
+            quality: 0.78
+        },
+        preview: {
+            maxSide: 256,
+            quality: 0.70
+        }
+    };
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 
@@ -5391,6 +6187,10 @@ export const createScene = function (engineArg, canvasArg) {
             grid-template-columns: repeat(3, minmax(0, 1fr));
         }
 
+        .gallery-artwork-image-actions.is-four {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .gallery-editor-action-button {
             appearance: none;
             min-height: 40px;
@@ -6154,7 +6954,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageFileInput.style.display = "none";
 
     var artworkImageActions = document.createElement("div");
-    artworkImageActions.className = "gallery-artwork-image-actions is-three";
+    artworkImageActions.className = "gallery-artwork-image-actions is-four";
 
     var artworkImageUploadButton = document.createElement("button");
     artworkImageUploadButton.type = "button";
@@ -6171,13 +6971,20 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageRemoveButton.className = "gallery-editor-action-button is-danger";
     artworkImageRemoveButton.innerText = "REMOVE";
 
+    var artworkImageRebuildVariantsButton = document.createElement("button");
+    artworkImageRebuildVariantsButton.type = "button";
+    artworkImageRebuildVariantsButton.className = "gallery-editor-action-button";
+    artworkImageRebuildVariantsButton.innerText = "REBUILD VARIANTS";
+    artworkImageRebuildVariantsButton.title = "Create web/mobile/preview versions for existing uploaded artwork images.";
+
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
-    artworkImageNote.innerText = "Upload saves the file in Supabase Storage. Gallery state stores only the URL/path.";
+    artworkImageNote.innerText = "Upload creates web/mobile/preview image variants in Supabase Storage. Mobile loads the smaller variant.";
 
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
     artworkImageActions.appendChild(artworkImageRemoveButton);
+    artworkImageActions.appendChild(artworkImageRebuildVariantsButton);
 
     artworkImageSectionData.section.appendChild(artworkImageStatus);
     artworkImageSectionData.section.appendChild(artworkImageUrlLabel);
@@ -6257,10 +7064,17 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoAuthorPhotoGroup.appendChild(artworkInfoAuthorPhotoInput);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoGroup);
 
+    var artworkInfoRebuildAuthorPhotoVariantsButton = document.createElement("button");
+    artworkInfoRebuildAuthorPhotoVariantsButton.type = "button";
+    artworkInfoRebuildAuthorPhotoVariantsButton.className = "gallery-editor-action-button";
+    artworkInfoRebuildAuthorPhotoVariantsButton.innerText = "REBUILD AUTHOR VARIANTS";
+    artworkInfoRebuildAuthorPhotoVariantsButton.title = "Create web/mobile/preview versions for existing author photos.";
+
     var artworkInfoAuthorPhotoActions = document.createElement("div");
     artworkInfoAuthorPhotoActions.className = "gallery-artwork-image-actions";
-    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr";
+    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr 1fr";
     artworkInfoAuthorPhotoActions.appendChild(artworkInfoUploadPhotoButton);
+    artworkInfoAuthorPhotoActions.appendChild(artworkInfoRebuildAuthorPhotoVariantsButton);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoActions);
 
     var artworkInfoDetailsCard = document.createElement("div");
@@ -6364,6 +7178,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         artworkInfoAuthorPhotoInput.disabled = !isVisible;
         artworkInfoUploadPhotoButton.disabled = !isVisible;
+        artworkInfoRebuildAuthorPhotoVariantsButton.disabled = !getAuthorRecordsNeedingPhotoVariants().length;
         artworkInfoFindAuthorButton.disabled = !isVisible;
         artworkInfoAuthorNameInput.disabled = !isVisible;
         artworkInfoTitleInput.disabled = !isVisible;
@@ -6379,7 +7194,7 @@ export const createScene = function (engineArg, canvasArg) {
         var info = getArtworkInfoState(artwork);
 
         if (document.activeElement !== artworkInfoAuthorPhotoInput) {
-            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+            artworkInfoAuthorPhotoInput.value = getOriginalAuthorPhotoUrlFromInfo(info);
         }
 
         if (document.activeElement !== artworkInfoAuthorNameInput) {
@@ -6394,7 +7209,7 @@ export const createScene = function (engineArg, canvasArg) {
             artworkInfoDescriptionInput.value = info.description;
         }
 
-        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
         updateAuthorFoundUi(getAuthorById(info.authorId) || getAuthorByName(info.authorName));
     }
 
@@ -6425,12 +7240,33 @@ export const createScene = function (engineArg, canvasArg) {
             id: String(author.id || getAuthorIdFromName(author.name || author.authorName || "")).trim(),
             name: String(author.name || author.authorName || "").trim(),
             photoUrl: String(author.photoUrl || author.authorPhotoUrl || "").trim(),
+            photoUrlOriginal: String(author.photoUrlOriginal || author.authorPhotoUrlOriginal || author.photoUrl || author.authorPhotoUrl || "").trim(),
+            photoUrlWeb: String(author.photoUrlWeb || author.authorPhotoUrlWeb || "").trim(),
+            photoUrlMobile: String(author.photoUrlMobile || author.authorPhotoUrlMobile || "").trim(),
+            photoUrlPreview: String(author.photoUrlPreview || author.authorPhotoUrlPreview || "").trim(),
             photoPath: String(author.photoPath || author.authorPhotoPath || "").trim(),
+            photoPathWeb: String(author.photoPathWeb || author.authorPhotoPathWeb || "").trim(),
+            photoPathMobile: String(author.photoPathMobile || author.authorPhotoPathMobile || "").trim(),
+            photoPathPreview: String(author.photoPathPreview || author.authorPhotoPathPreview || "").trim(),
             photoBucket: String(author.photoBucket || author.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
             photoOriginalName: String(author.photoOriginalName || author.authorPhotoOriginalName || "").trim(),
             photoMimeType: String(author.photoMimeType || author.authorPhotoMimeType || "").trim(),
+            photoMimeTypeWeb: String(author.photoMimeTypeWeb || author.authorPhotoMimeTypeWeb || "").trim(),
+            photoMimeTypeMobile: String(author.photoMimeTypeMobile || author.authorPhotoMimeTypeMobile || "").trim(),
+            photoMimeTypePreview: String(author.photoMimeTypePreview || author.authorPhotoMimeTypePreview || "").trim(),
             photoSize: Number(author.photoSize || author.authorPhotoSize || 0) || 0,
-            photoUploadedAt: String(author.photoUploadedAt || author.authorPhotoUploadedAt || "").trim()
+            photoSizeWeb: Number(author.photoSizeWeb || author.authorPhotoSizeWeb || 0) || 0,
+            photoSizeMobile: Number(author.photoSizeMobile || author.authorPhotoSizeMobile || 0) || 0,
+            photoSizePreview: Number(author.photoSizePreview || author.authorPhotoSizePreview || 0) || 0,
+            photoWidthWeb: Number(author.photoWidthWeb || author.authorPhotoWidthWeb || 0) || 0,
+            photoHeightWeb: Number(author.photoHeightWeb || author.authorPhotoHeightWeb || 0) || 0,
+            photoWidthMobile: Number(author.photoWidthMobile || author.authorPhotoWidthMobile || 0) || 0,
+            photoHeightMobile: Number(author.photoHeightMobile || author.authorPhotoHeightMobile || 0) || 0,
+            photoWidthPreview: Number(author.photoWidthPreview || author.authorPhotoWidthPreview || 0) || 0,
+            photoHeightPreview: Number(author.photoHeightPreview || author.authorPhotoHeightPreview || 0) || 0,
+            photoUploadedAt: String(author.photoUploadedAt || author.authorPhotoUploadedAt || "").trim(),
+            photoVariantsGeneratedAt: String(author.photoVariantsGeneratedAt || author.authorPhotoVariantsGeneratedAt || "").trim(),
+            photoVariantsRebuiltAt: String(author.photoVariantsRebuiltAt || author.authorPhotoVariantsRebuiltAt || "").trim()
         };
     }
 
@@ -6513,12 +7349,33 @@ export const createScene = function (engineArg, canvasArg) {
         info.authorId = author.id;
         info.authorName = author.name || info.authorName;
         info.authorPhotoUrl = author.photoUrl || info.authorPhotoUrl;
+        info.authorPhotoUrlOriginal = author.photoUrlOriginal || author.photoUrl || info.authorPhotoUrlOriginal;
+        info.authorPhotoUrlWeb = author.photoUrlWeb || info.authorPhotoUrlWeb;
+        info.authorPhotoUrlMobile = author.photoUrlMobile || info.authorPhotoUrlMobile;
+        info.authorPhotoUrlPreview = author.photoUrlPreview || info.authorPhotoUrlPreview;
         info.authorPhotoPath = author.photoPath || info.authorPhotoPath;
+        info.authorPhotoPathWeb = author.photoPathWeb || info.authorPhotoPathWeb;
+        info.authorPhotoPathMobile = author.photoPathMobile || info.authorPhotoPathMobile;
+        info.authorPhotoPathPreview = author.photoPathPreview || info.authorPhotoPathPreview;
         info.authorPhotoBucket = author.photoBucket || info.authorPhotoBucket;
         info.authorPhotoOriginalName = author.photoOriginalName || info.authorPhotoOriginalName;
         info.authorPhotoMimeType = author.photoMimeType || info.authorPhotoMimeType;
+        info.authorPhotoMimeTypeWeb = author.photoMimeTypeWeb || info.authorPhotoMimeTypeWeb;
+        info.authorPhotoMimeTypeMobile = author.photoMimeTypeMobile || info.authorPhotoMimeTypeMobile;
+        info.authorPhotoMimeTypePreview = author.photoMimeTypePreview || info.authorPhotoMimeTypePreview;
         info.authorPhotoSize = author.photoSize || info.authorPhotoSize;
+        info.authorPhotoSizeWeb = author.photoSizeWeb || info.authorPhotoSizeWeb;
+        info.authorPhotoSizeMobile = author.photoSizeMobile || info.authorPhotoSizeMobile;
+        info.authorPhotoSizePreview = author.photoSizePreview || info.authorPhotoSizePreview;
+        info.authorPhotoWidthWeb = author.photoWidthWeb || info.authorPhotoWidthWeb;
+        info.authorPhotoHeightWeb = author.photoHeightWeb || info.authorPhotoHeightWeb;
+        info.authorPhotoWidthMobile = author.photoWidthMobile || info.authorPhotoWidthMobile;
+        info.authorPhotoHeightMobile = author.photoHeightMobile || info.authorPhotoHeightMobile;
+        info.authorPhotoWidthPreview = author.photoWidthPreview || info.authorPhotoWidthPreview;
+        info.authorPhotoHeightPreview = author.photoHeightPreview || info.authorPhotoHeightPreview;
         info.authorPhotoUploadedAt = author.photoUploadedAt || info.authorPhotoUploadedAt;
+        info.authorPhotoVariantsGeneratedAt = author.photoVariantsGeneratedAt || info.authorPhotoVariantsGeneratedAt;
+        info.authorPhotoVariantsRebuiltAt = author.photoVariantsRebuiltAt || info.authorPhotoVariantsRebuiltAt;
 
         setArtworkInfoState(artwork, info);
 
@@ -6569,8 +7426,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         syncArtworkInfoWithAuthor(artwork, author);
 
-        artworkInfoAuthorPhotoInput.value = author.photoUrl || "";
-        updateArtworkInfoEditorPhotoPreview(author.photoUrl || "");
+        artworkInfoAuthorPhotoInput.value = author.photoUrlOriginal || author.photoUrl || "";
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(author));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(author);
 
@@ -6592,9 +7449,12 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        if (author.photoPath) {
+        if (author.photoPath || author.photoPathWeb || author.photoPathMobile || author.photoPathPreview) {
             await deleteAuthorPhotoFromSupabase({
                 authorPhotoPath: author.photoPath,
+                authorPhotoPathWeb: author.photoPathWeb,
+                authorPhotoPathMobile: author.photoPathMobile,
+                authorPhotoPathPreview: author.photoPathPreview,
                 authorPhotoBucket: author.photoBucket
             });
         }
@@ -6614,9 +7474,11 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     async function deleteAuthorPhotoFromSupabase(info) {
-        info = normalizeArtworkInfo(info);
+        info = Object.assign({}, info || {});
 
-        if (!info.authorPhotoPath) {
+        var pathsToRemove = getAuthorPhotoPathsForDelete(info);
+
+        if (!pathsToRemove.length) {
             return true;
         }
 
@@ -6628,8 +7490,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         var response = await client
             .storage
-            .from(info.authorPhotoBucket || galleryArtworkStorageBucket)
-            .remove([info.authorPhotoPath]);
+            .from(info.authorPhotoBucket || info.photoBucket || galleryArtworkStorageBucket)
+            .remove(pathsToRemove);
 
         if (response.error) {
             console.warn("Author photo delete warning:", response.error);
@@ -6680,7 +7542,7 @@ export const createScene = function (engineArg, canvasArg) {
         var info = normalizeArtworkInfo(previousInfo);
         var storagePath = createAuthorPhotoStoragePath(artwork, file);
 
-        notifyGalleryStatus("Uploading author photo...");
+        notifyGalleryStatus("Uploading author photo and creating variants...");
 
         var uploadResponse = await client
             .storage
@@ -6708,26 +7570,67 @@ export const createScene = function (engineArg, canvasArg) {
             publicUrlResponse.data.publicUrl
                 ? publicUrlResponse.data.publicUrl
                 : "";
-        info.authorPhotoPath = storagePath;
-        info.authorPhotoBucket = galleryArtworkStorageBucket;
-        info.authorPhotoOriginalName = file.name || "";
-        info.authorPhotoMimeType = file.type || "";
-        info.authorPhotoSize = file.size || 0;
-        info.authorPhotoUploadedAt = new Date().toISOString();
 
-        info.authorName = authorNameForUpload;
-        info.authorId = getAuthorIdFromName(info.authorName);
+        var authorVariantState = {};
+
+        try {
+            authorVariantState = await createAndUploadAuthorPhotoVariants(
+                file,
+                storagePath,
+                client
+            );
+        } catch (authorVariantError) {
+            console.warn("Author photo variants warning:", authorVariantError);
+            notifyGalleryStatus("Author photo uploaded, but web/mobile variants failed. Check console.");
+        }
+
+        info = Object.assign(
+            info,
+            {
+                authorPhotoUrl: info.authorPhotoUrl,
+                authorPhotoUrlOriginal: info.authorPhotoUrl,
+                authorPhotoPath: storagePath,
+                authorPhotoBucket: galleryArtworkStorageBucket,
+                authorPhotoOriginalName: file.name || "",
+                authorPhotoMimeType: file.type || "",
+                authorPhotoSize: file.size || 0,
+                authorPhotoUploadedAt: new Date().toISOString(),
+                authorName: authorNameForUpload,
+                authorId: getAuthorIdFromName(authorNameForUpload)
+            },
+            authorVariantState || {}
+        );
 
         var authorRecord = upsertAuthorRecord({
             id: info.authorId,
             name: info.authorName,
             photoUrl: info.authorPhotoUrl,
+            photoUrlOriginal: info.authorPhotoUrlOriginal,
+            photoUrlWeb: info.authorPhotoUrlWeb,
+            photoUrlMobile: info.authorPhotoUrlMobile,
+            photoUrlPreview: info.authorPhotoUrlPreview,
             photoPath: info.authorPhotoPath,
+            photoPathWeb: info.authorPhotoPathWeb,
+            photoPathMobile: info.authorPhotoPathMobile,
+            photoPathPreview: info.authorPhotoPathPreview,
             photoBucket: info.authorPhotoBucket,
             photoOriginalName: info.authorPhotoOriginalName,
             photoMimeType: info.authorPhotoMimeType,
+            photoMimeTypeWeb: info.authorPhotoMimeTypeWeb,
+            photoMimeTypeMobile: info.authorPhotoMimeTypeMobile,
+            photoMimeTypePreview: info.authorPhotoMimeTypePreview,
             photoSize: info.authorPhotoSize,
-            photoUploadedAt: info.authorPhotoUploadedAt
+            photoSizeWeb: info.authorPhotoSizeWeb,
+            photoSizeMobile: info.authorPhotoSizeMobile,
+            photoSizePreview: info.authorPhotoSizePreview,
+            photoWidthWeb: info.authorPhotoWidthWeb,
+            photoHeightWeb: info.authorPhotoHeightWeb,
+            photoWidthMobile: info.authorPhotoWidthMobile,
+            photoHeightMobile: info.authorPhotoHeightMobile,
+            photoWidthPreview: info.authorPhotoWidthPreview,
+            photoHeightPreview: info.authorPhotoHeightPreview,
+            photoUploadedAt: info.authorPhotoUploadedAt,
+            photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt
         });
 
         if (authorRecord) {
@@ -6737,10 +7640,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (artworkInfoAuthorPhotoInput) {
-            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrl;
+            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrlOriginal || info.authorPhotoUrl;
         }
 
-        updateArtworkInfoEditorPhotoPreview(info.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(authorRecord);
 
@@ -6754,7 +7657,7 @@ export const createScene = function (engineArg, canvasArg) {
                 });
         }
 
-        notifyGalleryStatus("Author photo uploaded. Save state to keep the change.");
+        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Save state to keep the change.");
         return true;
     }
 
@@ -6776,12 +7679,27 @@ export const createScene = function (engineArg, canvasArg) {
         currentInfo.description = artworkInfoDescriptionInput.value.trim();
 
         if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            currentInfo.authorPhotoUrlOriginal = currentInfo.authorPhotoUrl;
+            currentInfo.authorPhotoUrlWeb = "";
+            currentInfo.authorPhotoUrlMobile = "";
+            currentInfo.authorPhotoUrlPreview = "";
             currentInfo.authorPhotoPath = "";
+            currentInfo.authorPhotoPathWeb = "";
+            currentInfo.authorPhotoPathMobile = "";
+            currentInfo.authorPhotoPathPreview = "";
             currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
             currentInfo.authorPhotoOriginalName = "";
             currentInfo.authorPhotoMimeType = "";
+            currentInfo.authorPhotoMimeTypeWeb = "";
+            currentInfo.authorPhotoMimeTypeMobile = "";
+            currentInfo.authorPhotoMimeTypePreview = "";
             currentInfo.authorPhotoSize = 0;
+            currentInfo.authorPhotoSizeWeb = 0;
+            currentInfo.authorPhotoSizeMobile = 0;
+            currentInfo.authorPhotoSizePreview = 0;
             currentInfo.authorPhotoUploadedAt = "";
+            currentInfo.authorPhotoVariantsGeneratedAt = "";
+            currentInfo.authorPhotoVariantsRebuiltAt = "";
         }
 
         if (currentInfo.authorId) {
@@ -6795,12 +7713,27 @@ export const createScene = function (engineArg, canvasArg) {
                     id: currentInfo.authorId,
                     name: currentInfo.authorName,
                     photoUrl: currentInfo.authorPhotoUrl,
+                    photoUrlOriginal: currentInfo.authorPhotoUrlOriginal || currentInfo.authorPhotoUrl,
+                    photoUrlWeb: currentInfo.authorPhotoUrlWeb,
+                    photoUrlMobile: currentInfo.authorPhotoUrlMobile,
+                    photoUrlPreview: currentInfo.authorPhotoUrlPreview,
                     photoPath: currentInfo.authorPhotoPath,
+                    photoPathWeb: currentInfo.authorPhotoPathWeb,
+                    photoPathMobile: currentInfo.authorPhotoPathMobile,
+                    photoPathPreview: currentInfo.authorPhotoPathPreview,
                     photoBucket: currentInfo.authorPhotoBucket,
                     photoOriginalName: currentInfo.authorPhotoOriginalName,
                     photoMimeType: currentInfo.authorPhotoMimeType,
+                    photoMimeTypeWeb: currentInfo.authorPhotoMimeTypeWeb,
+                    photoMimeTypeMobile: currentInfo.authorPhotoMimeTypeMobile,
+                    photoMimeTypePreview: currentInfo.authorPhotoMimeTypePreview,
                     photoSize: currentInfo.authorPhotoSize,
-                    photoUploadedAt: currentInfo.authorPhotoUploadedAt
+                    photoSizeWeb: currentInfo.authorPhotoSizeWeb,
+                    photoSizeMobile: currentInfo.authorPhotoSizeMobile,
+                    photoSizePreview: currentInfo.authorPhotoSizePreview,
+                    photoUploadedAt: currentInfo.authorPhotoUploadedAt,
+                    photoVariantsGeneratedAt: currentInfo.authorPhotoVariantsGeneratedAt,
+                    photoVariantsRebuiltAt: currentInfo.authorPhotoVariantsRebuiltAt
                 });
 
                 setArtworkInfoState(artwork, currentInfo);
@@ -6809,7 +7742,7 @@ export const createScene = function (engineArg, canvasArg) {
             setArtworkInfoState(artwork, currentInfo);
         }
 
-        updateArtworkInfoEditorPhotoPreview(currentInfo.authorPhotoUrl);
+        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(getAuthorById(currentInfo.authorId));
         notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
@@ -6841,6 +7774,54 @@ export const createScene = function (engineArg, canvasArg) {
         event.preventDefault();
         event.stopPropagation();
         findAndApplyAuthorForCurrentArtwork();
+    };
+
+    artworkInfoRebuildAuthorPhotoVariantsButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var missingCount = getAuthorRecordsNeedingPhotoVariants().length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("All author photos already have web/mobile variants.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild author photo variants for " + missingCount + " author(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllAuthorPhotoVariants()
+            .then(function (result) {
+                console.info("Author photo variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Author photo variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("No author photos to rebuild. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild author photo variants error:", error);
+                notifyGalleryStatus("Author photo variants rebuild failed.");
+            })
+            .finally(function () {
+                updateArtworkInfoUi();
+                updateArtworkTransformUi();
+            });
     };
 
     artworkInfoUploadPhotoButton.onclick = function (event) {
@@ -6956,6 +7937,9 @@ export const createScene = function (engineArg, canvasArg) {
         artworkImageUploadButton.disabled = !artwork;
         artworkImageApplyUrlButton.disabled = !artwork;
         artworkImageRemoveButton.disabled = !artwork || !imageState;
+        artworkImageRebuildVariantsButton.disabled = !getActiveArtworks().some(function (candidate) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
+        });
 
         if (!artwork) {
             artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
@@ -6965,8 +7949,11 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (imageState) {
             var label = imageState.originalName || imageState.imagePath || imageState.imageUrl || "Custom image";
-            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>";
-            artworkImageUrlInput.value = imageState.imageUrl || "";
+            var variantInfo = imageState.imageUrlMobile && imageState.imageUrlWeb
+                ? " <span style=\"opacity:.75\">(variants ready)</span>"
+                : " <span style=\"opacity:.75\">(variants missing)</span>";
+            artworkImageStatus.innerHTML = "Image: <strong>" + label + "</strong>" + variantInfo;
+            artworkImageUrlInput.value = imageState.imageUrlOriginal || imageState.imageUrl || "";
         } else {
             artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
             artworkImageUrlInput.value = "";
@@ -7083,6 +8070,56 @@ export const createScene = function (engineArg, canvasArg) {
             });
     };
 
+    artworkImageRebuildVariantsButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var missingCount = getActiveArtworks().filter(function (candidate) {
+            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
+        }).length;
+
+        if (!missingCount) {
+            notifyGalleryStatus("Wszystkie obrazy maja juz warianty web/mobile.");
+            return;
+        }
+
+        var confirmed = true;
+
+        if (typeof window !== "undefined" && window.confirm) {
+            confirmed = window.confirm(
+                "Rebuild image variants for " + missingCount + " artwork image(s)? This can take a while."
+            );
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        rebuildAllArtworkImageVariants()
+            .then(function (result) {
+                console.info("Artwork image variants rebuild:", result);
+
+                if (result.rebuilt > 0) {
+                    return saveGalleryStateToSupabase()
+                        .then(function () {
+                            notifyGalleryStatus("Warianty obrazow gotowe i zapisane. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
+                            return result;
+                        });
+                }
+
+                notifyGalleryStatus("Brak obrazow do przebudowy wariantow. Failed: " + result.failed + ".");
+                return result;
+            })
+            .catch(function (error) {
+                console.warn("Rebuild image variants error:", error);
+                notifyGalleryStatus("Blad przebudowy wariantow obrazow.");
+            })
+            .finally(function () {
+                updateArtworkImageUi();
+                updateArtworkTransformUi();
+            });
+    };
+
     artworkImageApplyUrlButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -7102,6 +8139,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         applyArtworkImageState(artwork, {
             imageUrl: imageUrl,
+            imageUrlOriginal: imageUrl,
             fitMode: galleryArtworkDefaultFitMode,
             source: "manual-url",
             updatedAt: new Date().toISOString()
@@ -16257,12 +17295,33 @@ export const createScene = function (engineArg, canvasArg) {
         return {
             authorId: String(info.authorId || "").trim(),
             authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
+            authorPhotoUrlOriginal: String(info.authorPhotoUrlOriginal || info.authorPhotoUrl || "").trim(),
+            authorPhotoUrlWeb: String(info.authorPhotoUrlWeb || "").trim(),
+            authorPhotoUrlMobile: String(info.authorPhotoUrlMobile || "").trim(),
+            authorPhotoUrlPreview: String(info.authorPhotoUrlPreview || "").trim(),
             authorPhotoPath: String(info.authorPhotoPath || "").trim(),
+            authorPhotoPathWeb: String(info.authorPhotoPathWeb || "").trim(),
+            authorPhotoPathMobile: String(info.authorPhotoPathMobile || "").trim(),
+            authorPhotoPathPreview: String(info.authorPhotoPathPreview || "").trim(),
             authorPhotoBucket: String(info.authorPhotoBucket || galleryArtworkStorageBucket || "").trim(),
             authorPhotoOriginalName: String(info.authorPhotoOriginalName || "").trim(),
             authorPhotoMimeType: String(info.authorPhotoMimeType || "").trim(),
+            authorPhotoMimeTypeWeb: String(info.authorPhotoMimeTypeWeb || "").trim(),
+            authorPhotoMimeTypeMobile: String(info.authorPhotoMimeTypeMobile || "").trim(),
+            authorPhotoMimeTypePreview: String(info.authorPhotoMimeTypePreview || "").trim(),
             authorPhotoSize: Number(info.authorPhotoSize || 0) || 0,
+            authorPhotoSizeWeb: Number(info.authorPhotoSizeWeb || 0) || 0,
+            authorPhotoSizeMobile: Number(info.authorPhotoSizeMobile || 0) || 0,
+            authorPhotoSizePreview: Number(info.authorPhotoSizePreview || 0) || 0,
+            authorPhotoWidthWeb: Number(info.authorPhotoWidthWeb || 0) || 0,
+            authorPhotoHeightWeb: Number(info.authorPhotoHeightWeb || 0) || 0,
+            authorPhotoWidthMobile: Number(info.authorPhotoWidthMobile || 0) || 0,
+            authorPhotoHeightMobile: Number(info.authorPhotoHeightMobile || 0) || 0,
+            authorPhotoWidthPreview: Number(info.authorPhotoWidthPreview || 0) || 0,
+            authorPhotoHeightPreview: Number(info.authorPhotoHeightPreview || 0) || 0,
             authorPhotoUploadedAt: String(info.authorPhotoUploadedAt || "").trim(),
+            authorPhotoVariantsGeneratedAt: String(info.authorPhotoVariantsGeneratedAt || "").trim(),
+            authorPhotoVariantsRebuiltAt: String(info.authorPhotoVariantsRebuiltAt || "").trim(),
             authorName: String(info.authorName || "").trim(),
             title: String(info.title || "").trim(),
             description: String(info.description || "").trim()
@@ -16367,8 +17426,10 @@ export const createScene = function (engineArg, canvasArg) {
         var hasInfo = hasArtworkInfo(info);
 
         if (artworkInfoPopupRefs.photo) {
-            if (info.authorPhotoUrl) {
-                artworkInfoPopupRefs.photo.src = info.authorPhotoUrl;
+            var popupAuthorPhotoUrl = getBestAuthorPhotoUrlFromInfo(info);
+
+            if (popupAuthorPhotoUrl) {
+                artworkInfoPopupRefs.photo.src = popupAuthorPhotoUrl;
                 artworkInfoPopupRefs.photo.classList.add("is-visible");
 
                 if (artworkInfoPopupRefs.photoPlaceholder) {
@@ -17522,6 +18583,33 @@ export const createScene = function (engineArg, canvasArg) {
                 source: "GalleryApp"
             });
         },
+        rebuildArtworkImageVariants: function (artworkNameOrIndex) {
+            var artwork = typeof artworkNameOrIndex === "number"
+                ? artworks[artworkNameOrIndex]
+                : getArtworkByName(artworkNameOrIndex);
+
+            return rebuildArtworkImageVariants(artwork);
+        },
+        rebuildAllArtworkImageVariants: function () {
+            return rebuildAllArtworkImageVariants();
+        },
+        getArtworkImageVariantDebug: function () {
+            return getActiveArtworks().map(function (artwork) {
+                var imageState = getArtworkImageState(artwork);
+
+                return {
+                    name: artwork.name,
+                    hasImage: !!imageState,
+                    needsVariants: artworkImageStateNeedsVariants(imageState),
+                    selectedUrl: getArtworkImageUrlFromState(imageState),
+                    mobileDevice: isArtworkMobileTextureDevice(),
+                    imageUrl: imageState ? imageState.imageUrl || "" : "",
+                    imageUrlWeb: imageState ? imageState.imageUrlWeb || "" : "",
+                    imageUrlMobile: imageState ? imageState.imageUrlMobile || "" : "",
+                    imageUrlPreview: imageState ? imageState.imageUrlPreview || "" : ""
+                };
+            });
+        },
         removeArtworkImage: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
@@ -17584,6 +18672,30 @@ export const createScene = function (engineArg, canvasArg) {
         getAuthors: function () {
             return artworkAuthors.map(function (author) {
                 return normalizeAuthorRecord(author);
+            });
+        },
+        rebuildAuthorPhotoVariants: function (authorIdOrName) {
+            return rebuildAuthorPhotoVariants(authorIdOrName);
+        },
+        rebuildAllAuthorPhotoVariants: function () {
+            return rebuildAllAuthorPhotoVariants();
+        },
+        getAuthorPhotoVariantDebug: function () {
+            return artworkAuthors.map(function (author) {
+                author = normalizeAuthorRecord(author);
+
+                return {
+                    id: author.id,
+                    name: author.name,
+                    needsVariants: authorPhotoStateNeedsVariants(author),
+                    mobileDevice: isArtworkMobileTextureDevice(),
+                    selectedUrl: getBestAuthorPhotoUrlFromInfo(author),
+                    photoUrl: author.photoUrl,
+                    photoUrlWeb: author.photoUrlWeb,
+                    photoUrlMobile: author.photoUrlMobile,
+                    photoUrlPreview: author.photoUrlPreview,
+                    deletePaths: getAuthorPhotoPathsForDelete(author)
+                };
             });
         },
         findAuthorByName: function (name) {
