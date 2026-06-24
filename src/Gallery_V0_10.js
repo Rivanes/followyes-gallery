@@ -6991,7 +6991,7 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageFileInput.style.display = "none";
 
     var artworkImageActions = document.createElement("div");
-    artworkImageActions.className = "gallery-artwork-image-actions is-four";
+    artworkImageActions.className = "gallery-artwork-image-actions is-three";
 
     var artworkImageUploadButton = document.createElement("button");
     artworkImageUploadButton.type = "button";
@@ -7008,12 +7008,6 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageRemoveButton.className = "gallery-editor-action-button is-danger";
     artworkImageRemoveButton.innerText = "REMOVE";
 
-    var artworkImageRebuildVariantsButton = document.createElement("button");
-    artworkImageRebuildVariantsButton.type = "button";
-    artworkImageRebuildVariantsButton.className = "gallery-editor-action-button";
-    artworkImageRebuildVariantsButton.innerText = "REBUILD VARIANTS";
-    artworkImageRebuildVariantsButton.title = "Create web/mobile/preview versions for existing uploaded artwork images.";
-
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
     artworkImageNote.innerText = "Upload creates Original/Desktop/Mobile/Preview files in Supabase Storage. Mobile loads the smaller variant.";
@@ -7021,7 +7015,6 @@ export const createScene = function (engineArg, canvasArg) {
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
     artworkImageActions.appendChild(artworkImageRemoveButton);
-    artworkImageActions.appendChild(artworkImageRebuildVariantsButton);
 
     artworkImageSectionData.section.appendChild(artworkImageStatus);
     artworkImageSectionData.section.appendChild(artworkImageUrlLabel);
@@ -7038,7 +7031,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var imageOptimizationNote = document.createElement("p");
     imageOptimizationNote.className = "gallery-artwork-image-note";
-    imageOptimizationNote.innerText = "Creates Desktop/Mobile/Preview versions in Supabase Storage for existing artwork images and author photos.";
+    imageOptimizationNote.innerText = "This is the only place for rebuilding image variants. Creates Desktop/Mobile/Preview files in Supabase Storage for artwork images and author photos.";
 
     var imageOptimizationActions = document.createElement("div");
     imageOptimizationActions.className = "gallery-artwork-image-actions is-two";
@@ -7233,17 +7226,10 @@ export const createScene = function (engineArg, canvasArg) {
     artworkInfoAuthorPhotoGroup.appendChild(artworkInfoAuthorPhotoInput);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoGroup);
 
-    var artworkInfoRebuildAuthorPhotoVariantsButton = document.createElement("button");
-    artworkInfoRebuildAuthorPhotoVariantsButton.type = "button";
-    artworkInfoRebuildAuthorPhotoVariantsButton.className = "gallery-editor-action-button";
-    artworkInfoRebuildAuthorPhotoVariantsButton.innerText = "REBUILD AUTHOR VARIANTS";
-    artworkInfoRebuildAuthorPhotoVariantsButton.title = "Create web/mobile/preview versions for existing author photos.";
-
     var artworkInfoAuthorPhotoActions = document.createElement("div");
     artworkInfoAuthorPhotoActions.className = "gallery-artwork-image-actions";
-    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr 1fr";
+    artworkInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr";
     artworkInfoAuthorPhotoActions.appendChild(artworkInfoUploadPhotoButton);
-    artworkInfoAuthorPhotoActions.appendChild(artworkInfoRebuildAuthorPhotoVariantsButton);
     artworkInfoAuthorCard.appendChild(artworkInfoAuthorPhotoActions);
 
     var artworkInfoDetailsCard = document.createElement("div");
@@ -7347,7 +7333,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         artworkInfoAuthorPhotoInput.disabled = !isVisible;
         artworkInfoUploadPhotoButton.disabled = !isVisible;
-        artworkInfoRebuildAuthorPhotoVariantsButton.disabled = !getAuthorRecordsNeedingPhotoVariants().length;
         artworkInfoFindAuthorButton.disabled = !isVisible;
         artworkInfoAuthorNameInput.disabled = !isVisible;
         artworkInfoTitleInput.disabled = !isVisible;
@@ -7947,12 +7932,6 @@ export const createScene = function (engineArg, canvasArg) {
         findAndApplyAuthorForCurrentArtwork();
     };
 
-    artworkInfoRebuildAuthorPhotoVariantsButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        runAuthorPhotoVariantsRebuildFromUi();
-    };
-
     artworkInfoUploadPhotoButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -8066,9 +8045,6 @@ export const createScene = function (engineArg, canvasArg) {
         artworkImageUploadButton.disabled = !artwork;
         artworkImageApplyUrlButton.disabled = !artwork;
         artworkImageRemoveButton.disabled = !artwork || !imageState;
-        artworkImageRebuildVariantsButton.disabled = !getActiveArtworks().some(function (candidate) {
-            return artworkImageStateNeedsVariants(getArtworkImageState(candidate));
-        });
 
         if (!artwork) {
             artworkImageStatus.innerHTML = "Image: <strong>None</strong>";
@@ -8197,12 +8173,6 @@ export const createScene = function (engineArg, canvasArg) {
                 updateArtworkImageUi();
                 updateArtworkTransformUi();
             });
-    };
-
-    artworkImageRebuildVariantsButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        runArtworkImageVariantsRebuildFromUi();
     };
 
     artworkImageApplyUrlButton.onclick = function (event) {
@@ -17466,9 +17436,140 @@ export const createScene = function (engineArg, canvasArg) {
         return 3.9;
     }
 
+    // STAGE 11E - CENTER RAY POPUP TARGET
+    // Popup nie wybiera już najbliższego obrazu w promieniu.
+    // Najpierw musi trafić "niewidzialnym punktem" w środku kamery / ekranu.
+    // Dystans aktywacji zostaje taki sam jak wcześniej.
+    var artworkInfoPopupCenterRayEnabled = true;
+    var artworkInfoPopupCenterRayLengthExtra = 1.5;
+    var artworkInfoPopupLastTargetDebug = null;
+
+    function getArtworkFromPopupPickMesh(mesh) {
+        if (!mesh) {
+            return null;
+        }
+
+        if (artworks.indexOf(mesh) >= 0) {
+            return mesh;
+        }
+
+        if (
+            mesh.metadata &&
+            mesh.metadata.isArtworkImagePlane &&
+            mesh.name
+        ) {
+            var baseName = mesh.name.replace(/_ImagePlane$/, "");
+
+            for (var i = 0; i < artworks.length; i++) {
+                if (artworks[i] && artworks[i].name === baseName) {
+                    return artworks[i];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    function isArtworkPopupRayCandidate(mesh) {
+        var artwork = getArtworkFromPopupPickMesh(mesh);
+
+        if (!artwork) {
+            return false;
+        }
+
+        if (artwork.isDisposed && artwork.isDisposed()) {
+            return false;
+        }
+
+        if (typeof isArtworkDeleted === "function" && isArtworkDeleted(artwork)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function getCenterRayArtworkForInfoPopup() {
+        if (!camera || !scene || !scene.pickWithRay) {
+            return null;
+        }
+
+        var maxDistance = getArtworkPopupDistance();
+        var rayLength = maxDistance + artworkInfoPopupCenterRayLengthExtra;
+        var ray;
+
+        try {
+            ray = camera.getForwardRay(rayLength);
+        } catch (error) {
+            console.warn("Artwork popup center ray warning:", error);
+            return null;
+        }
+
+        var pickResult = scene.pickWithRay(
+            ray,
+            isArtworkPopupRayCandidate
+        );
+
+        if (!pickResult || !pickResult.hit || !pickResult.pickedMesh) {
+            artworkInfoPopupLastTargetDebug = {
+                mode: "centerRay",
+                hit: false,
+                maxDistance: maxDistance
+            };
+            return null;
+        }
+
+        var artwork = getArtworkFromPopupPickMesh(pickResult.pickedMesh);
+
+        if (!artwork) {
+            artworkInfoPopupLastTargetDebug = {
+                mode: "centerRay",
+                hit: true,
+                rejected: "notArtwork",
+                pickedMesh: pickResult.pickedMesh ? pickResult.pickedMesh.name : ""
+            };
+            return null;
+        }
+
+        var artworkPosition = artwork.getAbsolutePosition
+            ? artwork.getAbsolutePosition()
+            : artwork.position;
+
+        var distance = BABYLON.Vector3.Distance(
+            camera.position,
+            artworkPosition
+        );
+
+        if (distance > maxDistance) {
+            artworkInfoPopupLastTargetDebug = {
+                mode: "centerRay",
+                hit: true,
+                rejected: "distance",
+                artwork: artwork.name,
+                distance: distance,
+                maxDistance: maxDistance
+            };
+            return null;
+        }
+
+        artworkInfoPopupLastTargetDebug = {
+            mode: "centerRay",
+            hit: true,
+            artwork: artwork.name,
+            pickedMesh: pickResult.pickedMesh.name,
+            distance: distance,
+            maxDistance: maxDistance
+        };
+
+        return artwork;
+    }
+
     function getNearestArtworkForInfoPopup() {
         if (!camera) {
             return null;
+        }
+
+        if (artworkInfoPopupCenterRayEnabled) {
+            return getCenterRayArtworkForInfoPopup();
         }
 
         var activeArtworks = typeof getActiveArtworks === "function"
@@ -17498,6 +17599,13 @@ export const createScene = function (engineArg, canvasArg) {
                 nearestDistance = distance;
             }
         });
+
+        artworkInfoPopupLastTargetDebug = {
+            mode: "nearestFallback",
+            artwork: nearestArtwork ? nearestArtwork.name : null,
+            distance: nearestDistance,
+            maxDistance: maxDistance
+        };
 
         return nearestArtwork;
     }
@@ -18782,6 +18890,21 @@ export const createScene = function (engineArg, canvasArg) {
                     deletePaths: getAuthorPhotoPathsForDelete(author)
                 };
             });
+        },
+        getArtworkInfoPopupTargetDebug: function () {
+            return Object.assign(
+                {
+                    centerRayEnabled: artworkInfoPopupCenterRayEnabled,
+                    popupDistance: getArtworkPopupDistance()
+                },
+                artworkInfoPopupLastTargetDebug || {}
+            );
+        },
+        setArtworkInfoPopupCenterRay: function (enabled) {
+            artworkInfoPopupCenterRayEnabled = !!enabled;
+            return {
+                centerRayEnabled: artworkInfoPopupCenterRayEnabled
+            };
         },
         findAuthorByName: function (name) {
             return getAuthorByName(name);

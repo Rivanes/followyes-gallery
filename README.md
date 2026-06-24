@@ -1235,3 +1235,34 @@ Notes:
 - Existing files are not moved.
 - Existing files get new variants generated into the new Desktop/Mobile/Preview folders during rebuild.
 - Delete uses saved paths, so it removes original + variants regardless of old/new folder layout.
+
+
+## V0_11 Stage 11D Image Optimization UI Cleanup
+
+UI cleanup:
+- `REBUILD ARTWORK VARIANTS` remains only in `IMAGE OPTIMIZATION`.
+- `REBUILD AUTHOR VARIANTS` remains only in `IMAGE OPTIMIZATION`.
+- Removed duplicated rebuild buttons from:
+  - `ARTWORK IMAGE`
+  - `ARTWORK INFO / AUTHOR PHOTO`
+
+No logic changes:
+- upload still creates Original/Desktop/Mobile/Preview variants.
+- rebuild functions remain unchanged.
+- Storage folder structure remains unchanged.
+
+
+## V0_11 Stage 11E Center Ray Popup Target
+
+Fix:
+- Artwork info popup no longer chooses the nearest artwork only by distance.
+- Popup uses a center camera ray, like an invisible point in the middle of the camera.
+- The old activation distance is preserved.
+- This prevents popups from neighboring artworks when many artworks are close together.
+
+Console:
+```js
+GalleryApp.getArtworkInfoPopupTargetDebug()
+GalleryApp.setArtworkInfoPopupCenterRay(true)
+GalleryApp.setArtworkInfoPopupCenterRay(false)
+```
