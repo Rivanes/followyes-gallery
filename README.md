@@ -1417,3 +1417,21 @@ GalleryApp.duplicateSelectedModel3dSlot()
 GalleryApp.copySelectedModel3dToClipboard()
 GalleryApp.pasteModel3dFromClipboardToSelectedSlot()
 ```
+
+
+## V0_11 Stage 12B Model Slot Selection Like Artworks
+
+Fixes the Stage 12A model slot interaction:
+- clicking a sculpture/model slot now selects it persistently.
+- the 3D MODEL SLOT panel stays open after mouse release.
+- click without drag no longer focuses the camera.
+- selected model slot gets a blue outline.
+- clicking the floor while a slot is active can start moving that active slot.
+- dragging still works, but selection is not cleared after pointer up.
+
+Console:
+```js
+GalleryApp.selectModel3dSlot("ArtSphere_0")
+GalleryApp.clearModel3dSlotSelection()
+GalleryApp.getModel3dSlotDebug()
+```

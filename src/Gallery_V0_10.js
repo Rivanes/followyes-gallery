@@ -4717,6 +4717,11 @@ export const createScene = function (engineArg, canvasArg) {
     var selectedSphere = null;
     var isDraggingSphere = false;
 
+    // STAGE 12B - MODEL SLOT SELECTION LIKE ARTWORKS
+    // selectedSphere zostaje jako aktywne zaznaczenie slotu, a nie tylko obiekt chwilowo chwytany.
+    var activeModel3dSlot = null;
+    var model3dSlotSelectionOutlineColor = new BABYLON.Color3(0.55, 0.72, 1.0);
+
     var dragMoved = false;
 
     var lookAtObserver = null;
@@ -14486,8 +14491,7 @@ export const createScene = function (engineArg, canvasArg) {
         isDraggingArtwork = false;
         selectedArtwork = null;
 
-        isDraggingSphere = false;
-        selectedSphere = null;
+        clearModel3dSlotSelection();
 
         dragMoved = false;
 
@@ -17627,13 +17631,60 @@ export const createScene = function (engineArg, canvasArg) {
             applyModel3dStateToSlot(newSlot, duplicateState);
         }
 
-        selectedSphere = newSlot;
+        selectModel3dSlot(newSlot);
         updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
         updateEditHelpStatus();
         notifyGalleryStatus("Slot modelu zduplikowany bez ponownego uploadu.");
 
         return newSlot;
+    }
+
+    function setModel3dSlotSelected(slot, isSelected) {
+        if (!slot) {
+            return;
+        }
+
+        slot.renderOutline = !!isSelected;
+        slot.outlineColor = model3dSlotSelectionOutlineColor;
+        slot.outlineWidth = isSelected ? 0.045 : 0;
+
+        var sculpture = slot.metadata ? slot.metadata.sculptureMesh : null;
+
+        if (sculpture) {
+            sculpture.renderOutline = !!isSelected;
+            sculpture.outlineColor = model3dSlotSelectionOutlineColor;
+            sculpture.outlineWidth = isSelected ? 0.035 : 0;
+        }
+    }
+
+    function selectModel3dSlot(slot) {
+        if (!slot) {
+            return false;
+        }
+
+        if (activeModel3dSlot && activeModel3dSlot !== slot) {
+            setModel3dSlotSelected(activeModel3dSlot, false);
+        }
+
+        activeModel3dSlot = slot;
+        selectedSphere = slot;
+        setModel3dSlotSelected(slot, true);
+        updateModel3dSlotUi();
+        updateEditHelpStatus();
+
+        return true;
+    }
+
+    function clearModel3dSlotSelection() {
+        if (activeModel3dSlot) {
+            setModel3dSlotSelected(activeModel3dSlot, false);
+        }
+
+        activeModel3dSlot = null;
+        selectedSphere = null;
+        isDraggingSphere = false;
+        updateModel3dSlotUi();
     }
 
     function getModel3dSlotDebug() {
@@ -17645,6 +17696,7 @@ export const createScene = function (engineArg, canvasArg) {
                 name: slot ? slot.name : null,
                 index: index,
                 selected: slot === selectedSphere,
+                active: slot === activeModel3dSlot,
                 hasModel: !!modelState,
                 modelUrl: modelState ? modelState.modelUrl : "",
                 modelPath: modelState ? modelState.modelPath : "",
@@ -19100,13 +19152,31 @@ export const createScene = function (engineArg, canvasArg) {
                     getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
                 )
             ) {
-                selectedSphere = getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh;
+                var clickedModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh;
+
+                selectModel3dSlot(clickedModel3dSlot);
+
+                // Klik nadal może rozpocząć drag, ale zaznaczenie zostaje po puszczeniu.
                 isDraggingSphere = true;
                 dragMoved = false;
 
                 camera.detachControl(canvas);
-                updateModel3dSlotUi();
-                updateEditHelpStatus();
+
+                return;
+            }
+
+            // STAGE 12B - aktywny slot modelu można przestawiać kliknięciem/przeciągnięciem po podłodze.
+            if (
+                editMode &&
+                activeModel3dSlot &&
+                pickResult.hit &&
+                floorMeshes.includes(pickResult.pickedMesh)
+            ) {
+                selectedSphere = activeModel3dSlot;
+                isDraggingSphere = true;
+                dragMoved = false;
+
+                camera.detachControl(canvas);
 
                 return;
             }
@@ -19134,7 +19204,7 @@ export const createScene = function (engineArg, canvasArg) {
                 return;
             }
 
-            // TRYB EDYCJI = klik w podloge nie wykonuje akcji.
+            // TRYB EDYCJI = klik w podloge nie wykonuje akcji, jeśli nie mamy aktywnego slotu/modelu.
             if (
                 editMode &&
                 pickResult.hit &&
@@ -19229,6 +19299,7 @@ export const createScene = function (engineArg, canvasArg) {
                 selectedSphere.position.y = selectedSphere.position.y;
 
                 updatePedestalLight(selectedSphere);
+                updateViewerModePlaceholderVisibility();
             }
         }
     };
@@ -19269,13 +19340,14 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (editMode && isDraggingSphere) {
 
-            // Klik bez przeciagania w trybie edycji = podejscie do postumentu.
+            // STAGE 12B:
+            // Klik bez przeciagania nie robi focusu i nie kasuje zaznaczenia.
+            // Ma działać jak zaznaczenie obrazu: slot zostaje aktywny w panelu.
             if (!dragMoved && selectedSphere) {
-                focusCameraOnObject(selectedSphere);
+                selectModel3dSlot(selectedSphere);
             }
 
             isDraggingSphere = false;
-            selectedSphere = null;
             dragMoved = false;
 
             requestAllLocalSpotShadowRefresh(true);
@@ -19750,6 +19822,10 @@ export const createScene = function (engineArg, canvasArg) {
 
                 sphere.computeWorldMatrix(true);
                 updatePedestalLight(sphere);
+
+                if (sphere === activeModel3dSlot) {
+                    setModel3dSlotSelected(sphere, true);
+                }
             });
         }
 
@@ -20147,6 +20223,14 @@ export const createScene = function (engineArg, canvasArg) {
         copySelectedModel3dToClipboard: copySelectedModel3dToClipboard,
         pasteModel3dFromClipboardToSelectedSlot: pasteModel3dFromClipboardToSelectedSlot,
         getModel3dSlotDebug: getModel3dSlotDebug,
+        selectModel3dSlot: function (slotNameOrIndex) {
+            var slot = typeof slotNameOrIndex === "number"
+                ? artSpheres[slotNameOrIndex]
+                : getSphereByName(slotNameOrIndex);
+
+            return selectModel3dSlot(slot);
+        },
+        clearModel3dSlotSelection: clearModel3dSlotSelection,
         getArtworkImageState: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
