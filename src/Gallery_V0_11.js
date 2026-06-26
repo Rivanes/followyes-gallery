@@ -4784,6 +4784,56 @@ export const createScene = function (engineArg, canvasArg) {
     var mobileFloorBounds = null;
     var mobileFloorRayLength = 12;
 
+
+    // STAGE 12C1 - VIEWER WASD / MOBILE JOYSTICK GROUNDED WALK
+    // Edytor zostaje bez zmian. Ten system działa tylko w Viewer Mode.
+    // Baza ruchu: V11 preset 4 - Bound Gallery Polish V11.
+    var viewerWASDMovementEnabled = true;
+    var viewerMoveKeys = {
+        w: false,
+        a: false,
+        s: false,
+        d: false,
+        shift: false
+    };
+
+    var viewerMovementConfig = {
+        speed: 3.58,
+        sprintMultiplier: 1.22,
+        acceleration: 15.0,
+        braking: 35.0,
+        sideFriction: 43.0,
+        snapStopSpeed: 0.037,
+        inputRampTime: 0.105,
+        inputStartStrength: 0.91,
+        stepFrequency: 1.12,
+        bobHeight: 0.0078,
+        compression: 0.0054,
+        pitchAmount: 0.0017,
+        rollAmount: 0.0016,
+        stopSettlePitch: 0.0009,
+        stopSettleDuration: 0.10,
+        stopBounceDistance: 0.032,
+        stopBouncePitch: 0.0044,
+        stopBounceDuration: 0.23,
+        stopBounceFrequency: 0.66,
+        joystickDeadZone: 0.08
+    };
+
+    var viewerMovementVelocity = new BABYLON.Vector3(0, 0, 0);
+    var viewerMovementCurrentSpeed01 = 0;
+    var viewerMovementTargetSpeed01 = 0;
+    var viewerMovementStepTimer = 0;
+    var viewerMovementLastHadInput = false;
+    var viewerMovementStopSettleTimer = 999;
+    var viewerMovementLastMoveDirection = new BABYLON.Vector3(0, 0, 1);
+    var viewerMovementStopBounceDirection = new BABYLON.Vector3(0, 0, 1);
+    var viewerMovementStopBounceSpeed01 = 0;
+    var viewerMovementVisualOffset = new BABYLON.Vector3(0, 0, 0);
+    var viewerMovementVisualPitchOffset = 0;
+    var viewerMovementVisualRollOffset = 0;
+    var viewerMovementWasManualInputActive = false;
+
     // CUSTOM LOADING SCREEN
     var oldLoadingScreen = document.getElementById("customLoadingScreen");
 
@@ -13257,6 +13307,7 @@ export const createScene = function (engineArg, canvasArg) {
         editMode = !editMode;
 
         if (editMode) {
+            resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(true);
 
             refreshMobileViewerMode();
@@ -13271,6 +13322,7 @@ export const createScene = function (engineArg, canvasArg) {
             updateEditHelpStatus();
             updateAlignmentPanel();
         } else {
+            resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(false);
             clearEditSelection();
 
@@ -13302,6 +13354,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (galleryEditorLoginEnabled && !editorAuthenticated && editMode) {
             editMode = false;
+            resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(false);
             clearEditSelection();
 
@@ -13572,50 +13625,414 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function updateMobileJoystickMovement() {
-        if (!isMobileViewerActive() || !mobileJoystickActive) {
+        // STAGE 12C1: stary ruch joysticka zostal zastapiony wspolnym systemem Viewer WASD.
+        // Joystick na mobile podaje teraz wektor W/S/A/D do updateViewerWASDMovement().
+    }
+
+
+    // STAGE 12C1 - VIEWER WASD / MOBILE JOYSTICK GROUNDED WALK
+    function viewerMovementExpBlend(rate, dt) {
+        return 1 - Math.exp(-Math.max(0.001, rate) * dt);
+    }
+
+    function viewerMovementClamp01(value) {
+        return Math.max(0, Math.min(1, value));
+    }
+
+    function viewerMovementSmoothstep(value) {
+        value = viewerMovementClamp01(value);
+        return value * value * (3 - 2 * value);
+    }
+
+    function clearViewerWASDMoveKeys() {
+        viewerMoveKeys.w = false;
+        viewerMoveKeys.a = false;
+        viewerMoveKeys.s = false;
+        viewerMoveKeys.d = false;
+        viewerMoveKeys.shift = false;
+    }
+
+    function clearViewerWASDVisualOffsets() {
+        if (!camera) {
             return;
         }
 
-        var delta = scene.getEngine().getDeltaTime() / 16.666;
-
-        var turnInput = mobileJoystickVector.x;
-        var moveInput = -mobileJoystickVector.y;
-
-        // Lewo/prawo na joysticku obraca kamere. To ulatwia obsluge jedna reka.
-        if (Math.abs(turnInput) > 0.08) {
-            camera.rotation.y += turnInput * mobileJoystickTurnSpeed * delta;
+        if (viewerMovementVisualOffset.lengthSquared() > 0.0000001) {
+            camera.position.subtractInPlace(viewerMovementVisualOffset);
+            viewerMovementVisualOffset.set(0, 0, 0);
         }
 
-        // Gora/dol na joysticku idzie do przodu lub cofa.
-        if (Math.abs(moveInput) < 0.08) {
-            return;
+        if (Math.abs(viewerMovementVisualPitchOffset) > 0.0000001) {
+            camera.rotation.x -= viewerMovementVisualPitchOffset;
+            viewerMovementVisualPitchOffset = 0;
         }
 
+        if (Math.abs(viewerMovementVisualRollOffset) > 0.0000001) {
+            camera.rotation.z -= viewerMovementVisualRollOffset;
+            viewerMovementVisualRollOffset = 0;
+        }
+    }
+
+    function resetViewerWASDMovementRuntime(clearKeys) {
+        clearViewerWASDVisualOffsets();
+
+        viewerMovementVelocity.set(0, 0, 0);
+        viewerMovementCurrentSpeed01 = 0;
+        viewerMovementTargetSpeed01 = 0;
+        viewerMovementStepTimer = 0;
+        viewerMovementLastHadInput = false;
+        viewerMovementStopSettleTimer = 999;
+        viewerMovementStopBounceSpeed01 = 0;
+        viewerMovementWasManualInputActive = false;
+
+        if (clearKeys) {
+            clearViewerWASDMoveKeys();
+        }
+    }
+
+    function isViewerWASDMovementActive() {
+        return !!(
+            viewerWASDMovementEnabled &&
+            !editMode &&
+            !isDraggingArtwork &&
+            !isDraggingSphere
+        );
+    }
+
+    function getViewerMovementForwardFlat() {
         var forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
         forward.y = 0;
 
-        if (forward.lengthSquared() <= 0) {
+        if (forward.lengthSquared() > 0.00001) {
+            forward.normalize();
+        }
+
+        return forward;
+    }
+
+    function getViewerMovementRightFlat() {
+        var right = camera.getDirection(new BABYLON.Vector3(1, 0, 0));
+        right.y = 0;
+
+        if (right.lengthSquared() > 0.00001) {
+            right.normalize();
+        }
+
+        return right;
+    }
+
+    function getViewerWASDInputState() {
+        var x = 0;
+        var z = 0;
+        var analog = false;
+
+        if (isMobileViewerActive() && mobileJoystickActive) {
+            var deadZone = viewerMovementConfig.joystickDeadZone || 0.08;
+            var joystickX = Math.abs(mobileJoystickVector.x) >= deadZone ? mobileJoystickVector.x : 0;
+            var joystickZ = Math.abs(mobileJoystickVector.y) >= deadZone ? -mobileJoystickVector.y : 0;
+
+            x += joystickX;
+            z += joystickZ;
+            analog = true;
+        } else {
+            if (viewerMoveKeys.d) {
+                x += 1;
+            }
+
+            if (viewerMoveKeys.a) {
+                x -= 1;
+            }
+
+            if (viewerMoveKeys.w) {
+                z += 1;
+            }
+
+            if (viewerMoveKeys.s) {
+                z -= 1;
+            }
+        }
+
+        var magnitude = Math.sqrt(x * x + z * z);
+
+        if (magnitude > 1) {
+            x /= magnitude;
+            z /= magnitude;
+            magnitude = 1;
+        }
+
+        if (magnitude <= 0.0001) {
+            return {
+                hasInput: false,
+                analog: analog,
+                magnitude: 0,
+                direction: BABYLON.Vector3.Zero(),
+                rawX: 0,
+                rawZ: 0
+            };
+        }
+
+        var forward = getViewerMovementForwardFlat();
+        var right = getViewerMovementRightFlat();
+        var direction = forward.scale(z).add(right.scale(x));
+        direction.y = 0;
+
+        if (direction.lengthSquared() > 0.00001) {
+            direction.normalize();
+        }
+
+        return {
+            hasInput: true,
+            analog: analog,
+            magnitude: magnitude,
+            direction: direction,
+            rawX: x,
+            rawZ: z
+        };
+    }
+
+    function updateViewerMovementSpeedFactor(inputState, dt) {
+        var hasInput = inputState && inputState.hasInput;
+        var target = hasInput ? inputState.magnitude : 0;
+        viewerMovementTargetSpeed01 = target;
+
+        var rate = hasInput
+            ? 1 / Math.max(0.001, viewerMovementConfig.inputRampTime || 0.105)
+            : viewerMovementConfig.braking || 35.0;
+
+        viewerMovementCurrentSpeed01 +=
+            (viewerMovementTargetSpeed01 - viewerMovementCurrentSpeed01) *
+            viewerMovementExpBlend(rate, dt);
+
+        viewerMovementCurrentSpeed01 = viewerMovementClamp01(viewerMovementCurrentSpeed01);
+
+        if (
+            hasInput &&
+            !inputState.analog &&
+            inputState.magnitude > 0.95
+        ) {
+            viewerMovementCurrentSpeed01 = Math.max(
+                viewerMovementCurrentSpeed01,
+                viewerMovementConfig.inputStartStrength || 0.91
+            );
+        }
+
+        return viewerMovementSmoothstep(viewerMovementCurrentSpeed01);
+    }
+
+    function updateViewerMovementStopSettle(dt, hasInput, speedBeforeStop) {
+        if (viewerMovementLastHadInput && !hasInput) {
+            viewerMovementStopSettleTimer = 0;
+            viewerMovementStopBounceSpeed01 = Math.min(
+                1,
+                speedBeforeStop / Math.max(0.001, viewerMovementConfig.speed || 3.58)
+            );
+
+            if (viewerMovementLastMoveDirection.lengthSquared() > 0.00001) {
+                viewerMovementStopBounceDirection.copyFrom(viewerMovementLastMoveDirection);
+                viewerMovementStopBounceDirection.normalize();
+            }
+        }
+
+        viewerMovementLastHadInput = hasInput;
+
+        var settleDuration = viewerMovementConfig.stopSettleDuration || 0.10;
+        var bounceDuration = viewerMovementConfig.stopBounceDuration || 0.23;
+        var duration = Math.max(settleDuration, bounceDuration);
+
+        if (viewerMovementStopSettleTimer > duration) {
+            return {
+                pitch: 0,
+                positionOffset: BABYLON.Vector3.Zero()
+            };
+        }
+
+        viewerMovementStopSettleTimer += dt;
+
+        var settlePitch = 0;
+
+        if (settleDuration > 0 && viewerMovementStopSettleTimer <= settleDuration) {
+            var tSettle = viewerMovementClamp01(viewerMovementStopSettleTimer / settleDuration);
+            var settleWave = Math.sin(tSettle * Math.PI);
+            var settleDecay = Math.pow(1 - tSettle, 1.4);
+
+            settlePitch = -settleWave * settleDecay * (viewerMovementConfig.stopSettlePitch || 0.0009);
+        }
+
+        var bouncePitch = 0;
+        var bounceOffset = BABYLON.Vector3.Zero();
+
+        if (bounceDuration > 0 && viewerMovementStopSettleTimer <= bounceDuration) {
+            var tBounce = viewerMovementClamp01(viewerMovementStopSettleTimer / bounceDuration);
+            var frequency = viewerMovementConfig.stopBounceFrequency || 0.66;
+            var wave = Math.sin(tBounce * Math.PI * 2 * frequency);
+            var decay = Math.pow(1 - tBounce, 2.15);
+            var amount = wave * decay * (0.45 + viewerMovementStopBounceSpeed01 * 0.55);
+
+            bounceOffset = viewerMovementStopBounceDirection.scale(
+                amount * (viewerMovementConfig.stopBounceDistance || 0.032)
+            );
+            bouncePitch = -amount * (viewerMovementConfig.stopBouncePitch || 0.0044);
+        }
+
+        return {
+            pitch: settlePitch + bouncePitch,
+            positionOffset: bounceOffset
+        };
+    }
+
+    function getViewerMovementStepVisual(dt, hasInput, speedMagnitude) {
+        var speed01 = Math.min(1, speedMagnitude / Math.max(0.001, viewerMovementConfig.speed || 3.58));
+
+        if (hasInput && speed01 > 0.04) {
+            viewerMovementStepTimer += dt *
+                (viewerMovementConfig.stepFrequency || 1.12) *
+                (0.75 + speed01 * 0.35);
+        } else {
+            viewerMovementStepTimer += dt * 0.4;
+        }
+
+        var phase = viewerMovementStepTimer * Math.PI * 2;
+        var up = Math.abs(Math.sin(phase));
+        var compression = Math.pow(Math.max(0, Math.sin(phase + Math.PI * 0.35)), 2);
+
+        var height =
+            up * (viewerMovementConfig.bobHeight || 0.0078) * speed01 -
+            compression * (viewerMovementConfig.compression || 0.0054) * speed01;
+
+        var pitch =
+            Math.sin(phase + Math.PI * 0.2) *
+            (viewerMovementConfig.pitchAmount || 0.0017) *
+            speed01;
+
+        var roll =
+            Math.sin(phase * 0.5) *
+            (viewerMovementConfig.rollAmount || 0.0016) *
+            speed01;
+
+        return {
+            height: height,
+            pitch: pitch,
+            roll: roll
+        };
+    }
+
+    function applyViewerMovementVisualOffsets(offset, pitch, roll) {
+        clearViewerWASDVisualOffsets();
+
+        viewerMovementVisualOffset.copyFrom(offset || BABYLON.Vector3.Zero());
+        viewerMovementVisualPitchOffset = pitch || 0;
+        viewerMovementVisualRollOffset = roll || 0;
+
+        if (viewerMovementVisualOffset.lengthSquared() > 0.0000001) {
+            camera.position.addInPlace(viewerMovementVisualOffset);
+        }
+
+        if (Math.abs(viewerMovementVisualPitchOffset) > 0.0000001) {
+            camera.rotation.x += viewerMovementVisualPitchOffset;
+        }
+
+        if (Math.abs(viewerMovementVisualRollOffset) > 0.0000001) {
+            camera.rotation.z += viewerMovementVisualRollOffset;
+        }
+    }
+
+    function moveViewerCameraWithGroundedCollision(deltaVector) {
+        if (!deltaVector || deltaVector.lengthSquared() <= 0.0000001) {
+            return false;
+        }
+
+        var beforeMove = camera.position.clone();
+        var candidatePosition = camera.position.add(deltaVector);
+
+        if (isMobileViewerActive() && !isMobileCameraPositionOnFloor(candidatePosition)) {
+            viewerMovementVelocity.set(0, 0, 0);
+            return false;
+        }
+
+        moveCameraWithViewerCollisionIfActive(deltaVector);
+
+        if (isMobileViewerActive() && !isMobileCameraPositionOnFloor(camera.position)) {
+            camera.position.copyFrom(beforeMove);
+            viewerMovementVelocity.set(0, 0, 0);
+            return false;
+        }
+
+        return true;
+    }
+
+    function updateViewerWASDMovement() {
+        clearViewerWASDVisualOffsets();
+
+        var dt = scene.getEngine().getDeltaTime() / 1000;
+        dt = Math.min(0.05, Math.max(0.001, dt));
+
+        if (!isViewerWASDMovementActive()) {
+            resetViewerWASDMovementRuntime(false);
             return;
         }
 
-        forward.normalize();
+        var inputState = getViewerWASDInputState();
+        var hasInput = inputState.hasInput;
+        var speedBeforeStop = viewerMovementVelocity.length();
 
-        var movementDelta = forward.scale(mobileMoveSpeed * moveInput * delta);
-        var candidatePosition = camera.position.add(movementDelta);
-
-        // Mobile nie moze wyjechac poza galerie. Ruch jest akceptowany tylko tam,
-        // gdzie pod kamera dalej znajduje sie floor mesh.
-        if (isMobileCameraPositionOnFloor(candidatePosition)) {
-            var beforeMove = camera.position.clone();
-
-            moveCameraWithViewerCollisionIfActive(movementDelta);
-
-            // Jeżeli natywna kolizja albo inny ruch wypchnie kamerę poza floor,
-            // cofamy tylko ten krok. To nie jest globalny guard, więc nie powinno blokować chodzenia.
-            if (!isMobileCameraPositionOnFloor(camera.position)) {
-                camera.position.copyFrom(beforeMove);
-            }
+        if (hasInput && inputState.direction.lengthSquared() > 0.00001) {
+            viewerMovementLastMoveDirection.copyFrom(inputState.direction);
+            viewerMovementLastMoveDirection.normalize();
         }
+
+        if (hasInput && !viewerMovementWasManualInputActive) {
+            scene.stopAnimation(camera);
+        }
+
+        viewerMovementWasManualInputActive = hasInput;
+
+        var speedFactor = updateViewerMovementSpeedFactor(inputState, dt);
+        var speed = viewerMovementConfig.speed || 3.58;
+
+        if (viewerMoveKeys.shift && !isMobileViewerActive()) {
+            speed *= viewerMovementConfig.sprintMultiplier || 1.22;
+        }
+
+        var desiredVelocity = hasInput
+            ? inputState.direction.scale(speed * speedFactor)
+            : BABYLON.Vector3.Zero();
+
+        var blend = viewerMovementExpBlend(
+            hasInput ? viewerMovementConfig.acceleration : viewerMovementConfig.braking,
+            dt
+        );
+
+        viewerMovementVelocity.x += (desiredVelocity.x - viewerMovementVelocity.x) * blend;
+        viewerMovementVelocity.z += (desiredVelocity.z - viewerMovementVelocity.z) * blend;
+
+        if (!hasInput || Math.abs(inputState.rawX) < 0.001) {
+            var right = getViewerMovementRightFlat();
+            var lateral = BABYLON.Vector3.Dot(viewerMovementVelocity, right);
+            var sideBlend = viewerMovementExpBlend(viewerMovementConfig.sideFriction || 43.0, dt);
+            viewerMovementVelocity.subtractInPlace(right.scale(lateral * sideBlend));
+        }
+
+        if (!hasInput && viewerMovementVelocity.length() < (viewerMovementConfig.snapStopSpeed || 0.037)) {
+            viewerMovementVelocity.set(0, 0, 0);
+        }
+
+        var movementDelta = viewerMovementVelocity.scale(dt);
+        moveViewerCameraWithGroundedCollision(movementDelta);
+
+        var step = getViewerMovementStepVisual(dt, hasInput, viewerMovementVelocity.length());
+        var stopSettle = updateViewerMovementStopSettle(dt, hasInput, speedBeforeStop);
+
+        var visualOffset = new BABYLON.Vector3(
+            stopSettle.positionOffset.x,
+            step.height,
+            stopSettle.positionOffset.z
+        );
+
+        applyViewerMovementVisualOffsets(
+            visualOffset,
+            step.pitch + stopSettle.pitch,
+            step.roll
+        );
     }
 
     function beginMobileCanvasLook(event) {
@@ -13927,7 +14344,7 @@ export const createScene = function (engineArg, canvasArg) {
         createMobileViewerUi();
 
         scene.onBeforeRenderObservable.add(function () {
-            updateMobileJoystickMovement();
+            updateViewerWASDMovement();
         });
 
         window.addEventListener("resize", function () {
@@ -14595,11 +15012,17 @@ export const createScene = function (engineArg, canvasArg) {
         var key = event.key.toLowerCase();
 
         if (key === "w" || key === "a" || key === "s" || key === "d") {
-            editMoveKeys[key] = true;
-
             if (editMode) {
+                editMoveKeys[key] = true;
+                event.preventDefault();
+            } else {
+                viewerMoveKeys[key] = true;
                 event.preventDefault();
             }
+        }
+
+        if (key === "shift" && !editMode) {
+            viewerMoveKeys.shift = true;
         }
     });
 
@@ -14613,7 +15036,15 @@ export const createScene = function (engineArg, canvasArg) {
         var key = event.key.toLowerCase();
 
         if (key === "w" || key === "a" || key === "s" || key === "d") {
-            editMoveKeys[key] = false;
+            if (editMode) {
+                editMoveKeys[key] = false;
+            } else {
+                viewerMoveKeys[key] = false;
+            }
+        }
+
+        if (key === "shift") {
+            viewerMoveKeys.shift = false;
         }
     });
 
@@ -19426,6 +19857,8 @@ export const createScene = function (engineArg, canvasArg) {
                     lookAtObserver = null;
                 }
 
+                resetViewerWASDMovementRuntime(true);
+
                 BABYLON.Animation.CreateAndStartAnimation(
                     "cameraMove",
                     camera,
@@ -20556,6 +20989,34 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getViewerModePlaceholderVisibilityDebug: function () {
             return Object.assign({}, viewerPlaceholderVisibilityDebug);
+        },
+        getViewerWASDMovementDebug: function () {
+            return {
+                enabled: viewerWASDMovementEnabled,
+                editMode: editMode,
+                mobileViewerActive: isMobileViewerActive(),
+                keys: Object.assign({}, viewerMoveKeys),
+                joystick: {
+                    active: mobileJoystickActive,
+                    x: mobileJoystickVector.x,
+                    y: mobileJoystickVector.y
+                },
+                velocity: {
+                    x: viewerMovementVelocity.x,
+                    y: viewerMovementVelocity.y,
+                    z: viewerMovementVelocity.z
+                },
+                config: Object.assign({}, viewerMovementConfig)
+            };
+        },
+        setViewerWASDMovementEnabled: function (isEnabled) {
+            viewerWASDMovementEnabled = !!isEnabled;
+
+            if (!viewerWASDMovementEnabled) {
+                resetViewerWASDMovementRuntime(true);
+            }
+
+            return viewerWASDMovementEnabled;
         },
         findAuthorByName: function (name) {
             return getAuthorByName(name);
