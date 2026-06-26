@@ -1368,3 +1368,52 @@ Fix:
 State:
 - saved `segmentColorName` is restored through the same base-color-only paint path.
 - old saved color names `yellowish` and `steel` are normalized to `yellow` and `cyan`.
+
+
+## V0_11 Stage 11K Viewer Mode Hide Editor Placeholders
+
+Viewer/Observer Mode cleanup:
+- hides artwork placeholder boxes that do not have an image/imagePlane.
+- hides local light editor meshes: cube/sphere markers, helper meshes, target meshes.
+- hides sculpture/sphere placeholder meshes.
+- does not remove meshes from the scene graph; only changes `isVisible`, `visibility`, and `isPickable`.
+
+Edit Mode:
+- restores placeholder visibility so objects can still be edited.
+
+Console:
+```js
+GalleryApp.updateViewerModePlaceholderVisibility()
+GalleryApp.getViewerModePlaceholderVisibilityDebug()
+```
+
+
+## V0_11 Stage 12A 3D Model Slots From Sculptures
+
+This stage turns existing sculpture/pedestal placeholders into 3D model slots.
+
+Features:
+- Existing `ArtSphere_*` objects are now 3D model slots.
+- Upload GLB to Supabase Storage once.
+- Apply GLB URL to a selected slot.
+- Remove model from selected slot without deleting Storage file.
+- Duplicate selected slot without re-uploading the GLB.
+- Copy model from one slot and paste it into another slot without re-uploading.
+- Save/load `model3d` state in `gallery_state`.
+- Viewer Mode hides empty placeholders but keeps loaded model meshes visible.
+- Edit Mode shows placeholder controls for editing.
+
+Storage:
+```txt
+main/models/Original/
+```
+
+Console:
+```js
+GalleryApp.getModel3dSlotDebug()
+GalleryApp.applyModel3dUrlToSlot("ArtSphere_0", "https://.../model.glb")
+GalleryApp.removeModel3dFromSlot("ArtSphere_0")
+GalleryApp.duplicateSelectedModel3dSlot()
+GalleryApp.copySelectedModel3dToClipboard()
+GalleryApp.pasteModel3dFromClipboardToSelectedSlot()
+```

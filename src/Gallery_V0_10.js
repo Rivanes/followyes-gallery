@@ -2879,6 +2879,48 @@ export const createScene = function (engineArg, canvasArg) {
         return baseName + "." + extension;
     }
 
+    function createSafeModel3dFileName(fileName) {
+        var originalName = String(fileName || "model.glb").trim();
+        var extensionMatch = originalName.match(/\.([a-zA-Z0-9]+)$/);
+        var extension = extensionMatch ? extensionMatch[1].toLowerCase() : "glb";
+
+        // Stage 12A startowo obsługuje tylko GLB, bo to jeden plik z teksturami.
+        if (extension !== "glb") {
+            extension = "glb";
+        }
+
+        var baseName = originalName
+            .replace(/\.[^/.]+$/, "")
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+        if (!baseName) {
+            baseName = "model";
+        }
+
+        return baseName + "." + extension;
+    }
+
+    function createModel3dStoragePath(slot, file) {
+        var safeFileName = createSafeModel3dFileName(file && file.name);
+        var slotName = slot && slot.name
+            ? slot.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+            : "model-slot";
+
+        return galleryArtworkStoragePrefix + "/" + galleryModel3dStorageFolder + "/" + slotName + "-" + Date.now() + "-" + safeFileName;
+    }
+
+    function isValidModel3dFile(file) {
+        if (!file || !file.name) {
+            return false;
+        }
+
+        return /\.glb$/i.test(file.name);
+    }
+
     function createArtworkStoragePath(artwork, file) {
         var safeFileName = createSafeStorageFileName(file && file.name);
         var artworkName = artwork && artwork.name
@@ -4820,6 +4862,7 @@ export const createScene = function (engineArg, canvasArg) {
         camera.rotation = new BABYLON.Vector3(0, Math.PI / 50, 0);
 
         refreshMobileViewerMode();
+        updateViewerModePlaceholderVisibility();
 
         if (mobileViewerEnabled) {
             setMobileStartCameraPosition();
@@ -4870,6 +4913,16 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryArtworkStoragePrefix = "main";
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
+
+    // STAGE 12A - 3D MODEL SLOTS FROM SCULPTURES
+    // Obecne ArtSphere_* są traktowane jako sloty modeli 3D.
+    // Model GLB wgrywamy raz do Storage, a potem można go kopiować/duplikować bez ponownego uploadu.
+    var galleryModel3dUploadEnabled = true;
+    var galleryModel3dStorageFolder = "models/Original";
+    var galleryModel3dMaxUploadSizeMb = 50;
+    var galleryModel3dClipboardState = null;
+    var galleryModel3dCreateCounter = 0;
+    var galleryModel3dLastDebug = null;
 
     // STAGE 11A - ARTWORK IMAGE VARIANTS / MOBILE TEXTURE BUDGET
     // Upload jednego pliku tworzy automatycznie warianty:
@@ -7079,6 +7132,85 @@ export const createScene = function (engineArg, canvasArg) {
     imageOptimizationSectionData.section.appendChild(imageOptimizationNote);
     imageOptimizationSectionData.section.appendChild(imageOptimizationActions);
     editorScroll.appendChild(imageOptimizationSectionData.section);
+
+    // STAGE 12A - 3D MODEL SLOT UI
+    var model3dSectionData = createEditorSection("3D MODEL SLOT");
+    model3dSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
+
+    var model3dStatus = document.createElement("div");
+    model3dStatus.className = "gallery-artwork-image-status";
+    model3dStatus.innerHTML = "Model: <strong>None</strong>";
+
+    var model3dUrlLabel = document.createElement("label");
+    model3dUrlLabel.className = "gallery-editor-field-label";
+    model3dUrlLabel.innerText = "GLB URL / already uploaded model";
+
+    var model3dUrlInput = document.createElement("input");
+    model3dUrlInput.type = "text";
+    model3dUrlInput.className = "gallery-editor-text-input";
+    model3dUrlInput.placeholder = "https://.../model.glb";
+
+    var model3dFileInput = document.createElement("input");
+    model3dFileInput.type = "file";
+    model3dFileInput.accept = ".glb,model/gltf-binary";
+    model3dFileInput.style.display = "none";
+
+    var model3dActionsMain = document.createElement("div");
+    model3dActionsMain.className = "gallery-artwork-image-actions is-three";
+
+    var model3dUploadButton = document.createElement("button");
+    model3dUploadButton.type = "button";
+    model3dUploadButton.className = "gallery-editor-action-button is-primary";
+    model3dUploadButton.innerText = "UPLOAD GLB";
+
+    var model3dApplyUrlButton = document.createElement("button");
+    model3dApplyUrlButton.type = "button";
+    model3dApplyUrlButton.className = "gallery-editor-action-button";
+    model3dApplyUrlButton.innerText = "APPLY URL";
+
+    var model3dRemoveButton = document.createElement("button");
+    model3dRemoveButton.type = "button";
+    model3dRemoveButton.className = "gallery-editor-action-button is-danger";
+    model3dRemoveButton.innerText = "REMOVE MODEL";
+
+    model3dActionsMain.appendChild(model3dUploadButton);
+    model3dActionsMain.appendChild(model3dApplyUrlButton);
+    model3dActionsMain.appendChild(model3dRemoveButton);
+
+    var model3dActionsCopy = document.createElement("div");
+    model3dActionsCopy.className = "gallery-artwork-image-actions is-three";
+
+    var model3dDuplicateButton = document.createElement("button");
+    model3dDuplicateButton.type = "button";
+    model3dDuplicateButton.className = "gallery-editor-action-button";
+    model3dDuplicateButton.innerText = "DUPLICATE SLOT";
+
+    var model3dCopyButton = document.createElement("button");
+    model3dCopyButton.type = "button";
+    model3dCopyButton.className = "gallery-editor-action-button";
+    model3dCopyButton.innerText = "COPY MODEL";
+
+    var model3dPasteButton = document.createElement("button");
+    model3dPasteButton.type = "button";
+    model3dPasteButton.className = "gallery-editor-action-button";
+    model3dPasteButton.innerText = "PASTE MODEL";
+
+    model3dActionsCopy.appendChild(model3dDuplicateButton);
+    model3dActionsCopy.appendChild(model3dCopyButton);
+    model3dActionsCopy.appendChild(model3dPasteButton);
+
+    var model3dNote = document.createElement("p");
+    model3dNote.className = "gallery-artwork-image-note";
+    model3dNote.innerText = "GLB is uploaded once. Duplicate / paste reuses the same model URL without another upload.";
+
+    model3dSectionData.section.appendChild(model3dStatus);
+    model3dSectionData.section.appendChild(model3dUrlLabel);
+    model3dSectionData.section.appendChild(model3dUrlInput);
+    model3dSectionData.section.appendChild(model3dFileInput);
+    model3dSectionData.section.appendChild(model3dActionsMain);
+    model3dSectionData.section.appendChild(model3dActionsCopy);
+    model3dSectionData.section.appendChild(model3dNote);
+    editorScroll.appendChild(model3dSectionData.section);
 
     function runArtworkImageVariantsRebuildFromUi() {
         var missingCount = getActiveArtworks().filter(function (candidate) {
@@ -10500,6 +10632,7 @@ export const createScene = function (engineArg, canvasArg) {
         updateLocalLightHelper(item);
         applyLocalLightRuntimeEnabled(item);
         updateLocalLightsUi();
+        updateViewerModePlaceholderVisibility();
 
         return item;
     }
@@ -12891,6 +13024,185 @@ export const createScene = function (engineArg, canvasArg) {
         });
     }
 
+    // STAGE 11K - VIEWER MODE HIDE EDITOR PLACEHOLDERS
+    // Viewer / Observer Mode ma pokazywać finalną galerię, bez roboczych placeholderów.
+    // Dla bezpieczeństwa nie wyłączamy meshów z grafu sceny.
+    // Zmieniamy tylko widoczność i pickowanie meshów edytorskich.
+    var viewerHideEmptyArtworkPlaceholders = true;
+    var viewerHideLocalLightEditorMeshes = true;
+    var viewerHideSculpturePlaceholders = true;
+    var viewerPlaceholderVisibilityDebug = {
+        emptyArtworksHidden: 0,
+        localLightMeshesHidden: 0,
+        spherePlaceholdersHidden: 0,
+        mode: "viewer"
+    };
+
+    function isMeshSoftDeletedLocalLightEditorMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.metadata &&
+            mesh.metadata.softDeletedLocalLight
+        );
+    }
+
+    function setEditorOnlyMeshVisible(mesh, shouldBeVisible, shouldBePickable) {
+        if (!mesh) {
+            return false;
+        }
+
+        if (isMeshSoftDeletedLocalLightEditorMesh(mesh)) {
+            shouldBeVisible = false;
+            shouldBePickable = false;
+        }
+
+        if (mesh.isVisible !== undefined) {
+            mesh.isVisible = !!shouldBeVisible;
+        }
+
+        if (mesh.visibility !== undefined) {
+            mesh.visibility = shouldBeVisible ? 1 : 0;
+        }
+
+        if (mesh.isPickable !== undefined) {
+            mesh.isPickable = !!shouldBePickable;
+        }
+
+        mesh.metadata = mesh.metadata || {};
+        mesh.metadata.viewerPlaceholderVisibilityManaged = true;
+
+        return !shouldBeVisible;
+    }
+
+    function hasArtworkViewerImage(artwork) {
+        if (!artwork || !artwork.metadata) {
+            return false;
+        }
+
+        if (artwork.metadata.imagePlane && !(artwork.metadata.imagePlane.isDisposed && artwork.metadata.imagePlane.isDisposed())) {
+            return true;
+        }
+
+        return !!getArtworkImageState(artwork);
+    }
+
+    function updateViewerModeArtworkPlaceholderVisibility() {
+        var hiddenCount = 0;
+        var active = typeof getActiveArtworks === "function"
+            ? getActiveArtworks()
+            : artworks;
+
+        active.forEach(function (artwork) {
+            if (!artwork) {
+                return;
+            }
+
+            var showArtworkBox = editMode || !viewerHideEmptyArtworkPlaceholders || hasArtworkViewerImage(artwork);
+
+            if (!showArtworkBox) {
+                hiddenCount += 1;
+            }
+
+            setEditorOnlyMeshVisible(
+                artwork,
+                showArtworkBox,
+                editMode || hasArtworkViewerImage(artwork)
+            );
+
+            if (artwork.metadata && artwork.metadata.imagePlane) {
+                var imagePlane = artwork.metadata.imagePlane;
+
+                if (imagePlane && !(imagePlane.isDisposed && imagePlane.isDisposed())) {
+                    setEditorOnlyMeshVisible(
+                        imagePlane,
+                        !isArtworkDeleted(artwork),
+                        true
+                    );
+                }
+            }
+        });
+
+        viewerPlaceholderVisibilityDebug.emptyArtworksHidden = hiddenCount;
+    }
+
+    function setLocalLightEditorMeshVisibility(mesh, shouldBeVisible) {
+        if (!mesh) {
+            return 0;
+        }
+
+        var hidden = setEditorOnlyMeshVisible(
+            mesh,
+            shouldBeVisible,
+            shouldBeVisible
+        );
+
+        return hidden ? 1 : 0;
+    }
+
+    function updateViewerModeLocalLightPlaceholderVisibility() {
+        var hiddenCount = 0;
+        var shouldShow = editMode || !viewerHideLocalLightEditorMeshes;
+
+        localLightItems.forEach(function (item) {
+            if (!item) {
+                return;
+            }
+
+            hiddenCount += setLocalLightEditorMeshVisibility(item.markerMesh, shouldShow);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.helperMesh, shouldShow);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.targetMesh, shouldShow);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.rootNode, shouldShow);
+
+            if (item.helperMeshes && item.helperMeshes.length) {
+                item.helperMeshes.forEach(function (helperMesh) {
+                    hiddenCount += setLocalLightEditorMeshVisibility(helperMesh, shouldShow);
+                });
+            }
+        });
+
+        viewerPlaceholderVisibilityDebug.localLightMeshesHidden = hiddenCount;
+    }
+
+    function updateViewerModeSpherePlaceholderVisibility() {
+        var hiddenCount = 0;
+        var shouldShow = editMode || !viewerHideSculpturePlaceholders;
+
+        artSpheres.forEach(function (sphereMesh) {
+            if (!sphereMesh) {
+                return;
+            }
+
+            hiddenCount += setEditorOnlyMeshVisible(
+                sphereMesh,
+                shouldShow,
+                shouldShow
+            ) ? 1 : 0;
+
+            if (sphereMesh.getChildMeshes) {
+                sphereMesh.getChildMeshes(false).forEach(function (childMesh) {
+                    hiddenCount += setEditorOnlyMeshVisible(
+                        childMesh,
+                        shouldShow,
+                        false
+                    ) ? 1 : 0;
+                });
+            }
+        });
+
+        viewerPlaceholderVisibilityDebug.spherePlaceholdersHidden = hiddenCount;
+    }
+
+    function updateViewerModePlaceholderVisibility() {
+        viewerPlaceholderVisibilityDebug.mode = editMode ? "edit" : "viewer";
+
+        updateViewerModeArtworkPlaceholderVisibility();
+        updateViewerModeLocalLightPlaceholderVisibility();
+        updateViewerModeSpherePlaceholderVisibility();
+        updateModel3dSlotsVisibility();
+
+        return Object.assign({}, viewerPlaceholderVisibilityDebug);
+    }
+
     editButton.onclick = function (event) {
         if (event) {
             event.preventDefault();
@@ -12911,6 +13223,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             refreshMobileViewerMode();
             updateViewerCollisionMode();
+            updateViewerModePlaceholderVisibility();
             setMobileViewerUiVisible(false);
 
             if (mobileViewerEnabled) {
@@ -12925,6 +13238,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             refreshMobileViewerMode();
             updateViewerCollisionMode();
+            updateViewerModePlaceholderVisibility();
 
             if (mobileViewerEnabled) {
                 camera.detachControl(canvas);
@@ -12955,6 +13269,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             refreshMobileViewerMode();
             updateViewerCollisionMode();
+            updateViewerModePlaceholderVisibility();
 
             if (mobileViewerEnabled) {
                 camera.detachControl(canvas);
@@ -13614,6 +13929,166 @@ export const createScene = function (engineArg, canvasArg) {
 
 
 
+    function updateModel3dSlotUi() {
+        if (!model3dSectionData || !model3dSectionData.section) {
+            return;
+        }
+
+        var slot = selectedSphere || null;
+        var isVisible = !!(editMode && slot);
+        var modelState = getModel3dState(slot);
+
+        model3dSectionData.section.classList.toggle("is-hidden", !isVisible);
+
+        if (model3dStatus) {
+            if (slot && modelState) {
+                model3dStatus.innerHTML = "Slot: <strong>" + slot.name + "</strong><br>Model: <strong>" + (modelState.originalName || "GLB") + "</strong>";
+            } else if (slot) {
+                model3dStatus.innerHTML = "Slot: <strong>" + slot.name + "</strong><br>Model: <strong>None</strong>";
+            } else {
+                model3dStatus.innerHTML = "Model: <strong>None</strong>";
+            }
+        }
+
+        if (model3dUrlInput) {
+            model3dUrlInput.value = modelState ? modelState.modelUrl || "" : "";
+            model3dUrlInput.disabled = !isVisible;
+        }
+
+        [
+            model3dUploadButton,
+            model3dApplyUrlButton,
+            model3dRemoveButton,
+            model3dDuplicateButton,
+            model3dCopyButton,
+            model3dPasteButton
+        ].forEach(function (button) {
+            if (button) {
+                button.disabled = !isVisible;
+            }
+        });
+
+        if (model3dRemoveButton) {
+            model3dRemoveButton.disabled = !isVisible || !modelState;
+        }
+
+        if (model3dCopyButton) {
+            model3dCopyButton.disabled = !isVisible || !modelState;
+        }
+
+        if (model3dPasteButton) {
+            model3dPasteButton.disabled = !isVisible || !galleryModel3dClipboardState;
+        }
+    }
+
+    model3dUploadButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!selectedSphere) {
+            notifyGalleryStatus("Zaznacz slot modelu 3D.");
+            return;
+        }
+
+        model3dFileInput.value = "";
+        model3dFileInput.click();
+    };
+
+    model3dFileInput.onchange = function () {
+        var file = model3dFileInput.files && model3dFileInput.files[0]
+            ? model3dFileInput.files[0]
+            : null;
+
+        if (!file || !selectedSphere) {
+            return;
+        }
+
+        uploadModel3dToSlot(selectedSphere, file)
+            .then(function (ok) {
+                if (ok) {
+                    return saveGalleryStateToSupabase();
+                }
+
+                return false;
+            })
+            .catch(function (error) {
+                console.warn("3D model upload UI error:", error);
+                notifyGalleryStatus("Upload modelu 3D nieudany.");
+            })
+            .finally(function () {
+                updateModel3dSlotUi();
+                model3dFileInput.value = "";
+            });
+    };
+
+    model3dApplyUrlButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!selectedSphere) {
+            notifyGalleryStatus("Zaznacz slot modelu 3D.");
+            return;
+        }
+
+        var modelUrl = model3dUrlInput.value.trim();
+
+        if (!modelUrl) {
+            notifyGalleryStatus("Wklej URL do pliku GLB.");
+            return;
+        }
+
+        var modelState = createModel3dStateFromUrl(selectedSphere, modelUrl);
+
+        applyModel3dStateToSlot(selectedSphere, modelState)
+            .then(function (ok) {
+                if (ok) {
+                    notifyGalleryStatus("Model przypisany z URL. Zapisz stan galerii.");
+                    return saveGalleryStateToSupabase();
+                }
+
+                return false;
+            })
+            .catch(function (error) {
+                console.warn("Apply 3D model URL error:", error);
+                notifyGalleryStatus("Nie udalo sie przypisac modelu z URL.");
+            });
+    };
+
+    model3dRemoveButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!selectedSphere) {
+            return;
+        }
+
+        removeModel3dFromSlot(selectedSphere);
+        saveGalleryStateToSupabase();
+    };
+
+    model3dDuplicateButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        duplicateSelectedModel3dSlot();
+        saveGalleryStateToSupabase();
+    };
+
+    model3dCopyButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        copySelectedModel3dToClipboard();
+    };
+
+    model3dPasteButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        pasteModel3dFromClipboardToSelectedSlot();
+        saveGalleryStateToSupabase();
+    };
+
     function updateEditHelpStatus() {
 
         var selectedStatus = document.getElementById("editorSelectedArtworkStatus");
@@ -13652,6 +14127,7 @@ export const createScene = function (engineArg, canvasArg) {
         updateArtworkImageUi();
         updateArtworkInfoUi();
         updateArtworkTransformUi();
+        updateModel3dSlotUi();
         updateAlignmentPanel();
     }
 
@@ -16679,6 +17155,506 @@ export const createScene = function (engineArg, canvasArg) {
     );
 
 
+    // STAGE 12A - 3D MODEL SLOT LOGIC
+    function getModel3dState(slot) {
+        return slot && slot.metadata ? slot.metadata.model3d || null : null;
+    }
+
+    function normalizeModel3dState(modelState) {
+        if (!modelState || typeof modelState !== "object") {
+            return null;
+        }
+
+        var modelUrl = modelState.modelUrl || modelState.url || modelState.publicUrl || "";
+        var modelPath = modelState.modelPath || modelState.path || "";
+
+        if (!modelUrl && modelPath) {
+            modelUrl = getPublicArtworkUrlFromPath(modelPath, modelState.storageBucket || galleryArtworkStorageBucket);
+        }
+
+        if (!modelUrl) {
+            return null;
+        }
+
+        return {
+            modelUrl: modelUrl,
+            modelPath: modelPath,
+            storageBucket: modelState.storageBucket || galleryArtworkStorageBucket,
+            originalName: modelState.originalName || modelState.name || "model.glb",
+            size: modelState.size || null,
+            mimeType: modelState.mimeType || "model/gltf-binary",
+            uploadedAt: modelState.uploadedAt || null,
+            assignedAt: modelState.assignedAt || new Date().toISOString(),
+            sourceSlotName: modelState.sourceSlotName || "",
+            isDuplicate: !!modelState.isDuplicate,
+            transform: {
+                position: modelState.transform && modelState.transform.position
+                    ? modelState.transform.position
+                    : { x: 0, y: 0.65, z: 0 },
+                rotation: modelState.transform && modelState.transform.rotation
+                    ? modelState.transform.rotation
+                    : { x: 0, y: 0, z: 0 },
+                scaling: modelState.transform && modelState.transform.scaling
+                    ? modelState.transform.scaling
+                    : { x: 1, y: 1, z: 1 }
+            }
+        };
+    }
+
+    function getModel3dSlotByName(name) {
+        return getSphereByName(name);
+    }
+
+    function getNextModel3dSlotIndex() {
+        var maxIndex = -1;
+
+        artSpheres.forEach(function (slot) {
+            if (!slot || !slot.name) {
+                return;
+            }
+
+            var match = slot.name.match(/ArtSphere_(\d+)/);
+
+            if (match) {
+                maxIndex = Math.max(maxIndex, Number(match[1]) || 0);
+            }
+        });
+
+        galleryModel3dCreateCounter = Math.max(galleryModel3dCreateCounter, maxIndex + 1);
+
+        return galleryModel3dCreateCounter++;
+    }
+
+    function getModel3dSlotFromPickedMesh(mesh) {
+        if (!mesh) {
+            return null;
+        }
+
+        if (artSpheres.indexOf(mesh) >= 0) {
+            return mesh;
+        }
+
+        var current = mesh;
+
+        while (current) {
+            if (
+                current.metadata &&
+                current.metadata.model3dSlotName
+            ) {
+                return getModel3dSlotByName(current.metadata.model3dSlotName);
+            }
+
+            current = current.parent || null;
+        }
+
+        return null;
+    }
+
+    function disposeModel3dSlotRuntime(slot) {
+        if (!slot || !slot.metadata) {
+            return;
+        }
+
+        var runtime = slot.metadata.model3dRuntime;
+
+        if (runtime) {
+            if (runtime.root && runtime.root.dispose) {
+                runtime.root.dispose();
+            } else if (runtime.meshes && runtime.meshes.length) {
+                runtime.meshes.forEach(function (mesh) {
+                    if (mesh && mesh.dispose) {
+                        mesh.dispose();
+                    }
+                });
+            }
+        }
+
+        slot.metadata.model3dRuntime = null;
+    }
+
+    function markModel3dRuntimeMesh(mesh, slot) {
+        if (!mesh || !slot) {
+            return;
+        }
+
+        mesh.metadata = mesh.metadata || {};
+        mesh.metadata.model3dSlotName = slot.name;
+        mesh.metadata.isModel3dRuntimeMesh = true;
+        mesh.isPickable = true;
+
+        if (mesh.material) {
+            configureMaterialForCommonLighting(mesh.material);
+        }
+
+        try {
+            registerCommonShadowMesh(mesh, {
+                global: true,
+                local: true,
+                receive: true,
+                cast: true
+            });
+        } catch (shadowError) {
+            console.warn("Model 3D shadow register warning:", shadowError);
+        }
+    }
+
+    function applyModel3dRuntimeVisibility(slot) {
+        if (!slot || !slot.metadata || !slot.metadata.model3dRuntime) {
+            return;
+        }
+
+        var runtime = slot.metadata.model3dRuntime;
+        var shouldShowModel = !!getModel3dState(slot);
+
+        if (runtime.root) {
+            if (runtime.root.isVisible !== undefined) {
+                runtime.root.isVisible = shouldShowModel;
+            }
+
+            if (runtime.root.visibility !== undefined) {
+                runtime.root.visibility = shouldShowModel ? 1 : 0;
+            }
+        }
+
+        if (runtime.meshes && runtime.meshes.length) {
+            runtime.meshes.forEach(function (mesh) {
+                if (!mesh) {
+                    return;
+                }
+
+                if (mesh.isVisible !== undefined) {
+                    mesh.isVisible = shouldShowModel;
+                }
+
+                if (mesh.visibility !== undefined) {
+                    mesh.visibility = shouldShowModel ? 1 : 0;
+                }
+
+                if (mesh.isPickable !== undefined) {
+                    mesh.isPickable = shouldShowModel;
+                }
+            });
+        }
+    }
+
+    function updateModel3dSlotsVisibility() {
+        artSpheres.forEach(function (slot) {
+            applyModel3dRuntimeVisibility(slot);
+        });
+    }
+
+    function setModel3dSlotTransformFromState(slot, modelState) {
+        if (!slot || !slot.metadata || !slot.metadata.model3dRuntime) {
+            return;
+        }
+
+        var runtime = slot.metadata.model3dRuntime;
+        var root = runtime.root;
+
+        if (!root) {
+            return;
+        }
+
+        var transform = modelState && modelState.transform ? modelState.transform : {};
+        var position = transform.position || { x: 0, y: 0.65, z: 0 };
+        var rotation = transform.rotation || { x: 0, y: 0, z: 0 };
+        var scaling = transform.scaling || { x: 1, y: 1, z: 1 };
+
+        root.parent = slot;
+        root.position.copyFrom(vectorFromState(position, new BABYLON.Vector3(0, 0.65, 0)));
+        root.rotation.copyFrom(vectorFromState(rotation, BABYLON.Vector3.Zero()));
+        root.scaling.copyFrom(vectorFromState(scaling, new BABYLON.Vector3(1, 1, 1)));
+        root.computeWorldMatrix(true);
+    }
+
+    async function loadModel3dIntoSlot(slot, modelState) {
+        modelState = normalizeModel3dState(modelState);
+
+        if (!slot || !modelState || !modelState.modelUrl) {
+            return false;
+        }
+
+        slot.metadata = slot.metadata || {};
+        slot.metadata.model3d = modelState;
+
+        disposeModel3dSlotRuntime(slot);
+
+        var root = new BABYLON.TransformNode(slot.name + "_Model3DRoot", scene);
+        root.parent = slot;
+        root.metadata = root.metadata || {};
+        root.metadata.model3dSlotName = slot.name;
+        root.metadata.isModel3dRuntimeRoot = true;
+
+        slot.metadata.model3dRuntime = {
+            root: root,
+            meshes: [],
+            loadedAt: new Date().toISOString()
+        };
+
+        try {
+            var result = await BABYLON.SceneLoader.ImportMeshAsync(
+                "",
+                "",
+                modelState.modelUrl,
+                scene
+            );
+
+            var loadedMeshes = (result && result.meshes ? result.meshes : []).filter(function (mesh) {
+                return mesh && mesh.name !== "__root__";
+            });
+
+            loadedMeshes.forEach(function (mesh) {
+                mesh.parent = root;
+                markModel3dRuntimeMesh(mesh, slot);
+            });
+
+            slot.metadata.model3dRuntime.meshes = loadedMeshes;
+            setModel3dSlotTransformFromState(slot, modelState);
+            applyModel3dRuntimeVisibility(slot);
+
+            galleryModel3dLastDebug = {
+                slot: slot.name,
+                modelUrl: modelState.modelUrl,
+                meshCount: loadedMeshes.length,
+                loadedAt: new Date().toISOString()
+            };
+
+            refreshViewerCollisionMeshes();
+            refreshCommonLightingMaterialSupport();
+            refreshAllCommonLocalLightTargets();
+            refreshAllLocalSpotShadows();
+            updateViewerModePlaceholderVisibility();
+            updateModel3dSlotUi();
+
+            return true;
+        } catch (error) {
+            console.warn("3D model load failed:", {
+                slot: slot.name,
+                modelUrl: modelState.modelUrl,
+                error: error
+            });
+
+            disposeModel3dSlotRuntime(slot);
+            galleryModel3dLastDebug = {
+                slot: slot.name,
+                modelUrl: modelState.modelUrl,
+                error: error && error.message ? error.message : String(error)
+            };
+            notifyGalleryStatus("Nie udalo sie wczytac modelu 3D. Sprawdz URL/GLB i konsolę.");
+            return false;
+        }
+    }
+
+    function applyModel3dStateToSlot(slot, modelState) {
+        modelState = normalizeModel3dState(modelState);
+
+        if (!slot || !modelState) {
+            return Promise.resolve(false);
+        }
+
+        return loadModel3dIntoSlot(slot, modelState);
+    }
+
+    function removeModel3dFromSlot(slot) {
+        if (!slot) {
+            return false;
+        }
+
+        slot.metadata = slot.metadata || {};
+        disposeModel3dSlotRuntime(slot);
+        slot.metadata.model3d = null;
+
+        updateViewerModePlaceholderVisibility();
+        updateModel3dSlotUi();
+        notifyGalleryStatus("Model usuniety ze slotu. Plik w Storage nie zostal usuniety, bo moze byc uzywany przez kopie.");
+        return true;
+    }
+
+    function createModel3dStateFromUrl(slot, modelUrl) {
+        if (!modelUrl) {
+            return null;
+        }
+
+        return normalizeModel3dState({
+            modelUrl: String(modelUrl).trim(),
+            originalName: slot && slot.name ? slot.name + ".glb" : "model.glb",
+            assignedAt: new Date().toISOString()
+        });
+    }
+
+    async function uploadModel3dToSlot(slot, file) {
+        if (!slot || !file) {
+            notifyGalleryStatus("Zaznacz slot modelu i wybierz plik GLB.");
+            return false;
+        }
+
+        if (!galleryModel3dUploadEnabled) {
+            notifyGalleryStatus("Upload modeli 3D jest wylaczony.");
+            return false;
+        }
+
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby wgrac model 3D.");
+            return false;
+        }
+
+        if (!isValidModel3dFile(file)) {
+            notifyGalleryStatus("Wybierz plik .glb.");
+            return false;
+        }
+
+        var maxBytes = galleryModel3dMaxUploadSizeMb * 1024 * 1024;
+
+        if (file.size && file.size > maxBytes) {
+            notifyGalleryStatus("Model jest za duzy. Limit: " + galleryModel3dMaxUploadSizeMb + " MB.");
+            return false;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany.");
+            return false;
+        }
+
+        var storagePath = createModel3dStoragePath(slot, file);
+
+        notifyGalleryStatus("Wgrywam model 3D GLB...");
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(storagePath, file, {
+                cacheControl: "31536000",
+                upsert: false,
+                contentType: file.type || "model/gltf-binary"
+            });
+
+        if (uploadResponse.error) {
+            console.warn("3D model upload error:", uploadResponse.error);
+            notifyGalleryStatus("Upload modelu 3D nieudany: " + (uploadResponse.error.message || "unknown error"));
+            return false;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(storagePath);
+
+        var publicUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+
+        var modelState = normalizeModel3dState({
+            modelUrl: publicUrl,
+            modelPath: storagePath,
+            storageBucket: galleryArtworkStorageBucket,
+            originalName: file.name || "model.glb",
+            size: file.size || null,
+            mimeType: file.type || "model/gltf-binary",
+            uploadedAt: new Date().toISOString(),
+            assignedAt: new Date().toISOString()
+        });
+
+        var loaded = await applyModel3dStateToSlot(slot, modelState);
+
+        if (loaded) {
+            notifyGalleryStatus("Model 3D wgrany. Zapisz stan galerii, aby zachowac zmiane.");
+        }
+
+        return loaded;
+    }
+
+    function copySelectedModel3dToClipboard() {
+        var modelState = getModel3dState(selectedSphere);
+
+        if (!selectedSphere || !modelState) {
+            notifyGalleryStatus("Zaznacz slot z modelem 3D.");
+            return false;
+        }
+
+        galleryModel3dClipboardState = JSON.parse(JSON.stringify(modelState));
+        notifyGalleryStatus("Model skopiowany do schowka slotow.");
+        updateModel3dSlotUi();
+        return true;
+    }
+
+    function pasteModel3dFromClipboardToSelectedSlot() {
+        if (!selectedSphere || !galleryModel3dClipboardState) {
+            notifyGalleryStatus("Brak modelu w schowku albo brak zaznaczonego slotu.");
+            return false;
+        }
+
+        var pastedState = JSON.parse(JSON.stringify(galleryModel3dClipboardState));
+        pastedState.sourceSlotName = pastedState.sourceSlotName || "clipboard";
+        pastedState.isDuplicate = true;
+        pastedState.assignedAt = new Date().toISOString();
+
+        applyModel3dStateToSlot(selectedSphere, pastedState);
+        notifyGalleryStatus("Model przypisany do slotu bez ponownego uploadu.");
+        return true;
+    }
+
+    function duplicateSelectedModel3dSlot() {
+        if (!selectedSphere) {
+            notifyGalleryStatus("Zaznacz slot modelu 3D.");
+            return null;
+        }
+
+        var index = getNextModel3dSlotIndex();
+        var position = selectedSphere.position.clone().add(new BABYLON.Vector3(1.4, 0, 0));
+        var newSlot = createPedestalDisplay(position, index);
+
+        if (!newSlot) {
+            notifyGalleryStatus("Nie udalo sie utworzyc kopii slotu.");
+            return null;
+        }
+
+        newSlot.rotation.copyFrom(selectedSphere.rotation);
+        newSlot.scaling.copyFrom(selectedSphere.scaling);
+        newSlot.metadata = newSlot.metadata || {};
+        newSlot.metadata.isDynamicModelSlot = true;
+
+        var modelState = getModel3dState(selectedSphere);
+
+        if (modelState) {
+            var duplicateState = JSON.parse(JSON.stringify(modelState));
+            duplicateState.sourceSlotName = selectedSphere.name;
+            duplicateState.isDuplicate = true;
+            duplicateState.assignedAt = new Date().toISOString();
+            applyModel3dStateToSlot(newSlot, duplicateState);
+        }
+
+        selectedSphere = newSlot;
+        updateViewerModePlaceholderVisibility();
+        updateModel3dSlotUi();
+        updateEditHelpStatus();
+        notifyGalleryStatus("Slot modelu zduplikowany bez ponownego uploadu.");
+
+        return newSlot;
+    }
+
+    function getModel3dSlotDebug() {
+        return artSpheres.map(function (slot, index) {
+            var modelState = getModel3dState(slot);
+            var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
+
+            return {
+                name: slot ? slot.name : null,
+                index: index,
+                selected: slot === selectedSphere,
+                hasModel: !!modelState,
+                modelUrl: modelState ? modelState.modelUrl : "",
+                modelPath: modelState ? modelState.modelPath : "",
+                runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
+                placeholderVisible: slot ? !!slot.isVisible : false,
+                clipboardHasModel: !!galleryModel3dClipboardState
+            };
+        });
+    }
+
     var spherePositions = [
         new BABYLON.Vector3(-3, -3, -2),
         new BABYLON.Vector3(2, -3, 1),
@@ -16775,11 +17751,21 @@ export const createScene = function (engineArg, canvasArg) {
         pedestal.metadata.displayType = "pedestal";
         pedestal.metadata.sculptureMesh = sculpture;
 
+        pedestal.metadata.isModel3dSlot = true;
+        pedestal.metadata.model3d = pedestal.metadata.model3d || null;
+        pedestal.metadata.model3dRuntime = pedestal.metadata.model3dRuntime || null;
+
         artSpheres.push(pedestal);
 
         createPedestalLight(pedestal, index);
         refreshArtworkLightExclusions();
         refreshAllCommonLocalLightTargets();
+
+        if (typeof updateViewerModePlaceholderVisibility === "function") {
+            updateViewerModePlaceholderVisibility();
+        }
+
+        return pedestal;
     }
 
     spherePositions.forEach((pos, index) => {
@@ -18109,13 +19095,18 @@ export const createScene = function (engineArg, canvasArg) {
             if (
                 editMode &&
                 pickResult.hit &&
-                artSpheres.includes(pickResult.pickedMesh)
+                (
+                    artSpheres.includes(pickResult.pickedMesh) ||
+                    getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
+                )
             ) {
-                selectedSphere = pickResult.pickedMesh;
+                selectedSphere = getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh;
                 isDraggingSphere = true;
                 dragMoved = false;
 
                 camera.detachControl(canvas);
+                updateModel3dSlotUi();
+                updateEditHelpStatus();
 
                 return;
             }
@@ -18134,9 +19125,12 @@ export const createScene = function (engineArg, canvasArg) {
             if (
                 !editMode &&
                 pickResult.hit &&
-                artSpheres.includes(pickResult.pickedMesh)
+                (
+                    artSpheres.includes(pickResult.pickedMesh) ||
+                    getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
+                )
             ) {
-                focusCameraOnObject(pickResult.pickedMesh);
+                focusCameraOnObject(getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh);
                 return;
             }
 
@@ -18285,6 +19279,8 @@ export const createScene = function (engineArg, canvasArg) {
             dragMoved = false;
 
             requestAllLocalSpotShadowRefresh(true);
+            updateViewerModePlaceholderVisibility();
+            updateModel3dSlotUi();
 
             attachGalleryCameraControl();
         }
@@ -18471,7 +19467,10 @@ export const createScene = function (engineArg, canvasArg) {
                     position: vectorToState(sphere.position),
                     rotation: vectorToState(sphere.rotation),
                     scaling: vectorToState(sphere.scaling),
-                    material: getMaterialState(sphere.material)
+                    material: getMaterialState(sphere.material),
+                    isModel3dSlot: !!(sphere.metadata && sphere.metadata.isModel3dSlot),
+                    isDynamicModelSlot: !!(sphere.metadata && sphere.metadata.isDynamicModelSlot),
+                    model3d: getModel3dState(sphere)
                 };
             })
         };
@@ -18678,6 +19677,33 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (Array.isArray(editorState.spheres)) {
             editorState.spheres.forEach(function (sphereState) {
+                if (!sphereState || getSphereByName(sphereState.name)) {
+                    return;
+                }
+
+                if (sphereState.isDynamicModelSlot || sphereState.model3d) {
+                    var slotIndex = sphereState.index !== undefined
+                        ? Number(sphereState.index)
+                        : getNextModel3dSlotIndex();
+
+                    var slotPosition = sphereState.position
+                        ? vectorFromState(sphereState.position, new BABYLON.Vector3(0, -3, 0))
+                        : new BABYLON.Vector3(0, -3, 0);
+
+                    var createdSlot = createPedestalDisplay(slotPosition, slotIndex);
+
+                    if (createdSlot && sphereState.name) {
+                        createdSlot.name = sphereState.name;
+                    }
+
+                    if (createdSlot) {
+                        createdSlot.metadata = createdSlot.metadata || {};
+                        createdSlot.metadata.isDynamicModelSlot = true;
+                    }
+                }
+            });
+
+            editorState.spheres.forEach(function (sphereState) {
                 if (!sphereState) {
                     return;
                 }
@@ -18711,6 +19737,17 @@ export const createScene = function (engineArg, canvasArg) {
                 }
 
                 applyMaterialStateToMesh(sphere, sphereState.material);
+
+                sphere.metadata = sphere.metadata || {};
+                sphere.metadata.isModel3dSlot = sphereState.isModel3dSlot !== false;
+                sphere.metadata.isDynamicModelSlot = !!sphereState.isDynamicModelSlot;
+
+                if (sphereState.model3d) {
+                    applyModel3dStateToSlot(sphere, sphereState.model3d);
+                } else {
+                    removeModel3dFromSlot(sphere);
+                }
+
                 sphere.computeWorldMatrix(true);
                 updatePedestalLight(sphere);
             });
@@ -19085,6 +20122,31 @@ export const createScene = function (engineArg, canvasArg) {
             return deleteArtworkSafelyNoAutoLights(artwork);
         },
         deleteSelectedArtworks: deleteSelectedArtworksNoAutoLights,
+        uploadModel3dToSlot: function (slotNameOrIndex, file) {
+            var slot = typeof slotNameOrIndex === "number"
+                ? artSpheres[slotNameOrIndex]
+                : getSphereByName(slotNameOrIndex);
+
+            return uploadModel3dToSlot(slot, file);
+        },
+        applyModel3dUrlToSlot: function (slotNameOrIndex, modelUrl) {
+            var slot = typeof slotNameOrIndex === "number"
+                ? artSpheres[slotNameOrIndex]
+                : getSphereByName(slotNameOrIndex);
+
+            return applyModel3dStateToSlot(slot, createModel3dStateFromUrl(slot, modelUrl));
+        },
+        removeModel3dFromSlot: function (slotNameOrIndex) {
+            var slot = typeof slotNameOrIndex === "number"
+                ? artSpheres[slotNameOrIndex]
+                : getSphereByName(slotNameOrIndex);
+
+            return removeModel3dFromSlot(slot);
+        },
+        duplicateSelectedModel3dSlot: duplicateSelectedModel3dSlot,
+        copySelectedModel3dToClipboard: copySelectedModel3dToClipboard,
+        pasteModel3dFromClipboardToSelectedSlot: pasteModel3dFromClipboardToSelectedSlot,
+        getModel3dSlotDebug: getModel3dSlotDebug,
         getArtworkImageState: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
@@ -19175,6 +20237,12 @@ export const createScene = function (engineArg, canvasArg) {
             return {
                 centerRayEnabled: artworkInfoPopupCenterRayEnabled
             };
+        },
+        updateViewerModePlaceholderVisibility: function () {
+            return updateViewerModePlaceholderVisibility();
+        },
+        getViewerModePlaceholderVisibilityDebug: function () {
+            return Object.assign({}, viewerPlaceholderVisibilityDebug);
         },
         findAuthorByName: function (name) {
             return getAuthorByName(name);
