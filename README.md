@@ -1435,3 +1435,24 @@ GalleryApp.selectModel3dSlot("ArtSphere_0")
 GalleryApp.clearModel3dSlotSelection()
 GalleryApp.getModel3dSlotDebug()
 ```
+
+
+## V0_11 Stage 12C Sculpture Add/Delete Unified Artwork Flow
+
+This stage makes sculpture/model slots behave like a first-class object type next to artworks.
+
+Added:
+- `ADD SCULPTURE` in the same management section as `ADD ARTWORK`.
+- `DELETE SELECTED` now deletes selected artwork OR selected sculpture/model slot.
+- Sculpture/model slots use the same gradient selection glow as artworks.
+- The 3D model slot UI is moved to the same editor area as artwork-specific UI.
+- Selection status shows selected sculpture/model slot.
+- Static deleted slots are saved via `deletedModel3dSlotNames`, so removed default ArtSphere slots do not return after reload.
+
+Console:
+```js
+GalleryApp.addSculpture()
+GalleryApp.deleteSelected()
+GalleryApp.deleteModel3dSlot("ArtSphere_0")
+GalleryApp.getModel3dSlotDebug()
+```

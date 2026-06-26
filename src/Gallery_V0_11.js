@@ -4929,6 +4929,11 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryModel3dCreateCounter = 0;
     var galleryModel3dLastDebug = null;
 
+    // STAGE 12C - SCULPTURE ADD/DELETE UNIFIED ARTWORK FLOW
+    // Statyczne sloty ArtSphere_* muszą mieć listę usuniętych nazw, tak jak artworki.
+    // Inaczej po reloadzie domyślne rzeźby wróciłyby mimo usunięcia.
+    var deletedModel3dSlotNames = [];
+
     // STAGE 11A - ARTWORK IMAGE VARIANTS / MOBILE TEXTURE BUDGET
     // Upload jednego pliku tworzy automatycznie warianty:
     // - web: desktop
@@ -6995,14 +7000,19 @@ export const createScene = function (engineArg, canvasArg) {
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
     editorScroll.appendChild(selectionSectionData.section);
 
-    var artworkManageSectionData = createEditorSection("ARTWORKS");
+    var artworkManageSectionData = createEditorSection("ARTWORKS / SCULPTURES");
     var artworkManageActions = document.createElement("div");
-    artworkManageActions.className = "gallery-artwork-image-actions";
+    artworkManageActions.className = "gallery-artwork-image-actions is-three";
 
     var artworkAddButton = document.createElement("button");
     artworkAddButton.type = "button";
     artworkAddButton.className = "gallery-editor-action-button is-primary";
     artworkAddButton.innerText = "ADD ARTWORK";
+
+    var sculptureAddButton = document.createElement("button");
+    sculptureAddButton.type = "button";
+    sculptureAddButton.className = "gallery-editor-action-button is-primary";
+    sculptureAddButton.innerText = "ADD SCULPTURE";
 
     var artworkDeleteSelectedButton = document.createElement("button");
     artworkDeleteSelectedButton.type = "button";
@@ -7011,9 +7021,10 @@ export const createScene = function (engineArg, canvasArg) {
 
     var artworkManageNote = document.createElement("p");
     artworkManageNote.className = "gallery-artwork-image-note";
-    artworkManageNote.innerText = "Add creates a new artwork without automatic lights. Delete removes only selected artwork.";
+    artworkManageNote.innerText = "Add Artwork works on walls. Add Sculpture creates a 3D model slot on the floor. Delete Selected removes the currently selected artwork or sculpture slot.";
 
     artworkManageActions.appendChild(artworkAddButton);
+    artworkManageActions.appendChild(sculptureAddButton);
     artworkManageActions.appendChild(artworkDeleteSelectedButton);
     artworkManageSectionData.section.appendChild(artworkManageActions);
     artworkManageSectionData.section.appendChild(artworkManageNote);
@@ -7030,7 +7041,11 @@ export const createScene = function (engineArg, canvasArg) {
         );
 
         artworkAddButton.disabled = !editMode;
-        artworkDeleteSelectedButton.disabled = !editMode || selectedArtworks.length === 0;
+        sculptureAddButton.disabled = !editMode;
+        artworkDeleteSelectedButton.disabled = !editMode || (
+            selectedArtworks.length === 0 &&
+            !activeModel3dSlot
+        );
     }
 
     artworkAddButton.onclick = function (event) {
@@ -7044,14 +7059,25 @@ export const createScene = function (engineArg, canvasArg) {
         }
     };
 
+    sculptureAddButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var slot = addNewModel3dSlotToScene();
+
+        if (slot) {
+            notifyGalleryStatus("Added new sculpture/model slot. Upload GLB, move it on the floor, then save state.");
+        }
+    };
+
     artworkDeleteSelectedButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
 
-        deleteSelectedArtworksNoAutoLights()
+        deleteSelectedGalleryObjectsNoAutoLights()
             .catch(function (error) {
-                console.warn("Delete selected artworks error:", error);
-                notifyGalleryStatus("Artwork delete error.");
+                console.warn("Delete selected gallery objects error:", error);
+                notifyGalleryStatus("Delete selected error.");
             });
     };
 
@@ -7216,6 +7242,13 @@ export const createScene = function (engineArg, canvasArg) {
     model3dSectionData.section.appendChild(model3dActionsCopy);
     model3dSectionData.section.appendChild(model3dNote);
     editorScroll.appendChild(model3dSectionData.section);
+
+    // STAGE 12C - model UI ma siedzieć w tym samym miejscu co panel artworka.
+    // Fizycznie przenosimy sekcję przed ARTWORK IMAGE, żeby po zaznaczeniu obiektu
+    // nie trzeba było szukać kontrolek niżej przy globalnej optymalizacji.
+    if (artworkImageSectionData && artworkImageSectionData.section) {
+        editorScroll.insertBefore(model3dSectionData.section, artworkImageSectionData.section);
+    }
 
     function runArtworkImageVariantsRebuildFromUi() {
         var missingCount = getActiveArtworks().filter(function (candidate) {
@@ -14103,7 +14136,9 @@ export const createScene = function (engineArg, canvasArg) {
         if (selectedStatus) {
             var selectedLabel = "None";
 
-            if (selectedArtworks.length === 1 && selectedArtworks[0]) {
+            if (activeModel3dSlot) {
+                selectedLabel = "Sculpture: " + activeModel3dSlot.name;
+            } else if (selectedArtworks.length === 1 && selectedArtworks[0]) {
                 selectedLabel = selectedArtworks[0].name;
             } else if (selectedArtworks.length > 1 && primaryArtwork) {
                 selectedLabel = primaryArtwork.name + " + " + (selectedArtworks.length - 1);
@@ -14113,7 +14148,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (countStatus) {
-            countStatus.innerText = "Selected Count: " + selectedArtworks.length;
+            countStatus.innerText = "Selected Count: " + (activeModel3dSlot ? 1 : selectedArtworks.length);
         }
 
         if (colorStatus) {
@@ -14406,9 +14441,10 @@ export const createScene = function (engineArg, canvasArg) {
 
     function selectArtwork(artwork, addToSelection) {
 
-        // Selekcja obrazow i lokalnych lamp jest rozdzielna.
-        // Nie moze byc jednoczesnie zaznaczony obraz i lampa.
+        // Selekcja obrazow, modeli 3D i lokalnych lamp jest rozdzielna.
+        // Nie moze byc jednoczesnie zaznaczony obraz, rzezba/model i lampa.
         clearLocalLightSelection();
+        clearModel3dSlotSelection(true);
 
         if (addToSelection) {
 
@@ -17645,16 +17681,23 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        slot.renderOutline = !!isSelected;
-        slot.outlineColor = model3dSlotSelectionOutlineColor;
-        slot.outlineWidth = isSelected ? 0.045 : 0;
+        // STAGE 12C:
+        // Model slot używa tego samego gradientowego selection glow co artwork.
+        // Nie używamy już osobnego niebieskiego renderOutline.
+        slot.renderOutline = false;
+        slot.renderOverlay = false;
 
         var sculpture = slot.metadata ? slot.metadata.sculptureMesh : null;
 
         if (sculpture) {
-            sculpture.renderOutline = !!isSelected;
-            sculpture.outlineColor = model3dSlotSelectionOutlineColor;
-            sculpture.outlineWidth = isSelected ? 0.035 : 0;
+            sculpture.renderOutline = false;
+            sculpture.renderOverlay = false;
+        }
+
+        hideArtworkSelectionGlow(slot);
+
+        if (isSelected) {
+            ensureArtworkSelectionGlow(slot, "primary");
         }
     }
 
@@ -17662,6 +17705,10 @@ export const createScene = function (engineArg, canvasArg) {
         if (!slot) {
             return false;
         }
+
+        clearLocalLightSelection();
+        deselectArtwork();
+        clearWallColorSelection();
 
         if (activeModel3dSlot && activeModel3dSlot !== slot) {
             setModel3dSlotSelected(activeModel3dSlot, false);
@@ -17676,7 +17723,7 @@ export const createScene = function (engineArg, canvasArg) {
         return true;
     }
 
-    function clearModel3dSlotSelection() {
+    function clearModel3dSlotSelection(skipUiUpdate) {
         if (activeModel3dSlot) {
             setModel3dSlotSelected(activeModel3dSlot, false);
         }
@@ -17684,7 +17731,159 @@ export const createScene = function (engineArg, canvasArg) {
         activeModel3dSlot = null;
         selectedSphere = null;
         isDraggingSphere = false;
+
+        if (!skipUiUpdate) {
+            updateModel3dSlotUi();
+        }
+    }
+
+    function rememberDeletedModel3dSlotName(slotName) {
+        if (!slotName) {
+            return;
+        }
+
+        if (deletedModel3dSlotNames.indexOf(slotName) === -1) {
+            deletedModel3dSlotNames.push(slotName);
+        }
+    }
+
+    function forgetDeletedModel3dSlotName(slotName) {
+        deletedModel3dSlotNames = deletedModel3dSlotNames.filter(function (name) {
+            return name !== slotName;
+        });
+    }
+
+    function getDefaultModel3dSlotAddPosition() {
+        if (activeModel3dSlot && activeModel3dSlot.position) {
+            return activeModel3dSlot.position.clone().add(new BABYLON.Vector3(1.4, 0, 0));
+        }
+
+        var forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
+
+        if (forward.lengthSquared && forward.lengthSquared() > 0) {
+            forward.normalize();
+        } else {
+            forward = new BABYLON.Vector3(0, 0, 1);
+        }
+
+        return new BABYLON.Vector3(
+            camera.position.x + forward.x * 3.2,
+            -3,
+            camera.position.z + forward.z * 3.2
+        );
+    }
+
+    function addNewModel3dSlotToScene() {
+        var index = getNextModel3dSlotIndex();
+        var slot = createPedestalDisplay(
+            getDefaultModel3dSlotAddPosition(),
+            index
+        );
+
+        if (!slot) {
+            return null;
+        }
+
+        slot.metadata = slot.metadata || {};
+        slot.metadata.isDynamicModelSlot = true;
+        slot.metadata.isModel3dSlot = true;
+
+        forgetDeletedModel3dSlotName(slot.name);
+        selectModel3dSlot(slot);
+        updateViewerModePlaceholderVisibility();
+        updateEditHelpStatus();
+
+        return slot;
+    }
+
+    function deleteModel3dSlotRuntime(slot, options) {
+        options = options || {};
+
+        if (!slot || (slot.isDisposed && slot.isDisposed())) {
+            return false;
+        }
+
+        var slotName = slot.name;
+        var isDynamic = !!(slot.metadata && slot.metadata.isDynamicModelSlot);
+
+        if (!isDynamic && !options.skipRememberDeleted) {
+            rememberDeletedModel3dSlotName(slotName);
+        }
+
+        if (activeModel3dSlot === slot) {
+            setModel3dSlotSelected(slot, false);
+            activeModel3dSlot = null;
+        }
+
+        if (selectedSphere === slot) {
+            selectedSphere = null;
+        }
+
+        disposeModel3dSlotRuntime(slot);
+
+        if (slot.metadata && slot.metadata.sculptureMesh) {
+            unregisterViewerCollisionMesh(slot.metadata.sculptureMesh);
+
+            try {
+                slot.metadata.sculptureMesh.dispose();
+            } catch (sculptureDisposeError) {
+                console.warn("Sculpture placeholder dispose warning:", sculptureDisposeError);
+            }
+
+            slot.metadata.sculptureMesh = null;
+        }
+
+        unregisterViewerCollisionMesh(slot);
+
+        artSpheres = artSpheres.filter(function (candidate) {
+            return candidate !== slot;
+        });
+
+        try {
+            slot.dispose();
+        } catch (slotDisposeError) {
+            console.warn("Model slot dispose warning:", slotDisposeError);
+        }
+
+        refreshViewerCollisionMeshes();
+        refreshCommonLightingMaterialSupport();
+        refreshAllCommonLocalLightTargets();
+        refreshAllLocalSpotShadows();
+        updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
+        updateEditHelpStatus();
+
+        if (!options.silent) {
+            notifyGalleryStatus("Deleted sculpture/model slot. Save state to keep the change.");
+        }
+
+        return true;
+    }
+
+    async function deleteSelectedGalleryObjectsNoAutoLights() {
+        var hasArtworkSelection = selectedArtworks.length > 0;
+        var hasModelSlotSelection = !!activeModel3dSlot;
+
+        if (!hasArtworkSelection && !hasModelSlotSelection) {
+            notifyGalleryStatus("Select artwork or sculpture to delete.");
+            return false;
+        }
+
+        var deletedSomething = false;
+
+        if (hasArtworkSelection) {
+            deletedSomething = await deleteSelectedArtworksNoAutoLights() || deletedSomething;
+        }
+
+        if (hasModelSlotSelection) {
+            deletedSomething = deleteModel3dSlotRuntime(activeModel3dSlot) || deletedSomething;
+        }
+
+        updateArtworkManagementUi();
+        updateModel3dSlotUi();
+        updateEditHelpStatus();
+
+        return deletedSomething;
     }
 
     function getModel3dSlotDebug() {
@@ -17702,7 +17901,8 @@ export const createScene = function (engineArg, canvasArg) {
                 modelPath: modelState ? modelState.modelPath : "",
                 runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
                 placeholderVisible: slot ? !!slot.isVisible : false,
-                clipboardHasModel: !!galleryModel3dClipboardState
+                clipboardHasModel: !!galleryModel3dClipboardState,
+                deletedModel3dSlotNames: deletedModel3dSlotNames.slice()
             };
         });
     }
@@ -17807,6 +18007,7 @@ export const createScene = function (engineArg, canvasArg) {
         pedestal.metadata.model3d = pedestal.metadata.model3d || null;
         pedestal.metadata.model3dRuntime = pedestal.metadata.model3dRuntime || null;
 
+        forgetDeletedModel3dSlotName(pedestal.name);
         artSpheres.push(pedestal);
 
         createPedestalLight(pedestal, index);
@@ -19505,6 +19706,7 @@ export const createScene = function (engineArg, canvasArg) {
                 };
             }),
             deletedArtworkNames: deletedArtworkNames.slice(),
+            deletedModel3dSlotNames: deletedModel3dSlotNames.slice(),
             authors: artworkAuthors.map(function (author) {
                 return normalizeAuthorRecord(author);
             }),
@@ -19747,6 +19949,21 @@ export const createScene = function (engineArg, canvasArg) {
             });
         }
 
+        deletedModel3dSlotNames = Array.isArray(editorState.deletedModel3dSlotNames)
+            ? editorState.deletedModel3dSlotNames.slice()
+            : [];
+
+        deletedModel3dSlotNames.slice().forEach(function (slotName) {
+            var deletedSlot = getSphereByName(slotName);
+
+            if (deletedSlot) {
+                deleteModel3dSlotRuntime(deletedSlot, {
+                    skipRememberDeleted: true,
+                    silent: true
+                });
+            }
+        });
+
         if (Array.isArray(editorState.spheres)) {
             editorState.spheres.forEach(function (sphereState) {
                 if (!sphereState || getSphereByName(sphereState.name)) {
@@ -19771,6 +19988,7 @@ export const createScene = function (engineArg, canvasArg) {
                     if (createdSlot) {
                         createdSlot.metadata = createdSlot.metadata || {};
                         createdSlot.metadata.isDynamicModelSlot = true;
+                        forgetDeletedModel3dSlotName(createdSlot.name);
                     }
                 }
             });
@@ -20190,6 +20408,9 @@ export const createScene = function (engineArg, canvasArg) {
         addArtwork: function () {
             return addNewArtworkToScene();
         },
+        addSculpture: function () {
+            return addNewModel3dSlotToScene();
+        },
         deleteArtwork: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
@@ -20198,6 +20419,14 @@ export const createScene = function (engineArg, canvasArg) {
             return deleteArtworkSafelyNoAutoLights(artwork);
         },
         deleteSelectedArtworks: deleteSelectedArtworksNoAutoLights,
+        deleteSelected: deleteSelectedGalleryObjectsNoAutoLights,
+        deleteModel3dSlot: function (slotNameOrIndex) {
+            var slot = typeof slotNameOrIndex === "number"
+                ? artSpheres[slotNameOrIndex]
+                : getSphereByName(slotNameOrIndex);
+
+            return deleteModel3dSlotRuntime(slot);
+        },
         uploadModel3dToSlot: function (slotNameOrIndex, file) {
             var slot = typeof slotNameOrIndex === "number"
                 ? artSpheres[slotNameOrIndex]
