@@ -204,9 +204,17 @@ export const createScene = function (engineArg, canvasArg) {
         desktopViewerMiddleLookLastX = event.clientX;
         desktopViewerMiddleLookLastY = event.clientY;
 
+        // STAGE 12C2:
+        // Manualny obrót nie może startować z chwilowego visual roll z chodzenia.
+        if (!editMode && typeof clearViewerWASDVisualOffsets === "function") {
+            clearViewerWASDVisualOffsets();
+            camera.rotation.z = 0;
+        }
+
         camera.rotation.y += dx * desktopViewerMiddleLookSensitivityX;
         camera.rotation.x += dy * desktopViewerMiddleLookSensitivityY;
         camera.rotation.x = BABYLON.Scalar.Clamp(camera.rotation.x, -0.58, 0.58);
+        camera.rotation.z = 0;
 
         if (event.preventDefault) {
             event.preventDefault();
@@ -4810,7 +4818,9 @@ export const createScene = function (engineArg, canvasArg) {
         bobHeight: 0.0078,
         compression: 0.0054,
         pitchAmount: 0.0017,
-        rollAmount: 0.0016,
+        // STAGE 12C2:
+        // Roll kamery w viewer movement wyłączony, żeby nie zostawał kadr pod skosem.
+        rollAmount: 0.0,
         stopSettlePitch: 0.0009,
         stopSettleDuration: 0.10,
         stopBounceDistance: 0.032,
@@ -4833,6 +4843,7 @@ export const createScene = function (engineArg, canvasArg) {
     var viewerMovementVisualPitchOffset = 0;
     var viewerMovementVisualRollOffset = 0;
     var viewerMovementWasManualInputActive = false;
+    var viewerCameraRollLockEnabled = true;
 
     // CUSTOM LOADING SCREEN
     var oldLoadingScreen = document.getElementById("customLoadingScreen");
@@ -8790,6 +8801,20 @@ export const createScene = function (engineArg, canvasArg) {
     localLightHighlightLayer.blurVerticalSize = 1.35;
 
     var localLightGlowColor = new BABYLON.Color3(1, 1, 1);
+
+    // STAGE 12C2 - MODEL / SCULPTURE OBJECT SELECTION GLOW
+    // Rzeźby i sloty modeli nie używają już płaskiego rectangular plane jak obrazy.
+    // Highlight idzie po sylwetce/krawędziach całego zaznaczonego obiektu.
+    var model3dSelectionHighlightLayer = new BABYLON.HighlightLayer(
+        "Model3dSelectionHighlightLayer",
+        scene
+    );
+    model3dSelectionHighlightLayer.outerGlow = true;
+    model3dSelectionHighlightLayer.innerGlow = false;
+    model3dSelectionHighlightLayer.blurHorizontalSize = 1.55;
+    model3dSelectionHighlightLayer.blurVerticalSize = 1.55;
+
+    var model3dSelectionGlowColor = new BABYLON.Color3(1, 1, 1);
 
     var localLightUiRefs = {
         selectedCountValue: null,
@@ -13229,21 +13254,35 @@ export const createScene = function (engineArg, canvasArg) {
 
     function updateViewerModeLocalLightPlaceholderVisibility() {
         var hiddenCount = 0;
-        var shouldShow = editMode || !viewerHideLocalLightEditorMeshes;
 
         localLightItems.forEach(function (item) {
             if (!item) {
                 return;
             }
 
-            hiddenCount += setLocalLightEditorMeshVisibility(item.markerMesh, shouldShow);
-            hiddenCount += setLocalLightEditorMeshVisibility(item.helperMesh, shouldShow);
-            hiddenCount += setLocalLightEditorMeshVisibility(item.targetMesh, shouldShow);
-            hiddenCount += setLocalLightEditorMeshVisibility(item.rootNode, shouldShow);
+            // STAGE 12C2:
+            // W Edit Mode pokazujemy tylko marker lampy/cube na suficie.
+            // Helpery stożka/range/target są widoczne wyłącznie dla zaznaczonej lampy w Local Lights.
+            var shouldShowMarker = editMode || !viewerHideLocalLightEditorMeshes;
+            var shouldShowHelper = !!(
+                editMode &&
+                typeof isLocalLightsPanelActive === "function" &&
+                isLocalLightsPanelActive() &&
+                item.selected
+            );
+
+            if (!editMode && !viewerHideLocalLightEditorMeshes) {
+                shouldShowHelper = true;
+            }
+
+            hiddenCount += setLocalLightEditorMeshVisibility(item.markerMesh, shouldShowMarker);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.helperMesh, shouldShowHelper);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.targetMesh, shouldShowHelper);
+            hiddenCount += setLocalLightEditorMeshVisibility(item.rootNode, shouldShowHelper);
 
             if (item.helperMeshes && item.helperMeshes.length) {
                 item.helperMeshes.forEach(function (helperMesh) {
-                    hiddenCount += setLocalLightEditorMeshVisibility(helperMesh, shouldShow);
+                    hiddenCount += setLocalLightEditorMeshVisibility(helperMesh, shouldShowHelper);
                 });
             }
         });
@@ -13671,6 +13710,17 @@ export const createScene = function (engineArg, canvasArg) {
             camera.rotation.z -= viewerMovementVisualRollOffset;
             viewerMovementVisualRollOffset = 0;
         }
+
+        // STAGE 12C2:
+        // Viewer ma trzymać horyzont. Poprzedni visual roll potrafił zostawić kadr pod skosem,
+        // a start chodzenia prostował kamerę skokiem.
+        if (
+            viewerCameraRollLockEnabled &&
+            !editMode &&
+            Math.abs(camera.rotation.z) > 0.000001
+        ) {
+            camera.rotation.z = 0;
+        }
     }
 
     function resetViewerWASDMovementRuntime(clearKeys) {
@@ -14031,7 +14081,7 @@ export const createScene = function (engineArg, canvasArg) {
         applyViewerMovementVisualOffsets(
             visualOffset,
             step.pitch + stopSettle.pitch,
-            step.roll
+            0
         );
     }
 
@@ -14081,6 +14131,13 @@ export const createScene = function (engineArg, canvasArg) {
         mobileLookLastY = event.clientY;
 
         if (mobileLookMoved) {
+            // STAGE 12C2:
+            // Obrót na mobile też trzyma horyzont. Bez zostawiania kadru pod skosem.
+            if (!editMode && typeof clearViewerWASDVisualOffsets === "function") {
+                clearViewerWASDVisualOffsets();
+                camera.rotation.z = 0;
+            }
+
             camera.rotation.y += dx * mobileLookSensitivityX;
             camera.rotation.x += dy * mobileLookSensitivityY;
 
@@ -14089,6 +14146,8 @@ export const createScene = function (engineArg, canvasArg) {
                 -0.58,
                 0.58
             );
+
+            camera.rotation.z = 0;
         }
 
         return true;
@@ -17726,6 +17785,10 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
+        if (typeof clearModel3dSlotSelectionGlow === "function") {
+            clearModel3dSlotSelectionGlow(slot);
+        }
+
         var runtime = slot.metadata.model3dRuntime;
 
         if (runtime) {
@@ -17882,6 +17945,10 @@ export const createScene = function (engineArg, canvasArg) {
             slot.metadata.model3dRuntime.meshes = loadedMeshes;
             setModel3dSlotTransformFromState(slot, modelState);
             applyModel3dRuntimeVisibility(slot);
+
+            if (activeModel3dSlot === slot) {
+                applyModel3dSlotSelectionGlow(slot);
+            }
 
             galleryModel3dLastDebug = {
                 slot: slot.name,
@@ -18107,14 +18174,132 @@ export const createScene = function (engineArg, canvasArg) {
         return newSlot;
     }
 
+
+    function getModel3dSlotSelectionMeshes(slot) {
+        var result = [];
+
+        function addMesh(mesh) {
+            if (!mesh) {
+                return;
+            }
+
+            if (mesh.isDisposed && mesh.isDisposed()) {
+                return;
+            }
+
+            if (result.indexOf(mesh) !== -1) {
+                return;
+            }
+
+            result.push(mesh);
+        }
+
+        addMesh(slot);
+
+        if (slot && slot.metadata) {
+            addMesh(slot.metadata.sculptureMesh);
+
+            var runtime = slot.metadata.model3dRuntime;
+
+            if (runtime && runtime.meshes && runtime.meshes.length) {
+                runtime.meshes.forEach(function (mesh) {
+                    addMesh(mesh);
+                });
+            }
+        }
+
+        return result;
+    }
+
+    function clearModel3dSlotSelectionGlow(slot) {
+        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+            return;
+        }
+
+        var storedMeshes = slot.metadata.model3dSelectionGlowMeshes || [];
+
+        storedMeshes.forEach(function (mesh) {
+            if (
+                mesh &&
+                !(mesh.isDisposed && mesh.isDisposed()) &&
+                model3dSelectionHighlightLayer.removeMesh
+            ) {
+                model3dSelectionHighlightLayer.removeMesh(mesh);
+            }
+        });
+
+        getModel3dSlotSelectionMeshes(slot).forEach(function (mesh) {
+            if (
+                mesh &&
+                !(mesh.isDisposed && mesh.isDisposed()) &&
+                model3dSelectionHighlightLayer.removeMesh
+            ) {
+                model3dSelectionHighlightLayer.removeMesh(mesh);
+            }
+        });
+
+        slot.metadata.model3dSelectionGlowMeshes = [];
+    }
+
+    function applyModel3dSlotSelectionGlow(slot) {
+        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+            return;
+        }
+
+        clearModel3dSlotSelectionGlow(slot);
+
+        var meshes = getModel3dSlotSelectionMeshes(slot);
+        var appliedMeshes = [];
+
+        meshes.forEach(function (mesh) {
+            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                return;
+            }
+
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = false;
+            }
+
+            if (mesh.renderOverlay !== undefined) {
+                mesh.renderOverlay = false;
+            }
+
+            if (
+                mesh.disableEdgesRendering &&
+                typeof mesh.disableEdgesRendering === "function"
+            ) {
+                try {
+                    mesh.disableEdgesRendering();
+                } catch (edgeDisableError) {}
+            }
+
+            if (
+                mesh.isVisible === false ||
+                mesh.visibility === 0
+            ) {
+                return;
+            }
+
+            if (model3dSelectionHighlightLayer.addMesh) {
+                model3dSelectionHighlightLayer.addMesh(
+                    mesh,
+                    model3dSelectionGlowColor
+                );
+                appliedMeshes.push(mesh);
+            }
+        });
+
+        slot.metadata.model3dSelectionGlowMeshes = appliedMeshes;
+    }
+
     function setModel3dSlotSelected(slot, isSelected) {
         if (!slot) {
             return;
         }
 
-        // STAGE 12C:
-        // Model slot używa tego samego gradientowego selection glow co artwork.
-        // Nie używamy już osobnego niebieskiego renderOutline.
+        // STAGE 12C2:
+        // Rzeźba/model slot ma selection po całym obiekcie/sylwetce.
+        // Nie używamy płaskiego rectangular plane jak dla obrazów.
         slot.renderOutline = false;
         slot.renderOverlay = false;
 
@@ -18126,9 +18311,10 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         hideArtworkSelectionGlow(slot);
+        clearModel3dSlotSelectionGlow(slot);
 
         if (isSelected) {
-            ensureArtworkSelectionGlow(slot, "primary");
+            applyModel3dSlotSelectionGlow(slot);
         }
     }
 
@@ -21006,6 +21192,8 @@ export const createScene = function (engineArg, canvasArg) {
                     y: viewerMovementVelocity.y,
                     z: viewerMovementVelocity.z
                 },
+                rollLockEnabled: viewerCameraRollLockEnabled,
+                cameraRoll: camera && camera.rotation ? camera.rotation.z : 0,
                 config: Object.assign({}, viewerMovementConfig)
             };
         },
