@@ -1550,232 +1550,6 @@ export const createScene = function (engineArg, canvasArg) {
     var localLightCameraCullingMaxTargetMeshSamples = 10;
     var localLightCameraCullingPointLightSampleRadiusFactor = 0.35;
 
-    // STAGE 12C9 - LOCAL LIGHT MATERIAL BUDGET / SPECULAR SLOT FIX
-    // intensity = 0 nie wystarcza, bo lampa może dalej zajmować slot światła materiału.
-    // Lampy poza kadrem/targetem przepinamy na ukryty dummy mesh, żeby zwolnić sloty
-    // dla lamp, na które aktualnie patrzy kamera.
-    var localLightMaterialBudgetEnabled = true;
-    var localLightMaterialBudgetDirtyCount = 0;
-    var localLightMaterialBudgetLastChanged = 0;
-    var localLightMaterialBudgetDummyMesh = null;
-
-    function getLocalLightMaterialBudgetDummyMesh() {
-        if (
-            localLightMaterialBudgetDummyMesh &&
-            !(localLightMaterialBudgetDummyMesh.isDisposed && localLightMaterialBudgetDummyMesh.isDisposed())
-        ) {
-            return localLightMaterialBudgetDummyMesh;
-        }
-
-        localLightMaterialBudgetDummyMesh = BABYLON.MeshBuilder.CreateBox(
-            "berryboy_local_light_material_budget_dummy",
-            { size: 0.01 },
-            scene
-        );
-
-        localLightMaterialBudgetDummyMesh.position = new BABYLON.Vector3(0, -9998, 0);
-        localLightMaterialBudgetDummyMesh.isVisible = false;
-        localLightMaterialBudgetDummyMesh.visibility = 0;
-        localLightMaterialBudgetDummyMesh.isPickable = false;
-        localLightMaterialBudgetDummyMesh.checkCollisions = false;
-        localLightMaterialBudgetDummyMesh.metadata = {
-            role: "localLightMaterialBudgetDummy",
-            hiddenHelper: true
-        };
-
-        return localLightMaterialBudgetDummyMesh;
-    }
-
-    function areMeshListsEqualByReference(a, b) {
-        if (!a || !b || a.length !== b.length) {
-            return false;
-        }
-
-        for (var i = 0; i < a.length; i++) {
-            if (a[i] !== b[i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    function markLocalLightMaterialsAsLightsDirty() {
-        localLightMaterialBudgetDirtyCount += 1;
-        localLightMaterialBudgetLastChanged = Date.now();
-
-        scene.materials.forEach(function (material) {
-            if (!material) {
-                return;
-            }
-
-            if (material._markAllSubMeshesAsLightsDirty) {
-                material._markAllSubMeshesAsLightsDirty();
-                return;
-            }
-
-            if (
-                material.markAsDirty &&
-                BABYLON.Material &&
-                BABYLON.Material.LightDirtyFlag !== undefined
-            ) {
-                material.markAsDirty(BABYLON.Material.LightDirtyFlag);
-            }
-        });
-    }
-
-    function getLocalLightFullTargetMeshes(item) {
-        if (!item) {
-            return [];
-        }
-
-        if (item.localLightFullTargetMeshes && item.localLightFullTargetMeshes.length) {
-            return item.localLightFullTargetMeshes;
-        }
-
-        if (item.light && item.light.includedOnlyMeshes && item.light.includedOnlyMeshes.length) {
-            item.localLightFullTargetMeshes = item.light.includedOnlyMeshes.slice();
-            return item.localLightFullTargetMeshes;
-        }
-
-        return [];
-    }
-
-    function shouldLocalLightUseMaterialBudgetDummy(item) {
-        if (!localLightMaterialBudgetEnabled) {
-            return false;
-        }
-
-        if (!item || !item.light || item.softDeleted) {
-            return true;
-        }
-
-        if (!getLocalLightUserEnabled(item)) {
-            return true;
-        }
-
-        if (item.cameraCulled) {
-            return true;
-        }
-
-        if (
-            item.runtimeTargetIntensity !== undefined &&
-            Number(item.runtimeTargetIntensity) <= 0
-        ) {
-            return true;
-        }
-
-        if (getLocalLightUserIntensity(item) <= 0) {
-            return true;
-        }
-
-        return false;
-    }
-
-    function applyLocalLightMaterialBudgetTargets(item, force) {
-        if (!item || !item.light) {
-            return false;
-        }
-
-        if (item.type !== "spot" && item.type !== "point") {
-            return false;
-        }
-
-        var fullTargets = getLocalLightFullTargetMeshes(item);
-        var dummyMesh = getLocalLightMaterialBudgetDummyMesh();
-        var shouldUseDummy = shouldLocalLightUseMaterialBudgetDummy(item);
-        var nextTargets = shouldUseDummy
-            ? [dummyMesh]
-            : fullTargets.slice();
-
-        var mode = shouldUseDummy ? "dummy" : "full";
-        var currentTargets = item.light.includedOnlyMeshes || [];
-
-        if (
-            !force &&
-            item.localLightMaterialBudgetMode === mode &&
-            areMeshListsEqualByReference(currentTargets, nextTargets)
-        ) {
-            return false;
-        }
-
-        item.light.includedOnlyMeshes = nextTargets;
-        item.light.excludedMeshes = [];
-        item.localLightMaterialBudgetMode = mode;
-        item.localLightMaterialBudgetTargetCount = nextTargets.length;
-        item.localLightMaterialBudgetLastApplied = Date.now();
-
-        markLocalLightMaterialsAsLightsDirty();
-
-        return true;
-    }
-
-    function refreshLocalLightMaterialBudgetTargets(force) {
-        var changed = 0;
-
-        if (!localLightItems || !localLightItems.length) {
-            return changed;
-        }
-
-        localLightItems.forEach(function (item) {
-            if (applyLocalLightMaterialBudgetTargets(item, !!force)) {
-                changed += 1;
-            }
-        });
-
-        return changed;
-    }
-
-    function setLocalLightMaterialBudgetEnabled(enabled) {
-        localLightMaterialBudgetEnabled = !!enabled;
-
-        localLightItems.forEach(function (item) {
-            if (item) {
-                item.localLightMaterialBudgetMode = null;
-            }
-        });
-
-        refreshLocalLightMaterialBudgetTargets(true);
-        return localLightMaterialBudgetEnabled;
-    }
-
-    function getLocalLightMaterialBudgetDebug() {
-        refreshLocalLightMaterialBudgetTargets(false);
-
-        return {
-            enabled: localLightMaterialBudgetEnabled,
-            dummyMeshName: localLightMaterialBudgetDummyMesh ? localLightMaterialBudgetDummyMesh.name : null,
-            dirtyCount: localLightMaterialBudgetDirtyCount,
-            lastChanged: localLightMaterialBudgetLastChanged,
-            fullCount: localLightItems.filter(function (item) {
-                return item && item.localLightMaterialBudgetMode === "full";
-            }).length,
-            dummyCount: localLightItems.filter(function (item) {
-                return item && item.localLightMaterialBudgetMode === "dummy";
-            }).length,
-            lights: localLightItems.map(function (item) {
-                return {
-                    id: item ? item.id : null,
-                    name: item ? item.name : null,
-                    type: item ? item.type : null,
-                    cameraCulled: !!(item && item.cameraCulled),
-                    userEnabled: item ? getLocalLightUserEnabled(item) : false,
-                    userIntensity: item ? getLocalLightUserIntensity(item) : null,
-                    runtimeTargetIntensity: item && item.runtimeTargetIntensity !== undefined ? item.runtimeTargetIntensity : null,
-                    currentIntensity: item && item.light ? item.light.intensity : null,
-                    budgetMode: item ? item.localLightMaterialBudgetMode || null : null,
-                    fullTargetCount: item && item.localLightFullTargetMeshes ? item.localLightFullTargetMeshes.length : 0,
-                    activeTargetCount: item && item.light && item.light.includedOnlyMeshes ? item.light.includedOnlyMeshes.length : 0,
-                    activeTargetSample: item && item.light && item.light.includedOnlyMeshes
-                        ? item.light.includedOnlyMeshes.slice(0, 8).map(function (mesh) {
-                            return mesh ? mesh.name : null;
-                        })
-                        : []
-                };
-            })
-        };
-    }
-
     function getLocalLightUserEnabled(item) {
         if (!item) {
             return false;
@@ -1820,10 +1594,6 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (!item.cameraCulled && getLocalLightUserEnabled(item)) {
             item.light.intensity = item.userIntensity;
-        }
-
-        if (localLightMaterialBudgetEnabled) {
-            applyLocalLightMaterialBudgetTargets(item, false);
         }
     }
 
@@ -2149,13 +1919,6 @@ export const createScene = function (engineArg, canvasArg) {
 
             updateLocalLightSmoothIntensity(item, deltaSeconds);
         });
-
-        // STAGE 12C9:
-        // Po cullingu przepinamy lampy poza kadrem na dummy mesh.
-        // Dzięki temu widoczne/nowsze lampy odzyskują sloty materiału i refleks/specular.
-        if (shouldRefreshCulling && localLightMaterialBudgetEnabled) {
-            refreshLocalLightMaterialBudgetTargets(false);
-        }
     }
 
     function getLocalLightCameraCullingDebug() {
@@ -2170,14 +1933,6 @@ export const createScene = function (engineArg, canvasArg) {
             fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
             beamAwareEnabled: localLightCameraCullingBeamAwareEnabled,
             maxTargetMeshSamples: localLightCameraCullingMaxTargetMeshSamples,
-            materialBudgetEnabled: localLightMaterialBudgetEnabled,
-            materialBudgetDirtyCount: localLightMaterialBudgetDirtyCount,
-            materialBudgetFullCount: localLightItems.filter(function (item) {
-                return item && item.localLightMaterialBudgetMode === "full";
-            }).length,
-            materialBudgetDummyCount: localLightItems.filter(function (item) {
-                return item && item.localLightMaterialBudgetMode === "dummy";
-            }).length,
             activeCount: localLightItems.filter(function (item) {
                 return item && item.light && item.light.isEnabled && item.light.isEnabled() && item.light.intensity > 0;
             }).length,
@@ -2229,8 +1984,6 @@ export const createScene = function (engineArg, canvasArg) {
                         ? item.runtimeTargetIntensity
                         : null,
                     runtimeIntensity: item.light ? item.light.intensity : null,
-                    materialBudgetMode: item.localLightMaterialBudgetMode || null,
-                    materialBudgetTargetCount: item.localLightMaterialBudgetTargetCount || 0,
                     cameraCulled: !!item.cameraCulled,
                     cameraCulling: item._cameraCullingDebug || null
                 };
@@ -2823,19 +2576,8 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        // STAGE 12C9:
-        // Pełna lista targetów jest zapisana osobno.
-        // Runtime material budget może tymczasowo przepiąć lampę na dummy mesh,
-        // żeby nie blokowała slotów specular/reflection materiału.
-        item.localLightFullTargetMeshes = getCommonLocalLightTargetMeshes(item);
+        item.light.includedOnlyMeshes = getCommonLocalLightTargetMeshes(item);
         item.light.excludedMeshes = [];
-
-        if (!localLightMaterialBudgetEnabled) {
-            item.light.includedOnlyMeshes = item.localLightFullTargetMeshes.slice();
-            return;
-        }
-
-        applyLocalLightMaterialBudgetTargets(item, true);
     }
 
     function refreshAllCommonLocalLightTargets() {
@@ -22543,15 +22285,6 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getLocalLightCameraCullingDebug: function () {
             return getLocalLightCameraCullingDebug();
-        },
-        getLocalLightMaterialBudgetDebug: function () {
-            return getLocalLightMaterialBudgetDebug();
-        },
-        setLocalLightMaterialBudgetEnabled: function (enabled) {
-            return setLocalLightMaterialBudgetEnabled(enabled);
-        },
-        refreshLocalLightMaterialBudgetTargets: function () {
-            return refreshLocalLightMaterialBudgetTargets(true);
         },
         setLocalLightCameraCulling: function (options) {
             return setLocalLightCameraCullingDebugOptions(options);
