@@ -13114,10 +13114,194 @@ export const createScene = function (engineArg, canvasArg) {
         }
     ];
 
+    // STAGE 12C8 - WALL PAINT TEXTURE ORIENTATION FIX
+    // Modele GLTF mają inną orientację tekstur niż zwykły BABYLON.Texture z domyślnym invertY.
+    // Dlatego tekstury wall_color muszą być ładowane jak tekstury GLTF: invertY = false.
+    // Dodałem też awaryjne flip/rotate do testów bez dłubania w kodzie.
+    var wallPaintTextureOrientation = {
+        invertY: false,
+        flipU: false,
+        flipV: false,
+        rotate180: false
+    };
+
+    function applyWallPaintTextureTransform(texture) {
+        if (!texture) {
+            return texture;
+        }
+
+        texture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+        texture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+
+        texture.uRotationCenter = 0.5;
+        texture.vRotationCenter = 0.5;
+        texture.wRotationCenter = 0.5;
+
+        texture.uScale = wallPaintTextureOrientation.flipU ? -1 : 1;
+        texture.vScale = wallPaintTextureOrientation.flipV ? -1 : 1;
+
+        texture.uOffset = wallPaintTextureOrientation.flipU ? 1 : 0;
+        texture.vOffset = wallPaintTextureOrientation.flipV ? 1 : 0;
+
+        texture.wAng = wallPaintTextureOrientation.rotate180 ? Math.PI : 0;
+
+        texture.metadata = Object.assign(
+            {},
+            texture.metadata || {},
+            {
+                wallPaintTextureOrientation: Object.assign({}, wallPaintTextureOrientation)
+            }
+        );
+
+        return texture;
+    }
+
+    function createWallPaintTexture(url, colorName) {
+        if (!url) {
+            return null;
+        }
+
+        var texture = new BABYLON.Texture(
+            url,
+            scene,
+            false,
+            wallPaintTextureOrientation.invertY
+        );
+
+        texture.name = "WallPaintTexture_" + (colorName || "color");
+        texture.metadata = texture.metadata || {};
+        texture.metadata.wallPaintColorName = colorName || "";
+        texture.metadata.wallPaintTextureUrl = url;
+
+        return applyWallPaintTextureTransform(texture);
+    }
+
+    function getWallPaintTextureForColorData(colorData) {
+        if (!colorData) {
+            return null;
+        }
+
+        if (colorData.url) {
+            return createWallPaintTexture(colorData.url, colorData.name);
+        }
+
+        return applyWallPaintTextureTransform(colorData.texture || null);
+    }
+
+    function rebuildWallColorSelectorTextures() {
+        wallColors.forEach(function (colorData) {
+            if (!colorData || !colorData.name || !wallColorMaterials[colorData.name]) {
+                return;
+            }
+
+            var material = wallColorMaterials[colorData.name];
+            var texture = createWallPaintTexture(colorData.url, colorData.name);
+
+            material.albedoTexture = texture;
+            material.metadata = material.metadata || {};
+            material.metadata.wallColorTexture = texture;
+            material.metadata.wallColorTextureUrl = colorData.url;
+            material.metadata.wallPaintTextureOrientation = Object.assign({}, wallPaintTextureOrientation);
+        });
+    }
+
+    function reapplyWallPaintTextureOrientationToSegments() {
+        var updated = 0;
+
+        wallMeshes.forEach(function (wallMesh) {
+            if (
+                !wallMesh ||
+                !wallMesh.metadata ||
+                !isPaintableWallSegmentMesh(wallMesh)
+            ) {
+                return;
+            }
+
+            var colorName = normalizeWallColorName(
+                wallMesh.metadata.wallSegmentColorName ||
+                getWallColorNameFromMaterial(wallMesh.material)
+            );
+
+            if (!colorName) {
+                return;
+            }
+
+            var colorMaterial = wallColorMaterials[colorName];
+
+            if (!colorMaterial) {
+                return;
+            }
+
+            if (applyWallColorMaterialToSegment(wallMesh, colorMaterial)) {
+                updated += 1;
+            }
+        });
+
+        return updated;
+    }
+
+    function setWallPaintTextureOrientation(options) {
+        options = options || {};
+
+        if (typeof options.invertY === "boolean") {
+            wallPaintTextureOrientation.invertY = options.invertY;
+        }
+
+        if (typeof options.flipU === "boolean") {
+            wallPaintTextureOrientation.flipU = options.flipU;
+        }
+
+        if (typeof options.flipV === "boolean") {
+            wallPaintTextureOrientation.flipV = options.flipV;
+        }
+
+        if (typeof options.rotate180 === "boolean") {
+            wallPaintTextureOrientation.rotate180 = options.rotate180;
+        }
+
+        rebuildWallColorSelectorTextures();
+
+        return {
+            orientation: Object.assign({}, wallPaintTextureOrientation),
+            updatedSegments: reapplyWallPaintTextureOrientationToSegments()
+        };
+    }
+
+    function getWallPaintTextureOrientationDebug() {
+        return {
+            orientation: Object.assign({}, wallPaintTextureOrientation),
+            wallColorTextureBaseUrl: wallColorTextureBaseUrl,
+            paintedSegments: wallMeshes.filter(function (wallMesh) {
+                return !!(
+                    wallMesh &&
+                    wallMesh.metadata &&
+                    wallMesh.metadata.wallSegmentColorName
+                );
+            }).map(function (wallMesh) {
+                var texture = wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture
+                    : null;
+
+                return {
+                    name: wallMesh.name,
+                    colorName: wallMesh.metadata.wallSegmentColorName || null,
+                    textureUrl: texture ? texture.url || null : null,
+                    textureName: texture ? texture.name || null : null,
+                    invertY: texture ? texture.invertY : null,
+                    uScale: texture ? texture.uScale : null,
+                    vScale: texture ? texture.vScale : null,
+                    uOffset: texture ? texture.uOffset : null,
+                    vOffset: texture ? texture.vOffset : null,
+                    wAng: texture ? texture.wAng : null
+                };
+            })
+        };
+    }
+
     wallColors.forEach(function (colorData) {
 
         var material = new BABYLON.PBRMaterial("WallColor_" + colorData.name, scene);
-        var wallColorTexture = new BABYLON.Texture(colorData.url, scene);
+        var wallColorTexture = createWallPaintTexture(colorData.url, colorData.name);
 
         material.albedoTexture = wallColorTexture;
         material.roughness = 0.85;
@@ -13208,9 +13392,9 @@ export const createScene = function (engineArg, canvasArg) {
             null;
 
         if (!colorTexture && material.metadata.wallColorTextureUrl) {
-            colorTexture = new BABYLON.Texture(
+            colorTexture = createWallPaintTexture(
                 material.metadata.wallColorTextureUrl,
-                scene
+                colorName
             );
             material.metadata.wallColorTexture = colorTexture;
         }
@@ -13266,6 +13450,17 @@ export const createScene = function (engineArg, canvasArg) {
         wallMesh.metadata.wallSegmentBaseMaterialName = sourceMaterial && sourceMaterial.name
             ? sourceMaterial.name
             : "";
+        // STAGE 12C8:
+        // Segment ściany może być oglądany od strony wnętrza.
+        // Nie pozwalamy, żeby malowanie zachowało przypadkowo jednostronny materiał z modelu.
+        if (paintMaterial.backFaceCulling !== undefined) {
+            paintMaterial.backFaceCulling = false;
+        }
+
+        if (paintMaterial.twoSidedLighting !== undefined) {
+            paintMaterial.twoSidedLighting = true;
+        }
+
         wallMesh.metadata.wallSegmentPaintMaterial = paintMaterial;
         wallMesh.material = paintMaterial;
 
@@ -13280,16 +13475,26 @@ export const createScene = function (engineArg, canvasArg) {
         // STAGE 11J - WALL PAINT BASE COLOR ONLY FIX
         // Malowanie ściany nie może wymieniać całego materiału.
         // Zmieniamy tylko base color / albedo texture, a normal/roughness/metallic/AO zostają z modelu.
+        //
+        // STAGE 12C8:
+        // Tekstura base color dostaje poprawną orientację GLTF/invertY=false.
+        // Tworzymy ją per malowany materiał, żeby transform UV nie rozjechał się między segmentami.
+        var wallPaintTexture = getWallPaintTextureForColorData(colorData);
+
+        if (!wallPaintTexture) {
+            return false;
+        }
+
         if (targetMaterial.albedoTexture !== undefined) {
-            targetMaterial.albedoTexture = colorData.texture;
+            targetMaterial.albedoTexture = wallPaintTexture;
         }
 
         if (targetMaterial.diffuseTexture !== undefined) {
-            targetMaterial.diffuseTexture = colorData.texture;
+            targetMaterial.diffuseTexture = wallPaintTexture;
         }
 
         if (targetMaterial.baseTexture !== undefined) {
-            targetMaterial.baseTexture = colorData.texture;
+            targetMaterial.baseTexture = wallPaintTexture;
         }
 
         if (targetMaterial.albedoColor) {
@@ -13304,6 +13509,8 @@ export const createScene = function (engineArg, canvasArg) {
         targetMaterial.metadata.wallColorName = colorData.name;
         targetMaterial.metadata.uiName = colorData.label;
         targetMaterial.metadata.wallColorTextureUrl = colorData.url;
+        targetMaterial.metadata.wallColorTexture = wallPaintTexture;
+        targetMaterial.metadata.wallPaintTextureOrientation = Object.assign({}, wallPaintTextureOrientation);
         targetMaterial.metadata.wallBaseColorOnlyPaintMaterial = true;
 
         return true;
@@ -13364,6 +13571,18 @@ export const createScene = function (engineArg, canvasArg) {
                 hasAmbientTexture: !!(wallMesh.material && wallMesh.material.ambientTexture),
                 albedoTextureUrl: wallMesh.material && wallMesh.material.albedoTexture
                     ? wallMesh.material.albedoTexture.url || null
+                    : null,
+                albedoTextureInvertY: wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture.invertY
+                    : null,
+                albedoTextureUScale: wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture.uScale
+                    : null,
+                albedoTextureVScale: wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture.vScale
+                    : null,
+                albedoTextureWAng: wallMesh.material && wallMesh.material.albedoTexture
+                    ? wallMesh.material.albedoTexture.wAng
                     : null
             };
         });
@@ -22006,6 +22225,12 @@ export const createScene = function (engineArg, canvasArg) {
         },
         getWallSegmentPaintDebug: function () {
             return getWallSegmentPaintDebug();
+        },
+        getWallPaintTextureOrientationDebug: function () {
+            return getWallPaintTextureOrientationDebug();
+        },
+        setWallPaintTextureOrientation: function (options) {
+            return setWallPaintTextureOrientation(options);
         },
         getWallSegmentAlignmentGroupDebug: function () {
             var groups = [];
