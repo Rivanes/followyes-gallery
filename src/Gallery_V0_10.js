@@ -4754,6 +4754,209 @@ export const createScene = function (engineArg, canvasArg) {
     // MOBILE RESPONSIVE BREAKPOINT
     // Tryb mobilny wlacza sie przy szerokosci renderu/canvasu do 768 px.
     // Nie ma recznego wlaczania przez parametr w adresie.
+    // STAGE 12C4 - SCROLL / OVERSCROLL LOCK
+    function ensureGalleryScrollLockStyles() {
+        if (document.getElementById("berryboy-gallery-scroll-lock-style")) {
+            return;
+        }
+
+        var style = document.createElement("style");
+        style.id = "berryboy-gallery-scroll-lock-style";
+        style.textContent = `
+            html,
+            body {
+                overscroll-behavior: none;
+            }
+
+            body.gallery-app-scroll-locked {
+                overflow: hidden;
+                overscroll-behavior: none;
+                touch-action: none;
+            }
+
+            canvas,
+            #renderCanvas {
+                overscroll-behavior: none;
+                touch-action: none;
+            }
+
+            #mobileViewerControls,
+            #mobileViewerControls *,
+            .mobile-viewer-controls,
+            .mobile-viewer-controls *,
+            .mobile-viewer-joystick,
+            .mobile-viewer-joystick *,
+            .mobile-viewer-joystick-knob,
+            .mobile-viewer-joystick-knob * {
+                touch-action: none;
+                overscroll-behavior: none;
+                -webkit-user-select: none;
+                user-select: none;
+                -webkit-touch-callout: none;
+            }
+
+            .gallery-editor-panel,
+            .gallery-editor-scroll,
+            .gallery-editor-body,
+            .gallery-panel,
+            .editor-panel,
+            .editor-scroll {
+                overscroll-behavior: contain;
+            }
+        `;
+
+        document.head.appendChild(style);
+        document.body.classList.add("gallery-app-scroll-locked");
+    }
+
+    function isGalleryScrollableInDirection(element, deltaY) {
+        if (!element || element.scrollHeight <= element.clientHeight + 1) {
+            return false;
+        }
+
+        if (deltaY < 0) {
+            return element.scrollTop > 0;
+        }
+
+        if (deltaY > 0) {
+            return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+        }
+
+        return true;
+    }
+
+    function findGalleryEditorScrollParent(target) {
+        var current = target;
+
+        while (current && current !== document.body && current !== document.documentElement) {
+            if (
+                current.classList &&
+                (
+                    current.classList.contains("gallery-editor-panel") ||
+                    current.classList.contains("gallery-editor-scroll") ||
+                    current.classList.contains("gallery-editor-body") ||
+                    current.classList.contains("gallery-panel") ||
+                    current.classList.contains("editor-panel") ||
+                    current.classList.contains("editor-scroll")
+                )
+            ) {
+                return current;
+            }
+
+            var style = window.getComputedStyle ? window.getComputedStyle(current) : null;
+            var overflowY = style ? style.overflowY : "";
+
+            if (
+                current.scrollHeight > current.clientHeight + 1 &&
+                (
+                    overflowY === "auto" ||
+                    overflowY === "scroll" ||
+                    overflowY === "overlay"
+                )
+            ) {
+                return current;
+            }
+
+            current = current.parentElement;
+        }
+
+        return null;
+    }
+
+    function preventGalleryBrowserScroll(event) {
+        if (event && event.cancelable) {
+            event.preventDefault();
+        }
+    }
+
+    function setupGalleryScrollContainment() {
+        if (window.__berryboyGalleryScrollContainmentReady) {
+            return;
+        }
+
+        window.__berryboyGalleryScrollContainmentReady = true;
+
+        document.addEventListener(
+            "wheel",
+            function (event) {
+                var editorScroller = findGalleryEditorScrollParent(event.target);
+
+                if (!editorScroller) {
+                    return;
+                }
+
+                var deltaY = event.deltaY || 0;
+                event.stopPropagation();
+
+                if (!isGalleryScrollableInDirection(editorScroller, deltaY)) {
+                    preventGalleryBrowserScroll(event);
+                }
+            },
+            { passive: false, capture: true }
+        );
+
+        var lastEditorTouchY = null;
+
+        document.addEventListener(
+            "touchstart",
+            function (event) {
+                var touch = event.touches && event.touches.length ? event.touches[0] : null;
+
+                if (!touch) {
+                    lastEditorTouchY = null;
+                    return;
+                }
+
+                lastEditorTouchY = findGalleryEditorScrollParent(event.target) ? touch.clientY : null;
+            },
+            { passive: false, capture: true }
+        );
+
+        document.addEventListener(
+            "touchmove",
+            function (event) {
+                var editorScroller = findGalleryEditorScrollParent(event.target);
+                var touch = event.touches && event.touches.length ? event.touches[0] : null;
+
+                if (editorScroller && touch && lastEditorTouchY !== null) {
+                    var deltaY = lastEditorTouchY - touch.clientY;
+                    lastEditorTouchY = touch.clientY;
+                    event.stopPropagation();
+
+                    if (!isGalleryScrollableInDirection(editorScroller, deltaY)) {
+                        preventGalleryBrowserScroll(event);
+                    }
+
+                    return;
+                }
+
+                if (
+                    mobileJoystickActive ||
+                    mobileLookActive ||
+                    (
+                        event.target &&
+                        event.target.closest &&
+                        (
+                            event.target.closest("#mobileViewerControls") ||
+                            event.target.closest(".mobile-viewer-controls") ||
+                            event.target.closest(".mobile-viewer-joystick") ||
+                            event.target.closest(".mobile-viewer-joystick-knob")
+                        )
+                    )
+                ) {
+                    preventGalleryBrowserScroll(event);
+                }
+            },
+            { passive: false, capture: true }
+        );
+
+        document.addEventListener(
+            "gesturestart",
+            preventGalleryBrowserScroll,
+            { passive: false, capture: true }
+        );
+    }
+
     var mobileViewerBreakpoint = 768;
     var mobileViewerEnabled = false;
     var mobileStartCameraApplied = false;
@@ -14383,6 +14586,8 @@ export const createScene = function (engineArg, canvasArg) {
 
         mobileViewerControls = document.createElement("div");
         mobileViewerControls.id = "mobileViewerControls";
+        mobileViewerControls.style.touchAction = "none";
+        mobileViewerControls.style.overscrollBehavior = "none";
 
         mobileJoystickBase = document.createElement("div");
         mobileJoystickBase.id = "mobileJoystickBase";
@@ -14442,6 +14647,9 @@ export const createScene = function (engineArg, canvasArg) {
         updateMobileBackButton();
         setMobileViewerUiVisible(isMobileViewerActive());
     }
+
+    ensureGalleryScrollLockStyles();
+    setupGalleryScrollContainment();
 
     function setupMobileViewerControls() {
         createMobileViewerUi();
@@ -21223,6 +21431,7 @@ export const createScene = function (engineArg, canvasArg) {
         getViewerWASDMovementDebug: function () {
             return {
                 enabled: viewerWASDMovementEnabled,
+                scrollContainmentReady: !!window.__berryboyGalleryScrollContainmentReady,
                 editMode: editMode,
                 mobileViewerActive: isMobileViewerActive(),
                 keys: Object.assign({}, viewerMoveKeys),
