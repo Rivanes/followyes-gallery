@@ -17944,60 +17944,170 @@ export const createScene = function (engineArg, canvasArg) {
         return [target];
     }
 
+    function getViewerFocusCatmullPoint(points, t) {
+        if (!points || !points.length) {
+            return BABYLON.Vector3.Zero();
+        }
+
+        if (points.length === 1) {
+            return points[0].clone();
+        }
+
+        var maxSegment = points.length - 1;
+        var scaled = BABYLON.Scalar.Clamp(t, 0, 1) * maxSegment;
+        var segment = Math.min(maxSegment - 1, Math.floor(scaled));
+        var localT = scaled - segment;
+
+        var p0 = points[Math.max(0, segment - 1)];
+        var p1 = points[segment];
+        var p2 = points[Math.min(points.length - 1, segment + 1)];
+        var p3 = points[Math.min(points.length - 1, segment + 2)];
+
+        var t2 = localT * localT;
+        var t3 = t2 * localT;
+
+        var x = 0.5 * (
+            (2 * p1.x) +
+            (-p0.x + p2.x) * localT +
+            (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+            (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+        );
+
+        var y = 0.5 * (
+            (2 * p1.y) +
+            (-p0.y + p2.y) * localT +
+            (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+            (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+        );
+
+        var z = 0.5 * (
+            (2 * p1.z) +
+            (-p0.z + p2.z) * localT +
+            (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 +
+            (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3
+        );
+
+        return new BABYLON.Vector3(x, y, z);
+    }
+
+    function getViewerFocusSmoothedPath(points) {
+        if (!points || points.length <= 2) {
+            return points ? points.map(function (point) { return point.clone(); }) : [];
+        }
+
+        var result = [];
+        var samplesPerSegment = 12;
+        var segmentCount = points.length - 1;
+        var totalSamples = Math.max(24, segmentCount * samplesPerSegment);
+
+        for (var i = 0; i <= totalSamples; i++) {
+            var t = i / totalSamples;
+            var point = getViewerFocusCatmullPoint(points, t);
+
+            point.y = points[0].y;
+
+            if (
+                !result.length ||
+                point.subtract(result[result.length - 1]).lengthSquared() > 0.0001
+            ) {
+                result.push(point);
+            }
+        }
+
+        result[0] = points[0].clone();
+        result[result.length - 1] = points[points.length - 1].clone();
+
+        return result;
+    }
+
     function animateViewerFocusPositionPath(pathPoints, targetRotation, startRotation) {
         if (!pathPoints || !pathPoints.length) {
             return;
         }
 
-        var easing = new BABYLON.CubicEase();
-        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
-
-        var points = [camera.position.clone()].concat(pathPoints.map(function (point) {
+        // STAGE 12C6:
+        // Poprzednio waypointy były animowane segment po segmencie:
+        // idź -> stop -> idź -> stop.
+        // Teraz budujemy jedną ciągłą animację po wygładzonej krzywej.
+        // Pozycja i rotacja jadą razem w jednym timeline.
+        var rawPoints = [camera.position.clone()].concat(pathPoints.map(function (point) {
             return point.clone();
         }));
 
+        var points = getViewerFocusSmoothedPath(rawPoints);
         var totalLength = getViewerFocusPathLength(points);
-        var totalFrames = Math.max(70, Math.min(190, Math.round(totalLength * 18)));
+        var totalFrames = Math.max(80, Math.min(210, Math.round(totalLength * 18)));
 
-        BABYLON.Animation.CreateAndStartAnimation(
-            "cameraRotateToObject",
-            camera,
-            "rotation",
+        var easing = new BABYLON.CubicEase();
+        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+
+        var positionAnimation = new BABYLON.Animation(
+            "cameraMoveToObjectSmoothPath",
+            "position",
             60,
-            totalFrames,
-            startRotation,
-            targetRotation,
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-            easing
+            BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
         );
 
-        function animateSegment(index) {
-            if (index >= points.length - 1) {
-                return;
+        var positionKeys = [];
+
+        points.forEach(function (point, index) {
+            var frame = points.length === 1
+                ? 0
+                : Math.round((index / (points.length - 1)) * totalFrames);
+
+            positionKeys.push({
+                frame: frame,
+                value: point.clone()
+            });
+        });
+
+        positionAnimation.setKeys(positionKeys);
+        positionAnimation.setEasingFunction(easing);
+
+        var rotationAnimation = new BABYLON.Animation(
+            "cameraRotateToObjectSmoothPath",
+            "rotation",
+            60,
+            BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        );
+
+        rotationAnimation.setKeys([
+            {
+                frame: 0,
+                value: startRotation.clone()
+            },
+            {
+                frame: totalFrames,
+                value: targetRotation.clone()
             }
+        ]);
+        rotationAnimation.setEasingFunction(easing);
 
-            var fromPosition = points[index].clone();
-            var toPosition = points[index + 1].clone();
-            var segmentLength = toPosition.subtract(fromPosition).length();
-            var frames = Math.max(28, Math.min(85, Math.round(segmentLength * 18)));
+        camera.animations = camera.animations || [];
+        camera.animations.push(positionAnimation);
+        camera.animations.push(rotationAnimation);
 
-            BABYLON.Animation.CreateAndStartAnimation(
-                "cameraMoveToObject",
-                camera,
-                "position",
-                60,
-                frames,
-                fromPosition,
-                toPosition,
-                BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-                easing,
-                function () {
-                    animateSegment(index + 1);
-                }
-            );
+        scene.stopAnimation(camera);
+        scene.beginAnimation(
+            camera,
+            0,
+            totalFrames,
+            false,
+            1,
+            function () {
+                camera.position.copyFrom(points[points.length - 1]);
+                camera.rotation.copyFrom(targetRotation);
+            }
+        );
+
+        if (viewerSafeFocusPathDebug) {
+            viewerSafeFocusPathDebug.smoothed = true;
+            viewerSafeFocusPathDebug.rawPointCount = rawPoints.length;
+            viewerSafeFocusPathDebug.smoothPointCount = points.length;
+            viewerSafeFocusPathDebug.totalFrames = totalFrames;
         }
-
-        animateSegment(0);
     }
 
     function focusCameraOnObject(targetMesh) {
