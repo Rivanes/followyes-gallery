@@ -4754,29 +4754,25 @@ export const createScene = function (engineArg, canvasArg) {
     // MOBILE RESPONSIVE BREAKPOINT
     // Tryb mobilny wlacza sie przy szerokosci renderu/canvasu do 768 px.
     // Nie ma recznego wlaczania przez parametr w adresie.
-    // STAGE 12C4 - SCROLL / OVERSCROLL LOCK
-    function ensureGalleryScrollLockStyles() {
-        if (document.getElementById("berryboy-gallery-scroll-lock-style")) {
+    // STAGE 12C5 - CANVAS / PANEL SCROLL CONTAINMENT
+    // Poprawka po 12C4:
+    // Nie blokujemy całej strony. Scroll strony ma działać normalnie
+    // np. do sekcji About Project.
+    // Blokujemy tylko:
+    // - scroll chaining z panelu edytora,
+    // - touch scroll podczas joysticka,
+    // - touch scroll podczas obrotu kamery po canvasie.
+    function ensureGalleryScrollContainmentStyles() {
+        if (document.getElementById("berryboy-gallery-scroll-containment-style")) {
             return;
         }
 
         var style = document.createElement("style");
-        style.id = "berryboy-gallery-scroll-lock-style";
+        style.id = "berryboy-gallery-scroll-containment-style";
         style.textContent = `
-            html,
-            body {
-                overscroll-behavior: none;
-            }
-
-            body.gallery-app-scroll-locked {
-                overflow: hidden;
-                overscroll-behavior: none;
-                touch-action: none;
-            }
-
             canvas,
             #renderCanvas {
-                overscroll-behavior: none;
+                overscroll-behavior: contain;
                 touch-action: none;
             }
 
@@ -4789,7 +4785,7 @@ export const createScene = function (engineArg, canvasArg) {
             .mobile-viewer-joystick-knob,
             .mobile-viewer-joystick-knob * {
                 touch-action: none;
-                overscroll-behavior: none;
+                overscroll-behavior: contain;
                 -webkit-user-select: none;
                 user-select: none;
                 -webkit-touch-callout: none;
@@ -4806,10 +4802,9 @@ export const createScene = function (engineArg, canvasArg) {
         `;
 
         document.head.appendChild(style);
-        document.body.classList.add("gallery-app-scroll-locked");
     }
 
-    function isGalleryScrollableInDirection(element, deltaY) {
+    function isGalleryElementScrollableInDirection(element, deltaY) {
         if (!element || element.scrollHeight <= element.clientHeight + 1) {
             return false;
         }
@@ -4825,7 +4820,7 @@ export const createScene = function (engineArg, canvasArg) {
         return true;
     }
 
-    function findGalleryEditorScrollParent(target) {
+    function findGalleryEditorScrollElement(target) {
         var current = target;
 
         while (current && current !== document.body && current !== document.documentElement) {
@@ -4863,10 +4858,23 @@ export const createScene = function (engineArg, canvasArg) {
         return null;
     }
 
-    function preventGalleryBrowserScroll(event) {
+    function preventGalleryScrollEvent(event) {
         if (event && event.cancelable) {
             event.preventDefault();
         }
+    }
+
+    function isGalleryMobileControlTarget(target) {
+        return !!(
+            target &&
+            target.closest &&
+            (
+                target.closest("#mobileViewerControls") ||
+                target.closest(".mobile-viewer-controls") ||
+                target.closest(".mobile-viewer-joystick") ||
+                target.closest(".mobile-viewer-joystick-knob")
+            )
+        );
     }
 
     function setupGalleryScrollContainment() {
@@ -4879,20 +4887,25 @@ export const createScene = function (engineArg, canvasArg) {
         document.addEventListener(
             "wheel",
             function (event) {
-                var editorScroller = findGalleryEditorScrollParent(event.target);
+                var editorScroller = findGalleryEditorScrollElement(event.target);
 
                 if (!editorScroller) {
                     return;
                 }
 
                 var deltaY = event.deltaY || 0;
+
+                // Scroll zostaje w panelu. Po dojechaniu do końca nie przechodzi na body/page.
                 event.stopPropagation();
 
-                if (!isGalleryScrollableInDirection(editorScroller, deltaY)) {
-                    preventGalleryBrowserScroll(event);
+                if (!isGalleryElementScrollableInDirection(editorScroller, deltaY)) {
+                    preventGalleryScrollEvent(event);
                 }
             },
-            { passive: false, capture: true }
+            {
+                passive: false,
+                capture: true
+            }
         );
 
         var lastEditorTouchY = null;
@@ -4907,24 +4920,28 @@ export const createScene = function (engineArg, canvasArg) {
                     return;
                 }
 
-                lastEditorTouchY = findGalleryEditorScrollParent(event.target) ? touch.clientY : null;
+                lastEditorTouchY = findGalleryEditorScrollElement(event.target) ? touch.clientY : null;
             },
-            { passive: false, capture: true }
+            {
+                passive: false,
+                capture: true
+            }
         );
 
         document.addEventListener(
             "touchmove",
             function (event) {
-                var editorScroller = findGalleryEditorScrollParent(event.target);
+                var editorScroller = findGalleryEditorScrollElement(event.target);
                 var touch = event.touches && event.touches.length ? event.touches[0] : null;
 
                 if (editorScroller && touch && lastEditorTouchY !== null) {
                     var deltaY = lastEditorTouchY - touch.clientY;
                     lastEditorTouchY = touch.clientY;
+
                     event.stopPropagation();
 
-                    if (!isGalleryScrollableInDirection(editorScroller, deltaY)) {
-                        preventGalleryBrowserScroll(event);
+                    if (!isGalleryElementScrollableInDirection(editorScroller, deltaY)) {
+                        preventGalleryScrollEvent(event);
                     }
 
                     return;
@@ -4933,27 +4950,32 @@ export const createScene = function (engineArg, canvasArg) {
                 if (
                     mobileJoystickActive ||
                     mobileLookActive ||
-                    (
-                        event.target &&
-                        event.target.closest &&
-                        (
-                            event.target.closest("#mobileViewerControls") ||
-                            event.target.closest(".mobile-viewer-controls") ||
-                            event.target.closest(".mobile-viewer-joystick") ||
-                            event.target.closest(".mobile-viewer-joystick-knob")
-                        )
-                    )
+                    isGalleryMobileControlTarget(event.target)
                 ) {
-                    preventGalleryBrowserScroll(event);
+                    preventGalleryScrollEvent(event);
                 }
             },
-            { passive: false, capture: true }
+            {
+                passive: false,
+                capture: true
+            }
         );
 
         document.addEventListener(
             "gesturestart",
-            preventGalleryBrowserScroll,
-            { passive: false, capture: true }
+            function (event) {
+                if (
+                    mobileJoystickActive ||
+                    mobileLookActive ||
+                    isGalleryMobileControlTarget(event.target)
+                ) {
+                    preventGalleryScrollEvent(event);
+                }
+            },
+            {
+                passive: false,
+                capture: true
+            }
         );
     }
 
@@ -14405,22 +14427,48 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
+        var pickX = scene.pointerX;
+        var pickY = scene.pointerY;
+
+        if (
+            event &&
+            typeof event.clientX === "number" &&
+            typeof event.clientY === "number" &&
+            canvas &&
+            canvas.getBoundingClientRect
+        ) {
+            var rect = canvas.getBoundingClientRect();
+            pickX = event.clientX - rect.left;
+            pickY = event.clientY - rect.top;
+        }
+
         var pickResult = scene.pick(
-            scene.pointerX,
-            scene.pointerY
+            pickX,
+            pickY
         );
 
         if (!pickResult || !pickResult.hit || !pickResult.pickedMesh) {
             return;
         }
 
-        if (artworks.includes(pickResult.pickedMesh)) {
-            focusCameraOnObject(pickResult.pickedMesh);
+        // STAGE 12C5:
+        // Mobile tap musi działać też na imagePlane obrazu, nie tylko na box artworku.
+        var pickedArtworkMesh = getArtworkFromPopupPickMesh(pickResult.pickedMesh);
+
+        if (pickedArtworkMesh) {
+            focusCameraOnObject(pickedArtworkMesh);
             return;
         }
 
-        if (artSpheres.includes(pickResult.pickedMesh)) {
-            focusCameraOnObject(pickResult.pickedMesh);
+        // STAGE 12C5:
+        // Mobile tap na rzeźbę/model GLB mapujemy do parent model slotu.
+        var pickedModelSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
+
+        if (
+            artSpheres.includes(pickResult.pickedMesh) ||
+            pickedModelSlot
+        ) {
+            focusCameraOnObject(pickedModelSlot || pickResult.pickedMesh);
             return;
         }
 
@@ -14587,7 +14635,7 @@ export const createScene = function (engineArg, canvasArg) {
         mobileViewerControls = document.createElement("div");
         mobileViewerControls.id = "mobileViewerControls";
         mobileViewerControls.style.touchAction = "none";
-        mobileViewerControls.style.overscrollBehavior = "none";
+        mobileViewerControls.style.overscrollBehavior = "contain";
 
         mobileJoystickBase = document.createElement("div");
         mobileJoystickBase.id = "mobileJoystickBase";
@@ -14648,7 +14696,7 @@ export const createScene = function (engineArg, canvasArg) {
         setMobileViewerUiVisible(isMobileViewerActive());
     }
 
-    ensureGalleryScrollLockStyles();
+    ensureGalleryScrollContainmentStyles();
     setupGalleryScrollContainment();
 
     function setupMobileViewerControls() {
@@ -17688,6 +17736,270 @@ export const createScene = function (engineArg, canvasArg) {
         return null;
     }
 
+    // STAGE 12C5 - SAFE FOCUS PATH
+    // Direct camera focus może odbić się od ściany, gdy obraz jest za rogiem.
+    // Ten system próbuje zbudować prostą bezpieczną ścieżkę z dogleg/waypointami.
+    var viewerSafeFocusPathEnabled = true;
+    var viewerSafeFocusPathDebug = null;
+
+    function cloneViewerFocusPoint(position) {
+        var cloned = position.clone();
+        cloned.y = camera.position.y;
+        return cloned;
+    }
+
+    function isViewerFocusPointBlocked(position, direction) {
+        if (!position) {
+            return true;
+        }
+
+        if (
+            typeof isViewerWallTooCloseAtPosition === "function" &&
+            isViewerWallTooCloseAtPosition(position, direction || null)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function isViewerFocusSegmentBlocked(fromPosition, toPosition) {
+        if (!viewerSafeFocusPathEnabled) {
+            return false;
+        }
+
+        if (!fromPosition || !toPosition) {
+            return true;
+        }
+
+        if (
+            typeof isViewerWallHitBetweenPositions === "function" &&
+            isViewerWallHitBetweenPositions(fromPosition, toPosition)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function isViewerFocusPathClear(points) {
+        if (!points || points.length < 2) {
+            return false;
+        }
+
+        for (var i = 1; i < points.length; i++) {
+            var fromPosition = points[i - 1];
+            var toPosition = points[i];
+            var direction = toPosition.subtract(fromPosition);
+
+            direction.y = 0;
+
+            if (direction.lengthSquared() > 0.0001) {
+                direction.normalize();
+            }
+
+            if (isViewerFocusPointBlocked(toPosition, direction)) {
+                return false;
+            }
+
+            if (isViewerFocusSegmentBlocked(fromPosition, toPosition)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function getViewerFocusPathLength(points) {
+        var length = 0;
+
+        for (var i = 1; i < points.length; i++) {
+            length += points[i].subtract(points[i - 1]).length();
+        }
+
+        return length;
+    }
+
+    function findViewerSafeFocusPath(startPosition, targetPosition) {
+        var start = cloneViewerFocusPoint(startPosition);
+        var target = cloneViewerFocusPoint(targetPosition);
+
+        var directPath = [start, target];
+
+        viewerSafeFocusPathDebug = {
+            mode: "direct",
+            candidateCount: 0,
+            selectedLength: getViewerFocusPathLength(directPath),
+            blockedDirect: false
+        };
+
+        if (!viewerSafeFocusPathEnabled || isViewerFocusPathClear(directPath)) {
+            return [target];
+        }
+
+        viewerSafeFocusPathDebug.blockedDirect = true;
+
+        var horizontal = target.subtract(start);
+        horizontal.y = 0;
+
+        var distance = horizontal.length();
+
+        if (distance <= 0.001) {
+            return [target];
+        }
+
+        var forward = horizontal.normalize();
+        var side = new BABYLON.Vector3(-forward.z, 0, forward.x);
+
+        if (side.lengthSquared() > 0.0001) {
+            side.normalize();
+        }
+
+        var forwardA = start.add(forward.scale(Math.min(2.6, distance * 0.32)));
+        var forwardB = target.subtract(forward.scale(Math.min(2.2, distance * 0.28)));
+        var mid = start.add(target).scale(0.5);
+
+        forwardA.y = start.y;
+        forwardB.y = start.y;
+        mid.y = start.y;
+
+        var distances = [1.4, 2.2, 3.2, 4.4, 5.8, 7.2];
+        var candidates = [];
+
+        function addCandidate(points, label) {
+            var normalized = [start];
+
+            points.forEach(function (point) {
+                var cloned = cloneViewerFocusPoint(point);
+                normalized.push(cloned);
+            });
+
+            normalized.push(target);
+
+            candidates.push({
+                label: label,
+                points: normalized,
+                length: getViewerFocusPathLength(normalized)
+            });
+        }
+
+        distances.forEach(function (offset) {
+            [-1, 1].forEach(function (sign) {
+                var sideOffset = side.scale(offset * sign);
+
+                addCandidate(
+                    [
+                        start.add(sideOffset),
+                        target.add(sideOffset)
+                    ],
+                    "parallel_" + sign + "_" + offset
+                );
+
+                addCandidate(
+                    [
+                        mid.add(sideOffset)
+                    ],
+                    "mid_" + sign + "_" + offset
+                );
+
+                addCandidate(
+                    [
+                        forwardA.add(sideOffset),
+                        forwardB.add(sideOffset)
+                    ],
+                    "dogleg_" + sign + "_" + offset
+                );
+
+                addCandidate(
+                    [
+                        start.add(sideOffset),
+                        mid.add(sideOffset.scale(1.35)),
+                        target.add(sideOffset)
+                    ],
+                    "wide_" + sign + "_" + offset
+                );
+            });
+        });
+
+        candidates.sort(function (a, b) {
+            return a.length - b.length;
+        });
+
+        viewerSafeFocusPathDebug.candidateCount = candidates.length;
+
+        for (var i = 0; i < candidates.length; i++) {
+            if (isViewerFocusPathClear(candidates[i].points)) {
+                viewerSafeFocusPathDebug.mode = candidates[i].label;
+                viewerSafeFocusPathDebug.selectedLength = candidates[i].length;
+                viewerSafeFocusPathDebug.waypointCount = candidates[i].points.length - 1;
+
+                return candidates[i].points.slice(1);
+            }
+        }
+
+        viewerSafeFocusPathDebug.mode = "fallback_direct_blocked";
+        viewerSafeFocusPathDebug.selectedLength = getViewerFocusPathLength(directPath);
+        viewerSafeFocusPathDebug.waypointCount = 1;
+
+        return [target];
+    }
+
+    function animateViewerFocusPositionPath(pathPoints, targetRotation, startRotation) {
+        if (!pathPoints || !pathPoints.length) {
+            return;
+        }
+
+        var easing = new BABYLON.CubicEase();
+        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+
+        var points = [camera.position.clone()].concat(pathPoints.map(function (point) {
+            return point.clone();
+        }));
+
+        var totalLength = getViewerFocusPathLength(points);
+        var totalFrames = Math.max(70, Math.min(190, Math.round(totalLength * 18)));
+
+        BABYLON.Animation.CreateAndStartAnimation(
+            "cameraRotateToObject",
+            camera,
+            "rotation",
+            60,
+            totalFrames,
+            startRotation,
+            targetRotation,
+            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+            easing
+        );
+
+        function animateSegment(index) {
+            if (index >= points.length - 1) {
+                return;
+            }
+
+            var fromPosition = points[index].clone();
+            var toPosition = points[index + 1].clone();
+            var segmentLength = toPosition.subtract(fromPosition).length();
+            var frames = Math.max(28, Math.min(85, Math.round(segmentLength * 18)));
+
+            BABYLON.Animation.CreateAndStartAnimation(
+                "cameraMoveToObject",
+                camera,
+                "position",
+                60,
+                frames,
+                fromPosition,
+                toPosition,
+                BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+                easing,
+                function () {
+                    animateSegment(index + 1);
+                }
+            );
+        }
+
+        animateSegment(0);
+    }
+
     function focusCameraOnObject(targetMesh) {
 
         enterMobileFocusState();
@@ -17734,9 +18046,18 @@ export const createScene = function (engineArg, canvasArg) {
         let startPosition = camera.position.clone();
         let startRotation = camera.rotation.clone();
 
+        let focusPath = findViewerSafeFocusPath(
+            startPosition,
+            targetCameraPosition
+        );
+
+        let finalCameraPosition = focusPath && focusPath.length
+            ? focusPath[focusPath.length - 1].clone()
+            : targetCameraPosition.clone();
+
         let tempCamera = new BABYLON.UniversalCamera(
             "tempCamera",
-            targetCameraPosition.clone(),
+            finalCameraPosition.clone(),
             scene
         );
 
@@ -17760,31 +18081,12 @@ export const createScene = function (engineArg, canvasArg) {
         targetRotation.y = fixRotation(targetRotation.y, startRotation.y);
         targetRotation.z = fixRotation(targetRotation.z, startRotation.z);
 
-        let easing = new BABYLON.CubicEase();
-        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
-
-        BABYLON.Animation.CreateAndStartAnimation(
-            "cameraMoveToObject",
-            camera,
-            "position",
-            60,
-            120,
-            startPosition,
-            targetCameraPosition,
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-            easing
-        );
-
-        BABYLON.Animation.CreateAndStartAnimation(
-            "cameraRotateToObject",
-            camera,
-            "rotation",
-            60,
-            120,
-            startRotation,
+        // STAGE 12C5:
+        // Jeżeli direct focus przecina ścianę, animujemy po waypointach.
+        animateViewerFocusPositionPath(
+            focusPath,
             targetRotation,
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-            easing
+            startRotation
         );
     }
 
@@ -21452,6 +21754,13 @@ export const createScene = function (engineArg, canvasArg) {
                 cameraRoll: camera && camera.rotation ? camera.rotation.z : 0,
                 config: Object.assign({}, viewerMovementConfig)
             };
+        },
+        getViewerSafeFocusPathDebug: function () {
+            return viewerSafeFocusPathDebug ? Object.assign({}, viewerSafeFocusPathDebug) : null;
+        },
+        setViewerSafeFocusPathEnabled: function (isEnabled) {
+            viewerSafeFocusPathEnabled = !!isEnabled;
+            return viewerSafeFocusPathEnabled;
         },
         setViewerWASDMovementEnabled: function (isEnabled) {
             viewerWASDMovementEnabled = !!isEnabled;
