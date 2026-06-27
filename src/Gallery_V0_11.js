@@ -14297,6 +14297,10 @@ export const createScene = function (engineArg, canvasArg) {
 
         if ((hasInput || mobileJoystickTurnActive) && !viewerMovementWasManualInputActive) {
             scene.stopAnimation(camera);
+
+            if (typeof stopViewerSafeFocusRuntimeAnimation === "function") {
+                stopViewerSafeFocusRuntimeAnimation();
+            }
         }
 
         viewerMovementWasManualInputActive = hasInput || mobileJoystickTurnActive;
@@ -18020,94 +18024,154 @@ export const createScene = function (engineArg, canvasArg) {
         return result;
     }
 
+    var viewerSafeFocusRuntimeObserver = null;
+
+    function stopViewerSafeFocusRuntimeAnimation() {
+        if (viewerSafeFocusRuntimeObserver) {
+            scene.onBeforeRenderObservable.remove(viewerSafeFocusRuntimeObserver);
+            viewerSafeFocusRuntimeObserver = null;
+        }
+    }
+
+    function viewerSafeFocusEaseInOut(t) {
+        t = BABYLON.Scalar.Clamp(t, 0, 1);
+
+        // smootherstep — mniej blokowy start/stop niż cubic keyframe.
+        return t * t * t * (t * (t * 6 - 15) + 10);
+    }
+
+    function buildViewerFocusArcLengthTable(points) {
+        var cumulative = [0];
+        var total = 0;
+
+        for (var i = 1; i < points.length; i++) {
+            total += points[i].subtract(points[i - 1]).length();
+            cumulative.push(total);
+        }
+
+        return {
+            cumulative: cumulative,
+            total: total
+        };
+    }
+
+    function sampleViewerFocusPathByDistance(points, arcTable, distance) {
+        if (!points || points.length === 0) {
+            return BABYLON.Vector3.Zero();
+        }
+
+        if (points.length === 1 || !arcTable || arcTable.total <= 0.0001) {
+            return points[points.length - 1].clone();
+        }
+
+        var targetDistance = BABYLON.Scalar.Clamp(distance, 0, arcTable.total);
+        var cumulative = arcTable.cumulative;
+
+        for (var i = 1; i < cumulative.length; i++) {
+            if (targetDistance <= cumulative[i]) {
+                var prevDistance = cumulative[i - 1];
+                var nextDistance = cumulative[i];
+                var segmentLength = Math.max(0.0001, nextDistance - prevDistance);
+                var localT = (targetDistance - prevDistance) / segmentLength;
+
+                return BABYLON.Vector3.Lerp(
+                    points[i - 1],
+                    points[i],
+                    localT
+                );
+            }
+        }
+
+        return points[points.length - 1].clone();
+    }
+
     function animateViewerFocusPositionPath(pathPoints, targetRotation, startRotation) {
         if (!pathPoints || !pathPoints.length) {
             return;
         }
 
-        // STAGE 12C6:
-        // Poprzednio waypointy były animowane segment po segmencie:
-        // idź -> stop -> idź -> stop.
-        // Teraz budujemy jedną ciągłą animację po wygładzonej krzywej.
-        // Pozycja i rotacja jadą razem w jednym timeline.
+        // STAGE 12C7:
+        // Nie używamy już keyframe animation dla pozycji safe path.
+        // Keyframe'y dalej dawały wrażenie blokowego ruchu między punktami.
+        // Teraz kamera jest prowadzona ręcznie co klatkę po arc-length path.
+        stopViewerSafeFocusRuntimeAnimation();
+        scene.stopAnimation(camera);
+
         var rawPoints = [camera.position.clone()].concat(pathPoints.map(function (point) {
             return point.clone();
         }));
 
         var points = getViewerFocusSmoothedPath(rawPoints);
-        var totalLength = getViewerFocusPathLength(points);
-        var totalFrames = Math.max(80, Math.min(210, Math.round(totalLength * 18)));
+        var arcTable = buildViewerFocusArcLengthTable(points);
+        var totalLength = arcTable.total;
 
-        var easing = new BABYLON.CubicEase();
-        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+        if (totalLength <= 0.0001) {
+            camera.position.copyFrom(points[points.length - 1]);
+            camera.rotation.copyFrom(targetRotation);
+            return;
+        }
 
-        var positionAnimation = new BABYLON.Animation(
-            "cameraMoveToObjectSmoothPath",
-            "position",
-            60,
-            BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        var duration = Math.max(
+            1.15,
+            Math.min(
+                3.65,
+                totalLength / 3.55
+            )
         );
 
-        var positionKeys = [];
-
-        points.forEach(function (point, index) {
-            var frame = points.length === 1
-                ? 0
-                : Math.round((index / (points.length - 1)) * totalFrames);
-
-            positionKeys.push({
-                frame: frame,
-                value: point.clone()
-            });
-        });
-
-        positionAnimation.setKeys(positionKeys);
-        positionAnimation.setEasingFunction(easing);
-
-        var rotationAnimation = new BABYLON.Animation(
-            "cameraRotateToObjectSmoothPath",
-            "rotation",
-            60,
-            BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-        );
-
-        rotationAnimation.setKeys([
-            {
-                frame: 0,
-                value: startRotation.clone()
-            },
-            {
-                frame: totalFrames,
-                value: targetRotation.clone()
-            }
-        ]);
-        rotationAnimation.setEasingFunction(easing);
-
-        camera.animations = camera.animations || [];
-        camera.animations.push(positionAnimation);
-        camera.animations.push(rotationAnimation);
-
-        scene.stopAnimation(camera);
-        scene.beginAnimation(
-            camera,
-            0,
-            totalFrames,
-            false,
-            1,
-            function () {
-                camera.position.copyFrom(points[points.length - 1]);
-                camera.rotation.copyFrom(targetRotation);
-            }
-        );
+        var elapsed = 0;
+        var startQuaternion = BABYLON.Quaternion.FromEulerVector(startRotation);
+        var targetQuaternion = BABYLON.Quaternion.FromEulerVector(targetRotation);
+        var finalPosition = points[points.length - 1].clone();
 
         if (viewerSafeFocusPathDebug) {
             viewerSafeFocusPathDebug.smoothed = true;
+            viewerSafeFocusPathDebug.runtimeFollow = true;
             viewerSafeFocusPathDebug.rawPointCount = rawPoints.length;
             viewerSafeFocusPathDebug.smoothPointCount = points.length;
-            viewerSafeFocusPathDebug.totalFrames = totalFrames;
+            viewerSafeFocusPathDebug.totalLength = totalLength;
+            viewerSafeFocusPathDebug.duration = duration;
+            viewerSafeFocusPathDebug.animationMode = "runtime_arc_length_slerp";
         }
+
+        viewerSafeFocusRuntimeObserver = scene.onBeforeRenderObservable.add(function () {
+            var engine = scene.getEngine();
+            var dt = engine ? engine.getDeltaTime() / 1000 : 1 / 60;
+
+            dt = Math.max(0.001, Math.min(0.05, dt));
+            elapsed += dt;
+
+            var t = BABYLON.Scalar.Clamp(elapsed / duration, 0, 1);
+            var easedT = viewerSafeFocusEaseInOut(t);
+            var distance = easedT * totalLength;
+
+            var sampledPosition = sampleViewerFocusPathByDistance(
+                points,
+                arcTable,
+                distance
+            );
+
+            camera.position.copyFrom(sampledPosition);
+
+            // Rotacja i pozycja jadą w tym samym runtime.
+            // Quaternion slerp usuwa szarpanie przy przejściach yaw/pitch.
+            var currentQuaternion = BABYLON.Quaternion.Slerp(
+                startQuaternion,
+                targetQuaternion,
+                easedT
+            );
+
+            var currentRotation = currentQuaternion.toEulerAngles();
+            camera.rotation.copyFrom(currentRotation);
+            camera.rotation.z = 0;
+
+            if (t >= 1) {
+                stopViewerSafeFocusRuntimeAnimation();
+                camera.position.copyFrom(finalPosition);
+                camera.rotation.copyFrom(targetRotation);
+                camera.rotation.z = 0;
+            }
+        });
     }
 
     function focusCameraOnObject(targetMesh) {
