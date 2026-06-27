@@ -4782,6 +4782,13 @@ export const createScene = function (engineArg, canvasArg) {
     var mobileMoveSpeed = 0.085;
     var mobileJoystickTurnSpeed = 0.026;
 
+    // STAGE 12C3:
+    // Joystick mobile zachowuje poprzedni schemat:
+    // Y = przód/tył, X = obrót kamery, nie strafe.
+    var viewerMovementMobileJoystickTurnEnabled = true;
+    var viewerMovementMobileJoystickTurnSpeed = 1.62;
+    var viewerMovementMobileJoystickTurnDeadZone = 0.08;
+
     var mobileInitialCameraPosition = camera.position.clone();
     var mobileInitialCameraRotation = camera.rotation.clone();
 
@@ -13664,8 +13671,9 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function updateMobileJoystickMovement() {
-        // STAGE 12C1: stary ruch joysticka zostal zastapiony wspolnym systemem Viewer WASD.
-        // Joystick na mobile podaje teraz wektor W/S/A/D do updateViewerWASDMovement().
+        // STAGE 12C3:
+        // Ruch joysticka jest obsługiwany w updateViewerWASDMovement().
+        // Y = przód/tył, X = obrót kamery. X nie robi już strafe.
     }
 
 
@@ -13778,10 +13786,12 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (isMobileViewerActive() && mobileJoystickActive) {
             var deadZone = viewerMovementConfig.joystickDeadZone || 0.08;
-            var joystickX = Math.abs(mobileJoystickVector.x) >= deadZone ? mobileJoystickVector.x : 0;
             var joystickZ = Math.abs(mobileJoystickVector.y) >= deadZone ? -mobileJoystickVector.y : 0;
 
-            x += joystickX;
+            // STAGE 12C3:
+            // Mobile joystick X wraca do obrotu kamery.
+            // Nie dodajemy go do x/strafe, bo to psuło poprzedni feeling mobile.
+            x += 0;
             z += joystickZ;
             analog = true;
         } else {
@@ -14010,6 +14020,34 @@ export const createScene = function (engineArg, canvasArg) {
         return true;
     }
 
+    function updateViewerMobileJoystickTurn(dt) {
+        if (
+            !viewerMovementMobileJoystickTurnEnabled ||
+            !isMobileViewerActive() ||
+            !mobileJoystickActive ||
+            editMode ||
+            !camera
+        ) {
+            return false;
+        }
+
+        var turnInput = mobileJoystickVector.x || 0;
+
+        if (Math.abs(turnInput) < viewerMovementMobileJoystickTurnDeadZone) {
+            return false;
+        }
+
+        // STAGE 12C3:
+        // Stary mobile feeling: joystick w lewo/prawo obraca kamerę.
+        // Nie ma bocznego dryfu i nie ma A/D strafe na mobile.
+        clearViewerWASDVisualOffsets();
+        scene.stopAnimation(camera);
+        camera.rotation.y += turnInput * viewerMovementMobileJoystickTurnSpeed * dt;
+        camera.rotation.z = 0;
+
+        return true;
+    }
+
     function updateViewerWASDMovement() {
         clearViewerWASDVisualOffsets();
 
@@ -14021,6 +14059,8 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
+        var mobileJoystickTurnActive = updateViewerMobileJoystickTurn(dt);
+
         var inputState = getViewerWASDInputState();
         var hasInput = inputState.hasInput;
         var speedBeforeStop = viewerMovementVelocity.length();
@@ -14030,11 +14070,11 @@ export const createScene = function (engineArg, canvasArg) {
             viewerMovementLastMoveDirection.normalize();
         }
 
-        if (hasInput && !viewerMovementWasManualInputActive) {
+        if ((hasInput || mobileJoystickTurnActive) && !viewerMovementWasManualInputActive) {
             scene.stopAnimation(camera);
         }
 
-        viewerMovementWasManualInputActive = hasInput;
+        viewerMovementWasManualInputActive = hasInput || mobileJoystickTurnActive;
 
         var speedFactor = updateViewerMovementSpeedFactor(inputState, dt);
         var speed = viewerMovementConfig.speed || 3.58;
@@ -14055,7 +14095,11 @@ export const createScene = function (engineArg, canvasArg) {
         viewerMovementVelocity.x += (desiredVelocity.x - viewerMovementVelocity.x) * blend;
         viewerMovementVelocity.z += (desiredVelocity.z - viewerMovementVelocity.z) * blend;
 
-        if (!hasInput || Math.abs(inputState.rawX) < 0.001) {
+        if (
+            !hasInput ||
+            Math.abs(inputState.rawX) < 0.001 ||
+            isMobileViewerActive()
+        ) {
             var right = getViewerMovementRightFlat();
             var lateral = BABYLON.Vector3.Dot(viewerMovementVelocity, right);
             var sideBlend = viewerMovementExpBlend(viewerMovementConfig.sideFriction || 43.0, dt);
@@ -21185,7 +21229,10 @@ export const createScene = function (engineArg, canvasArg) {
                 joystick: {
                     active: mobileJoystickActive,
                     x: mobileJoystickVector.x,
-                    y: mobileJoystickVector.y
+                    y: mobileJoystickVector.y,
+                    turnEnabled: viewerMovementMobileJoystickTurnEnabled,
+                    turnSpeed: viewerMovementMobileJoystickTurnSpeed,
+                    turnDeadZone: viewerMovementMobileJoystickTurnDeadZone
                 },
                 velocity: {
                     x: viewerMovementVelocity.x,
@@ -21205,6 +21252,20 @@ export const createScene = function (engineArg, canvasArg) {
             }
 
             return viewerWASDMovementEnabled;
+        },
+        setViewerMobileJoystickTurnEnabled: function (isEnabled) {
+            viewerMovementMobileJoystickTurnEnabled = !!isEnabled;
+            return viewerMovementMobileJoystickTurnEnabled;
+        },
+        setViewerMobileJoystickTurnSpeed: function (speed) {
+            var parsed = parseFloat(speed);
+
+            if (!isFinite(parsed)) {
+                return viewerMovementMobileJoystickTurnSpeed;
+            }
+
+            viewerMovementMobileJoystickTurnSpeed = Math.max(0.1, Math.min(6, parsed));
+            return viewerMovementMobileJoystickTurnSpeed;
         },
         findAuthorByName: function (name) {
             return getAuthorByName(name);
