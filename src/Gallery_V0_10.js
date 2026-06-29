@@ -129,8 +129,55 @@ export const createScene = function (engineArg, canvasArg) {
     var desktopViewerMiddleLookSensitivityX = 0.004;
     var desktopViewerMiddleLookSensitivityY = 0.003;
 
+    // STAGE 12C10 - VIEWER INTRO / LOOK BUTTON CHOICE
+    // Observer can choose whether camera look uses Middle Mouse or Right Mouse.
+    var desktopViewerLookButtonMode = "middle";
+
+    try {
+        var storedDesktopViewerLookButtonMode = window.localStorage
+            ? window.localStorage.getItem("berryboyViewerLookButtonMode")
+            : null;
+
+        if (
+            storedDesktopViewerLookButtonMode === "middle" ||
+            storedDesktopViewerLookButtonMode === "right"
+        ) {
+            desktopViewerLookButtonMode = storedDesktopViewerLookButtonMode;
+        }
+    } catch (lookButtonStorageError) {}
+
+    function getDesktopViewerLookButtonCode() {
+        return desktopViewerLookButtonMode === "right" ? 2 : 1;
+    }
+
+    function setDesktopViewerLookButtonMode(mode) {
+        if (mode !== "middle" && mode !== "right") {
+            mode = "middle";
+        }
+
+        desktopViewerLookButtonMode = mode;
+
+        try {
+            if (window.localStorage) {
+                window.localStorage.setItem(
+                    "berryboyViewerLookButtonMode",
+                    desktopViewerLookButtonMode
+                );
+            }
+        } catch (lookButtonStoreError) {}
+
+        return desktopViewerLookButtonMode;
+    }
+
     function isDesktopViewerMiddleLookAllowed(event) {
-        if (!event || event.button !== 1) {
+        if (!event || event.button !== getDesktopViewerLookButtonCode()) {
+            return false;
+        }
+
+        if (
+            typeof isViewerIntroOverlayBlockingMovement === "function" &&
+            isViewerIntroOverlayBlockingMovement()
+        ) {
             return false;
         }
 
@@ -147,7 +194,7 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function preventMiddleMouseBrowserAction(event) {
-        if (!event || event.button !== 1) {
+        if (!event || event.button !== getDesktopViewerLookButtonCode()) {
             return;
         }
 
@@ -280,14 +327,26 @@ export const createScene = function (engineArg, canvasArg) {
     }, true);
 
     canvas.addEventListener("mousedown", function (event) {
-        if (event.button === 1) {
+        if (event.button === getDesktopViewerLookButtonCode()) {
             preventMiddleMouseBrowserAction(event);
         }
     }, true);
 
     canvas.addEventListener("auxclick", function (event) {
-        if (event.button === 1) {
+        if (event.button === getDesktopViewerLookButtonCode()) {
             preventMiddleMouseBrowserAction(event);
+        }
+    }, true);
+
+    canvas.addEventListener("contextmenu", function (event) {
+        if (desktopViewerLookButtonMode === "right") {
+            if (event.preventDefault) {
+                event.preventDefault();
+            }
+
+            if (event.stopPropagation) {
+                event.stopPropagation();
+            }
         }
     }, true);
 
@@ -5089,14 +5148,13 @@ export const createScene = function (engineArg, canvasArg) {
 
     loadingScreen.innerHTML = `
         <div id="loadingContent">
-            <img id="loadingLogo" src="https://raw.githubusercontent.com/Rivanes/babylon-assets/main/Follow_yes_logo.jpg.jpg" alt="Follow Yes logo">
             <div id="loaderSpinner"></div>
         </div>
     `;
 
     loadingScreen.style.position = "fixed";
     loadingScreen.style.inset = "0";
-    loadingScreen.style.background = "#F0EADE";
+    loadingScreen.style.background = "#000000";
     loadingScreen.style.color = "white";
     loadingScreen.style.display = "flex";
     loadingScreen.style.alignItems = "center";
@@ -5123,17 +5181,11 @@ export const createScene = function (engineArg, canvasArg) {
             gap: 34px;
         }
 
-        #loadingLogo {
-            width: min(520px, 72vw);
-            height: auto;
-            display: block;
-        }
-
         #loaderSpinner {
             width: 58px;
             height: 58px;
-            border: 6px solid rgba(0, 0, 0, 0.12);
-            border-top: 6px solid #111111;
+            border: 6px solid rgba(255, 255, 255, 0.16);
+            border-top: 6px solid rgba(255, 255, 255, 0.92);
             border-radius: 50%;
             animation: galleryLoaderSpin 1s linear infinite;
         }
@@ -5150,6 +5202,438 @@ export const createScene = function (engineArg, canvasArg) {
     `;
 
     document.head.appendChild(loaderStyle);
+
+
+    // STAGE 12C10 - VIEWER INTRO OVERLAY
+    // All visible copy is intentionally in English.
+    var viewerIntroOverlay = null;
+    var viewerIntroOverlayMovementUnlocked = false;
+
+    function isViewerIntroOverlayBlockingMovement() {
+        return !viewerIntroOverlayMovementUnlocked && !editMode;
+    }
+
+    function createViewerIntroOverlayStyles() {
+        if (document.getElementById("berryboyViewerIntroOverlayStyle")) {
+            return;
+        }
+
+        var style = document.createElement("style");
+        style.id = "berryboyViewerIntroOverlayStyle";
+        style.textContent = `
+            #berryboyViewerIntroOverlay {
+                position: fixed;
+                inset: 0;
+                z-index: 9998;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                padding: 22px;
+                box-sizing: border-box;
+                background:
+                    radial-gradient(circle at 50% 40%, rgba(255,255,255,0.08), rgba(0,0,0,0.62) 58%, rgba(0,0,0,0.86) 100%);
+                color: #f7f3ea;
+                font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                pointer-events: auto;
+            }
+
+            #berryboyViewerIntroCard {
+                width: min(760px, calc(100vw - 34px));
+                max-height: min(88vh, 760px);
+                overflow: auto;
+                border-radius: 28px;
+                padding: 26px;
+                box-sizing: border-box;
+                border: 1px solid rgba(255,255,255,0.20);
+                background: rgba(18, 18, 18, 0.58);
+                box-shadow: 0 30px 95px rgba(0,0,0,0.54);
+                backdrop-filter: blur(22px) saturate(1.32);
+                -webkit-backdrop-filter: blur(22px) saturate(1.32);
+                transform: translateY(10px) scale(0.985);
+                opacity: 0;
+                animation: berryboyIntroCardIn 540ms cubic-bezier(.19,1,.22,1) forwards;
+            }
+
+            #berryboyViewerIntroCard h1 {
+                margin: 0 0 8px;
+                font-size: clamp(24px, 4.3vw, 42px);
+                line-height: 1.02;
+                letter-spacing: -0.04em;
+            }
+
+            #berryboyViewerIntroCard p {
+                margin: 0;
+                color: rgba(247,243,234,0.76);
+                font-size: 14px;
+                line-height: 1.55;
+            }
+
+            .berryboyIntroGrid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 12px;
+                margin: 22px 0;
+            }
+
+            .berryboyIntroTile {
+                border: 1px solid rgba(255,255,255,0.14);
+                background: rgba(255,255,255,0.075);
+                border-radius: 18px;
+                padding: 15px;
+                min-height: 122px;
+                box-sizing: border-box;
+                position: relative;
+                overflow: hidden;
+            }
+
+            .berryboyIntroTile strong {
+                display: block;
+                font-size: 13px;
+                letter-spacing: .05em;
+                text-transform: uppercase;
+                margin-bottom: 8px;
+            }
+
+            .berryboyIntroIcon {
+                width: 100%;
+                height: 44px;
+                margin-bottom: 10px;
+                opacity: .95;
+            }
+
+            .berryboyKeyRow {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+            }
+
+            .berryboyKey {
+                min-width: 32px;
+                height: 30px;
+                border-radius: 8px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid rgba(255,255,255,0.24);
+                background: rgba(255,255,255,0.12);
+                font-size: 12px;
+                font-weight: 800;
+                animation: berryboyKeyPulse 1.8s ease-in-out infinite;
+            }
+
+            .berryboyKey:nth-child(2) { animation-delay: .08s; }
+            .berryboyKey:nth-child(3) { animation-delay: .16s; }
+            .berryboyKey:nth-child(4) { animation-delay: .24s; }
+
+            .berryboyMouseIcon {
+                width: 44px;
+                height: 44px;
+                border: 2px solid rgba(255,255,255,0.64);
+                border-radius: 18px 18px 22px 22px;
+                position: relative;
+                margin: 0 auto 10px;
+            }
+
+            .berryboyMouseIcon::before {
+                content: "";
+                position: absolute;
+                left: 50%;
+                top: 8px;
+                width: 4px;
+                height: 10px;
+                border-radius: 99px;
+                background: rgba(255,255,255,0.82);
+                transform: translateX(-50%);
+                animation: berryboyMouseWheelMove 1.4s ease-in-out infinite;
+            }
+
+            .berryboyJoystickIcon {
+                width: 48px;
+                height: 48px;
+                border-radius: 999px;
+                border: 1px solid rgba(255,255,255,0.28);
+                background: rgba(255,255,255,0.08);
+                margin: 0 auto 10px;
+                position: relative;
+            }
+
+            .berryboyJoystickIcon::after {
+                content: "";
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                width: 22px;
+                height: 22px;
+                border-radius: 999px;
+                background: rgba(255,255,255,0.72);
+                transform: translate(-50%, -50%);
+                animation: berryboyJoystickMove 1.75s ease-in-out infinite;
+            }
+
+            .berryboyTapIcon {
+                width: 46px;
+                height: 46px;
+                border-radius: 14px;
+                border: 1px solid rgba(255,255,255,0.26);
+                margin: 0 auto 10px;
+                position: relative;
+            }
+
+            .berryboyTapIcon::after {
+                content: "";
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                width: 12px;
+                height: 12px;
+                border-radius: 999px;
+                border: 2px solid rgba(255,255,255,0.92);
+                transform: translate(-50%, -50%);
+                animation: berryboyTapPulse 1.3s ease-out infinite;
+            }
+
+            .berryboyLookChoice {
+                margin-top: 16px;
+                padding-top: 16px;
+                border-top: 1px solid rgba(255,255,255,0.12);
+            }
+
+            .berryboyLookButtons {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px;
+                margin-top: 10px;
+            }
+
+            .berryboyLookButton {
+                border: 1px solid rgba(255,255,255,0.18);
+                border-radius: 16px;
+                background: rgba(255,255,255,0.075);
+                color: #f7f3ea;
+                padding: 13px 14px;
+                cursor: pointer;
+                text-align: left;
+                font: inherit;
+                transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+            }
+
+            .berryboyLookButton:hover {
+                transform: translateY(-1px);
+                background: rgba(255,255,255,0.12);
+            }
+
+            .berryboyLookButton.is-active {
+                border-color: rgba(247,243,234,0.72);
+                background: rgba(247,243,234,0.18);
+                box-shadow: 0 0 0 2px rgba(247,243,234,0.08) inset;
+            }
+
+            .berryboyLookButton span {
+                display: block;
+                margin-top: 4px;
+                font-size: 12px;
+                opacity: .72;
+            }
+
+            #berryboyIntroStart {
+                width: 100%;
+                margin-top: 18px;
+                border: 0;
+                border-radius: 18px;
+                padding: 15px 18px;
+                background: #f7f3ea;
+                color: #121212;
+                font-weight: 900;
+                letter-spacing: .02em;
+                cursor: pointer;
+                box-shadow: 0 16px 38px rgba(0,0,0,0.28);
+                transition: transform 170ms ease, box-shadow 170ms ease;
+            }
+
+            #berryboyIntroStart:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 20px 46px rgba(0,0,0,0.34);
+            }
+
+            @keyframes berryboyIntroCardIn {
+                to {
+                    transform: translateY(0) scale(1);
+                    opacity: 1;
+                }
+            }
+
+            @keyframes berryboyKeyPulse {
+                0%, 100% { transform: translateY(0); opacity: .72; }
+                50% { transform: translateY(-3px); opacity: 1; }
+            }
+
+            @keyframes berryboyMouseWheelMove {
+                0%, 100% { transform: translate(-50%, 0); opacity: .55; }
+                50% { transform: translate(-50%, 8px); opacity: 1; }
+            }
+
+            @keyframes berryboyJoystickMove {
+                0%, 100% { transform: translate(-50%, -50%); }
+                25% { transform: translate(-34%, -64%); }
+                50% { transform: translate(-50%, -38%); }
+                75% { transform: translate(-66%, -50%); }
+            }
+
+            @keyframes berryboyTapPulse {
+                0% { width: 8px; height: 8px; opacity: 1; }
+                100% { width: 38px; height: 38px; opacity: 0; }
+            }
+
+            @media (max-width: 720px) {
+                #berryboyViewerIntroCard {
+                    padding: 18px;
+                    border-radius: 22px;
+                }
+
+                .berryboyIntroGrid {
+                    grid-template-columns: 1fr;
+                    gap: 10px;
+                    margin: 18px 0;
+                }
+
+                .berryboyIntroTile {
+                    min-height: 96px;
+                }
+
+                .berryboyLookChoice {
+                    display: none;
+                }
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
+    function updateViewerIntroLookButtons() {
+        if (!viewerIntroOverlay) {
+            return;
+        }
+
+        var buttons = viewerIntroOverlay.querySelectorAll(".berryboyLookButton");
+
+        buttons.forEach(function (button) {
+            button.classList.toggle(
+                "is-active",
+                button.getAttribute("data-look-mode") === desktopViewerLookButtonMode
+            );
+        });
+    }
+
+    function hideViewerIntroOverlay() {
+        viewerIntroOverlayMovementUnlocked = true;
+
+        if (viewerIntroOverlay) {
+            viewerIntroOverlay.style.opacity = "0";
+            viewerIntroOverlay.style.transition = "opacity 220ms ease";
+
+            setTimeout(function () {
+                if (viewerIntroOverlay) {
+                    viewerIntroOverlay.style.display = "none";
+                }
+            }, 230);
+        }
+
+        resetViewerWASDMovementRuntime(true);
+    }
+
+    function showViewerIntroOverlay() {
+        createViewerIntroOverlayStyles();
+
+        if (!viewerIntroOverlay) {
+            viewerIntroOverlay = document.createElement("div");
+            viewerIntroOverlay.id = "berryboyViewerIntroOverlay";
+            viewerIntroOverlay.innerHTML = `
+                <div id="berryboyViewerIntroCard" role="dialog" aria-modal="true" aria-label="Viewer controls">
+                    <h1>Explore the gallery</h1>
+                    <p>Move through the space, click artworks to approach them, and choose how you want to rotate the camera on desktop.</p>
+
+                    <div class="berryboyIntroGrid">
+                        <div class="berryboyIntroTile">
+                            <div class="berryboyIntroIcon">
+                                <div class="berryboyKeyRow">
+                                    <span class="berryboyKey">W</span>
+                                    <span class="berryboyKey">A</span>
+                                    <span class="berryboyKey">S</span>
+                                    <span class="berryboyKey">D</span>
+                                </div>
+                            </div>
+                            <strong>Desktop movement</strong>
+                            <p>Use WASD to walk, or left-click the floor to move.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile">
+                            <div class="berryboyMouseIcon"></div>
+                            <strong>Desktop camera</strong>
+                            <p>Hold your selected mouse button and drag to look around.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile">
+                            <div class="berryboyJoystickIcon"></div>
+                            <strong>Mobile movement</strong>
+                            <p>Use the joystick to move. Drag with one finger to rotate the camera.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile">
+                            <div class="berryboyTapIcon"></div>
+                            <strong>Artworks and sculptures</strong>
+                            <p>Click or tap an artwork or sculpture to smoothly approach it.</p>
+                        </div>
+                    </div>
+
+                    <div class="berryboyLookChoice">
+                        <p><strong>Choose desktop camera rotation</strong></p>
+                        <div class="berryboyLookButtons">
+                            <button type="button" class="berryboyLookButton" data-look-mode="middle">
+                                Middle mouse
+                                <span>Hold the wheel button and drag.</span>
+                            </button>
+                            <button type="button" class="berryboyLookButton" data-look-mode="right">
+                                Right mouse
+                                <span>Hold right click and drag.</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button id="berryboyIntroStart" type="button">Start exploring</button>
+                </div>
+            `;
+
+            document.body.appendChild(viewerIntroOverlay);
+
+            var lookButtons = viewerIntroOverlay.querySelectorAll(".berryboyLookButton");
+
+            lookButtons.forEach(function (button) {
+                button.addEventListener("click", function (event) {
+                    var mode = button.getAttribute("data-look-mode");
+
+                    setDesktopViewerLookButtonMode(mode);
+                    updateViewerIntroLookButtons();
+
+                    if (event.preventDefault) {
+                        event.preventDefault();
+                    }
+                });
+            });
+
+            var startButton = viewerIntroOverlay.querySelector("#berryboyIntroStart");
+
+            if (startButton) {
+                startButton.addEventListener("click", function () {
+                    hideViewerIntroOverlay();
+                });
+            }
+        }
+
+        viewerIntroOverlayMovementUnlocked = false;
+        viewerIntroOverlay.style.display = "flex";
+        viewerIntroOverlay.style.opacity = "1";
+        updateViewerIntroLookButtons();
+    }
 
     var assetsToLoad = 4;
     var assetsLoaded = 0;
@@ -5168,6 +5652,12 @@ export const createScene = function (engineArg, canvasArg) {
 
         setTimeout(function () {
             loadingScreen.style.display = "none";
+
+            if (!editMode) {
+                showViewerIntroOverlay();
+            } else {
+                viewerIntroOverlayMovementUnlocked = true;
+            }
         }, 300);
     }
 
@@ -14196,6 +14686,7 @@ export const createScene = function (engineArg, canvasArg) {
         return !!(
             viewerWASDMovementEnabled &&
             !editMode &&
+            viewerIntroOverlayMovementUnlocked &&
             !isDraggingArtwork &&
             !isDraggingSphere
         );
@@ -14448,14 +14939,17 @@ export const createScene = function (engineArg, canvasArg) {
         var beforeMove = camera.position.clone();
         var candidatePosition = camera.position.add(deltaVector);
 
-        if (isMobileViewerActive() && !isMobileCameraPositionOnFloor(candidatePosition)) {
+        // STAGE 12C10:
+        // Viewer WASD/joystick can move only over the actual floor.
+        // This is no longer mobile-only, because desktop WASD could leave the map.
+        if (!editMode && !isMobileCameraPositionOnFloor(candidatePosition)) {
             viewerMovementVelocity.set(0, 0, 0);
             return false;
         }
 
         moveCameraWithViewerCollisionIfActive(deltaVector);
 
-        if (isMobileViewerActive() && !isMobileCameraPositionOnFloor(camera.position)) {
+        if (!editMode && !isMobileCameraPositionOnFloor(camera.position)) {
             camera.position.copyFrom(beforeMove);
             viewerMovementVelocity.set(0, 0, 0);
             return false;
@@ -22126,6 +22620,9 @@ export const createScene = function (engineArg, canvasArg) {
         getViewerWASDMovementDebug: function () {
             return {
                 enabled: viewerWASDMovementEnabled,
+                introUnlocked: viewerIntroOverlayMovementUnlocked,
+                lookButtonMode: desktopViewerLookButtonMode,
+                floorLocked: true,
                 scrollContainmentReady: !!window.__berryboyGalleryScrollContainmentReady,
                 editMode: editMode,
                 mobileViewerActive: isMobileViewerActive(),
@@ -22163,6 +22660,20 @@ export const createScene = function (engineArg, canvasArg) {
             }
 
             return viewerWASDMovementEnabled;
+        },
+        showViewerIntroOverlay: function () {
+            showViewerIntroOverlay();
+            return true;
+        },
+        hideViewerIntroOverlay: function () {
+            hideViewerIntroOverlay();
+            return true;
+        },
+        setDesktopViewerLookButtonMode: function (mode) {
+            return setDesktopViewerLookButtonMode(mode);
+        },
+        getDesktopViewerLookButtonMode: function () {
+            return desktopViewerLookButtonMode;
         },
         setViewerMobileJoystickTurnEnabled: function (isEnabled) {
             viewerMovementMobileJoystickTurnEnabled = !!isEnabled;
