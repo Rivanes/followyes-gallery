@@ -99,14 +99,25 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        // Prawy przycisk myszy jest zarezerwowany do czyszczenia zaznaczenia.
-        // Obracanie kamery zostaje tylko pod wcisnietym scrollem / srodkowym przyciskiem myszy.
+        // STAGE 12C12:
+        // Middle/Right camera-look choice exists only in Viewer Mode.
+        // Edit Mode stays normal: right click remains reserved for deselect/clear selection.
+        var buttonCode = 1;
+
+        if (
+            typeof editMode !== "undefined" &&
+            !editMode &&
+            typeof getDesktopViewerLookButtonCode === "function"
+        ) {
+            buttonCode = getDesktopViewerLookButtonCode();
+        }
+
         if (camera.inputs.attached.mouse && camera.inputs.attached.mouse.buttons) {
-            camera.inputs.attached.mouse.buttons = [1];
+            camera.inputs.attached.mouse.buttons = [buttonCode];
         }
 
         if (camera.inputs.attached.pointers && camera.inputs.attached.pointers.buttons) {
-            camera.inputs.attached.pointers.buttons = [1];
+            camera.inputs.attached.pointers.buttons = [buttonCode];
         }
     }
 
@@ -166,10 +177,16 @@ export const createScene = function (engineArg, canvasArg) {
             }
         } catch (lookButtonStoreError) {}
 
+        configureCameraPointerButtons();
+
         return desktopViewerLookButtonMode;
     }
 
     function isDesktopViewerMiddleLookAllowed(event) {
+        if (editMode) {
+            return false;
+        }
+
         if (!event || event.button !== getDesktopViewerLookButtonCode()) {
             return false;
         }
@@ -194,7 +211,7 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function preventMiddleMouseBrowserAction(event) {
-        if (!event || event.button !== getDesktopViewerLookButtonCode()) {
+        if (editMode || !event || event.button !== getDesktopViewerLookButtonCode()) {
             return;
         }
 
@@ -339,7 +356,7 @@ export const createScene = function (engineArg, canvasArg) {
     }, true);
 
     canvas.addEventListener("contextmenu", function (event) {
-        if (desktopViewerLookButtonMode === "right") {
+        if (!editMode && desktopViewerLookButtonMode === "right") {
             if (event.preventDefault) {
                 event.preventDefault();
             }
@@ -1546,6 +1563,386 @@ export const createScene = function (engineArg, canvasArg) {
         });
     }
 
+    // STAGE 12C12 - FLOOR / CEILING SEGMENT LIGHT TARGETING
+    // Same idea as Wall_segment_: avoid one huge floor/ceiling material consuming
+    // light budget for the whole gallery. Local lights target nearby segments only.
+    var localLightFloorSegmentTargetingEnabled = true;
+    var localLightCeilingSegmentTargetingEnabled = true;
+    var localLightFloorSegmentBudgetMap = {};
+    var localLightCeilingSegmentBudgetMap = {};
+
+    function isLightingFloorSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Floor_segment_") === 0
+        );
+    }
+
+    function isLightingCeilingSegmentMesh(mesh) {
+        return !!(
+            mesh &&
+            mesh.name &&
+            mesh.name.indexOf("Ceiling_segment_") === 0
+        );
+    }
+
+    function getLightingFloorSegmentMeshes() {
+        return floorMeshes.filter(function (mesh) {
+            return isLightingFloorSegmentMesh(mesh);
+        });
+    }
+
+    function getLightingCeilingSegmentMeshes() {
+        return ceilingMeshes.filter(function (mesh) {
+            return isLightingCeilingSegmentMesh(mesh);
+        });
+    }
+
+    function getHorizontalSegmentDistanceToReference(mesh, referencePoint) {
+        if (!mesh || !referencePoint) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        var center = getMeshWorldCenter(mesh);
+        var dx = center.x - referencePoint.x;
+        var dz = center.z - referencePoint.z;
+
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    function addSurfaceSegmentBudgetUse(mesh, item, budgetMap, isSegmentMeshFn) {
+        if (!mesh || !isSegmentMeshFn(mesh)) {
+            return false;
+        }
+
+        var key = mesh.name;
+
+        if (!budgetMap[key]) {
+            budgetMap[key] = [];
+        }
+
+        if (budgetMap[key].indexOf(item) !== -1) {
+            return true;
+        }
+
+        if (
+            localLightWallSegmentBudgetPassActive &&
+            budgetMap[key].length >= localLightWallSegmentMaxLightsPerSegment
+        ) {
+            return false;
+        }
+
+        budgetMap[key].push(item);
+        return true;
+    }
+
+    function getLocalLightSurfaceHitFromSpotRay(item, segmentMeshes, sourceName) {
+        if (
+            !item ||
+            item.type !== "spot" ||
+            !item.light ||
+            !item.light.position ||
+            !item.light.direction ||
+            !segmentMeshes ||
+            !segmentMeshes.length
+        ) {
+            return null;
+        }
+
+        var direction = item.light.direction.clone();
+
+        if (direction.lengthSquared() <= 0.0001) {
+            return null;
+        }
+
+        direction.normalize();
+
+        var range = item.light.range && isFinite(item.light.range)
+            ? item.light.range
+            : 12;
+
+        try {
+            var ray = new BABYLON.Ray(
+                item.light.position.clone(),
+                direction,
+                range + 0.75
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (mesh) {
+                    return segmentMeshes.indexOf(mesh) !== -1;
+                }
+            );
+
+            if (hit && hit.hit && hit.pickedMesh && segmentMeshes.indexOf(hit.pickedMesh) !== -1) {
+                return {
+                    source: sourceName + "SpotRay",
+                    point: hit.pickedPoint ? hit.pickedPoint.clone() : getMeshWorldCenter(hit.pickedMesh),
+                    primaryMesh: hit.pickedMesh
+                };
+            }
+        } catch (error) {
+            console.warn(sourceName + " segment ray reference warning:", error);
+        }
+
+        return null;
+    }
+
+    function getLocalLightSurfaceReference(item, segmentMeshes, sourceName) {
+        var spotHit = getLocalLightSurfaceHitFromSpotRay(item, segmentMeshes, sourceName);
+
+        if (spotHit) {
+            return spotHit;
+        }
+
+        if (item && item.ownerMesh && item.ownerMesh.position) {
+            return {
+                source: sourceName + "OwnerPosition",
+                point: item.ownerMesh.position.clone(),
+                primaryMesh: null
+            };
+        }
+
+        return {
+            source: sourceName + "LightPosition",
+            point: getLocalLightPosition(item),
+            primaryMesh: null
+        };
+    }
+
+    function getSurfaceSegmentCandidateListForLocalLight(item, segmentMeshes, sourceName) {
+        var reference = getLocalLightSurfaceReference(item, segmentMeshes, sourceName);
+        var referencePoint = reference && reference.point
+            ? reference.point
+            : getLocalLightPosition(item);
+
+        var radius = localLightWallSegmentTargetRadius;
+
+        if (item && item.light && item.light.range) {
+            radius = Math.max(
+                radius,
+                Math.min(item.light.range * 0.9, 10.0)
+            );
+        }
+
+        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
+
+        var candidates = segmentMeshes.map(function (mesh) {
+            var distance = getHorizontalSegmentDistanceToReference(mesh, referencePoint);
+
+            return {
+                mesh: mesh,
+                distance: distance,
+                priority: distance <= radius ? 0 : 1
+            };
+        }).filter(function (candidate) {
+            return (
+                candidate.distance <= softRadius ||
+                (
+                    reference &&
+                    reference.primaryMesh &&
+                    candidate.mesh === reference.primaryMesh
+                )
+            );
+        }).sort(function (a, b) {
+            if (a.priority !== b.priority) {
+                return a.priority - b.priority;
+            }
+
+            return a.distance - b.distance;
+        });
+
+        if (reference && reference.primaryMesh) {
+            var alreadyHasPrimary = candidates.some(function (candidate) {
+                return candidate.mesh === reference.primaryMesh;
+            });
+
+            if (!alreadyHasPrimary) {
+                candidates.unshift({
+                    mesh: reference.primaryMesh,
+                    distance: 0,
+                    priority: -1
+                });
+            }
+        }
+
+        return {
+            reference: reference,
+            referencePoint: referencePoint,
+            radius: radius,
+            softRadius: softRadius,
+            candidates: candidates
+        };
+    }
+
+    function addSurfaceSegmentTargetsForLocalLight(targetList, item, options) {
+        options = options || {};
+
+        if (!options.enabled) {
+            addMeshArrayUnique(targetList, options.fallbackMeshes || []);
+            return;
+        }
+
+        var segmentMeshes = options.getSegments ? options.getSegments() : [];
+
+        if (!segmentMeshes.length) {
+            addMeshArrayUnique(targetList, options.fallbackMeshes || []);
+            return;
+        }
+
+        var candidateData = getSurfaceSegmentCandidateListForLocalLight(
+            item,
+            segmentMeshes,
+            options.sourceName || "surface"
+        );
+
+        var candidates = candidateData.candidates;
+        var selectedSegments = [];
+        var isSegmentMeshFn = options.isSegmentMesh || function () { return true; };
+        var budgetMap = options.budgetMap || {};
+
+        function addSegment(mesh) {
+            if (
+                mesh &&
+                isSegmentMeshFn(mesh) &&
+                selectedSegments.indexOf(mesh) === -1 &&
+                addSurfaceSegmentBudgetUse(mesh, item, budgetMap, isSegmentMeshFn)
+            ) {
+                selectedSegments.push(mesh);
+            }
+        }
+
+        if (
+            candidateData.reference &&
+            candidateData.reference.primaryMesh &&
+            isSegmentMeshFn(candidateData.reference.primaryMesh)
+        ) {
+            addSegment(candidateData.reference.primaryMesh);
+        }
+
+        candidates.forEach(function (candidate) {
+            if (selectedSegments.length >= localLightWallSegmentTargetMaxCount) {
+                return;
+            }
+
+            addSegment(candidate.mesh);
+        });
+
+        if (!selectedSegments.length && candidates.length) {
+            selectedSegments.push(candidates[0].mesh);
+        }
+
+        item[options.debugKey] = {
+            mode: "segmentLightBudget",
+            source: candidateData.reference ? candidateData.reference.source : "unknown",
+            referencePoint: candidateData.referencePoint ? serializeVector3(candidateData.referencePoint) : null,
+            radius: candidateData.radius,
+            softRadius: candidateData.softRadius,
+            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            candidateCount: candidates.length,
+            targetCount: selectedSegments.length,
+            targetNames: selectedSegments.map(function (mesh) {
+                return mesh.name;
+            })
+        };
+
+        addMeshArrayUnique(targetList, selectedSegments);
+    }
+
+    function addFloorSegmentTargetsForLocalLight(targetList, item) {
+        addSurfaceSegmentTargetsForLocalLight(targetList, item, {
+            enabled: localLightFloorSegmentTargetingEnabled,
+            fallbackMeshes: floorMeshes,
+            getSegments: getLightingFloorSegmentMeshes,
+            isSegmentMesh: isLightingFloorSegmentMesh,
+            budgetMap: localLightFloorSegmentBudgetMap,
+            sourceName: "floor",
+            debugKey: "_floorSegmentTargetDebug"
+        });
+    }
+
+    function addCeilingSegmentTargetsForLocalLight(targetList, item) {
+        addSurfaceSegmentTargetsForLocalLight(targetList, item, {
+            enabled: localLightCeilingSegmentTargetingEnabled,
+            fallbackMeshes: ceilingMeshes,
+            getSegments: getLightingCeilingSegmentMeshes,
+            isSegmentMesh: isLightingCeilingSegmentMesh,
+            budgetMap: localLightCeilingSegmentBudgetMap,
+            sourceName: "ceiling",
+            debugKey: "_ceilingSegmentTargetDebug"
+        });
+    }
+
+    function getSurfaceSegmentLightTargetDebug(surfaceName, getSegments, isSegmentMeshFn, debugKey) {
+        refreshAllCommonLocalLightTargets();
+
+        var segmentLightMap = {};
+
+        getSegments().forEach(function (segment) {
+            segmentLightMap[segment.name] = {
+                segment: segment.name,
+                lightCount: 0,
+                lights: []
+            };
+        });
+
+        var lightDebug = localLightItems.map(function (item) {
+            var included = item && item.light && item.light.includedOnlyMeshes
+                ? item.light.includedOnlyMeshes
+                : [];
+
+            var targets = included.filter(function (mesh) {
+                return isSegmentMeshFn(mesh);
+            });
+
+            targets.forEach(function (mesh) {
+                if (!segmentLightMap[mesh.name]) {
+                    segmentLightMap[mesh.name] = {
+                        segment: mesh.name,
+                        lightCount: 0,
+                        lights: []
+                    };
+                }
+
+                segmentLightMap[mesh.name].lightCount += 1;
+                segmentLightMap[mesh.name].lights.push(item.name || item.id || item.light.name);
+            });
+
+            return {
+                id: item.id,
+                name: item.name,
+                type: item.type,
+                enabled: getLocalLightUserEnabled(item),
+                cameraCulled: !!item.cameraCulled,
+                targetCount: targets.length,
+                targetNames: targets.map(function (mesh) {
+                    return mesh.name;
+                }),
+                targetDebug: item[debugKey] || null
+            };
+        });
+
+        return {
+            surface: surfaceName,
+            enabled: surfaceName === "floor"
+                ? localLightFloorSegmentTargetingEnabled
+                : localLightCeilingSegmentTargetingEnabled,
+            segmentCount: getSegments().length,
+            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            targetRadius: localLightWallSegmentTargetRadius,
+            softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
+            lights: lightDebug,
+            segments: Object.keys(segmentLightMap).sort().map(function (name) {
+                return segmentLightMap[name];
+            })
+        };
+    }
+
+
     function getMeshWorldCenter(mesh) {
         if (!mesh || !mesh.getBoundingInfo) {
             return mesh && mesh.position ? mesh.position.clone() : BABYLON.Vector3.Zero();
@@ -2587,7 +2984,7 @@ export const createScene = function (engineArg, canvasArg) {
         item.targetOptions = normalizeLocalTargetOptions(item.targetOptions);
 
         if (getLocalTargetOption(item, "floor")) {
-            addMeshArrayUnique(includedMeshes, floorMeshes);
+            addFloorSegmentTargetsForLocalLight(includedMeshes, item);
         }
 
         if (getLocalTargetOption(item, "walls")) {
@@ -2595,7 +2992,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         if (getLocalTargetOption(item, "ceiling")) {
-            addCeilingMeshesUnique(includedMeshes);
+            addCeilingSegmentTargetsForLocalLight(includedMeshes, item);
         }
 
         // Lampy przypisane do ekspozycji zawsze moga zachowac swoj owner jako
@@ -2641,6 +3038,8 @@ export const createScene = function (engineArg, canvasArg) {
 
     function refreshAllCommonLocalLightTargets() {
         localLightWallSegmentBudgetMap = {};
+        localLightFloorSegmentBudgetMap = {};
+        localLightCeilingSegmentBudgetMap = {};
         localLightWallSegmentBudgetPassActive = true;
 
         localLightItems.forEach(function (item) {
@@ -2663,7 +3062,11 @@ export const createScene = function (engineArg, canvasArg) {
             return;
         }
 
-        if (!item.targetOptions || item.targetOptions.walls !== true) {
+        if (
+            !getLocalTargetOption(item, "walls") &&
+            !getLocalTargetOption(item, "floor") &&
+            !getLocalTargetOption(item, "ceiling")
+        ) {
             return;
         }
 
@@ -14315,6 +14718,7 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         editMode = !editMode;
+        configureCameraPointerButtons();
 
         if (editMode) {
             resetViewerWASDMovementRuntime(true);
@@ -14364,6 +14768,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (galleryEditorLoginEnabled && !editorAuthenticated && editMode) {
             editMode = false;
+            configureCameraPointerButtons();
             resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(false);
             clearEditSelection();
@@ -19010,7 +19415,7 @@ export const createScene = function (engineArg, canvasArg) {
     BABYLON.SceneLoader.ImportMesh(
         "",
         "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Floor/",
-        "Floor.gltf",
+        "Floor_segment.gltf",
         scene,
         function (meshes) {
 
@@ -19127,8 +19532,8 @@ export const createScene = function (engineArg, canvasArg) {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
-        "Ceiling.glb",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Ceiling/",
+        "Ceiling.gltf",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
@@ -22748,6 +23153,10 @@ export const createScene = function (engineArg, canvasArg) {
                     ? serializeVector3(viewerWallLastSafeCameraPosition)
                     : null,
                 wallMeshes: wallMeshes.length,
+                floorMeshes: floorMeshes.length,
+                floorSegments: getLightingFloorSegmentMeshes().length,
+                ceilingMeshes: ceilingMeshes.length,
+                ceilingSegments: getLightingCeilingSegmentMeshes().length,
                 activeWallCollisionMeshes: getViewerWallCollisionMeshes().length,
                 propMeshes: propMeshes.length,
                 artworks: getActiveArtworks().length,
@@ -22820,9 +23229,43 @@ export const createScene = function (engineArg, canvasArg) {
         getWallSegmentLightTargetDebug: function () {
             return getWallSegmentLightTargetDebug();
         },
+        getFloorSegmentLightTargetDebug: function () {
+            return getSurfaceSegmentLightTargetDebug(
+                "floor",
+                getLightingFloorSegmentMeshes,
+                isLightingFloorSegmentMesh,
+                "_floorSegmentTargetDebug"
+            );
+        },
+        getCeilingSegmentLightTargetDebug: function () {
+            return getSurfaceSegmentLightTargetDebug(
+                "ceiling",
+                getLightingCeilingSegmentMeshes,
+                isLightingCeilingSegmentMesh,
+                "_ceilingSegmentTargetDebug"
+            );
+        },
         refreshLocalLightWallSegmentTargets: function () {
             refreshAllCommonLocalLightTargets();
             return getWallSegmentLightTargetDebug();
+        },
+        refreshLocalLightSurfaceSegmentTargets: function () {
+            refreshAllCommonLocalLightTargets();
+            return {
+                walls: getWallSegmentLightTargetDebug(),
+                floor: getSurfaceSegmentLightTargetDebug(
+                    "floor",
+                    getLightingFloorSegmentMeshes,
+                    isLightingFloorSegmentMesh,
+                    "_floorSegmentTargetDebug"
+                ),
+                ceiling: getSurfaceSegmentLightTargetDebug(
+                    "ceiling",
+                    getLightingCeilingSegmentMeshes,
+                    isLightingCeilingSegmentMesh,
+                    "_ceilingSegmentTargetDebug"
+                )
+            };
         },
         getLocalLightCameraCullingDebug: function () {
             return getLocalLightCameraCullingDebug();
