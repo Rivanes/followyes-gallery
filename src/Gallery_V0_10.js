@@ -5275,6 +5275,14 @@ export const createScene = function (engineArg, canvasArg) {
                 margin: 22px 0;
             }
 
+            .berryboyMobileOnly {
+                display: none !important;
+            }
+
+            .berryboyDesktopOnly {
+                display: block;
+            }
+
             .berryboyIntroTile {
                 border: 1px solid rgba(255,255,255,0.14);
                 background: rgba(255,255,255,0.075);
@@ -5500,6 +5508,14 @@ export const createScene = function (engineArg, canvasArg) {
                     min-height: 96px;
                 }
 
+                .berryboyDesktopOnly {
+                    display: none !important;
+                }
+
+                .berryboyMobileOnly {
+                    display: block !important;
+                }
+
                 .berryboyLookChoice {
                     display: none;
                 }
@@ -5550,10 +5566,12 @@ export const createScene = function (engineArg, canvasArg) {
             viewerIntroOverlay.innerHTML = `
                 <div id="berryboyViewerIntroCard" role="dialog" aria-modal="true" aria-label="Viewer controls">
                     <h1>Explore the gallery</h1>
-                    <p>Move through the space, click artworks to approach them, and choose how you want to rotate the camera on desktop.</p>
+
+                    <p class="berryboyDesktopOnly">Move through the space with WASD or left-click the floor. Choose how you want to rotate the camera.</p>
+                    <p class="berryboyMobileOnly">Move with the joystick, drag with one finger to rotate the camera, and tap artworks to approach them.</p>
 
                     <div class="berryboyIntroGrid">
-                        <div class="berryboyIntroTile">
+                        <div class="berryboyIntroTile berryboyDesktopOnly">
                             <div class="berryboyIntroIcon">
                                 <div class="berryboyKeyRow">
                                     <span class="berryboyKey">W</span>
@@ -5566,26 +5584,38 @@ export const createScene = function (engineArg, canvasArg) {
                             <p>Use WASD to walk, or left-click the floor to move.</p>
                         </div>
 
-                        <div class="berryboyIntroTile">
+                        <div class="berryboyIntroTile berryboyDesktopOnly">
                             <div class="berryboyMouseIcon"></div>
                             <strong>Desktop camera</strong>
                             <p>Hold your selected mouse button and drag to look around.</p>
                         </div>
 
-                        <div class="berryboyIntroTile">
-                            <div class="berryboyJoystickIcon"></div>
-                            <strong>Mobile movement</strong>
-                            <p>Use the joystick to move. Drag with one finger to rotate the camera.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile">
+                        <div class="berryboyIntroTile berryboyDesktopOnly">
                             <div class="berryboyTapIcon"></div>
                             <strong>Artworks and sculptures</strong>
-                            <p>Click or tap an artwork or sculpture to smoothly approach it.</p>
+                            <p>Left-click an artwork or sculpture to smoothly approach it.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile berryboyMobileOnly">
+                            <div class="berryboyJoystickIcon"></div>
+                            <strong>Mobile movement</strong>
+                            <p>Use the joystick to move through the gallery.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile berryboyMobileOnly">
+                            <div class="berryboyMouseIcon"></div>
+                            <strong>Mobile camera</strong>
+                            <p>Drag with one finger to rotate the camera.</p>
+                        </div>
+
+                        <div class="berryboyIntroTile berryboyMobileOnly">
+                            <div class="berryboyTapIcon"></div>
+                            <strong>Artworks and sculptures</strong>
+                            <p>Tap an artwork or sculpture to smoothly approach it.</p>
                         </div>
                     </div>
 
-                    <div class="berryboyLookChoice">
+                    <div class="berryboyLookChoice berryboyDesktopOnly">
                         <p><strong>Choose desktop camera rotation</strong></p>
                         <div class="berryboyLookButtons">
                             <button type="button" class="berryboyLookButton" data-look-mode="middle">
@@ -19067,8 +19097,8 @@ export const createScene = function (engineArg, canvasArg) {
 
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/",
-        "Props.glb",
+        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/props/",
+        "Props.gltf",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
