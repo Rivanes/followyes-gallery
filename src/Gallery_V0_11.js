@@ -1848,6 +1848,17 @@ var pipeline = ensureVisualRenderingPipeline();
                 ) {
                     registerViewerCollisionMesh(displayMesh.metadata.sculptureMesh, "sculpture");
                 }
+
+                if (
+                    displayMesh &&
+                    displayMesh.metadata &&
+                    displayMesh.metadata.model3dRuntime &&
+                    displayMesh.metadata.model3dRuntime.meshes
+                ) {
+                    displayMesh.metadata.model3dRuntime.meshes.forEach(function (mesh) {
+                        registerViewerCollisionMesh(mesh, "sculpture");
+                    });
+                }
             });
         }
     }
@@ -2259,6 +2270,16 @@ var pipeline = ensureVisualRenderingPipeline();
         } else {
             if (ownerMesh.metadata && ownerMesh.metadata.sculptureMesh) {
                 includedMeshes.push(ownerMesh.metadata.sculptureMesh);
+            }
+
+            if (
+                ownerMesh.metadata &&
+                ownerMesh.metadata.model3dRuntime &&
+                ownerMesh.metadata.model3dRuntime.meshes
+            ) {
+                ownerMesh.metadata.model3dRuntime.meshes.forEach(function (mesh) {
+                    includedMeshes.push(mesh);
+                });
             }
 
             floorMeshes.forEach(function (floorMesh) {
@@ -3781,6 +3802,16 @@ var pipeline = ensureVisualRenderingPipeline();
             ) {
                 addMeshUnique(targetList, displayMesh.metadata.sculptureMesh);
             }
+
+            if (
+                displayMesh.metadata &&
+                displayMesh.metadata.model3dRuntime &&
+                displayMesh.metadata.model3dRuntime.meshes
+            ) {
+                displayMesh.metadata.model3dRuntime.meshes.forEach(function (mesh) {
+                    addMeshUnique(targetList, mesh);
+                });
+            }
         });
     }
 
@@ -4015,6 +4046,13 @@ var pipeline = ensureVisualRenderingPipeline();
     var artworkTransformScaleMax = 3.0;
     var artworkTransformScaleStep = 0.05;
     var artworkTransformRotationStepDegrees = 15;
+
+    // STAGE 12C25 CLEAN - SCULPTURE SLOT TRANSFORM
+    // UI dla rzezb/model slots: uniform scale + pelny obrot 360 stopni.
+    // W Babylon pionowa os sceny to Y, wiec to jest obrot rzezby w miejscu na podlodze.
+    var sculptureTransformScaleMin = 0.25;
+    var sculptureTransformScaleMax = 3.0;
+    var sculptureTransformRotationStepDegrees = 1;
 
     var artworkBoundsSafeMargin = 0.0;
     var artworkCollisionPadding = 0.0;
@@ -5276,6 +5314,151 @@ var pipeline = ensureVisualRenderingPipeline();
         updateArtworkTransformUi();
         updateAlignmentPanel();
         notifyGalleryStatus("Zresetowano skale i rotacje obrazu. Zapisz stan galerii, aby zachowac zmiane.");
+    }
+
+    // STAGE 12C25 CLEAN - SCULPTURE / MODEL SLOT TRANSFORM HELPERS
+    function clampSculptureTransformScale(value) {
+        var numericValue = Number(value);
+
+        if (!isFinite(numericValue)) {
+            numericValue = 1;
+        }
+
+        return BABYLON.Scalar.Clamp(
+            numericValue,
+            sculptureTransformScaleMin,
+            sculptureTransformScaleMax
+        );
+    }
+
+    function normalizeSculptureTransformRotationDegrees(value) {
+        var degrees = Number(value);
+
+        if (!isFinite(degrees)) {
+            degrees = 0;
+        }
+
+        degrees = Math.round(degrees / sculptureTransformRotationStepDegrees) * sculptureTransformRotationStepDegrees;
+
+        while (degrees < 0) {
+            degrees += 360;
+        }
+
+        while (degrees > 360) {
+            degrees -= 360;
+        }
+
+        return degrees;
+    }
+
+    function getUniformScaleFromVector3(vector, fallback) {
+        if (!vector) {
+            return fallback;
+        }
+
+        var values = [vector.x, vector.y, vector.z]
+            .map(function (value) {
+                return Number(value);
+            })
+            .filter(function (value) {
+                return isFinite(value) && value > 0;
+            });
+
+        if (!values.length) {
+            return fallback;
+        }
+
+        return values.reduce(function (sum, value) {
+            return sum + value;
+        }, 0) / values.length;
+    }
+
+    function getModel3dSlotTransformState(slot) {
+        if (!slot) {
+            return {
+                scale: 1,
+                rotationDegrees: 0
+            };
+        }
+
+        var storedTransform = slot.metadata && slot.metadata.sculptureTransform
+            ? slot.metadata.sculptureTransform
+            : null;
+
+        var scale = storedTransform && storedTransform.scale !== undefined
+            ? storedTransform.scale
+            : getUniformScaleFromVector3(slot.scaling, 1);
+
+        var rotationDegrees = storedTransform && storedTransform.rotationDegrees !== undefined
+            ? storedTransform.rotationDegrees
+            : BABYLON.Tools.ToDegrees(slot.rotation ? slot.rotation.y : 0);
+
+        return {
+            scale: clampSculptureTransformScale(scale),
+            rotationDegrees: normalizeSculptureTransformRotationDegrees(rotationDegrees)
+        };
+    }
+
+    function setModel3dSlotTransformState(slot, transformState, shouldNotify) {
+        if (!slot) {
+            notifyGalleryStatus("Zaznacz rzezbe/model slot, aby zmienic skale lub rotacje.");
+            return null;
+        }
+
+        slot.metadata = slot.metadata || {};
+
+        var currentTransform = getModel3dSlotTransformState(slot);
+        var nextTransform = {
+            scale: clampSculptureTransformScale(
+                transformState && transformState.scale !== undefined
+                    ? transformState.scale
+                    : currentTransform.scale
+            ),
+            rotationDegrees: normalizeSculptureTransformRotationDegrees(
+                transformState && transformState.rotationDegrees !== undefined
+                    ? transformState.rotationDegrees
+                    : currentTransform.rotationDegrees
+            )
+        };
+
+        slot.metadata.sculptureTransform = nextTransform;
+        slot.scaling.x = nextTransform.scale;
+        slot.scaling.y = nextTransform.scale;
+        slot.scaling.z = nextTransform.scale;
+
+        // Babylon ma pion jako Y. To jest obrot rzezby w miejscu na podlodze.
+        slot.rotation.y = BABYLON.Tools.ToRadians(nextTransform.rotationDegrees);
+
+        slot.computeWorldMatrix(true);
+
+        if (slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.root) {
+            slot.metadata.model3dRuntime.root.computeWorldMatrix(true);
+        }
+
+        if (activeModel3dSlot === slot) {
+            setModel3dSlotSelected(slot, true);
+        }
+
+        updatePedestalLight(slot);
+        updateViewerModePlaceholderVisibility();
+        updateModel3dTransformUi();
+
+        if (shouldNotify) {
+            notifyGalleryStatus("Zmieniono transformacje rzezby/modelu. Zapisz stan galerii, aby zachowac zmiane.");
+        }
+
+        return nextTransform;
+    }
+
+    function resetSelectedModel3dSlotTransform() {
+        if (!selectedSphere) {
+            return;
+        }
+
+        setModel3dSlotTransformState(selectedSphere, {
+            scale: 1,
+            rotationDegrees: 0
+        }, true);
     }
 
     function getArtworkDimensionsForAspectRatio(imageAspect) {
@@ -9348,6 +9531,123 @@ var pipeline = ensureVisualRenderingPipeline();
     if (artworkImageSectionData && artworkImageSectionData.section) {
         editorScroll.insertBefore(model3dSectionData.section, artworkImageSectionData.section);
     }
+
+    var model3dTransformSectionData = createEditorSection("SCULPTURE TRANSFORM");
+    model3dTransformSectionData.section.classList.add("gallery-artwork-transform-section", "is-hidden");
+
+    var model3dTransformGrid = document.createElement("div");
+    model3dTransformGrid.className = "gallery-artwork-transform-grid";
+
+    var model3dTransformScaleRow = createArtworkTransformSliderRow(
+        "Scale",
+        Math.round(sculptureTransformScaleMin * 100),
+        Math.round(sculptureTransformScaleMax * 100),
+        1
+    );
+    var model3dTransformRotationRow = createArtworkTransformSliderRow("Rotate 360°", 0, 360, sculptureTransformRotationStepDegrees);
+
+    model3dTransformGrid.appendChild(model3dTransformScaleRow.row);
+    model3dTransformGrid.appendChild(model3dTransformRotationRow.row);
+
+    var model3dTransformResetButton = document.createElement("button");
+    model3dTransformResetButton.type = "button";
+    model3dTransformResetButton.className = "gallery-editor-action-button gallery-artwork-transform-reset";
+    model3dTransformResetButton.innerText = "RESET TRANSFORM";
+
+    var model3dTransformNote = document.createElement("p");
+    model3dTransformNote.className = "gallery-artwork-image-note";
+    model3dTransformNote.innerText = "Scale changes the whole sculpture/model slot. Rotation is a full 360° spin on the floor.";
+
+    model3dTransformSectionData.section.appendChild(model3dTransformGrid);
+    model3dTransformSectionData.section.appendChild(model3dTransformResetButton);
+    model3dTransformSectionData.section.appendChild(model3dTransformNote);
+    editorScroll.appendChild(model3dTransformSectionData.section);
+
+    if (artworkImageSectionData && artworkImageSectionData.section) {
+        editorScroll.insertBefore(model3dTransformSectionData.section, artworkImageSectionData.section);
+    }
+
+    function updateModel3dTransformUi() {
+        if (!model3dTransformSectionData || !model3dTransformSectionData.section) {
+            return;
+        }
+
+        var slot = selectedSphere || activeModel3dSlot || null;
+
+        model3dTransformSectionData.section.classList.toggle(
+            "is-hidden",
+            !editMode || !slot
+        );
+
+        var disabled = !slot;
+        model3dTransformScaleRow.input.disabled = disabled;
+        model3dTransformRotationRow.input.disabled = disabled;
+        model3dTransformResetButton.disabled = disabled;
+
+        if (!slot) {
+            model3dTransformScaleRow.value.innerText = "-";
+            model3dTransformRotationRow.value.innerText = "-";
+            return;
+        }
+
+        var transformState = getModel3dSlotTransformState(slot);
+        var scalePercent = Math.round(transformState.scale * 100);
+
+        model3dTransformScaleRow.input.value = String(scalePercent);
+        model3dTransformRotationRow.input.value = String(transformState.rotationDegrees);
+        model3dTransformScaleRow.value.innerText = scalePercent + "%";
+        model3dTransformRotationRow.value.innerText = transformState.rotationDegrees + "°";
+    }
+
+    function applyModel3dTransformSliderValues(shouldNotify) {
+        if (!selectedSphere && activeModel3dSlot) {
+            selectedSphere = activeModel3dSlot;
+        }
+
+        if (!selectedSphere) {
+            notifyGalleryStatus("Zaznacz rzezbe/model slot, aby zmienic skale lub rotacje.");
+            return;
+        }
+
+        var scaleValue = Number(model3dTransformScaleRow.input.value) / 100;
+        var rotationValue = Number(model3dTransformRotationRow.input.value);
+
+        setModel3dSlotTransformState(selectedSphere, {
+            scale: scaleValue,
+            rotationDegrees: rotationValue
+        }, !!shouldNotify);
+    }
+
+    model3dTransformScaleRow.input.addEventListener("input", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyModel3dTransformSliderValues(false);
+    });
+
+    model3dTransformScaleRow.input.addEventListener("change", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyModel3dTransformSliderValues(true);
+    });
+
+    model3dTransformRotationRow.input.addEventListener("input", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyModel3dTransformSliderValues(false);
+    });
+
+    model3dTransformRotationRow.input.addEventListener("change", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyModel3dTransformSliderValues(true);
+    });
+
+    model3dTransformResetButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        resetSelectedModel3dSlotTransform();
+    };
+
 
     function runArtworkImageVariantsRebuildFromUi() {
         var missingCount = getActiveArtworks().filter(function (candidate) {
@@ -15889,27 +16189,59 @@ var pipeline = ensureVisualRenderingPipeline();
         viewerPlaceholderVisibilityDebug.localLightMeshesHidden = hiddenCount;
     }
 
+
+    function hasLoadedModel3dRuntime(slot) {
+        return !!(
+            slot &&
+            slot.metadata &&
+            slot.metadata.model3d &&
+            slot.metadata.model3dRuntime &&
+            slot.metadata.model3dRuntime.meshes &&
+            slot.metadata.model3dRuntime.meshes.length
+        );
+    }
+
     function updateViewerModeSpherePlaceholderVisibility() {
         var hiddenCount = 0;
-        var shouldShow = editMode || !viewerHideSculpturePlaceholders;
+        var baseShouldShowPlaceholder = editMode || !viewerHideSculpturePlaceholders;
 
         artSpheres.forEach(function (sphereMesh) {
             if (!sphereMesh) {
                 return;
             }
 
+            var hasRuntimeModel = hasLoadedModel3dRuntime(sphereMesh);
+            var showPlaceholderCube = baseShouldShowPlaceholder && !hasRuntimeModel;
+
             hiddenCount += setEditorOnlyMeshVisible(
                 sphereMesh,
-                shouldShow,
-                shouldShow
+                showPlaceholderCube,
+                showPlaceholderCube && editMode
             ) ? 1 : 0;
 
             if (sphereMesh.getChildMeshes) {
                 sphereMesh.getChildMeshes(false).forEach(function (childMesh) {
+                    if (!childMesh) {
+                        return;
+                    }
+
+                    var isRuntimeMesh = !!(
+                        childMesh.metadata &&
+                        childMesh.metadata.isModel3dRuntimeMesh
+                    );
+
+                    var showChild = isRuntimeMesh
+                        ? hasRuntimeModel
+                        : showPlaceholderCube;
+
+                    var pickChild = isRuntimeMesh
+                        ? hasRuntimeModel
+                        : false;
+
                     hiddenCount += setEditorOnlyMeshVisible(
                         childMesh,
-                        shouldShow,
-                        false
+                        showChild,
+                        pickChild
                     ) ? 1 : 0;
                 });
             }
@@ -15917,6 +16249,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         viewerPlaceholderVisibilityDebug.spherePlaceholdersHidden = hiddenCount;
     }
+
 
     function updateViewerModePlaceholderVisibility() {
         viewerPlaceholderVisibilityDebug.mode = editMode ? "edit" : "viewer";
@@ -17170,6 +17503,8 @@ var pipeline = ensureVisualRenderingPipeline();
         if (model3dPasteButton) {
             model3dPasteButton.disabled = !isVisible || !galleryModel3dClipboardState;
         }
+
+        updateModel3dTransformUi();
     }
 
     model3dUploadButton.onclick = function (event) {
@@ -21278,6 +21613,7 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
 
+
     function getModel3dSlotSelectionMeshes(slot) {
         var result = [];
 
@@ -21297,47 +21633,63 @@ var pipeline = ensureVisualRenderingPipeline();
             result.push(mesh);
         }
 
-        addMesh(slot);
-
-        if (slot && slot.metadata) {
-            addMesh(slot.metadata.sculptureMesh);
-
+        if (slot && hasLoadedModel3dRuntime(slot)) {
             var runtime = slot.metadata.model3dRuntime;
 
-            if (runtime && runtime.meshes && runtime.meshes.length) {
-                runtime.meshes.forEach(function (mesh) {
-                    addMesh(mesh);
-                });
-            }
+            runtime.meshes.forEach(function (mesh) {
+                addMesh(mesh);
+            });
+        } else {
+            addMesh(slot);
         }
 
         return result;
     }
 
     function clearModel3dSlotSelectionGlow(slot) {
-        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+        if (!slot || !slot.metadata) {
             return;
         }
 
         var storedMeshes = slot.metadata.model3dSelectionGlowMeshes || [];
 
         storedMeshes.forEach(function (mesh) {
-            if (
-                mesh &&
-                !(mesh.isDisposed && mesh.isDisposed()) &&
-                model3dSelectionHighlightLayer.removeMesh
-            ) {
-                model3dSelectionHighlightLayer.removeMesh(mesh);
+            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                return;
+            }
+
+            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
+                try {
+                    model3dSelectionHighlightLayer.removeMesh(mesh);
+                } catch (highlightRemoveError) {}
+            }
+
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = false;
+            }
+
+            if (mesh.renderOverlay !== undefined) {
+                mesh.renderOverlay = false;
             }
         });
 
         getModel3dSlotSelectionMeshes(slot).forEach(function (mesh) {
-            if (
-                mesh &&
-                !(mesh.isDisposed && mesh.isDisposed()) &&
-                model3dSelectionHighlightLayer.removeMesh
-            ) {
-                model3dSelectionHighlightLayer.removeMesh(mesh);
+            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                return;
+            }
+
+            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
+                try {
+                    model3dSelectionHighlightLayer.removeMesh(mesh);
+                } catch (highlightRemoveCurrentError) {}
+            }
+
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = false;
+            }
+
+            if (mesh.renderOverlay !== undefined) {
+                mesh.renderOverlay = false;
             }
         });
 
@@ -21345,7 +21697,7 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function applyModel3dSlotSelectionGlow(slot) {
-        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+        if (!slot || !slot.metadata) {
             return;
         }
 
@@ -21359,35 +21711,18 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
-            if (mesh.renderOutline !== undefined) {
-                mesh.renderOutline = false;
+            if (mesh.isVisible === false || mesh.visibility === 0) {
+                return;
             }
 
             if (mesh.renderOverlay !== undefined) {
                 mesh.renderOverlay = false;
             }
 
-            if (
-                mesh.disableEdgesRendering &&
-                typeof mesh.disableEdgesRendering === "function"
-            ) {
-                try {
-                    mesh.disableEdgesRendering();
-                } catch (edgeDisableError) {}
-            }
-
-            if (
-                mesh.isVisible === false ||
-                mesh.visibility === 0
-            ) {
-                return;
-            }
-
-            if (model3dSelectionHighlightLayer.addMesh) {
-                model3dSelectionHighlightLayer.addMesh(
-                    mesh,
-                    model3dSelectionGlowColor
-                );
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = true;
+                mesh.outlineColor = model3dSlotSelectionOutlineColor;
+                mesh.outlineWidth = hasLoadedModel3dRuntime(slot) ? 0.035 : 0.045;
                 appliedMeshes.push(mesh);
             }
         });
@@ -21400,19 +21735,6 @@ var pipeline = ensureVisualRenderingPipeline();
             return;
         }
 
-        // STAGE 12C2:
-        // Rzeźba/model slot ma selection po całym obiekcie/sylwetce.
-        // Nie używamy płaskiego rectangular plane jak dla obrazów.
-        slot.renderOutline = false;
-        slot.renderOverlay = false;
-
-        var sculpture = slot.metadata ? slot.metadata.sculptureMesh : null;
-
-        if (sculpture) {
-            sculpture.renderOutline = false;
-            sculpture.renderOverlay = false;
-        }
-
         hideArtworkSelectionGlow(slot);
         clearModel3dSlotSelectionGlow(slot);
 
@@ -21420,6 +21742,7 @@ var pipeline = ensureVisualRenderingPipeline();
             applyModel3dSlotSelectionGlow(slot);
         }
     }
+
 
     function selectModel3dSlot(slot) {
         if (!slot) {
@@ -21438,6 +21761,7 @@ var pipeline = ensureVisualRenderingPipeline();
         selectedSphere = slot;
         setModel3dSlotSelected(slot, true);
         updateModel3dSlotUi();
+        updateModel3dTransformUi();
         updateEditHelpStatus();
 
         return true;
@@ -21454,6 +21778,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         if (!skipUiUpdate) {
             updateModel3dSlotUi();
+            updateModel3dTransformUi();
         }
     }
 
@@ -21688,40 +22013,20 @@ var pipeline = ensureVisualRenderingPipeline();
             cast: true
         });
 
-        var sculpture = BABYLON.MeshBuilder.CreateTorusKnot(
-            "PedestalSculpture_" + index,
-            {
-                radius: 0.22,
-                tube: 0.07,
-                radialSegments: 80,
-                tubularSegments: 64,
-                p: 2,
-                q: 3
-            },
-            scene
-        );
 
-        sculpture.parent = pedestal;
-        sculpture.position = new BABYLON.Vector3(0, 0.72, 0);
-        sculpture.rotation.x = Math.PI / 2;
-        sculpture.rotation.z = 0.28;
-        sculpture.isPickable = false;
-
-        var sculptureMat = new BABYLON.StandardMaterial("PedestalSculptureMat_" + index, scene);
-        sculptureMat.diffuseColor = new BABYLON.Color3(0.56, 0.56, 0.54);
-        sculptureMat.specularColor = new BABYLON.Color3(0.12, 0.12, 0.10);
-        sculpture.material = sculptureMat;
-        registerViewerCollisionMesh(sculpture, "sculpture");
-        registerCommonShadowMesh(sculpture, {
-            global: true,
-            local: true,
-            receive: true,
-            cast: true
-        });
+        // STAGE 12C25 CLEAN:
+        // Slot rzezby/modelu to teraz tylko jeden widoczny cube-placeholder.
+        // Nie generujemy drugiego obiektu TorusKnot. Po wgraniu GLB cube jest ukrywany,
+        // a model przejmuje widocznosc, pickowanie i outline zaznaczenia.
+        var sculpture = null;
 
         pedestal.metadata = pedestal.metadata || {};
         pedestal.metadata.displayType = "pedestal";
-        pedestal.metadata.sculptureMesh = sculpture;
+        pedestal.metadata.sculptureMesh = null;
+        pedestal.metadata.sculptureTransform = pedestal.metadata.sculptureTransform || {
+            scale: 1,
+            rotationDegrees: 0
+        };
 
         pedestal.metadata.isModel3dSlot = true;
         pedestal.metadata.model3d = pedestal.metadata.model3d || null;
@@ -23223,6 +23528,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
                 updatePedestalLight(selectedSphere);
                 updateViewerModePlaceholderVisibility();
+                updateModel3dTransformUi();
             }
         }
     };
@@ -23276,6 +23582,7 @@ var pipeline = ensureVisualRenderingPipeline();
             requestAllLocalSpotShadowRefresh(true);
             updateViewerModePlaceholderVisibility();
             updateModel3dSlotUi();
+            updateModel3dTransformUi();
 
             attachGalleryCameraControl();
         }
@@ -23466,6 +23773,9 @@ var pipeline = ensureVisualRenderingPipeline();
                     material: getMaterialState(sphere.material),
                     isModel3dSlot: !!(sphere.metadata && sphere.metadata.isModel3dSlot),
                     isDynamicModelSlot: !!(sphere.metadata && sphere.metadata.isDynamicModelSlot),
+                    sculptureTransform: sphere.metadata && sphere.metadata.sculptureTransform
+                        ? Object.assign({}, sphere.metadata.sculptureTransform)
+                        : getModel3dSlotTransformState(sphere),
                     model3d: getModel3dState(sphere)
                 };
             })
@@ -23747,6 +24057,14 @@ var pipeline = ensureVisualRenderingPipeline();
                         vectorFromState(sphereState.scaling, sphere.scaling)
                     );
                 }
+
+                sphere.metadata = sphere.metadata || {};
+                sphere.metadata.sculptureTransform = sphereState.sculptureTransform
+                    ? {
+                        scale: clampSculptureTransformScale(sphereState.sculptureTransform.scale),
+                        rotationDegrees: normalizeSculptureTransformRotationDegrees(sphereState.sculptureTransform.rotationDegrees)
+                    }
+                    : getModel3dSlotTransformState(sphere);
 
                 applyMaterialStateToMesh(sphere, sphereState.material);
 
