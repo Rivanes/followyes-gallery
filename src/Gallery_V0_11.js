@@ -1532,10 +1532,18 @@ export const createScene = function (engineArg, canvasArg) {
     // Poprzednio limit 5 oznaczał: jedna lampa -> maksymalnie 5 segmentów.
     // To dawało twarde odcięcia światła na granicach segmentów.
     // Teraz limit oznacza: jeden segment -> maksymalnie 5 świateł.
-    var localLightWallSegmentMaxLightsPerSegment = 5;
-    var localLightWallSegmentTargetMaxCount = 14;
-    var localLightWallSegmentTargetRadius = 8.5;
-    var localLightWallSegmentSoftEdgeExtraRadius = 2.0;
+    // STAGE 12C13 - WIDER SEGMENT LIGHT SEARCH
+    // 12C12 było za ciasne:
+    // - max 14 segmentów na lampę
+    // - radius 8.5 + soft 2.0
+    // To dawało widoczne, ostre ucięcia światła na Floor/Wall/Ceiling segmentach.
+    //
+    // Ten zestaw jest celowo dużo szerszy.
+    // Nadal nie robimy dynamicznego przepinania materiałów jak w 12C9.
+    var localLightWallSegmentMaxLightsPerSegment = 7;
+    var localLightWallSegmentTargetMaxCount = 38;
+    var localLightWallSegmentTargetRadius = 18.0;
+    var localLightWallSegmentSoftEdgeExtraRadius = 8.0;
     var localLightWallSegmentBudgetPassActive = false;
     var localLightWallSegmentBudgetMap = {};
 
@@ -1935,6 +1943,10 @@ export const createScene = function (engineArg, canvasArg) {
             maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
             targetRadius: localLightWallSegmentTargetRadius,
             softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
+            effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius,
+            widerSearchStage: "12C13",
+            effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius,
+            widerSearchStage: "12C13",
             lights: lightDebug,
             segments: Object.keys(segmentLightMap).sort().map(function (name) {
                 return segmentLightMap[name];
@@ -1987,9 +1999,13 @@ export const createScene = function (engineArg, canvasArg) {
     // Test optymalizacji: Local Light działa tylko, gdy znajduje się w środkowej części widoku kamery.
     // Na próbę ustawione na 2/3 kadru, żeby efekt był łatwy do zauważenia.
     var localLightCameraCullingEnabled = true;
-    var localLightCameraCullingViewScale = 1.0; // STAGE 10E2 - full camera view
+    // STAGE 12C14 - GENTLER LOCAL LIGHT CAMERA CULLING
+    // 1.0 = exact viewport. 1.22 gives a small margin outside the visible screen,
+    // so lights do not fade too early while the viewer is looking at an artwork target.
+    var localLightCameraCullingViewScale = 1.22;
     var localLightCameraCullingCheckEveryFrames = 1;
     var localLightCameraCullingFrameCounter = 0;
+    var localLightCameraCullingGraceMs = 900;
 
     // STAGE 10E3 - SMOOTH CAMERA LIGHT FADE
     // Camera culling nie robi już natychmiastowego intensity 0 / userIntensity.
@@ -2271,10 +2287,38 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         var viewportData = getLocalLightCameraCullingViewportData(item);
-        item._cameraCullingDebug = viewportData;
-        item.cameraCulled = !viewportData.inside;
+        var now = Date.now();
 
-        return viewportData.inside;
+        if (viewportData.inside) {
+            item._lastCameraCullingInsideTime = now;
+            item.cameraCulled = false;
+            item._cameraCullingDebug = viewportData;
+            return true;
+        }
+
+        var lastInsideTime = item._lastCameraCullingInsideTime || 0;
+        var withinGrace = lastInsideTime > 0 && now - lastInsideTime <= localLightCameraCullingGraceMs;
+
+        if (withinGrace) {
+            item.cameraCulled = false;
+            item._cameraCullingDebug = Object.assign(
+                {},
+                viewportData,
+                {
+                    inside: true,
+                    reason: "outsideCameraViewGrace",
+                    rawInside: false,
+                    graceMs: localLightCameraCullingGraceMs,
+                    msSinceInside: now - lastInsideTime
+                }
+            );
+            return true;
+        }
+
+        item._cameraCullingDebug = viewportData;
+        item.cameraCulled = true;
+
+        return false;
     }
 
     function getLocalLightRuntimeTargetIntensity(item) {
@@ -2383,6 +2427,8 @@ export const createScene = function (engineArg, canvasArg) {
         return {
             enabled: localLightCameraCullingEnabled,
             viewScale: localLightCameraCullingViewScale,
+            graceMs: localLightCameraCullingGraceMs,
+            expandedViewportEnabled: localLightCameraCullingViewScale > 1,
             checkEveryFrames: localLightCameraCullingCheckEveryFrames,
             smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
             fadeInSpeed: localLightCameraCullingFadeInSpeed,
@@ -2441,6 +2487,7 @@ export const createScene = function (engineArg, canvasArg) {
                         : null,
                     runtimeIntensity: item.light ? item.light.intensity : null,
                     cameraCulled: !!item.cameraCulled,
+                    lastCameraCullingInsideTime: item._lastCameraCullingInsideTime || null,
                     cameraCulling: item._cameraCullingDebug || null
                 };
             })
@@ -2457,7 +2504,14 @@ export const createScene = function (engineArg, canvasArg) {
         if (options.viewScale !== undefined) {
             localLightCameraCullingViewScale = Math.max(
                 0.1,
-                Math.min(1.0, Number(options.viewScale) || 0.66)
+                Math.min(1.6, Number(options.viewScale) || 1.22)
+            );
+        }
+
+        if (options.graceMs !== undefined) {
+            localLightCameraCullingGraceMs = Math.max(
+                0,
+                Math.min(4000, Number(options.graceMs) || localLightCameraCullingGraceMs)
             );
         }
 
@@ -23267,11 +23321,72 @@ export const createScene = function (engineArg, canvasArg) {
                 )
             };
         },
+        setLocalLightSegmentSearchSettings: function (settings) {
+            settings = settings || {};
+
+            if (settings.maxLightsPerSegment !== undefined) {
+                localLightWallSegmentMaxLightsPerSegment = Math.max(
+                    1,
+                    Math.floor(Number(settings.maxLightsPerSegment) || localLightWallSegmentMaxLightsPerSegment)
+                );
+            }
+
+            if (settings.maxSegmentsPerLight !== undefined) {
+                localLightWallSegmentTargetMaxCount = Math.max(
+                    1,
+                    Math.floor(Number(settings.maxSegmentsPerLight) || localLightWallSegmentTargetMaxCount)
+                );
+            }
+
+            if (settings.radius !== undefined) {
+                localLightWallSegmentTargetRadius = Math.max(
+                    0.1,
+                    Number(settings.radius) || localLightWallSegmentTargetRadius
+                );
+            }
+
+            if (settings.softExtraRadius !== undefined) {
+                localLightWallSegmentSoftEdgeExtraRadius = Math.max(
+                    0,
+                    Number(settings.softExtraRadius) || localLightWallSegmentSoftEdgeExtraRadius
+                );
+            }
+
+            refreshAllCommonLocalLightTargets();
+
+            return {
+                maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+                maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+                radius: localLightWallSegmentTargetRadius,
+                softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
+                effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
+            };
+        },
+        getLocalLightSegmentSearchSettings: function () {
+            return {
+                maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
+                maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+                radius: localLightWallSegmentTargetRadius,
+                softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
+                effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
+            };
+        },
         getLocalLightCameraCullingDebug: function () {
             return getLocalLightCameraCullingDebug();
         },
         setLocalLightCameraCulling: function (options) {
             return setLocalLightCameraCullingDebugOptions(options);
+        },
+        getLocalLightCameraCullingSettings: function () {
+            return {
+                enabled: localLightCameraCullingEnabled,
+                viewScale: localLightCameraCullingViewScale,
+                graceMs: localLightCameraCullingGraceMs,
+                smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
+                fadeInSpeed: localLightCameraCullingFadeInSpeed,
+                fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
+                beamAwareEnabled: localLightCameraCullingBeamAwareEnabled
+            };
         },
         cleanDisabledLocalLights: function () {
             return cleanDisabledLocalLightPool();
