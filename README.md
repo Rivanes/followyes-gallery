@@ -1456,3 +1456,13 @@ GalleryApp.deleteSelected()
 GalleryApp.deleteModel3dSlot("ArtSphere_0")
 GalleryApp.getModel3dSlotDebug()
 ```
+
+
+## Stage 12C26 — Visual Look Presets + Sculpture Slot + PointLight Wall Leak Fix
+
+- Visual Settings Save Look corrected: it now saves custom Look presets, not gallery_state.
+- Added 3 Visual Look preset slots with Load / Save Look / Clear, like Main Light presets.
+- Fixed GLB upload MIME by forcing .glb to `model/gltf-binary` instead of `application/octet-stream`.
+- Improved sculpture/model slot placeholder visibility and pickability in Edit Mode.
+- Changed sculpture selection from filled white HighlightLayer glow to edge/silhouette outline.
+- PointLight wall targeting now uses range-limited segment search and line-of-sight filtering so it should not target wall segments behind another wall.

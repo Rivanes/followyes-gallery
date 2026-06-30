@@ -403,7 +403,8 @@ export const createScene = function (engineArg, canvasArg) {
 
     // STAGE 12C15 - VISUAL SETTINGS / QUALITY PRESETS
     // Editor-only UI controls final viewer look. Public Viewer only sees saved state.
-    var visualSettingsStorageKey = "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24";
+    var visualSettingsStorageKey = "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C26";
+    var visualLegacySettingsStorageKeys = ["BerryboyArtGallery_VisualSettings_V0_11_STAGE12C25", "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24"];
     var visualRenderingPipeline = null;
     var visualSsaoPipeline = null;
     var visualSsaoAttached = false;
@@ -411,6 +412,15 @@ export const createScene = function (engineArg, canvasArg) {
     var visualCurrentSettings = null;
     var visualActivePresetName = "Custom";
     var visualApplyLock = false;
+    var visualPresetApplyInProgress = false;
+    var visualPresetQueuedName = null;
+    var visualControlsSyncTimer = null;
+    var visualSaveLookInProgress = false;
+    // STAGE 12C26 - VISUAL CUSTOM LOOK PRESETS
+    // SAVE LOOK ma dzialac jak preset w MAIN LIGHT: zapis lokalnego slotu, bez automatycznego Save State.
+    var visualLookPresetStorageKey = "BerryboyArtGallery_VisualLookPresets_V0_11_STAGE12C26";
+    var visualLookPresetLegacyStorageKeys = ["BerryboyArtGallery_VisualLookPresets_V0_11_STAGE12C25"];
+    var visualLookPresetRows = [];
 
     var visualDefaultSettings = {
         preset: "Neutral Gallery",
@@ -938,19 +948,25 @@ bloomEnabled: pipeline ? !!pipeline.bloomEnabled : !!stored.bloomEnabled,
 
     function readSavedVisualSettings() {
         try {
-            var rawData = localStorage.getItem(visualSettingsStorageKey);
+            var storageKeys = [visualSettingsStorageKey].concat(visualLegacySettingsStorageKeys || []);
 
-            if (!rawData) {
-                return null;
+            for (var storageIndex = 0; storageIndex < storageKeys.length; storageIndex++) {
+                var rawData = localStorage.getItem(storageKeys[storageIndex]);
+
+                if (!rawData) {
+                    continue;
+                }
+
+                var parsedData = JSON.parse(rawData);
+
+                if (!parsedData || typeof parsedData !== "object") {
+                    continue;
+                }
+
+                return normalizeVisualSettings(parsedData);
             }
 
-            var parsedData = JSON.parse(rawData);
-
-            if (!parsedData || typeof parsedData !== "object") {
-                return null;
-            }
-
-            return normalizeVisualSettings(parsedData);
+            return null;
         } catch (error) {
             return null;
         }
@@ -959,6 +975,9 @@ bloomEnabled: pipeline ? !!pipeline.bloomEnabled : !!stored.bloomEnabled,
     function clearSavedVisualSettings() {
         try {
             localStorage.removeItem(visualSettingsStorageKey);
+            (visualLegacySettingsStorageKeys || []).forEach(function (storageKey) {
+                localStorage.removeItem(storageKey);
+            });
         } catch (error) {}
 
         return true;
@@ -1023,68 +1042,227 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateVisualPresetButtons(settings.preset || "Custom");
     }
 
+    // STAGE 12C26 - VISUAL SETTINGS STABILITY + CUSTOM LOOK PRESETS
+    // Presety Visual Settings potrafia przebudowac SSAO / post-process / odbicia.
+    // Dlatego nie pozwalamy nakladac kilku presetow jednoczesnie i zostawiamy tylko ostatni klik.
+    function isVisualControlKey(key) {
+        return typeof key === "string" && key.indexOf("visual") === 0;
+    }
+
+    function persistLightingOrVisualControl(key) {
+        if (isVisualControlKey(key)) {
+            persistCurrentVisualSettings();
+            return;
+        }
+
+        persistCurrentLightingSettings();
+    }
+
+    function setVisualPresetButtonsDisabled(isDisabled) {
+        var buttons = document.querySelectorAll(".gallery-visual-preset-button");
+
+        buttons.forEach(function (button) {
+            button.disabled = !!isDisabled;
+            button.classList.toggle("is-loading", !!isDisabled);
+        });
+    }
+
+    function scheduleVisualControlsSync(settings) {
+        settings = normalizeVisualSettings(settings || readVisualSettingsFromScene());
+
+        if (visualControlsSyncTimer) {
+            clearTimeout(visualControlsSyncTimer);
+            visualControlsSyncTimer = null;
+        }
+
+        function syncNow() {
+            syncVisualControls(settings);
+        }
+
+        syncNow();
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(syncNow);
+        }
+
+        visualControlsSyncTimer = setTimeout(function () {
+            visualControlsSyncTimer = null;
+            syncNow();
+        }, 16);
+    }
+
+    function readVisualLookPresets() {
+        var rawData = null;
+
+        try {
+            rawData = localStorage.getItem(visualLookPresetStorageKey);
+
+            if (!rawData && visualLookPresetLegacyStorageKeys && visualLookPresetLegacyStorageKeys.length) {
+                for (var i = 0; i < visualLookPresetLegacyStorageKeys.length; i++) {
+                    rawData = localStorage.getItem(visualLookPresetLegacyStorageKeys[i]);
+
+                    if (rawData) {
+                        break;
+                    }
+                }
+            }
+
+            if (!rawData) {
+                return [null, null, null];
+            }
+
+            var parsedData = JSON.parse(rawData);
+
+            if (!Array.isArray(parsedData)) {
+                return [null, null, null];
+            }
+
+            return [
+                parsedData[0] ? normalizeVisualSettings(parsedData[0]) : null,
+                parsedData[1] ? normalizeVisualSettings(parsedData[1]) : null,
+                parsedData[2] ? normalizeVisualSettings(parsedData[2]) : null
+            ];
+        } catch (error) {
+            console.warn("Visual look presets read warning:", error);
+            return [null, null, null];
+        }
+    }
+
+    function writeVisualLookPresets(presets) {
+        presets = Array.isArray(presets) ? presets : [null, null, null];
+
+        try {
+            localStorage.setItem(
+                visualLookPresetStorageKey,
+                JSON.stringify([
+                    presets[0] ? normalizeVisualSettings(presets[0]) : null,
+                    presets[1] ? normalizeVisualSettings(presets[1]) : null,
+                    presets[2] ? normalizeVisualSettings(presets[2]) : null
+                ])
+            );
+        } catch (error) {
+            console.warn("Visual look presets write warning:", error);
+        }
+    }
+
+    function updateVisualLookPresetRows() {
+        var presets = readVisualLookPresets();
+
+        visualLookPresetRows.forEach(function (rowData, index) {
+            var isSaved = !!presets[index];
+
+            rowData.status.innerText = isSaved ? "Saved" : "Empty";
+            rowData.loadButton.disabled = !isSaved;
+            rowData.clearButton.disabled = !isSaved;
+        });
+    }
+
+    function saveVisualLookPreset(index) {
+        var presets = readVisualLookPresets();
+        var snapshot = createVisualSettingsSnapshot();
+
+        snapshot.preset = "Saved Look " + (index + 1);
+        presets[index] = normalizeVisualSettings(snapshot);
+
+        writeVisualLookPresets(presets);
+        updateVisualLookPresetRows();
+        notifyGalleryStatus("Saved Visual Look preset " + (index + 1) + ". Use Save State only if you want to publish it online.");
+
+        return true;
+    }
+
+    function loadVisualLookPreset(index) {
+        var presets = readVisualLookPresets();
+        var preset = presets[index];
+
+        if (!preset) {
+            return false;
+        }
+
+        // Tak jak w MAIN LIGHT: preset aktualizuje scene oraz kontrolki, bez automatycznego zapisu online.
+        applyVisualSettings(normalizeVisualSettings(preset), true, false);
+        updateVisualLookPresetRows();
+        notifyGalleryStatus("Loaded Visual Look preset " + (index + 1) + ".");
+
+        return true;
+    }
+
+    function clearVisualLookPreset(index) {
+        var presets = readVisualLookPresets();
+
+        presets[index] = null;
+        writeVisualLookPresets(presets);
+        updateVisualLookPresetRows();
+        notifyGalleryStatus("Cleared Visual Look preset " + (index + 1) + ".");
+
+        return true;
+    }
+
+
     function applyVisualSettings(settings, shouldSyncControls, skipPersist) {
         settings = normalizeVisualSettings(settings);
 
+        var previousVisualApplyLock = visualApplyLock;
         visualApplyLock = !!skipPersist;
 
         visualActivePresetName = settings.preset || "Custom";
         visualCurrentSettings = normalizeVisualSettings(settings);
 
-        scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
-        scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-        scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
-        scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
-var pipeline = ensureVisualRenderingPipeline();
+        try {
+            scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
+            scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+            scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
+            scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
 
-        if (pipeline) {
-            if (pipeline.imageProcessingEnabled !== undefined) {
-                pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+            var pipeline = ensureVisualRenderingPipeline();
+
+            if (pipeline) {
+                if (pipeline.imageProcessingEnabled !== undefined) {
+                    pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+                }
+
+                if (pipeline.fxaaEnabled !== undefined) {
+                    pipeline.fxaaEnabled = !!settings.fxaaEnabled;
+                }
+
+                if (pipeline.bloomEnabled !== undefined) {
+                    pipeline.bloomEnabled = !!settings.bloomEnabled;
+                }
+
+                if (pipeline.bloomWeight !== undefined) {
+                    pipeline.bloomWeight = Number(settings.bloomIntensity);
+                }
+
+                if (pipeline.bloomThreshold !== undefined) {
+                    pipeline.bloomThreshold = Number(settings.bloomThreshold);
+                }
+
+                if (pipeline.bloomKernel !== undefined) {
+                    pipeline.bloomKernel = 64;
+                }
             }
 
-            if (pipeline.fxaaEnabled !== undefined) {
-                pipeline.fxaaEnabled = !!settings.fxaaEnabled;
-            }
+            applyVisualSsaoSettings(settings);
+            applyVisualReflectionSettings(settings);
 
-            if (pipeline.bloomEnabled !== undefined) {
-                pipeline.bloomEnabled = !!settings.bloomEnabled;
-            }
+            scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
+            scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
+            scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
 
-            if (pipeline.bloomWeight !== undefined) {
-                pipeline.bloomWeight = Number(settings.bloomIntensity);
+            if (shouldSyncControls) {
+                scheduleVisualControlsSync(settings);
             }
-
-            if (pipeline.bloomThreshold !== undefined) {
-                pipeline.bloomThreshold = Number(settings.bloomThreshold);
-            }
-
-            if (pipeline.bloomKernel !== undefined) {
-                pipeline.bloomKernel = 64;
-            }
+        } catch (error) {
+            console.warn("Visual Settings apply warning:", error);
+        } finally {
+            visualApplyLock = previousVisualApplyLock;
         }
-
-        applyVisualSsaoSettings(settings);
-        applyVisualReflectionSettings(settings);
-
-        scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
-        scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
-        scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
-
-        if (shouldSyncControls) {
-            // Stage 12C16:
-            // Presets must visibly move the sliders/checks to their preset values.
-            syncVisualControls(settings);
-
-            if (typeof syncLightingControls === "function") {
-                syncLightingControls(readLightingSettingsFromScene());
-            }
-        }
-
-        visualApplyLock = false;
 
         if (!skipPersist) {
+            // STAGE 12C25:
+            // Visual Settings zapisuje tylko swoj look lokalny.
+            // Main Light zostaje zapisany tylko przez Main Light.
             persistCurrentVisualSettings();
-            persistCurrentLightingSettings();
         }
 
         return readVisualSettingsFromScene();
@@ -1100,6 +1278,7 @@ var pipeline = ensureVisualRenderingPipeline();
         return null;
     }
 
+
     function applyVisualPresetByName(name) {
         var preset = getVisualPresetByName(name);
 
@@ -1107,42 +1286,66 @@ var pipeline = ensureVisualRenderingPipeline();
             return null;
         }
 
-        var appliedSettings = normalizeVisualSettings(Object.assign({}, preset.settings));
-        var result = applyVisualSettings(appliedSettings, true, false);
-
-        syncVisualControls(appliedSettings);
-
-        if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(function () {
-                syncVisualControls(appliedSettings);
-            });
+        if (visualPresetApplyInProgress) {
+            visualPresetQueuedName = name;
+            updateVisualPresetButtons(name);
+            return visualCurrentSettings || readVisualSettingsFromScene();
         }
 
-        setTimeout(function () {
-            syncVisualControls(appliedSettings);
-        }, 0);
+        var appliedSettings = normalizeVisualSettings(Object.assign({}, preset.settings));
+        visualPresetApplyInProgress = true;
+        visualPresetQueuedName = null;
 
-        return result;
+        updateVisualPresetButtons(appliedSettings.preset || name);
+        setVisualPresetButtonsDisabled(true);
+
+        function runVisualPresetApply() {
+            var result = null;
+
+            try {
+                // STAGE 12C25:
+                // Preset zmienia wyglad live i zapisuje lokalny look.
+                // Ciezki zapis online robi dopiero SAVE LOOK, tak jak w Main Light zapis/preset jest osobna akcja.
+                result = applyVisualSettings(appliedSettings, false, true);
+                persistCurrentVisualSettings();
+                scheduleVisualControlsSync(appliedSettings);
+            } catch (error) {
+                console.warn("Visual preset apply warning:", error);
+            } finally {
+                visualPresetApplyInProgress = false;
+                setVisualPresetButtonsDisabled(false);
+
+                if (visualPresetQueuedName && visualPresetQueuedName !== name) {
+                    var queuedName = visualPresetQueuedName;
+                    visualPresetQueuedName = null;
+
+                    setTimeout(function () {
+                        applyVisualPresetByName(queuedName);
+                    }, 0);
+                }
+            }
+
+            return result;
+        }
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runVisualPresetApply);
+            return visualCurrentSettings || readVisualSettingsFromScene();
+        }
+
+        return runVisualPresetApply();
     }
+
 
     function resetVisualSettingsToDefault() {
         var defaultSettings = normalizeVisualSettings(
             Object.assign({}, visualDefaultSettings, { preset: "Neutral Gallery" })
         );
 
-        var result = applyVisualSettings(defaultSettings, true, false);
+        var result = applyVisualSettings(defaultSettings, false, true);
 
-        syncVisualControls(defaultSettings);
-
-        if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(function () {
-                syncVisualControls(defaultSettings);
-            });
-        }
-
-        setTimeout(function () {
-            syncVisualControls(defaultSettings);
-        }, 0);
+        persistCurrentVisualSettings();
+        scheduleVisualControlsSync(defaultSettings);
 
         return result;
     }
@@ -2310,6 +2513,38 @@ var pipeline = ensureVisualRenderingPipeline();
     var localLightWallSegmentSoftEdgeExtraRadius = 8.0;
     var localLightWallSegmentBudgetPassActive = false;
     var localLightWallSegmentBudgetMap = {};
+    // STAGE 12C26 - POINT LIGHT WALL LEAK FIX
+    // PointLight nie ma fizycznej okluzji w Babylonie, więc blokujemy targetowanie segmentów za ścianą kodem.
+    var localLightWallSegmentLineOfSightFilterEnabled = true;
+    var localLightWallSegmentLineOfSightTolerance = 0.08;
+
+    function getLocalLightSegmentSearchRadii(item, baseRadius, softExtraRadius) {
+        var range = item && item.light && item.light.range && isFinite(item.light.range)
+            ? Number(item.light.range)
+            : 0;
+
+        if (item && item.type === "point" && range > 0) {
+            var pointRadius = Math.max(1.25, Math.min(baseRadius, range * 0.92));
+            return {
+                radius: pointRadius,
+                softRadius: Math.min(pointRadius + 1.25, range + 0.85)
+            };
+        }
+
+        var radius = baseRadius;
+
+        if (range > 0) {
+            radius = Math.max(
+                radius,
+                Math.min(range * 0.9, 10.0)
+            );
+        }
+
+        return {
+            radius: radius,
+            softRadius: radius + softExtraRadius
+        };
+    }
 
     // STAGE 10F - DYNAMIC WALL SEGMENT RETARGETING WHILE MOVING LOCAL LIGHTS
     // Lampa nie może zostać przypisana raz na stałe do starych segmentów.
@@ -2490,16 +2725,13 @@ var pipeline = ensureVisualRenderingPipeline();
             ? reference.point
             : getLocalLightPosition(item);
 
-        var radius = localLightWallSegmentTargetRadius;
-
-        if (item && item.light && item.light.range) {
-            radius = Math.max(
-                radius,
-                Math.min(item.light.range * 0.9, 10.0)
-            );
-        }
-
-        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
+        var searchRadii = getLocalLightSegmentSearchRadii(
+            item,
+            localLightWallSegmentTargetRadius,
+            localLightWallSegmentSoftEdgeExtraRadius
+        );
+        var radius = searchRadii.radius;
+        var softRadius = searchRadii.softRadius;
 
         var candidates = segmentMeshes.map(function (mesh) {
             var distance = getHorizontalSegmentDistanceToReference(mesh, referencePoint);
@@ -3479,6 +3711,69 @@ var pipeline = ensureVisualRenderingPipeline();
         }
     }
 
+    function isWallSegmentVisibleFromLocalLight(mesh, item) {
+        if (!localLightWallSegmentLineOfSightFilterEnabled) {
+            return true;
+        }
+
+        if (!mesh || !isLightingWallSegmentMesh(mesh)) {
+            return false;
+        }
+
+        // SpotLight ma już własny ray do powierzchni. Ten filtr jest kluczowy dla PointLight,
+        // bo PointLight w Babylonie nie zatrzymuje się fizycznie na ścianach.
+        if (!item || item.type !== "point") {
+            return true;
+        }
+
+        var origin = getLocalLightPosition(item);
+        var target = getMeshWorldCenter(mesh);
+        var direction = target.subtract(origin);
+        var distance = direction.length();
+
+        if (distance <= 0.0001) {
+            return true;
+        }
+
+        direction.normalize();
+
+        try {
+            var ray = new BABYLON.Ray(
+                origin,
+                direction,
+                distance + localLightWallSegmentLineOfSightTolerance + 0.2
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (candidate) {
+                    return isLightingWallSegmentMesh(candidate);
+                }
+            );
+
+            if (!hit || !hit.hit || !hit.pickedMesh) {
+                return false;
+            }
+
+            if (hit.pickedMesh === mesh) {
+                return true;
+            }
+
+            if (
+                hit.distance !== undefined &&
+                isFinite(hit.distance) &&
+                hit.distance < distance - localLightWallSegmentLineOfSightTolerance
+            ) {
+                return false;
+            }
+
+            return hit.pickedMesh === mesh;
+        } catch (error) {
+            console.warn("Wall segment line-of-sight filter warning:", error);
+            return true;
+        }
+    }
+
     function addWallSegmentBudgetUse(mesh, item) {
         if (!mesh || !isLightingWallSegmentMesh(mesh)) {
             return false;
@@ -3511,29 +3806,28 @@ var pipeline = ensureVisualRenderingPipeline();
             ? reference.point
             : getLocalLightPosition(item);
 
-        var radius = localLightWallSegmentTargetRadius;
-
-        if (item && item.light && item.light.range) {
-            radius = Math.max(
-                radius,
-                Math.min(item.light.range * 0.9, 10.0)
-            );
-        }
-
-        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
+        var searchRadii = getLocalLightSegmentSearchRadii(
+            item,
+            localLightWallSegmentTargetRadius,
+            localLightWallSegmentSoftEdgeExtraRadius
+        );
+        var radius = searchRadii.radius;
+        var softRadius = searchRadii.softRadius;
 
         var candidates = wallSegments.map(function (mesh) {
             var distance = getWallSegmentDistanceToReference(mesh, referencePoint);
             var frontFacing = isWallSegmentFrontFacingLocalLight(mesh, item);
+            var lineOfSight = isWallSegmentVisibleFromLocalLight(mesh, item);
 
             return {
                 mesh: mesh,
                 distance: distance,
                 frontFacing: frontFacing,
+                lineOfSight: lineOfSight,
                 priority: distance <= radius ? 0 : 1
             };
         }).filter(function (candidate) {
-            if (!candidate.frontFacing) {
+            if (!candidate.frontFacing || !candidate.lineOfSight) {
                 return false;
             }
 
@@ -3557,7 +3851,8 @@ var pipeline = ensureVisualRenderingPipeline();
             reference &&
             reference.primaryMesh &&
             isLightingWallSegmentMesh(reference.primaryMesh) &&
-            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item)
+            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item) &&
+            isWallSegmentVisibleFromLocalLight(reference.primaryMesh, item)
         ) {
             var alreadyHasPrimary = candidates.some(function (candidate) {
                 return candidate.mesh === reference.primaryMesh;
@@ -3642,6 +3937,7 @@ var pipeline = ensureVisualRenderingPipeline();
             softRadius: candidateData.softRadius,
             frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
             frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            lineOfSightFilterEnabled: localLightWallSegmentLineOfSightFilterEnabled,
             dynamicRetargetEnabled: localLightDynamicWallRetargetEnabled,
             dynamicRetargetThrottleMs: localLightDynamicWallRetargetThrottleMs,
             dynamicRetargetCount: localLightDynamicWallRetargetCount,
@@ -3720,6 +4016,7 @@ var pipeline = ensureVisualRenderingPipeline();
             softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
             frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
             frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            lineOfSightFilterEnabled: localLightWallSegmentLineOfSightFilterEnabled,
             lights: lightDebug,
             segments: Object.keys(segmentLightMap).sort().map(function (name) {
                 return segmentLightMap[name];
@@ -4207,6 +4504,21 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         return /\.glb$/i.test(file.name);
+    }
+
+    function getModel3dUploadContentType(file) {
+        // STAGE 12C26:
+        // Chrome/Windows potrafi zgłosić .glb jako application/octet-stream.
+        // Supabase bucket może tego MIME nie przyjmować, więc dla .glb wymuszamy poprawny content-type.
+        if (file && file.name && /\.glb$/i.test(file.name)) {
+            return "model/gltf-binary";
+        }
+
+        if (file && file.type && file.type !== "application/octet-stream") {
+            return file.type;
+        }
+
+        return "model/gltf-binary";
     }
 
     function createArtworkStoragePath(artwork, file) {
@@ -10849,8 +11161,8 @@ var pipeline = ensureVisualRenderingPipeline();
     );
     model3dSelectionHighlightLayer.outerGlow = true;
     model3dSelectionHighlightLayer.innerGlow = false;
-    model3dSelectionHighlightLayer.blurHorizontalSize = 1.55;
-    model3dSelectionHighlightLayer.blurVerticalSize = 1.55;
+    model3dSelectionHighlightLayer.blurHorizontalSize = 0.35;
+    model3dSelectionHighlightLayer.blurVerticalSize = 0.35;
 
     var model3dSelectionGlowColor = new BABYLON.Color3(1, 1, 1);
 
@@ -10930,7 +11242,7 @@ var pipeline = ensureVisualRenderingPipeline();
             var parsedValue = parseFloat(input.value);
             valueLabel.innerText = parsedValue.toFixed(decimals);
             onInput(parsedValue);
-            persistCurrentLightingSettings();
+            persistLightingOrVisualControl(key);
         };
 
         row.appendChild(label);
@@ -10964,7 +11276,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         input.onchange = function () {
             onChange(input.checked);
-            persistCurrentLightingSettings();
+            persistLightingOrVisualControl(key);
         };
 
         label.appendChild(input);
@@ -10996,7 +11308,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         input.oninput = function () {
             onInput(hexToColor3(input.value));
-            persistCurrentLightingSettings();
+            persistLightingOrVisualControl(key);
         };
 
         row.appendChild(label);
@@ -14265,15 +14577,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (lightingContentMode === "visual") {
-            var currentVisualSettings = readVisualSettingsFromScene();
-
-            syncVisualControls(currentVisualSettings);
-
-            if (typeof requestAnimationFrame === "function") {
-                requestAnimationFrame(function () {
-                    syncVisualControls(currentVisualSettings);
-                });
-            }
+            scheduleVisualControlsSync(readVisualSettingsFromScene());
         }
 
         if (lightingContentStack) {
@@ -14791,7 +15095,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
     var visualPresetHint = document.createElement("p");
     visualPresetHint.className = "gallery-visual-hint";
-    visualPresetHint.innerText = "Presets change the final public viewer look. They are saved in gallery state.";
+    visualPresetHint.innerText = "Presets change the final look live. Use Save Look in a Look slot to store your own Visual preset.";
     visualPresetSection.appendChild(visualPresetHint);
 
     visualLightingContent.appendChild(visualPresetSection);
@@ -15012,40 +15316,79 @@ var pipeline = ensureVisualRenderingPipeline();
         visualActionsGrid.appendChild(button);
     }
 
-    addVisualActionButton("SAVE LOOK", function () {
-        persistCurrentVisualSettings();
-
-        if (typeof saveGalleryStateToSupabase === "function") {
-            saveGalleryStateToSupabase();
-        }
-
-        syncVisualControls(readVisualSettingsFromScene());
-    });
-
-    addVisualActionButton("LOAD SAVED", function () {
-        var loadedSettings = loadSavedVisualSettings();
-
-        if (!loadedSettings) {
-            resetVisualSettingsToDefault();
-        }
-    });
-
-    addVisualActionButton("RESET", function () {
-        resetVisualSettingsToDefault();
-    });
-
-    addVisualActionButton("CLEAR SAVED", function () {
-        clearSavedVisualSettings();
+    addVisualActionButton("RESET CURRENT LOOK", function () {
         resetVisualSettingsToDefault();
     });
 
     visualActionsSection.appendChild(visualActionsGrid);
 
+    var visualLookPresetsWrapper = document.createElement("div");
+    visualLookPresetsWrapper.className = "gallery-lighting-presets gallery-visual-look-presets";
+
+    for (var visualLookPresetIndex = 0; visualLookPresetIndex < 3; visualLookPresetIndex++) {
+        (function (index) {
+            var row = document.createElement("div");
+            row.className = "gallery-lighting-preset-row gallery-visual-look-preset-row";
+
+            var nameWrap = document.createElement("div");
+            nameWrap.className = "gallery-lighting-preset-name";
+            nameWrap.innerHTML = "Look " + (index + 1) + "<span class=\"gallery-lighting-preset-status\">Empty</span>";
+
+            var status = nameWrap.querySelector(".gallery-lighting-preset-status");
+
+            var loadButton = document.createElement("button");
+            loadButton.type = "button";
+            loadButton.className = "gallery-lighting-preset-button";
+            loadButton.innerText = "Load";
+            loadButton.onclick = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                loadVisualLookPreset(index);
+            };
+
+            var saveButton = document.createElement("button");
+            saveButton.type = "button";
+            saveButton.className = "gallery-lighting-preset-button";
+            saveButton.innerText = "Save Look";
+            saveButton.onclick = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                saveVisualLookPreset(index);
+            };
+
+            var clearButton = document.createElement("button");
+            clearButton.type = "button";
+            clearButton.className = "gallery-lighting-preset-button";
+            clearButton.innerText = "Clear";
+            clearButton.onclick = function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                clearVisualLookPreset(index);
+            };
+
+            row.appendChild(nameWrap);
+            row.appendChild(loadButton);
+            row.appendChild(saveButton);
+            row.appendChild(clearButton);
+
+            visualLookPresetsWrapper.appendChild(row);
+
+            visualLookPresetRows.push({
+                status: status,
+                loadButton: loadButton,
+                clearButton: clearButton
+            });
+        })(visualLookPresetIndex);
+    }
+
+    visualActionsSection.appendChild(visualLookPresetsWrapper);
+
     var visualActionsHint = document.createElement("p");
     visualActionsHint.className = "gallery-visual-hint";
-    visualActionsHint.innerText = "SAVE LOOK stores the current visual look. LOAD SAVED restores it. RESET returns to Neutral Gallery defaults. CLEAR SAVED removes the stored visual look and resets.";
+    visualActionsHint.innerText = "Save Look stores the current Visual Settings as a custom preset, like Main Light presets. It does not publish/save gallery_state. Use Save State to publish the currently loaded look.";
     visualActionsSection.appendChild(visualActionsHint);
 
+    updateVisualLookPresetRows();
     visualLightingContent.appendChild(visualActionsSection);
 
 
@@ -15071,6 +15414,7 @@ var pipeline = ensureVisualRenderingPipeline();
             syncLightingControls(readLightingSettingsFromScene());
             syncVisualControls(readVisualSettingsFromScene());
             updateLightingPresetRows();
+            updateVisualLookPresetRows();
         }
 
         updateLocalLightsUi();
@@ -15889,6 +16233,36 @@ var pipeline = ensureVisualRenderingPipeline();
         viewerPlaceholderVisibilityDebug.localLightMeshesHidden = hiddenCount;
     }
 
+    function setModel3dPlaceholderEditorVisual(mesh, shouldShow) {
+        if (!mesh || !mesh.material) {
+            return;
+        }
+
+        var material = mesh.material;
+        material.metadata = material.metadata || {};
+
+        if (!material.metadata.model3dPlaceholderOriginal) {
+            material.metadata.model3dPlaceholderOriginal = {
+                alpha: material.alpha !== undefined ? material.alpha : 1,
+                emissiveColor: material.emissiveColor && material.emissiveColor.clone
+                    ? material.emissiveColor.clone()
+                    : null
+            };
+        }
+
+        if (material.emissiveColor) {
+            material.emissiveColor = shouldShow
+                ? new BABYLON.Color3(0.10, 0.10, 0.10)
+                : (material.metadata.model3dPlaceholderOriginal.emissiveColor || BABYLON.Color3.Black());
+        }
+
+        if (material.alpha !== undefined) {
+            material.alpha = shouldShow
+                ? Math.max(0.72, material.metadata.model3dPlaceholderOriginal.alpha || 1)
+                : (material.metadata.model3dPlaceholderOriginal.alpha || 1);
+        }
+    }
+
     function updateViewerModeSpherePlaceholderVisibility() {
         var hiddenCount = 0;
         var shouldShow = editMode || !viewerHideSculpturePlaceholders;
@@ -15903,14 +16277,16 @@ var pipeline = ensureVisualRenderingPipeline();
                 shouldShow,
                 shouldShow
             ) ? 1 : 0;
+            setModel3dPlaceholderEditorVisual(sphereMesh, shouldShow && editMode);
 
             if (sphereMesh.getChildMeshes) {
                 sphereMesh.getChildMeshes(false).forEach(function (childMesh) {
                     hiddenCount += setEditorOnlyMeshVisible(
                         childMesh,
                         shouldShow,
-                        false
+                        editMode
                     ) ? 1 : 0;
+                    setModel3dPlaceholderEditorVisual(childMesh, shouldShow && editMode);
                 });
             }
         });
@@ -21159,6 +21535,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var storagePath = createModel3dStoragePath(slot, file);
+        var modelUploadContentType = getModel3dUploadContentType(file);
 
         notifyGalleryStatus("Wgrywam model 3D GLB...");
 
@@ -21168,7 +21545,7 @@ var pipeline = ensureVisualRenderingPipeline();
             .upload(storagePath, file, {
                 cacheControl: "31536000",
                 upsert: false,
-                contentType: file.type || "model/gltf-binary"
+                contentType: modelUploadContentType
             });
 
         if (uploadResponse.error) {
@@ -21194,7 +21571,7 @@ var pipeline = ensureVisualRenderingPipeline();
             storageBucket: galleryArtworkStorageBucket,
             originalName: file.name || "model.glb",
             size: file.size || null,
-            mimeType: file.type || "model/gltf-binary",
+            mimeType: modelUploadContentType,
             uploadedAt: new Date().toISOString(),
             assignedAt: new Date().toISOString()
         });
@@ -21315,29 +21692,35 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function clearModel3dSlotSelectionGlow(slot) {
-        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+        if (!slot || !slot.metadata) {
             return;
         }
 
         var storedMeshes = slot.metadata.model3dSelectionGlowMeshes || [];
 
-        storedMeshes.forEach(function (mesh) {
-            if (
-                mesh &&
-                !(mesh.isDisposed && mesh.isDisposed()) &&
-                model3dSelectionHighlightLayer.removeMesh
-            ) {
-                model3dSelectionHighlightLayer.removeMesh(mesh);
+        storedMeshes.concat(getModel3dSlotSelectionMeshes(slot)).forEach(function (mesh) {
+            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                return;
             }
-        });
 
-        getModel3dSlotSelectionMeshes(slot).forEach(function (mesh) {
-            if (
-                mesh &&
-                !(mesh.isDisposed && mesh.isDisposed()) &&
-                model3dSelectionHighlightLayer.removeMesh
-            ) {
-                model3dSelectionHighlightLayer.removeMesh(mesh);
+            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
+                try {
+                    model3dSelectionHighlightLayer.removeMesh(mesh);
+                } catch (highlightRemoveError) {}
+            }
+
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = false;
+            }
+
+            if (mesh.renderOverlay !== undefined) {
+                mesh.renderOverlay = false;
+            }
+
+            if (mesh.disableEdgesRendering && typeof mesh.disableEdgesRendering === "function") {
+                try {
+                    mesh.disableEdgesRendering();
+                } catch (edgeDisableError) {}
             }
         });
 
@@ -21345,7 +21728,7 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function applyModel3dSlotSelectionGlow(slot) {
-        if (!slot || !slot.metadata || !model3dSelectionHighlightLayer) {
+        if (!slot || !slot.metadata) {
             return;
         }
 
@@ -21359,37 +21742,32 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
-            if (mesh.renderOutline !== undefined) {
-                mesh.renderOutline = false;
+            if (mesh.isVisible === false || mesh.visibility === 0) {
+                return;
             }
 
+            // STAGE 12C26:
+            // Rzeźby/sloty nie używają już HighlightLayer jako głównego zaznaczenia,
+            // bo potrafił wypalić cały placeholder na biało. Zostawiamy tylko krawędzie/sylwetkę.
             if (mesh.renderOverlay !== undefined) {
                 mesh.renderOverlay = false;
             }
 
-            if (
-                mesh.disableEdgesRendering &&
-                typeof mesh.disableEdgesRendering === "function"
-            ) {
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = true;
+                mesh.outlineColor = model3dSelectionGlowColor;
+                mesh.outlineWidth = 0.018;
+            }
+
+            if (mesh.enableEdgesRendering && typeof mesh.enableEdgesRendering === "function") {
                 try {
-                    mesh.disableEdgesRendering();
-                } catch (edgeDisableError) {}
+                    mesh.enableEdgesRendering(0.999);
+                    mesh.edgesWidth = 1.4;
+                    mesh.edgesColor = new BABYLON.Color4(1, 1, 1, 0.95);
+                } catch (edgeEnableError) {}
             }
 
-            if (
-                mesh.isVisible === false ||
-                mesh.visibility === 0
-            ) {
-                return;
-            }
-
-            if (model3dSelectionHighlightLayer.addMesh) {
-                model3dSelectionHighlightLayer.addMesh(
-                    mesh,
-                    model3dSelectionGlowColor
-                );
-                appliedMeshes.push(mesh);
-            }
+            appliedMeshes.push(mesh);
         });
 
         slot.metadata.model3dSelectionGlowMeshes = appliedMeshes;
@@ -21705,7 +22083,10 @@ var pipeline = ensureVisualRenderingPipeline();
         sculpture.position = new BABYLON.Vector3(0, 0.72, 0);
         sculpture.rotation.x = Math.PI / 2;
         sculpture.rotation.z = 0.28;
-        sculpture.isPickable = false;
+        sculpture.isPickable = true;
+        sculpture.metadata = sculpture.metadata || {};
+        sculpture.metadata.model3dSlotName = pedestal.name;
+        sculpture.metadata.isModel3dPlaceholderChild = true;
 
         var sculptureMat = new BABYLON.StandardMaterial("PedestalSculptureMat_" + index, scene);
         sculptureMat.diffuseColor = new BABYLON.Color3(0.56, 0.56, 0.54);
@@ -23785,6 +24166,7 @@ var pipeline = ensureVisualRenderingPipeline();
             editor: serializeEditorState(),
             lighting: readLightingSettingsFromScene(),
             visualSettings: createVisualSettingsSnapshot(),
+            visualLookPresets: readVisualLookPresets(),
             lightingPresets: readLightingPresets(),
             localLights: readLocalLightStateFromScene()
         };
@@ -23834,6 +24216,11 @@ var pipeline = ensureVisualRenderingPipeline();
             if (savedVisualSettings) {
                 applyVisualSettings(normalizeVisualSettings(savedVisualSettings), true, true);
             }
+        }
+
+        if (Array.isArray(state.visualLookPresets)) {
+            writeVisualLookPresets(state.visualLookPresets);
+            updateVisualLookPresetRows();
         }
 
         if (Array.isArray(state.lightingPresets)) {
