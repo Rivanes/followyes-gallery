@@ -2364,6 +2364,13 @@ var pipeline = ensureVisualRenderingPipeline();
     var localLightFloorSegmentBudgetMap = {};
     var localLightCeilingSegmentBudgetMap = {};
 
+    // STAGE 12C26 CLEAN - SCULPTURE LOCAL LIGHT SAFETY
+    // Zbyt wiele Local Lights na rzezbach/modelach potrafilo wczesniej przepalac
+    // albo gubic material. Trzymamy maksymalnie 4 lokalne lampy na mesh rzezby.
+    var localLightSculptureMaxLightsPerMesh = 4;
+    var localLightSculptureBudgetPassActive = false;
+    var localLightSculptureBudgetMap = {};
+
     function isLightingFloorSegmentMesh(mesh) {
         return !!(
             mesh &&
@@ -3792,15 +3799,60 @@ var pipeline = ensureVisualRenderingPipeline();
         });
     }
 
-    function addSculptureMeshesUnique(targetList) {
+    function getLocalLightSculptureBudgetKey(mesh) {
+        if (!mesh) {
+            return null;
+        }
+
+        return mesh.uniqueId !== undefined
+            ? String(mesh.uniqueId)
+            : mesh.name || null;
+    }
+
+    function addSculptureMeshUniqueWithBudget(targetList, mesh, item) {
+        if (!mesh || mesh.name === "__root__") {
+            return;
+        }
+
+        if (localLightSculptureBudgetPassActive) {
+            var key = getLocalLightSculptureBudgetKey(mesh);
+
+            if (key) {
+                localLightSculptureBudgetMap[key] = localLightSculptureBudgetMap[key] || [];
+
+                if (localLightSculptureBudgetMap[key].indexOf(item) === -1) {
+                    if (localLightSculptureBudgetMap[key].length >= localLightSculptureMaxLightsPerMesh) {
+                        return;
+                    }
+
+                    localLightSculptureBudgetMap[key].push(item);
+                }
+            }
+        }
+
+        addMeshUnique(targetList, mesh);
+    }
+
+    function addSculptureMeshesUnique(targetList, item) {
         artSpheres.forEach(function (displayMesh) {
-            addMeshUnique(targetList, displayMesh);
+            if (!displayMesh) {
+                return;
+            }
+
+            // Pusty slot = cube placeholder. Slot z GLB = targetujemy realne meshe modelu,
+            // a nie niewidzialny cube, który tylko trzyma pozycję/obrót/skalę slotu.
+            var hasRuntimeModel = hasLoadedModel3dRuntime(displayMesh);
+
+            if (!hasRuntimeModel) {
+                addSculptureMeshUniqueWithBudget(targetList, displayMesh, item);
+            }
 
             if (
+                !hasRuntimeModel &&
                 displayMesh.metadata &&
                 displayMesh.metadata.sculptureMesh
             ) {
-                addMeshUnique(targetList, displayMesh.metadata.sculptureMesh);
+                addSculptureMeshUniqueWithBudget(targetList, displayMesh.metadata.sculptureMesh, item);
             }
 
             if (
@@ -3809,7 +3861,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 displayMesh.metadata.model3dRuntime.meshes
             ) {
                 displayMesh.metadata.model3dRuntime.meshes.forEach(function (mesh) {
-                    addMeshUnique(targetList, mesh);
+                    addSculptureMeshUniqueWithBudget(targetList, mesh, item);
                 });
             }
         });
@@ -3862,7 +3914,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (!item.ownerMesh && getLocalTargetOption(item, "sculptures")) {
-            addSculptureMeshesUnique(includedMeshes);
+            addSculptureMeshesUnique(includedMeshes, item);
         }
 
         if (getLocalTargetOption(item, "props")) {
@@ -3889,7 +3941,9 @@ var pipeline = ensureVisualRenderingPipeline();
         localLightWallSegmentBudgetMap = {};
         localLightFloorSegmentBudgetMap = {};
         localLightCeilingSegmentBudgetMap = {};
+        localLightSculptureBudgetMap = {};
         localLightWallSegmentBudgetPassActive = true;
+        localLightSculptureBudgetPassActive = true;
 
         localLightItems.forEach(function (item) {
             if (!item || item.softDeleted) {
@@ -3900,6 +3954,7 @@ var pipeline = ensureVisualRenderingPipeline();
         });
 
         localLightWallSegmentBudgetPassActive = false;
+        localLightSculptureBudgetPassActive = false;
     }
 
     function requestDynamicWallSegmentRetargetForLocalLight(item, force, reason) {
@@ -16201,6 +16256,65 @@ var pipeline = ensureVisualRenderingPipeline();
         );
     }
 
+    // STAGE 12C26 CLEAN - SCULPTURE SLOT VISIBILITY FIX
+    // GLB runtime jest dzieckiem cube-slotu. Nie wolno chować cube-slotu przez
+    // slot.visibility = 0, bo Babylon dziedziczy visibility na dzieci i model znika.
+    // Dlatego slot z modelem zostaje isVisible/visibility = true, a sam cube chowamy
+    // tylko alfą materiału. Model wtedy pozostaje widoczny, pickowalny i może dostać outline.
+    function setSculptureSlotCubeOwnVisual(slot, shouldShowCube, shouldBePickable) {
+        if (!slot) {
+            return;
+        }
+
+        slot.metadata = slot.metadata || {};
+
+        if (slot.isVisible !== undefined) {
+            slot.isVisible = true;
+        }
+
+        if (slot.visibility !== undefined) {
+            slot.visibility = 1;
+        }
+
+        if (slot.isPickable !== undefined) {
+            slot.isPickable = !!shouldBePickable;
+        }
+
+        if (slot.material) {
+            slot.material.metadata = slot.material.metadata || {};
+
+            if (slot.material.metadata.model3dSlotOriginalAlpha === undefined) {
+                slot.material.metadata.model3dSlotOriginalAlpha = slot.material.alpha !== undefined
+                    ? slot.material.alpha
+                    : 1;
+            }
+
+            if (slot.material.alpha !== undefined) {
+                slot.material.alpha = shouldShowCube
+                    ? slot.material.metadata.model3dSlotOriginalAlpha
+                    : 0;
+            }
+
+            if (slot.material.transparencyMode !== undefined && !shouldShowCube) {
+                slot.material.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+            }
+        }
+    }
+
+    function setModel3dRuntimeMeshVisible(mesh, shouldShow, shouldPick) {
+        if (!mesh) {
+            return 0;
+        }
+
+        var hidden = setEditorOnlyMeshVisible(
+            mesh,
+            shouldShow,
+            shouldPick
+        );
+
+        return hidden ? 1 : 0;
+    }
+
     function updateViewerModeSpherePlaceholderVisibility() {
         var hiddenCount = 0;
         var baseShouldShowPlaceholder = editMode || !viewerHideSculpturePlaceholders;
@@ -16212,12 +16326,21 @@ var pipeline = ensureVisualRenderingPipeline();
 
             var hasRuntimeModel = hasLoadedModel3dRuntime(sphereMesh);
             var showPlaceholderCube = baseShouldShowPlaceholder && !hasRuntimeModel;
+            var showRuntimeModel = hasRuntimeModel;
 
-            hiddenCount += setEditorOnlyMeshVisible(
-                sphereMesh,
-                showPlaceholderCube,
-                showPlaceholderCube && editMode
-            ) ? 1 : 0;
+            if (hasRuntimeModel) {
+                // Model zastępuje cube, ale parent slot musi zostać widoczny,
+                // inaczej dzieci GLB odziedziczą visibility = 0.
+                setSculptureSlotCubeOwnVisual(sphereMesh, false, false);
+            } else {
+                setSculptureSlotCubeOwnVisual(sphereMesh, true, showPlaceholderCube && editMode);
+
+                hiddenCount += setEditorOnlyMeshVisible(
+                    sphereMesh,
+                    showPlaceholderCube,
+                    showPlaceholderCube && editMode
+                ) ? 1 : 0;
+            }
 
             if (sphereMesh.getChildMeshes) {
                 sphereMesh.getChildMeshes(false).forEach(function (childMesh) {
@@ -16231,18 +16354,18 @@ var pipeline = ensureVisualRenderingPipeline();
                     );
 
                     var showChild = isRuntimeMesh
-                        ? hasRuntimeModel
+                        ? showRuntimeModel
                         : showPlaceholderCube;
 
                     var pickChild = isRuntimeMesh
-                        ? hasRuntimeModel
+                        ? (showRuntimeModel && editMode)
                         : false;
 
-                    hiddenCount += setEditorOnlyMeshVisible(
+                    hiddenCount += setModel3dRuntimeMeshVisible(
                         childMesh,
                         showChild,
                         pickChild
-                    ) ? 1 : 0;
+                    );
                 });
             }
         });
@@ -21253,6 +21376,14 @@ var pipeline = ensureVisualRenderingPipeline();
         mesh.metadata.model3dSlotName = slot.name;
         mesh.metadata.isModel3dRuntimeMesh = true;
         mesh.isPickable = true;
+
+        if (mesh.isVisible !== undefined) {
+            mesh.isVisible = true;
+        }
+
+        if (mesh.visibility !== undefined) {
+            mesh.visibility = 1;
+        }
 
         if (mesh.material) {
             configureMaterialForCommonLighting(mesh.material);
