@@ -400,6 +400,770 @@ export const createScene = function (engineArg, canvasArg) {
 
     setEnvironmentRotationY(environmentRotationY);
 
+
+    // STAGE 12C15 - VISUAL SETTINGS / QUALITY PRESETS
+    // Editor-only UI controls final viewer look. Public Viewer only sees saved state.
+    var visualSettingsStorageKey = "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24";
+    var visualRenderingPipeline = null;
+    var visualSsaoPipeline = null;
+    var visualSsaoAttached = false;
+    var visualControlRefs = {};
+    var visualCurrentSettings = null;
+    var visualActivePresetName = "Custom";
+    var visualApplyLock = false;
+
+    var visualDefaultSettings = {
+        preset: "Neutral Gallery",
+        exposure: 1.00,
+        contrast: 1.03,
+bloomEnabled: false,
+        bloomIntensity: 0.018,
+        bloomThreshold: 0.90,
+vignetteEnabled: false,
+        vignetteWeight: 0.10,
+        ssaoEnabled: false,
+        ssaoStrength: 0.28,
+        ssaoRadius: 1.65,
+        ssaoArea: 0.95,
+        ssaoBase: 0.04,
+        imageProcessingEnabled: true,
+        toneMappingEnabled: true,
+        fxaaEnabled: true,
+        reflectionEnabled: true,
+        reflectionStrength: 0.55,
+        floorReflectionStrength: 0.72,
+        wallReflectionStrength: 0.22,
+        ceilingReflectionStrength: 0.18,
+        floorRoughness: 0.72,
+        wallRoughness: 0.86,
+        ceilingRoughness: 0.84
+    };
+
+    var visualQualityPresets = [
+        {
+            name: "Neutral Gallery",
+            settings: {
+                preset: "Neutral Gallery",
+                exposure: 1.00,
+                contrast: 1.03,
+bloomEnabled: false,
+                bloomIntensity: 0.018,
+                bloomThreshold: 0.90,
+vignetteEnabled: false,
+                vignetteWeight: 0.10,
+                ssaoEnabled: false,
+                ssaoStrength: 0.28,
+                ssaoRadius: 1.65,
+                ssaoArea: 0.95,
+                ssaoBase: 0.04,
+                imageProcessingEnabled: true,
+                toneMappingEnabled: true,
+                fxaaEnabled: true,
+                reflectionEnabled: true,
+                reflectionStrength: 0.55,
+                floorReflectionStrength: 0.72,
+                wallReflectionStrength: 0.22,
+                ceilingReflectionStrength: 0.18,
+                floorRoughness: 0.72,
+                wallRoughness: 0.86,
+                ceilingRoughness: 0.84
+            }
+        },
+        {
+            name: "Soft Museum",
+            settings: {
+                preset: "Soft Museum",
+                exposure: 1.08,
+                contrast: 0.98,
+bloomEnabled: true,
+                bloomIntensity: 0.020,
+                bloomThreshold: 0.88,
+vignetteEnabled: true,
+                vignetteWeight: 0.08,
+                ssaoEnabled: true,
+                ssaoStrength: 0.30,
+                ssaoRadius: 1.75,
+                ssaoArea: 1.00,
+                ssaoBase: 0.045,
+                imageProcessingEnabled: true,
+                toneMappingEnabled: true,
+                fxaaEnabled: true,
+                reflectionEnabled: true,
+                reflectionStrength: 0.55,
+                floorReflectionStrength: 0.72,
+                wallReflectionStrength: 0.22,
+                ceilingReflectionStrength: 0.18,
+                floorRoughness: 0.72,
+                wallRoughness: 0.86,
+                ceilingRoughness: 0.84
+            }
+        },
+        {
+            name: "Warm Gallery",
+            settings: {
+                preset: "Warm Gallery",
+                exposure: 1.07,
+                contrast: 1.04,
+bloomEnabled: true,
+                bloomIntensity: 0.026,
+                bloomThreshold: 0.86,
+vignetteEnabled: true,
+                vignetteWeight: 0.09,
+                ssaoEnabled: true,
+                ssaoStrength: 0.34,
+                ssaoRadius: 1.85,
+                ssaoArea: 1.05,
+                ssaoBase: 0.05,
+                imageProcessingEnabled: true,
+                toneMappingEnabled: true,
+                fxaaEnabled: true,
+                reflectionEnabled: true,
+                reflectionStrength: 0.55,
+                floorReflectionStrength: 0.72,
+                wallReflectionStrength: 0.22,
+                ceilingReflectionStrength: 0.18,
+                floorRoughness: 0.72,
+                wallRoughness: 0.86,
+                ceilingRoughness: 0.84
+            }
+        },
+        {
+            name: "Cycles Inspired",
+            settings: {
+                preset: "Cycles Inspired",
+                exposure: 1.05,
+                contrast: 1.08,
+bloomEnabled: true,
+                bloomIntensity: 0.032,
+                bloomThreshold: 0.84,
+vignetteEnabled: true,
+                vignetteWeight: 0.11,
+                ssaoEnabled: true,
+                ssaoStrength: 0.46,
+                ssaoRadius: 2.10,
+                ssaoArea: 1.15,
+                ssaoBase: 0.055,
+                imageProcessingEnabled: true,
+                toneMappingEnabled: true,
+                fxaaEnabled: true,
+                reflectionEnabled: true,
+                reflectionStrength: 0.55,
+                floorReflectionStrength: 0.72,
+                wallReflectionStrength: 0.22,
+                ceilingReflectionStrength: 0.18,
+                floorRoughness: 0.72,
+                wallRoughness: 0.86,
+                ceilingRoughness: 0.84
+            }
+        },
+        {
+            name: "High Contrast",
+            settings: {
+                preset: "High Contrast",
+                exposure: 1.02,
+                contrast: 1.13,
+bloomEnabled: true,
+                bloomIntensity: 0.026,
+                bloomThreshold: 0.88,
+vignetteEnabled: true,
+                vignetteWeight: 0.12,
+                ssaoEnabled: true,
+                ssaoStrength: 0.50,
+                ssaoRadius: 2.00,
+                ssaoArea: 1.10,
+                ssaoBase: 0.055,
+                imageProcessingEnabled: true,
+                toneMappingEnabled: true,
+                fxaaEnabled: true,
+                reflectionEnabled: true,
+                reflectionStrength: 0.55,
+                floorReflectionStrength: 0.72,
+                wallReflectionStrength: 0.22,
+                ceilingReflectionStrength: 0.18,
+                floorRoughness: 0.72,
+                wallRoughness: 0.86,
+                ceilingRoughness: 0.84
+            }
+        }
+    ];
+
+    function ensureVisualRenderingPipeline() {
+        if (visualRenderingPipeline) {
+            return visualRenderingPipeline;
+        }
+
+        if (!BABYLON.DefaultRenderingPipeline) {
+            return null;
+        }
+
+        try {
+            visualRenderingPipeline = new BABYLON.DefaultRenderingPipeline(
+                "BerryboyVisualRenderingPipeline",
+                false,
+                scene,
+                [camera]
+            );
+
+            visualRenderingPipeline.imageProcessingEnabled = true;
+            visualRenderingPipeline.fxaaEnabled = true;
+            visualRenderingPipeline.bloomEnabled = false;
+
+            if (visualRenderingPipeline.bloomKernel !== undefined) {
+                visualRenderingPipeline.bloomKernel = 64;
+            }
+return visualRenderingPipeline;
+        } catch (error) {
+            console.warn("Visual Settings pipeline warning:", error);
+            visualRenderingPipeline = null;
+            return null;
+        }
+    }
+
+
+    function ensureVisualSsaoPipeline() {
+        if (visualSsaoPipeline) {
+            return visualSsaoPipeline;
+        }
+
+        if (!BABYLON.SSAO2RenderingPipeline) {
+            return null;
+        }
+
+        try {
+            if (scene.enableGeometryBufferRenderer) {
+                scene.enableGeometryBufferRenderer();
+            }
+
+            visualSsaoPipeline = new BABYLON.SSAO2RenderingPipeline(
+                "BerryboyVisualSSAO2",
+                scene,
+                {
+                    ssaoRatio: 0.55,
+                    blurRatio: 0.55
+                },
+                [camera]
+            );
+
+            visualSsaoAttached = true;
+
+            return visualSsaoPipeline;
+        } catch (error) {
+            console.warn("Visual SSAO / Contact Depth warning:", error);
+            visualSsaoPipeline = null;
+            visualSsaoAttached = false;
+            return null;
+        }
+    }
+
+    function setVisualSsaoAttached(isEnabled) {
+        if (!visualSsaoPipeline || !scene.postProcessRenderPipelineManager) {
+            visualSsaoAttached = false;
+            return false;
+        }
+
+        try {
+            if (isEnabled) {
+                scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline(
+                    "BerryboyVisualSSAO2",
+                    [camera],
+                    true
+                );
+                visualSsaoAttached = true;
+            } else {
+                scene.postProcessRenderPipelineManager.detachCamerasFromRenderPipeline(
+                    "BerryboyVisualSSAO2",
+                    [camera]
+                );
+                visualSsaoAttached = false;
+            }
+        } catch (error) {
+            console.warn("Visual SSAO attach/detach warning:", error);
+        }
+
+        return visualSsaoAttached;
+    }
+
+    function applyVisualSsaoSettings(settings) {
+        settings = normalizeVisualSettings(settings);
+
+        if (!settings.ssaoEnabled && !visualSsaoPipeline) {
+            visualSsaoAttached = false;
+            return null;
+        }
+
+        var ssaoPipeline = ensureVisualSsaoPipeline();
+
+        if (!ssaoPipeline) {
+            visualSsaoAttached = false;
+            return null;
+        }
+
+        if (ssaoPipeline.totalStrength !== undefined) {
+            ssaoPipeline.totalStrength = Math.max(0, Math.min(1.5, Number(settings.ssaoStrength) || 0));
+        }
+
+        if (ssaoPipeline.radius !== undefined) {
+            ssaoPipeline.radius = Math.max(0.05, Math.min(8, Number(settings.ssaoRadius) || 1.5));
+        }
+
+        if (ssaoPipeline.area !== undefined) {
+            ssaoPipeline.area = Math.max(0.05, Math.min(6, Number(settings.ssaoArea) || 1.0));
+        }
+
+        if (ssaoPipeline.base !== undefined) {
+            ssaoPipeline.base = Math.max(0, Math.min(0.35, Number(settings.ssaoBase) || 0.04));
+        }
+
+        if (ssaoPipeline.samples !== undefined) {
+            ssaoPipeline.samples = 8;
+        }
+
+        if (ssaoPipeline.expensiveBlur !== undefined) {
+            ssaoPipeline.expensiveBlur = false;
+        }
+
+        setVisualSsaoAttached(!!settings.ssaoEnabled);
+
+        return ssaoPipeline;
+    }
+
+
+    function getUniqueVisualMaterialsFromMeshes(meshes) {
+        var materials = [];
+
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.material) {
+                return;
+            }
+
+            if (materials.indexOf(mesh.material) === -1) {
+                materials.push(mesh.material);
+            }
+        });
+
+        return materials;
+    }
+
+    function applyVisualMaterialReflection(material, settings, surfaceStrength, roughnessValue) {
+        if (!material) {
+            return;
+        }
+
+        var enabled = !!settings.reflectionEnabled;
+        var reflectionIntensity = enabled
+            ? Math.max(0, Number(settings.reflectionStrength) || 0) * Math.max(0, Number(surfaceStrength) || 0)
+            : 0;
+
+        material.metadata = material.metadata || {};
+
+        if (material.metadata.visualOriginalEnvironmentIntensity === undefined) {
+            material.metadata.visualOriginalEnvironmentIntensity = material.environmentIntensity !== undefined
+                ? material.environmentIntensity
+                : null;
+        }
+
+        if (material.environmentIntensity !== undefined) {
+            material.environmentIntensity = reflectionIntensity;
+        }
+
+        if (
+            material.reflectionTexture === undefined &&
+            material.getClassName &&
+            material.getClassName() === "StandardMaterial" &&
+            scene.environmentTexture
+        ) {
+            try {
+                material.reflectionTexture = scene.environmentTexture;
+            } catch (reflectionTextureError) {}
+        }
+
+        if (material.roughness !== undefined && roughnessValue !== undefined && roughnessValue !== null) {
+            if (material.metadata.visualOriginalRoughness === undefined) {
+                material.metadata.visualOriginalRoughness = material.roughness;
+            }
+
+            material.roughness = Math.max(
+                0.02,
+                Math.min(1.0, Number(roughnessValue) || material.roughness || 0.75)
+            );
+        }
+
+        if (material.markAsDirty) {
+            try {
+                material.markAsDirty(BABYLON.Material.TextureDirtyFlag);
+            } catch (dirtyError) {}
+        }
+    }
+
+    function applyVisualReflectionSettings(settings) {
+        settings = normalizeVisualSettings(settings);
+
+        getUniqueVisualMaterialsFromMeshes(floorMeshes).forEach(function (material) {
+            applyVisualMaterialReflection(
+                material,
+                settings,
+                settings.floorReflectionStrength,
+                settings.floorRoughness
+            );
+        });
+
+        getUniqueVisualMaterialsFromMeshes(wallMeshes).forEach(function (material) {
+            applyVisualMaterialReflection(
+                material,
+                settings,
+                settings.wallReflectionStrength,
+                settings.wallRoughness
+            );
+        });
+
+        getUniqueVisualMaterialsFromMeshes(ceilingMeshes).forEach(function (material) {
+            applyVisualMaterialReflection(
+                material,
+                settings,
+                settings.ceilingReflectionStrength,
+                settings.ceilingRoughness
+            );
+        });
+
+        return {
+            enabled: !!settings.reflectionEnabled,
+            reflectionStrength: settings.reflectionStrength,
+            floorReflectionStrength: settings.floorReflectionStrength,
+            wallReflectionStrength: settings.wallReflectionStrength,
+            ceilingReflectionStrength: settings.ceilingReflectionStrength,
+            floorMaterials: getUniqueVisualMaterialsFromMeshes(floorMeshes).length,
+            wallMaterials: getUniqueVisualMaterialsFromMeshes(wallMeshes).length,
+            ceilingMaterials: getUniqueVisualMaterialsFromMeshes(ceilingMeshes).length
+        };
+    }
+
+    function normalizeVisualSettings(settings) {
+        var normalized = Object.assign(
+            {},
+            visualDefaultSettings,
+            settings || {}
+        );
+
+        // STAGE 12C23 - Visual Settings state sanitizer.
+        // These values used to be part of Visual Settings in older stages,
+        // but now belong only to MAIN LIGHTS or were removed entirely.
+        // They are deleted before apply/save so old gallery_state/localStorage
+        // cannot reintroduce dead controls or mixed responsibilities.
+        [
+            "environment" + "Intensity",
+            "ambient" + "Strength",
+            "sha" + "rpenEnabled",
+            "sha" + "rpenAmount"
+        ].forEach(function (key) {
+            if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+                delete normalized[key];
+            }
+        });
+
+        return normalized;
+    }
+
+    function readVisualSettingsFromScene() {
+        var pipeline = ensureVisualRenderingPipeline();
+        var stored = normalizeVisualSettings(visualCurrentSettings || {});
+
+        return normalizeVisualSettings(Object.assign(
+            {},
+            stored,
+            {
+                preset: visualActivePresetName || stored.preset || "Custom",
+
+                exposure: scene.imageProcessingConfiguration.exposure,
+                contrast: scene.imageProcessingConfiguration.contrast,
+bloomEnabled: pipeline ? !!pipeline.bloomEnabled : !!stored.bloomEnabled,
+                bloomIntensity: pipeline && pipeline.bloomWeight !== undefined
+                    ? Number(pipeline.bloomWeight)
+                    : stored.bloomIntensity,
+                bloomThreshold: pipeline && pipeline.bloomThreshold !== undefined
+                    ? Number(pipeline.bloomThreshold)
+                    : stored.bloomThreshold,
+
+                vignetteEnabled: !!scene.imageProcessingConfiguration.vignetteEnabled,
+                vignetteWeight: scene.imageProcessingConfiguration.vignetteWeight !== undefined
+                    ? Number(scene.imageProcessingConfiguration.vignetteWeight)
+                    : stored.vignetteWeight,
+
+                fxaaEnabled: pipeline && pipeline.fxaaEnabled !== undefined
+                    ? !!pipeline.fxaaEnabled
+                    : stored.fxaaEnabled,
+
+                ssaoEnabled: !!visualSsaoAttached,
+                ssaoStrength: visualSsaoPipeline && visualSsaoPipeline.totalStrength !== undefined
+                    ? Number(visualSsaoPipeline.totalStrength)
+                    : stored.ssaoStrength,
+                ssaoRadius: visualSsaoPipeline && visualSsaoPipeline.radius !== undefined
+                    ? Number(visualSsaoPipeline.radius)
+                    : stored.ssaoRadius,
+                ssaoArea: visualSsaoPipeline && visualSsaoPipeline.area !== undefined
+                    ? Number(visualSsaoPipeline.area)
+                    : stored.ssaoArea,
+                ssaoBase: visualSsaoPipeline && visualSsaoPipeline.base !== undefined
+                    ? Number(visualSsaoPipeline.base)
+                    : stored.ssaoBase,
+
+                reflectionEnabled: stored.reflectionEnabled,
+                reflectionStrength: stored.reflectionStrength,
+                floorReflectionStrength: stored.floorReflectionStrength,
+                wallReflectionStrength: stored.wallReflectionStrength,
+                ceilingReflectionStrength: stored.ceilingReflectionStrength,
+                floorRoughness: stored.floorRoughness,
+                wallRoughness: stored.wallRoughness,
+                ceilingRoughness: stored.ceilingRoughness,
+
+                imageProcessingEnabled: pipeline && pipeline.imageProcessingEnabled !== undefined
+                    ? !!pipeline.imageProcessingEnabled
+                    : stored.imageProcessingEnabled,
+                toneMappingEnabled: !!scene.imageProcessingConfiguration.toneMappingEnabled
+            }
+        ));
+    }
+
+    function persistCurrentVisualSettings() {
+        if (visualApplyLock) {
+            return;
+        }
+
+        try {
+            localStorage.setItem(
+                visualSettingsStorageKey,
+                JSON.stringify(createVisualSettingsSnapshot())
+            );
+        } catch (error) {}
+    }
+
+    function readSavedVisualSettings() {
+        try {
+            var rawData = localStorage.getItem(visualSettingsStorageKey);
+
+            if (!rawData) {
+                return null;
+            }
+
+            var parsedData = JSON.parse(rawData);
+
+            if (!parsedData || typeof parsedData !== "object") {
+                return null;
+            }
+
+            return normalizeVisualSettings(parsedData);
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function clearSavedVisualSettings() {
+        try {
+            localStorage.removeItem(visualSettingsStorageKey);
+        } catch (error) {}
+
+        return true;
+    }
+
+    function loadSavedVisualSettings() {
+        var savedVisualSettings = readSavedVisualSettings();
+
+        if (!savedVisualSettings) {
+            return null;
+        }
+
+        return applyVisualSettings(savedVisualSettings, true, false);
+    }
+
+    function syncVisualControls(settings) {
+        settings = normalizeVisualSettings(settings || readVisualSettingsFromScene());
+
+        function syncControl(settingsKey, controlKey) {
+            var control = null;
+
+            if (lightingControlRefs && lightingControlRefs[controlKey]) {
+                control = lightingControlRefs[controlKey];
+            } else if (visualControlRefs && visualControlRefs[settingsKey]) {
+                control = visualControlRefs[settingsKey];
+            }
+
+            if (!control || settings[settingsKey] === undefined) {
+                return;
+            }
+
+            control.setValue(settings[settingsKey]);
+        }
+
+        // STAGE 12C20:
+        // Presets update all VISUAL SETTINGS sections:
+        // IMAGE LOOK, POST PROCESS, SSAO / CONTACT DEPTH, REFLECTIONS.
+        syncControl("exposure", "visualExposure");
+        syncControl("contrast", "visualContrast");
+syncControl("bloomEnabled", "visualBloomEnabled");
+        syncControl("bloomIntensity", "visualBloomIntensity");
+        syncControl("bloomThreshold", "visualBloomThreshold");
+        syncControl("vignetteEnabled", "visualVignetteEnabled");
+        syncControl("vignetteWeight", "visualVignetteWeight");
+        syncControl("fxaaEnabled", "visualFxaaEnabled");
+
+        syncControl("ssaoEnabled", "visualSsaoEnabled");
+        syncControl("ssaoStrength", "visualSsaoStrength");
+        syncControl("ssaoRadius", "visualSsaoRadius");
+        syncControl("ssaoArea", "visualSsaoArea");
+        syncControl("ssaoBase", "visualSsaoBase");
+
+        syncControl("reflectionEnabled", "visualReflectionEnabled");
+        syncControl("reflectionStrength", "visualReflectionStrength");
+        syncControl("floorReflectionStrength", "visualFloorReflectionStrength");
+        syncControl("wallReflectionStrength", "visualWallReflectionStrength");
+        syncControl("ceilingReflectionStrength", "visualCeilingReflectionStrength");
+        syncControl("floorRoughness", "visualFloorRoughness");
+        syncControl("wallRoughness", "visualWallRoughness");
+        syncControl("ceilingRoughness", "visualCeilingRoughness");
+
+        updateVisualPresetButtons(settings.preset || "Custom");
+    }
+
+    function applyVisualSettings(settings, shouldSyncControls, skipPersist) {
+        settings = normalizeVisualSettings(settings);
+
+        visualApplyLock = !!skipPersist;
+
+        visualActivePresetName = settings.preset || "Custom";
+        visualCurrentSettings = normalizeVisualSettings(settings);
+
+        scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
+        scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+        scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
+        scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
+var pipeline = ensureVisualRenderingPipeline();
+
+        if (pipeline) {
+            if (pipeline.imageProcessingEnabled !== undefined) {
+                pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+            }
+
+            if (pipeline.fxaaEnabled !== undefined) {
+                pipeline.fxaaEnabled = !!settings.fxaaEnabled;
+            }
+
+            if (pipeline.bloomEnabled !== undefined) {
+                pipeline.bloomEnabled = !!settings.bloomEnabled;
+            }
+
+            if (pipeline.bloomWeight !== undefined) {
+                pipeline.bloomWeight = Number(settings.bloomIntensity);
+            }
+
+            if (pipeline.bloomThreshold !== undefined) {
+                pipeline.bloomThreshold = Number(settings.bloomThreshold);
+            }
+
+            if (pipeline.bloomKernel !== undefined) {
+                pipeline.bloomKernel = 64;
+            }
+        }
+
+        applyVisualSsaoSettings(settings);
+        applyVisualReflectionSettings(settings);
+
+        scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
+        scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
+        scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
+
+        if (shouldSyncControls) {
+            // Stage 12C16:
+            // Presets must visibly move the sliders/checks to their preset values.
+            syncVisualControls(settings);
+
+            if (typeof syncLightingControls === "function") {
+                syncLightingControls(readLightingSettingsFromScene());
+            }
+        }
+
+        visualApplyLock = false;
+
+        if (!skipPersist) {
+            persistCurrentVisualSettings();
+            persistCurrentLightingSettings();
+        }
+
+        return readVisualSettingsFromScene();
+    }
+
+    function getVisualPresetByName(name) {
+        for (var i = 0; i < visualQualityPresets.length; i++) {
+            if (visualQualityPresets[i].name === name) {
+                return visualQualityPresets[i];
+            }
+        }
+
+        return null;
+    }
+
+    function applyVisualPresetByName(name) {
+        var preset = getVisualPresetByName(name);
+
+        if (!preset) {
+            return null;
+        }
+
+        var appliedSettings = normalizeVisualSettings(Object.assign({}, preset.settings));
+        var result = applyVisualSettings(appliedSettings, true, false);
+
+        syncVisualControls(appliedSettings);
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+                syncVisualControls(appliedSettings);
+            });
+        }
+
+        setTimeout(function () {
+            syncVisualControls(appliedSettings);
+        }, 0);
+
+        return result;
+    }
+
+    function resetVisualSettingsToDefault() {
+        var defaultSettings = normalizeVisualSettings(
+            Object.assign({}, visualDefaultSettings, { preset: "Neutral Gallery" })
+        );
+
+        var result = applyVisualSettings(defaultSettings, true, false);
+
+        syncVisualControls(defaultSettings);
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+                syncVisualControls(defaultSettings);
+            });
+        }
+
+        setTimeout(function () {
+            syncVisualControls(defaultSettings);
+        }, 0);
+
+        return result;
+    }
+
+    function createVisualSettingsSnapshot() {
+        var snapshot = normalizeVisualSettings(readVisualSettingsFromScene());
+        snapshot.preset = visualActivePresetName || "Custom";
+        return normalizeVisualSettings(snapshot);
+    }
+
+    function updateVisualPresetButtons(activePresetName) {
+        var buttons = document.querySelectorAll(".gallery-visual-preset-button");
+
+        buttons.forEach(function (button) {
+            button.classList.toggle(
+                "is-active",
+                button.getAttribute("data-visual-preset") === activePresetName
+            );
+        });
+    }
+
     var light = new BABYLON.HemisphericLight(
         "light",
         new BABYLON.Vector3(0, 1, 0),
@@ -7144,7 +7908,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         .gallery-lighting-mode-tabs {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
             flex: 0 0 auto;
             margin: 18px 0 0;
@@ -7191,8 +7955,73 @@ export const createScene = function (engineArg, canvasArg) {
         }
 
         .gallery-lighting-main-content,
-        .gallery-lighting-local-content {
+        .gallery-lighting-local-content,
+        .gallery-lighting-visual-content {
             display: block;
+        }
+
+        .gallery-visual-preset-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 9px;
+        }
+
+        .gallery-visual-preset-button {
+            appearance: none;
+            width: 100%;
+            min-height: 42px;
+            border-radius: 13px;
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            background: rgba(255, 255, 255, 0.24);
+            color: #333333;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.025em;
+            cursor: pointer;
+            text-align: left;
+            padding: 0 14px;
+        }
+
+        .gallery-visual-preset-button:hover {
+            background: rgba(255, 255, 255, 0.36);
+        }
+
+        .gallery-visual-preset-button.is-active {
+            border-color: rgba(0, 0, 0, 0.23);
+            background: rgba(255, 255, 255, 0.52);
+            box-shadow:
+                0 6px 14px rgba(0, 0, 0, 0.08),
+                inset 0 1px 0 rgba(255, 255, 255, 0.72);
+        }
+
+        .gallery-visual-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .gallery-visual-action-button {
+            appearance: none;
+            min-height: 42px;
+            padding: 0 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            background: rgba(255, 255, 255, 0.24);
+            color: #333333;
+            font-size: 13px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .gallery-visual-action-button:hover {
+            background: rgba(255, 255, 255, 0.36);
+        }
+
+        .gallery-visual-hint {
+            margin: 10px 0 0;
+            font-size: 12px;
+            line-height: 1.45;
+            color: rgba(48, 48, 48, 0.68);
         }
 
         .gallery-lighting-content-hidden {
@@ -10790,6 +11619,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             restoreLocalLightGroupsFromState(localLightState);
             clearLocalLightSelection();
+            applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
             updateLocalLightsUi();
@@ -13339,8 +14169,14 @@ export const createScene = function (engineArg, canvasArg) {
     lightingLocalTabButton.className = "gallery-lighting-tab-button";
     lightingLocalTabButton.innerText = "LOCAL LIGHTS";
 
+    var lightingVisualTabButton = document.createElement("button");
+    lightingVisualTabButton.type = "button";
+    lightingVisualTabButton.className = "gallery-lighting-tab-button";
+    lightingVisualTabButton.innerText = "VISUAL SETTINGS";
+
     lightingModeTabs.appendChild(lightingMainTabButton);
     lightingModeTabs.appendChild(lightingLocalTabButton);
+    lightingModeTabs.appendChild(lightingVisualTabButton);
 
     var lightingContentStack = document.createElement("div");
     lightingContentStack.className = "gallery-lighting-content-stack";
@@ -13350,6 +14186,9 @@ export const createScene = function (engineArg, canvasArg) {
 
     var localLightingContent = document.createElement("div");
     localLightingContent.className = "gallery-lighting-local-content gallery-lighting-content-hidden";
+
+    var visualLightingContent = document.createElement("div");
+    visualLightingContent.className = "gallery-lighting-visual-content gallery-lighting-content-hidden";
 
     function closeLightingDropdown() {
         lightingDropdown.classList.remove("is-open");
@@ -13391,19 +14230,50 @@ export const createScene = function (engineArg, canvasArg) {
                 setLightingContentMode("local");
             });
         }
+
+        if (lightingContentMode !== "visual") {
+            addLightingDropdownOption("Visual Settings", function () {
+                setEditorPanelMode("lighting");
+                setLightingContentMode("visual");
+            });
+        }
     }
 
     function setLightingContentMode(nextMode) {
-        lightingContentMode = nextMode === "local" ? "local" : "main";
+        lightingContentMode = nextMode === "local"
+            ? "local"
+            : nextMode === "visual"
+                ? "visual"
+                : "main";
 
         mainLightingContent.classList.toggle("gallery-lighting-content-hidden", lightingContentMode !== "main");
         localLightingContent.classList.toggle("gallery-lighting-content-hidden", lightingContentMode !== "local");
+        visualLightingContent.classList.toggle("gallery-lighting-content-hidden", lightingContentMode !== "visual");
 
         lightingMainTabButton.classList.toggle("is-active", lightingContentMode === "main");
         lightingLocalTabButton.classList.toggle("is-active", lightingContentMode === "local");
+        lightingVisualTabButton.classList.toggle("is-active", lightingContentMode === "visual");
+
+        lightingModeLabel.innerText = lightingContentMode === "visual"
+            ? "Mode: Visual Settings"
+            : lightingContentMode === "local"
+                ? "Mode: Local Lights"
+                : "Mode: Main Lights";
 
         if (lightingContentMode === "local") {
             updateLocalLightsUi();
+        }
+
+        if (lightingContentMode === "visual") {
+            var currentVisualSettings = readVisualSettingsFromScene();
+
+            syncVisualControls(currentVisualSettings);
+
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(function () {
+                    syncVisualControls(currentVisualSettings);
+                });
+            }
         }
 
         if (lightingContentStack) {
@@ -13425,8 +14295,15 @@ export const createScene = function (engineArg, canvasArg) {
         setLightingContentMode("local");
     };
 
+    lightingVisualTabButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        setLightingContentMode("visual");
+    };
+
     lightingContentStack.appendChild(mainLightingContent);
     lightingContentStack.appendChild(localLightingContent);
+    lightingContentStack.appendChild(visualLightingContent);
     lightingScroll.appendChild(lightingContentStack);
 
     var globalLookSection = createLightingSection("GLOBAL LOOK");
@@ -13888,6 +14765,291 @@ export const createScene = function (engineArg, canvasArg) {
     updateLocalLightsUi();
 
 
+    // STAGE 12C15 - VISUAL SETTINGS UI
+    var visualPresetSection = createLightingSection("VISUAL PRESETS");
+
+    var visualPresetGrid = document.createElement("div");
+    visualPresetGrid.className = "gallery-visual-preset-grid";
+
+    visualQualityPresets.forEach(function (preset) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "gallery-visual-preset-button";
+        button.setAttribute("data-visual-preset", preset.name);
+        button.innerText = preset.name;
+
+        button.onclick = function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            applyVisualPresetByName(preset.name);
+        };
+
+        visualPresetGrid.appendChild(button);
+    });
+
+    visualPresetSection.appendChild(visualPresetGrid);
+
+    var visualPresetHint = document.createElement("p");
+    visualPresetHint.className = "gallery-visual-hint";
+    visualPresetHint.innerText = "Presets change the final public viewer look. They are saved in gallery state.";
+    visualPresetSection.appendChild(visualPresetHint);
+
+    visualLightingContent.appendChild(visualPresetSection);
+
+    var visualCoreSection = createLightingSection("IMAGE LOOK");
+
+    createLightingSlider(visualCoreSection, "visualExposure", "Exposure", 0.2, 2.5, 0.01, visualDefaultSettings.exposure, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.exposure = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.exposure = lightingControlRefs.visualExposure;
+
+    createLightingSlider(visualCoreSection, "visualContrast", "Contrast", 0.5, 2.0, 0.01, visualDefaultSettings.contrast, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.contrast = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.contrast = lightingControlRefs.visualContrast;
+
+    visualLightingContent.appendChild(visualCoreSection);
+
+    var visualPostSection = createLightingSection("POST PROCESS");
+
+    createLightingCheckbox(visualPostSection, "visualBloomEnabled", "Bloom", visualDefaultSettings.bloomEnabled, function (checked) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.bloomEnabled = checked;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.bloomEnabled = lightingControlRefs.visualBloomEnabled;
+
+    createLightingSlider(visualPostSection, "visualBloomIntensity", "Bloom Intensity", 0, 0.35, 0.005, visualDefaultSettings.bloomIntensity, 3, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.bloomIntensity = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.bloomIntensity = lightingControlRefs.visualBloomIntensity;
+
+    createLightingSlider(visualPostSection, "visualBloomThreshold", "Bloom Threshold", 0, 1.4, 0.01, visualDefaultSettings.bloomThreshold, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.bloomThreshold = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.bloomThreshold = lightingControlRefs.visualBloomThreshold;
+
+    createLightingCheckbox(visualPostSection, "visualVignetteEnabled", "Vignette", visualDefaultSettings.vignetteEnabled, function (checked) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.vignetteEnabled = checked;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.vignetteEnabled = lightingControlRefs.visualVignetteEnabled;
+
+    createLightingSlider(visualPostSection, "visualVignetteWeight", "Vignette Weight", 0, 0.7, 0.01, visualDefaultSettings.vignetteWeight, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.vignetteWeight = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.vignetteWeight = lightingControlRefs.visualVignetteWeight;
+
+    createLightingCheckbox(visualPostSection, "visualFxaaEnabled", "FXAA", visualDefaultSettings.fxaaEnabled, function (checked) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.fxaaEnabled = checked;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.fxaaEnabled = lightingControlRefs.visualFxaaEnabled;
+
+    visualLightingContent.appendChild(visualPostSection);
+
+
+    var visualContactSection = createLightingSection("SSAO / CONTACT DEPTH");
+
+    createLightingCheckbox(visualContactSection, "visualSsaoEnabled", "Contact Depth", visualDefaultSettings.ssaoEnabled, function (checked) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ssaoEnabled = checked;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ssaoEnabled = lightingControlRefs.visualSsaoEnabled;
+
+    createLightingSlider(visualContactSection, "visualSsaoStrength", "Contact Strength", 0, 1.2, 0.01, visualDefaultSettings.ssaoStrength, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ssaoStrength = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ssaoStrength = lightingControlRefs.visualSsaoStrength;
+
+    createLightingSlider(visualContactSection, "visualSsaoRadius", "Contact Radius", 0.2, 5.5, 0.05, visualDefaultSettings.ssaoRadius, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ssaoRadius = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ssaoRadius = lightingControlRefs.visualSsaoRadius;
+
+    createLightingSlider(visualContactSection, "visualSsaoArea", "Contact Area", 0.2, 4.0, 0.05, visualDefaultSettings.ssaoArea, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ssaoArea = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ssaoArea = lightingControlRefs.visualSsaoArea;
+
+    createLightingSlider(visualContactSection, "visualSsaoBase", "Base Lift", 0, 0.20, 0.005, visualDefaultSettings.ssaoBase, 3, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ssaoBase = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ssaoBase = lightingControlRefs.visualSsaoBase;
+
+    var visualContactHint = document.createElement("p");
+    visualContactHint.className = "gallery-visual-hint";
+    visualContactHint.innerText = "Adds subtle contact depth in corners and under objects. Keep it low on mobile if FPS drops.";
+    visualContactSection.appendChild(visualContactHint);
+
+    visualLightingContent.appendChild(visualContactSection);
+
+
+    var visualReflectionSection = createLightingSection("REFLECTIONS");
+
+    createLightingCheckbox(visualReflectionSection, "visualReflectionEnabled", "Reflections", visualDefaultSettings.reflectionEnabled, function (checked) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.reflectionEnabled = checked;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.reflectionEnabled = lightingControlRefs.visualReflectionEnabled;
+
+    createLightingSlider(visualReflectionSection, "visualReflectionStrength", "Global Reflection", 0, 2.0, 0.01, visualDefaultSettings.reflectionStrength, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.reflectionStrength = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.reflectionStrength = lightingControlRefs.visualReflectionStrength;
+
+    createLightingSlider(visualReflectionSection, "visualFloorReflectionStrength", "Floor Reflection", 0, 2.0, 0.01, visualDefaultSettings.floorReflectionStrength, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.floorReflectionStrength = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.floorReflectionStrength = lightingControlRefs.visualFloorReflectionStrength;
+
+    createLightingSlider(visualReflectionSection, "visualWallReflectionStrength", "Wall Reflection", 0, 1.5, 0.01, visualDefaultSettings.wallReflectionStrength, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.wallReflectionStrength = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.wallReflectionStrength = lightingControlRefs.visualWallReflectionStrength;
+
+    createLightingSlider(visualReflectionSection, "visualCeilingReflectionStrength", "Ceiling Reflection", 0, 1.5, 0.01, visualDefaultSettings.ceilingReflectionStrength, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ceilingReflectionStrength = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ceilingReflectionStrength = lightingControlRefs.visualCeilingReflectionStrength;
+
+    createLightingSlider(visualReflectionSection, "visualFloorRoughness", "Floor Roughness", 0.15, 1.0, 0.01, visualDefaultSettings.floorRoughness, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.floorRoughness = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.floorRoughness = lightingControlRefs.visualFloorRoughness;
+
+    createLightingSlider(visualReflectionSection, "visualWallRoughness", "Wall Roughness", 0.3, 1.0, 0.01, visualDefaultSettings.wallRoughness, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.wallRoughness = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.wallRoughness = lightingControlRefs.visualWallRoughness;
+
+    createLightingSlider(visualReflectionSection, "visualCeilingRoughness", "Ceiling Roughness", 0.3, 1.0, 0.01, visualDefaultSettings.ceilingRoughness, 2, function (value) {
+        var current = readVisualSettingsFromScene();
+        current.preset = "Custom";
+        current.ceilingRoughness = value;
+        applyVisualSettings(current, true, false);
+    });
+    visualControlRefs.ceilingRoughness = lightingControlRefs.visualCeilingRoughness;
+
+    var visualReflectionHint = document.createElement("p");
+    visualReflectionHint.className = "gallery-visual-hint";
+    visualReflectionHint.innerText = "Controls environment reflections on floor, walls and ceiling. Lower roughness gives clearer reflections.";
+    visualReflectionSection.appendChild(visualReflectionHint);
+
+    visualLightingContent.appendChild(visualReflectionSection);
+
+    var visualActionsSection = createLightingSection("ACTIONS");
+
+    var visualActionsGrid = document.createElement("div");
+    visualActionsGrid.className = "gallery-visual-actions-grid";
+
+    function addVisualActionButton(label, onClick) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "gallery-visual-action-button";
+        button.innerText = label;
+
+        button.onclick = function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+        };
+
+        visualActionsGrid.appendChild(button);
+    }
+
+    addVisualActionButton("SAVE LOOK", function () {
+        persistCurrentVisualSettings();
+
+        if (typeof saveGalleryStateToSupabase === "function") {
+            saveGalleryStateToSupabase();
+        }
+
+        syncVisualControls(readVisualSettingsFromScene());
+    });
+
+    addVisualActionButton("LOAD SAVED", function () {
+        var loadedSettings = loadSavedVisualSettings();
+
+        if (!loadedSettings) {
+            resetVisualSettingsToDefault();
+        }
+    });
+
+    addVisualActionButton("RESET", function () {
+        resetVisualSettingsToDefault();
+    });
+
+    addVisualActionButton("CLEAR SAVED", function () {
+        clearSavedVisualSettings();
+        resetVisualSettingsToDefault();
+    });
+
+    visualActionsSection.appendChild(visualActionsGrid);
+
+    var visualActionsHint = document.createElement("p");
+    visualActionsHint.className = "gallery-visual-hint";
+    visualActionsHint.innerText = "SAVE LOOK stores the current visual look. LOAD SAVED restores it. RESET returns to Neutral Gallery defaults. CLEAR SAVED removes the stored visual look and resets.";
+    visualActionsSection.appendChild(visualActionsHint);
+
+    visualLightingContent.appendChild(visualActionsSection);
+
+
+
     lightingScroll.appendChild(lightingModeTabs);
 
     var lightingBackButton = document.createElement("button");
@@ -13907,6 +15069,7 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (lightingPanelMode === "lighting") {
             syncLightingControls(readLightingSettingsFromScene());
+            syncVisualControls(readVisualSettingsFromScene());
             updateLightingPresetRows();
         }
 
@@ -13954,6 +15117,14 @@ export const createScene = function (engineArg, canvasArg) {
     };
 
     lightingDefaultSettings = readLightingSettingsFromScene();
+
+    var savedVisualSettingsAtStartup = readSavedVisualSettings();
+
+    if (savedVisualSettingsAtStartup) {
+        applyVisualSettings(savedVisualSettingsAtStartup, true, true);
+    } else {
+        applyVisualSettings(visualDefaultSettings, true, true);
+    }
 
     var savedLightingState = readSavedLightingState();
 
@@ -19488,9 +20659,11 @@ export const createScene = function (engineArg, canvasArg) {
             });
 
             updateMobileFloorBounds();
+            applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshViewerCollisionMeshes();
             refreshArtworkLightExclusions();
             refreshPedestalLightIncludedMeshes();
+            applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
@@ -22611,6 +23784,7 @@ export const createScene = function (engineArg, canvasArg) {
             savedAt: new Date().toISOString(),
             editor: serializeEditorState(),
             lighting: readLightingSettingsFromScene(),
+            visualSettings: createVisualSettingsSnapshot(),
             lightingPresets: readLightingPresets(),
             localLights: readLocalLightStateFromScene()
         };
@@ -22650,6 +23824,16 @@ export const createScene = function (engineArg, canvasArg) {
 
         if (state.lighting) {
             applyLightingSettings(state.lighting, true);
+        }
+
+        if (state.visualSettings) {
+            applyVisualSettings(normalizeVisualSettings(state.visualSettings), true, true);
+        } else {
+            var savedVisualSettings = readSavedVisualSettings();
+
+            if (savedVisualSettings) {
+                applyVisualSettings(normalizeVisualSettings(savedVisualSettings), true, true);
+            }
         }
 
         if (Array.isArray(state.lightingPresets)) {
@@ -23376,6 +24560,46 @@ export const createScene = function (engineArg, canvasArg) {
         },
         setLocalLightCameraCulling: function (options) {
             return setLocalLightCameraCullingDebugOptions(options);
+        },
+        getVisualSettings: function () {
+            return readVisualSettingsFromScene();
+        },
+        sanitizeVisualSettings: function (settings) {
+            return normalizeVisualSettings(settings || readVisualSettingsFromScene());
+        },
+        loadSavedVisualSettings: function () {
+            return loadSavedVisualSettings();
+        },
+        clearSavedVisualSettings: function () {
+            return clearSavedVisualSettings();
+        },
+        setVisualSettings: function (settings) {
+            return applyVisualSettings(settings, true, false);
+        },
+        applyVisualPreset: function (name) {
+            return applyVisualPresetByName(name);
+        },
+        getVisualContactDepthDebug: function () {
+            return {
+                ssaoAvailable: !!BABYLON.SSAO2RenderingPipeline,
+                pipelineCreated: !!visualSsaoPipeline,
+                attached: !!visualSsaoAttached,
+                settings: readVisualSettingsFromScene()
+            };
+        },
+        getVisualReflectionDebug: function () {
+            return applyVisualReflectionSettings(readVisualSettingsFromScene());
+        },
+        getVisualPresets: function () {
+            return visualQualityPresets.map(function (preset) {
+                return {
+                    name: preset.name,
+                    settings: Object.assign({}, preset.settings)
+                };
+            });
+        },
+        resetVisualSettings: function () {
+            return resetVisualSettingsToDefault();
         },
         getLocalLightCameraCullingSettings: function () {
             return {
