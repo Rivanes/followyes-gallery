@@ -13,6 +13,7 @@
   - nowo dodane Spot/Point korzystaja ze wspolnego targetowania i maxSimultaneousLights,
   - Etap 6: dodano aktywne Target Controls dla Local Lights.
   - Target Controls steruja realnym includedOnlyMeshes lampy: Floor / Walls / Artworks / Sculptures / Props.
+  - Stage 12C27 Clean: sculpture outline edges + automatic floor contact.
   - Etap 7: Local Light Groups dostaly batch actions: Enable / Disable / Solo.
   - Etap 7: Solo Group zapisuje poprzednie stany Enabled i potrafi je przywrocic.
   - Poprawka: Targets przeniesione do zwijanej sekcji ADVANCED.
@@ -5454,6 +5455,142 @@ var pipeline = ensureVisualRenderingPipeline();
         };
     }
 
+
+    // STAGE 12C27 CLEAN - SCULPTURE FLOOR CONTACT HELPERS
+    function getSculptureFloorYAtSlot(slot) {
+        if (!slot) {
+            return -3;
+        }
+
+        var fallbackY = isFinite(Number(slot.position && slot.position.y))
+            ? Number(slot.position.y)
+            : -3;
+
+        if (!floorMeshes || !floorMeshes.length || !scene || !scene.pickWithRay) {
+            return fallbackY;
+        }
+
+        try {
+            var rayOrigin = new BABYLON.Vector3(
+                slot.position.x,
+                fallbackY + 8,
+                slot.position.z
+            );
+            var ray = new BABYLON.Ray(rayOrigin, new BABYLON.Vector3(0, -1, 0), 20);
+            var hit = scene.pickWithRay(ray, function (mesh) {
+                return floorMeshes.indexOf(mesh) !== -1;
+            });
+
+            if (hit && hit.hit && hit.pickedPoint && isFinite(hit.pickedPoint.y)) {
+                return hit.pickedPoint.y;
+            }
+        } catch (floorPickError) {}
+
+        return fallbackY;
+    }
+
+    function getModel3dRuntimeBottomWorldY(slot) {
+        if (!slot || !slot.metadata || !slot.metadata.model3dRuntime) {
+            return null;
+        }
+
+        var runtime = slot.metadata.model3dRuntime;
+        var meshes = runtime.meshes || [];
+        var minY = Infinity;
+
+        try {
+            slot.computeWorldMatrix(true);
+
+            if (runtime.root && runtime.root.computeWorldMatrix) {
+                runtime.root.computeWorldMatrix(true);
+            }
+
+            meshes.forEach(function (mesh) {
+                if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                    return;
+                }
+
+                if (mesh.isVisible === false || mesh.visibility === 0) {
+                    return;
+                }
+
+                if (mesh.computeWorldMatrix) {
+                    mesh.computeWorldMatrix(true);
+                }
+
+                if (!mesh.getBoundingInfo) {
+                    return;
+                }
+
+                var bbox = mesh.getBoundingInfo().boundingBox;
+
+                if (bbox && bbox.minimumWorld && isFinite(bbox.minimumWorld.y)) {
+                    minY = Math.min(minY, bbox.minimumWorld.y);
+                }
+            });
+        } catch (boundsError) {
+            return null;
+        }
+
+        return isFinite(minY) ? minY : null;
+    }
+
+    function getModel3dSlotWorldScaleY(slot) {
+        if (!slot || !slot.getWorldMatrix) {
+            return 1;
+        }
+
+        try {
+            var scale = new BABYLON.Vector3(1, 1, 1);
+            var rotation = new BABYLON.Quaternion();
+            var translation = new BABYLON.Vector3();
+
+            slot.computeWorldMatrix(true);
+            slot.getWorldMatrix().decompose(scale, rotation, translation);
+
+            if (isFinite(scale.y) && Math.abs(scale.y) > 0.0001) {
+                return scale.y;
+            }
+        } catch (scaleError) {}
+
+        return 1;
+    }
+
+    function snapModel3dSlotRuntimeToFloor(slot) {
+        if (!slot || !slot.metadata || !slot.metadata.model3dRuntime || !slot.metadata.model3dRuntime.root) {
+            return false;
+        }
+
+        var runtime = slot.metadata.model3dRuntime;
+        var root = runtime.root;
+        var floorY = getSculptureFloorYAtSlot(slot);
+        var bottomY = getModel3dRuntimeBottomWorldY(slot);
+
+        if (!isFinite(floorY) || bottomY === null || !isFinite(bottomY)) {
+            return false;
+        }
+
+        var deltaWorldY = floorY - bottomY;
+
+        if (Math.abs(deltaWorldY) < 0.001) {
+            return true;
+        }
+
+        var parentScaleY = getModel3dSlotWorldScaleY(slot);
+        root.position.y += deltaWorldY / parentScaleY;
+        root.computeWorldMatrix(true);
+
+        if (runtime.meshes && runtime.meshes.length) {
+            runtime.meshes.forEach(function (mesh) {
+                if (mesh && mesh.computeWorldMatrix) {
+                    mesh.computeWorldMatrix(true);
+                }
+            });
+        }
+
+        return true;
+    }
+
     function setModel3dSlotTransformState(slot, transformState, shouldNotify) {
         if (!slot) {
             notifyGalleryStatus("Zaznacz rzezbe/model slot, aby zmienic skale lub rotacje.");
@@ -5488,6 +5625,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         if (slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.root) {
             slot.metadata.model3dRuntime.root.computeWorldMatrix(true);
+            snapModel3dSlotRuntimeToFloor(slot);
         }
 
         if (activeModel3dSlot === slot) {
@@ -6247,6 +6385,9 @@ var pipeline = ensureVisualRenderingPipeline();
     // selectedSphere zostaje jako aktywne zaznaczenie slotu, a nie tylko obiekt chwilowo chwytany.
     var activeModel3dSlot = null;
     var model3dSlotSelectionOutlineColor = new BABYLON.Color3(0.55, 0.72, 1.0);
+    var model3dSlotSelectionEdgesColor = new BABYLON.Color4(0.55, 0.72, 1.0, 1.0);
+    var model3dSlotSelectionEdgesWidth = 2.6;
+    var model3dSlotSelectionPlaceholderEdgesWidth = 3.6;
 
     var dragMoved = false;
 
@@ -21281,7 +21422,7 @@ var pipeline = ensureVisualRenderingPipeline();
             transform: {
                 position: modelState.transform && modelState.transform.position
                     ? modelState.transform.position
-                    : { x: 0, y: 0.65, z: 0 },
+                    : { x: 0, y: 0, z: 0 },
                 rotation: modelState.transform && modelState.transform.rotation
                     ? modelState.transform.rotation
                     : { x: 0, y: 0, z: 0 },
@@ -21459,15 +21600,16 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var transform = modelState && modelState.transform ? modelState.transform : {};
-        var position = transform.position || { x: 0, y: 0.65, z: 0 };
+        var position = transform.position || { x: 0, y: 0, z: 0 };
         var rotation = transform.rotation || { x: 0, y: 0, z: 0 };
         var scaling = transform.scaling || { x: 1, y: 1, z: 1 };
 
         root.parent = slot;
-        root.position.copyFrom(vectorFromState(position, new BABYLON.Vector3(0, 0.65, 0)));
+        root.position.copyFrom(vectorFromState(position, new BABYLON.Vector3(0, 0, 0)));
         root.rotation.copyFrom(vectorFromState(rotation, BABYLON.Vector3.Zero()));
         root.scaling.copyFrom(vectorFromState(scaling, new BABYLON.Vector3(1, 1, 1)));
         root.computeWorldMatrix(true);
+        snapModel3dSlotRuntimeToFloor(slot);
     }
 
     async function loadModel3dIntoSlot(slot, modelState) {
@@ -21514,6 +21656,7 @@ var pipeline = ensureVisualRenderingPipeline();
             slot.metadata.model3dRuntime.meshes = loadedMeshes;
             setModel3dSlotTransformFromState(slot, modelState);
             applyModel3dRuntimeVisibility(slot);
+            snapModel3dSlotRuntimeToFloor(slot);
 
             if (activeModel3dSlot === slot) {
                 applyModel3dSlotSelectionGlow(slot);
@@ -21784,7 +21927,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var storedMeshes = slot.metadata.model3dSelectionGlowMeshes || [];
 
-        storedMeshes.forEach(function (mesh) {
+        function clearMeshSelection(mesh) {
             if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
                 return;
             }
@@ -21802,27 +21945,16 @@ var pipeline = ensureVisualRenderingPipeline();
             if (mesh.renderOverlay !== undefined) {
                 mesh.renderOverlay = false;
             }
-        });
 
-        getModel3dSlotSelectionMeshes(slot).forEach(function (mesh) {
-            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
-                return;
-            }
-
-            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
+            if (mesh.disableEdgesRendering) {
                 try {
-                    model3dSelectionHighlightLayer.removeMesh(mesh);
-                } catch (highlightRemoveCurrentError) {}
+                    mesh.disableEdgesRendering();
+                } catch (edgesDisableError) {}
             }
+        }
 
-            if (mesh.renderOutline !== undefined) {
-                mesh.renderOutline = false;
-            }
-
-            if (mesh.renderOverlay !== undefined) {
-                mesh.renderOverlay = false;
-            }
-        });
+        storedMeshes.forEach(clearMeshSelection);
+        getModel3dSlotSelectionMeshes(slot).forEach(clearMeshSelection);
 
         slot.metadata.model3dSelectionGlowMeshes = [];
     }
@@ -21836,6 +21968,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var meshes = getModel3dSlotSelectionMeshes(slot);
         var appliedMeshes = [];
+        var hasRuntime = hasLoadedModel3dRuntime(slot);
 
         meshes.forEach(function (mesh) {
             if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
@@ -21850,12 +21983,27 @@ var pipeline = ensureVisualRenderingPipeline();
                 mesh.renderOverlay = false;
             }
 
+            // STAGE 12C27 CLEAN:
+            // renderOutline bywa niewidoczny na importowanych GLB/PBR, dlatego dodajemy
+            // też EdgesRenderer. To daje czytelne zaznaczenie po krawędziach modelu,
+            // bez białego HighlightLayer zalewającego całą bryłę.
             if (mesh.renderOutline !== undefined) {
                 mesh.renderOutline = true;
                 mesh.outlineColor = model3dSlotSelectionOutlineColor;
-                mesh.outlineWidth = hasLoadedModel3dRuntime(slot) ? 0.035 : 0.045;
-                appliedMeshes.push(mesh);
+                mesh.outlineWidth = hasRuntime ? 0.065 : 0.075;
             }
+
+            if (mesh.enableEdgesRendering) {
+                try {
+                    mesh.enableEdgesRendering(0.96, true);
+                    mesh.edgesColor = model3dSlotSelectionEdgesColor;
+                    mesh.edgesWidth = hasRuntime
+                        ? model3dSlotSelectionEdgesWidth
+                        : model3dSlotSelectionPlaceholderEdgesWidth;
+                } catch (edgesError) {}
+            }
+
+            appliedMeshes.push(mesh);
         });
 
         slot.metadata.model3dSelectionGlowMeshes = appliedMeshes;
@@ -23653,9 +23801,11 @@ var pipeline = ensureVisualRenderingPipeline();
                 selectedSphere.position.x = floorPoint.x;
                 selectedSphere.position.z = floorPoint.z;
 
-                // wysokosc postumentu zostaje taka sama jak byla
-                // jesli chcesz inna wysokosc, zmien wartosc Y tutaj.
-                selectedSphere.position.y = selectedSphere.position.y;
+                // STAGE 12C27 CLEAN:
+                // Slot rzezby jest kotwica na podlodze. Przy dragowaniu po podlodze
+                // Y też bierzemy z trafionego floor segmentu, a model runtime dociagamy do podlogi.
+                selectedSphere.position.y = floorPoint.y;
+                snapModel3dSlotRuntimeToFloor(selectedSphere);
 
                 updatePedestalLight(selectedSphere);
                 updateViewerModePlaceholderVisibility();
