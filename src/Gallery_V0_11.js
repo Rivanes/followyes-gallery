@@ -13,7 +13,9 @@
   - nowo dodane Spot/Point korzystaja ze wspolnego targetowania i maxSimultaneousLights,
   - Etap 6: dodano aktywne Target Controls dla Local Lights.
   - Target Controls steruja realnym includedOnlyMeshes lampy: Floor / Walls / Artworks / Sculptures / Props.
-  - Stage 12C28 Clean: unified sculpture/model slot system with artwork-like flow.
+  - Stage 12C29 Clean: unified sculpture/model slot system with artwork-like flow.
+  - Stage 12C44: Observer Lifecycle + Deep Edit Performance Cleanup.
+  - Stage 12C45: Local Lights + Look Responsibility Cleanup.
   - Etap 7: Local Light Groups dostaly batch actions: Enable / Disable / Solo.
   - Etap 7: Solo Group zapisuje poprzednie stany Enabled i potrafi je przywrocic.
   - Poprawka: Targets przeniesione do zwijanej sekcji ADVANCED.
@@ -328,35 +330,153 @@ export const createScene = function (engineArg, canvasArg) {
         return true;
     }
 
-    canvas.addEventListener("pointerdown", function (event) {
+
+    // STAGE 12C44 - OBSERVER / EVENT LIFECYCLE REGISTRY
+    // Recreating the gallery in the same browser session used to leave window/canvas listeners alive.
+    // Keep one registry and remove previous listeners before adding new ones.
+    var galleryDomListenerRegistry = globalThis.__berryboyGalleryDomListenerRegistry || [];
+
+    galleryDomListenerRegistry.forEach(function (entry) {
+        try {
+            if (entry && entry.element && entry.type && entry.handler) {
+                entry.element.removeEventListener(entry.type, entry.handler, entry.options || false);
+            }
+        } catch (listenerCleanupError) {}
+    });
+
+    galleryDomListenerRegistry = [];
+    globalThis.__berryboyGalleryDomListenerRegistry = galleryDomListenerRegistry;
+
+    function registerGalleryDomEvent(key, element, type, handler, options) {
+        if (!element || !type || !handler) {
+            return null;
+        }
+
+        for (var i = galleryDomListenerRegistry.length - 1; i >= 0; i--) {
+            var existing = galleryDomListenerRegistry[i];
+
+            if (existing && existing.key === key) {
+                try {
+                    existing.element.removeEventListener(existing.type, existing.handler, existing.options || false);
+                } catch (removeError) {}
+
+                galleryDomListenerRegistry.splice(i, 1);
+            }
+        }
+
+        element.addEventListener(type, handler, options || false);
+        galleryDomListenerRegistry.push({
+            key: key,
+            element: element,
+            type: type,
+            handler: handler,
+            options: options || false
+        });
+
+        return handler;
+    }
+
+    var galleryBeforeRenderObserverRegistry = {};
+    var galleryEngineResizeObserverRegistry = {};
+
+    function registerGalleryBeforeRenderObserver(key, callback) {
+        if (!scene || !scene.onBeforeRenderObservable || !key || !callback) {
+            return null;
+        }
+
+        if (galleryBeforeRenderObserverRegistry[key]) {
+            try {
+                scene.onBeforeRenderObservable.remove(galleryBeforeRenderObserverRegistry[key]);
+            } catch (removeObserverError) {}
+        }
+
+        galleryBeforeRenderObserverRegistry[key] = scene.onBeforeRenderObservable.add(callback);
+        return galleryBeforeRenderObserverRegistry[key];
+    }
+
+    function unregisterGalleryBeforeRenderObserver(key) {
+        if (!galleryBeforeRenderObserverRegistry[key]) {
+            return;
+        }
+
+        try {
+            scene.onBeforeRenderObservable.remove(galleryBeforeRenderObserverRegistry[key]);
+        } catch (removeObserverError) {}
+
+        galleryBeforeRenderObserverRegistry[key] = null;
+        delete galleryBeforeRenderObserverRegistry[key];
+    }
+
+    function registerGalleryEngineResizeObserver(key, callback) {
+        if (!scene || !scene.getEngine || !scene.getEngine().onResizeObservable || !key || !callback) {
+            return null;
+        }
+
+        if (galleryEngineResizeObserverRegistry[key]) {
+            try {
+                scene.getEngine().onResizeObservable.remove(galleryEngineResizeObserverRegistry[key]);
+            } catch (removeResizeObserverError) {}
+        }
+
+        galleryEngineResizeObserverRegistry[key] = scene.getEngine().onResizeObservable.add(callback);
+        return galleryEngineResizeObserverRegistry[key];
+    }
+
+    scene.onDisposeObservable.add(function () {
+        Object.keys(galleryBeforeRenderObserverRegistry).forEach(unregisterGalleryBeforeRenderObserver);
+
+        Object.keys(galleryEngineResizeObserverRegistry).forEach(function (key) {
+            var observer = galleryEngineResizeObserverRegistry[key];
+
+            if (observer && scene && scene.getEngine && scene.getEngine().onResizeObservable) {
+                try {
+                    scene.getEngine().onResizeObservable.remove(observer);
+                } catch (removeResizeObserverError) {}
+            }
+        });
+
+        galleryEngineResizeObserverRegistry = {};
+
+        galleryDomListenerRegistry.forEach(function (entry) {
+            try {
+                if (entry && entry.element && entry.type && entry.handler) {
+                    entry.element.removeEventListener(entry.type, entry.handler, entry.options || false);
+                }
+            } catch (listenerDisposeError) {}
+        });
+
+        galleryDomListenerRegistry.length = 0;
+    });
+
+    registerGalleryDomEvent("desktopLookPointerDown", canvas, "pointerdown", function (event) {
         beginDesktopViewerMiddleLook(event);
     }, true);
 
-    window.addEventListener("pointermove", function (event) {
+    registerGalleryDomEvent("desktopLookPointerMove", window, "pointermove", function (event) {
         updateDesktopViewerMiddleLook(event);
     }, true);
 
-    window.addEventListener("pointerup", function (event) {
+    registerGalleryDomEvent("desktopLookPointerUp", window, "pointerup", function (event) {
         endDesktopViewerMiddleLook(event);
     }, true);
 
-    window.addEventListener("pointercancel", function (event) {
+    registerGalleryDomEvent("desktopLookPointerCancel", window, "pointercancel", function (event) {
         endDesktopViewerMiddleLook(event);
     }, true);
 
-    canvas.addEventListener("mousedown", function (event) {
+    registerGalleryDomEvent("desktopLookMouseDown", canvas, "mousedown", function (event) {
         if (event.button === getDesktopViewerLookButtonCode()) {
             preventMiddleMouseBrowserAction(event);
         }
     }, true);
 
-    canvas.addEventListener("auxclick", function (event) {
+    registerGalleryDomEvent("desktopLookAuxClick", canvas, "auxclick", function (event) {
         if (event.button === getDesktopViewerLookButtonCode()) {
             preventMiddleMouseBrowserAction(event);
         }
     }, true);
 
-    canvas.addEventListener("contextmenu", function (event) {
+    registerGalleryDomEvent("desktopLookContextMenu", canvas, "contextmenu", function (event) {
         if (!editMode && desktopViewerLookButtonMode === "right") {
             if (event.preventDefault) {
                 event.preventDefault();
@@ -374,6 +494,10 @@ export const createScene = function (engineArg, canvasArg) {
     // gdy zwiedzający podejdzie bardzo blisko powierzchni.
     camera.minZ = 0.035;
     camera.setTarget(new BABYLON.Vector3(0, 1, 0));
+
+    // STAGE 12C42:
+    // Baseline walk height used as a safety fallback when focus preview recovery cannot resolve a floor.
+    var galleryDefaultWalkCameraY = camera.position.y;
 
     scene.imageProcessingConfiguration.toneMappingEnabled = true;
     scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
@@ -657,9 +781,16 @@ return visualRenderingPipeline;
     }
 
     function setVisualSsaoAttached(isEnabled) {
+        isEnabled = !!isEnabled;
+
         if (!visualSsaoPipeline || !scene.postProcessRenderPipelineManager) {
             visualSsaoAttached = false;
             return false;
+        }
+
+        // STAGE 12C51: avoid heavy attach/detach churn when preset repeats the same SSAO state.
+        if (visualSsaoAttached === isEnabled) {
+            return visualSsaoAttached;
         }
 
         try {
@@ -756,6 +887,20 @@ return visualRenderingPipeline;
             : 0;
 
         material.metadata = material.metadata || {};
+
+        var visualMaterialSignature = [
+            enabled ? 1 : 0,
+            Math.round(reflectionIntensity * 10000) / 10000,
+            roughnessValue === undefined || roughnessValue === null
+                ? ""
+                : Math.round(Number(roughnessValue || 0) * 10000) / 10000
+        ].join("|");
+
+        if (material.metadata.visualMaterialReflectionSignature === visualMaterialSignature) {
+            return;
+        }
+
+        material.metadata.visualMaterialReflectionSignature = visualMaterialSignature;
 
         if (material.metadata.visualOriginalEnvironmentIntensity === undefined) {
             material.metadata.visualOriginalEnvironmentIntensity = material.environmentIntensity !== undefined
@@ -1024,68 +1169,162 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateVisualPresetButtons(settings.preset || "Custom");
     }
 
+
+    // STAGE 12C45 - VISUAL LOOK OWNS POST-PROCESS ONLY
+    // One safe sync path for Visual Settings controls. Main Light controls are not touched here.
+    var visualControlsSyncPending = false;
+    var visualControlsSyncSettings = null;
+
+    // STAGE 12C51 - VISUAL PRESET SAFE APPLY
+    // Visual presets can touch bloom/SSAO/reflection materials. Do not allow repeated
+    // preset clicks to stack heavy pipeline/material work in the same moment.
+    var visualPresetApplyInProgress = false;
+    var visualPresetQueuedName = null;
+    var visualLastAppliedSettingsSignature = null;
+
+    function getVisualSettingsSignature(settings) {
+        settings = normalizeVisualSettings(settings);
+
+        return [
+            settings.preset || "Custom",
+            settings.exposure,
+            settings.contrast,
+            !!settings.imageProcessingEnabled,
+            !!settings.toneMappingEnabled,
+            !!settings.bloomEnabled,
+            settings.bloomIntensity,
+            settings.bloomThreshold,
+            !!settings.vignetteEnabled,
+            settings.vignetteWeight,
+            !!settings.fxaaEnabled,
+            !!settings.ssaoEnabled,
+            settings.ssaoStrength,
+            settings.ssaoRadius,
+            settings.ssaoArea,
+            settings.ssaoBase,
+            !!settings.reflectionEnabled,
+            settings.reflectionStrength,
+            settings.floorReflectionStrength,
+            settings.wallReflectionStrength,
+            settings.ceilingReflectionStrength,
+            settings.floorRoughness,
+            settings.wallRoughness,
+            settings.ceilingRoughness
+        ].join("|");
+    }
+
+    function setVisualPresetButtonsBusy(isBusy) {
+        var buttons = document.querySelectorAll(".gallery-visual-preset-button");
+
+        buttons.forEach(function (button) {
+            button.disabled = !!isBusy;
+            button.classList.toggle("is-busy", !!isBusy);
+        });
+    }
+
+    function scheduleVisualControlsSync(settings) {
+        visualControlsSyncSettings = normalizeVisualSettings(settings || readVisualSettingsFromScene());
+
+        if (visualControlsSyncPending) {
+            return;
+        }
+
+        visualControlsSyncPending = true;
+
+        var runSync = function () {
+            visualControlsSyncPending = false;
+            syncVisualControls(visualControlsSyncSettings || readVisualSettingsFromScene());
+            visualControlsSyncSettings = null;
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runSync);
+        } else {
+            setTimeout(runSync, 0);
+        }
+    }
+
+
     function applyVisualSettings(settings, shouldSyncControls, skipPersist) {
         settings = normalizeVisualSettings(settings);
 
+        var previousVisualApplyLock = visualApplyLock;
         visualApplyLock = !!skipPersist;
 
         visualActivePresetName = settings.preset || "Custom";
         visualCurrentSettings = normalizeVisualSettings(settings);
 
-        scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
-        scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-        scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
-        scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
-var pipeline = ensureVisualRenderingPipeline();
+        var visualSettingsSignature = getVisualSettingsSignature(settings);
 
-        if (pipeline) {
-            if (pipeline.imageProcessingEnabled !== undefined) {
-                pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+        if (visualLastAppliedSettingsSignature === visualSettingsSignature) {
+            if (shouldSyncControls) {
+                scheduleVisualControlsSync(settings);
             }
 
-            if (pipeline.fxaaEnabled !== undefined) {
-                pipeline.fxaaEnabled = !!settings.fxaaEnabled;
+            if (!skipPersist) {
+                persistCurrentVisualSettings();
             }
 
-            if (pipeline.bloomEnabled !== undefined) {
-                pipeline.bloomEnabled = !!settings.bloomEnabled;
-            }
-
-            if (pipeline.bloomWeight !== undefined) {
-                pipeline.bloomWeight = Number(settings.bloomIntensity);
-            }
-
-            if (pipeline.bloomThreshold !== undefined) {
-                pipeline.bloomThreshold = Number(settings.bloomThreshold);
-            }
-
-            if (pipeline.bloomKernel !== undefined) {
-                pipeline.bloomKernel = 64;
-            }
+            return readVisualSettingsFromScene();
         }
 
-        applyVisualSsaoSettings(settings);
-        applyVisualReflectionSettings(settings);
+        try {
+            scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
+            scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
 
-        scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
-        scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
-        scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
+            // STAGE 12C45:
+            // Exposure / Contrast are owned by Visual Settings, not Main Light.
+            scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
+            scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
 
-        if (shouldSyncControls) {
-            // Stage 12C16:
-            // Presets must visibly move the sliders/checks to their preset values.
-            syncVisualControls(settings);
+            var pipeline = ensureVisualRenderingPipeline();
 
-            if (typeof syncLightingControls === "function") {
-                syncLightingControls(readLightingSettingsFromScene());
+            if (pipeline) {
+                if (pipeline.imageProcessingEnabled !== undefined) {
+                    pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+                }
+
+                if (pipeline.fxaaEnabled !== undefined) {
+                    pipeline.fxaaEnabled = !!settings.fxaaEnabled;
+                }
+
+                if (pipeline.bloomEnabled !== undefined) {
+                    pipeline.bloomEnabled = !!settings.bloomEnabled;
+                }
+
+                if (pipeline.bloomWeight !== undefined) {
+                    pipeline.bloomWeight = Number(settings.bloomIntensity);
+                }
+
+                if (pipeline.bloomThreshold !== undefined) {
+                    pipeline.bloomThreshold = Number(settings.bloomThreshold);
+                }
+
+                if (pipeline.bloomKernel !== undefined) {
+                    pipeline.bloomKernel = 64;
+                }
             }
-        }
 
-        visualApplyLock = false;
+            applyVisualSsaoSettings(settings);
+            applyVisualReflectionSettings(settings);
+
+            scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
+            scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
+            scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
+
+            visualLastAppliedSettingsSignature = visualSettingsSignature;
+
+            if (shouldSyncControls) {
+                scheduleVisualControlsSync(settings);
+            }
+        } catch (error) {
+            console.warn("Visual Settings apply warning:", error);
+        } finally {
+            visualApplyLock = previousVisualApplyLock;
+        }
 
         if (!skipPersist) {
             persistCurrentVisualSettings();
-            persistCurrentLightingSettings();
         }
 
         return readVisualSettingsFromScene();
@@ -1108,22 +1347,50 @@ var pipeline = ensureVisualRenderingPipeline();
             return null;
         }
 
-        var appliedSettings = normalizeVisualSettings(Object.assign({}, preset.settings));
-        var result = applyVisualSettings(appliedSettings, true, false);
-
-        syncVisualControls(appliedSettings);
-
-        if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(function () {
-                syncVisualControls(appliedSettings);
-            });
+        if (visualPresetApplyInProgress) {
+            visualPresetQueuedName = name;
+            updateVisualPresetButtons(name);
+            return visualCurrentSettings || readVisualSettingsFromScene();
         }
 
-        setTimeout(function () {
-            syncVisualControls(appliedSettings);
-        }, 0);
+        var appliedSettings = normalizeVisualSettings(Object.assign({}, preset.settings));
+        visualPresetApplyInProgress = true;
+        visualPresetQueuedName = null;
+        updateVisualPresetButtons(appliedSettings.preset || name);
+        setVisualPresetButtonsBusy(true);
 
-        return result;
+        function finishVisualPresetApply() {
+            visualPresetApplyInProgress = false;
+            setVisualPresetButtonsBusy(false);
+
+            if (visualPresetQueuedName && visualPresetQueuedName !== name) {
+                var queuedName = visualPresetQueuedName;
+                visualPresetQueuedName = null;
+
+                setTimeout(function () {
+                    applyVisualPresetByName(queuedName);
+                }, 0);
+            }
+        }
+
+        function runVisualPresetApply() {
+            try {
+                // STAGE 12C51: live-only preset preview, queued to avoid stacking heavy SSAO/reflection work.
+                applyVisualSettings(appliedSettings, false, true);
+                persistCurrentVisualSettings();
+                scheduleVisualControlsSync(appliedSettings);
+            } finally {
+                setTimeout(finishVisualPresetApply, 0);
+            }
+        }
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runVisualPresetApply);
+        } else {
+            setTimeout(runVisualPresetApply, 0);
+        }
+
+        return visualCurrentSettings || readVisualSettingsFromScene();
     }
 
     function resetVisualSettingsToDefault() {
@@ -1132,18 +1399,7 @@ var pipeline = ensureVisualRenderingPipeline();
         );
 
         var result = applyVisualSettings(defaultSettings, true, false);
-
-        syncVisualControls(defaultSettings);
-
-        if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(function () {
-                syncVisualControls(defaultSettings);
-            });
-        }
-
-        setTimeout(function () {
-            syncVisualControls(defaultSettings);
-        }, 0);
+        scheduleVisualControlsSync(defaultSettings);
 
         return result;
     }
@@ -1328,6 +1584,38 @@ var pipeline = ensureVisualRenderingPipeline();
         });
     }
 
+
+    // STAGE 12C51 - DEFERRED COMMON LIGHTING MATERIAL SUPPORT
+    // Spawning a Local Light must not scan all scene materials/meshes in the same frame.
+    // This scheduler merges repeated requests and runs the expensive material support scan after the browser has a frame.
+    var commonLightingMaterialSupportDeferredPending = false;
+    var commonLightingMaterialSupportLastReason = "initial";
+
+    function scheduleCommonLightingMaterialSupport(reason) {
+        commonLightingMaterialSupportLastReason = reason || commonLightingMaterialSupportLastReason || "deferred";
+
+        if (commonLightingMaterialSupportDeferredPending) {
+            return;
+        }
+
+        commonLightingMaterialSupportDeferredPending = true;
+
+        var runSupport = function () {
+            commonLightingMaterialSupportDeferredPending = false;
+            measureGalleryPerformanceMetric("materialSupportMs", function () {
+                refreshCommonLightingMaterialSupport();
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+                setTimeout(runSupport, 0);
+            });
+        } else {
+            setTimeout(runSupport, 16);
+        }
+    }
+
     function setupMeshForMainShadows(mesh, options) {
         if (!mesh || mesh.name === "__root__") {
             return;
@@ -1398,6 +1686,8 @@ var pipeline = ensureVisualRenderingPipeline();
             }
 
             item._lastLocalShadowRefreshRequest = now;
+            localLightTargetDebugStats.lastShadowItemId = item.id || item.name || null;
+            var shadowStart = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
 
             var shadowMap = item.localShadowGenerator.getShadowMap();
 
@@ -1408,6 +1698,8 @@ var pipeline = ensureVisualRenderingPipeline();
                     shadowMap.resetRefreshCounter();
                 }
             }
+
+            localLightTargetDebugStats.lastShadowMs = Math.round(((typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()) - shadowStart) * 100) / 100;
         }
     }
 
@@ -1415,6 +1707,117 @@ var pipeline = ensureVisualRenderingPipeline();
         localLightItems.forEach(function (item) {
             requestLocalSpotShadowRefresh(item, !!forceRefresh);
         });
+    }
+
+
+    // STAGE 12C48 - LOCAL SHADOW RENDER LIST DIFF
+    // Updating all local shadow casters for every spotlight was another hitch source.
+    // We keep only nearby caster candidates and mutate renderList only when it really changes.
+    function getMeshShadowApproxCenterAndRadius(mesh) {
+        var center = mesh && mesh.getAbsolutePosition
+            ? mesh.getAbsolutePosition().clone()
+            : mesh && mesh.position
+                ? mesh.position.clone()
+                : BABYLON.Vector3.Zero();
+        var radius = 1;
+
+        try {
+            if (mesh && mesh.getBoundingInfo) {
+                mesh.computeWorldMatrix(true);
+                var sphere = mesh.getBoundingInfo().boundingSphere;
+
+                if (sphere) {
+                    center = sphere.centerWorld ? sphere.centerWorld.clone() : center;
+                    radius = Number(sphere.radiusWorld || sphere.radius || radius) || radius;
+                }
+            }
+        } catch (error) {}
+
+        return {
+            center: center,
+            radius: radius
+        };
+    }
+
+    function isLocalShadowCasterRelevantForItem(item, mesh) {
+        if (!item || !item.light || !mesh || mesh.name === "__root__") {
+            return false;
+        }
+
+        if (mesh.isDisposed && mesh.isDisposed()) {
+            return false;
+        }
+
+        var lightPosition = getLocalLightWorldPosition(item);
+        var range = Number(item.light.range || item.helperMaxRadius || 0) || 0;
+
+        if (!range || range <= 0) {
+            return true;
+        }
+
+        var approx = getMeshShadowApproxCenterAndRadius(mesh);
+        var maxDistance = range + approx.radius + 1.5;
+
+        return BABYLON.Vector3.DistanceSquared(lightPosition, approx.center) <= maxDistance * maxDistance;
+    }
+
+    function getLocalShadowCasterMeshesForItem(item) {
+        var candidates = [];
+
+        localShadowCasterMeshes.forEach(function (mesh) {
+            if (isLocalShadowCasterRelevantForItem(item, mesh)) {
+                candidates.push(mesh);
+            }
+        });
+
+        var lightPosition = getLocalLightWorldPosition(item);
+
+        candidates.sort(function (a, b) {
+            var ca = getMeshShadowApproxCenterAndRadius(a).center;
+            var cb = getMeshShadowApproxCenterAndRadius(b).center;
+
+            return BABYLON.Vector3.DistanceSquared(lightPosition, ca) - BABYLON.Vector3.DistanceSquared(lightPosition, cb);
+        });
+
+        // Keep the list bounded. Spot shadows mainly need nearby casters; distant casters were causing spikes.
+        return candidates.slice(0, 48);
+    }
+
+    function setLocalShadowRenderListIfChanged(item, shadowMap, nextMeshes) {
+        if (!shadowMap) {
+            return false;
+        }
+
+        var nextSignature = getLocalLightMeshListSignature(nextMeshes || []);
+        var currentSignature = item ? item._lastLocalShadowRenderListSignature : "";
+
+        if (currentSignature === nextSignature) {
+            localLightTargetDebugStats.shadowRenderListSkipped += 1;
+            localLightTargetDebugStats.lastShadowCasterCount = (nextMeshes || []).length;
+            return false;
+        }
+
+        var renderList = shadowMap.renderList;
+
+        if (!Array.isArray(renderList)) {
+            renderList = [];
+            shadowMap.renderList = renderList;
+        }
+
+        renderList.length = 0;
+        (nextMeshes || []).forEach(function (mesh) {
+            if (mesh && renderList.indexOf(mesh) === -1) {
+                renderList.push(mesh);
+            }
+        });
+
+        if (item) {
+            item._lastLocalShadowRenderListSignature = nextSignature;
+        }
+
+        localLightTargetDebugStats.shadowRenderListChanged += 1;
+        localLightTargetDebugStats.lastShadowCasterCount = renderList.length;
+        return true;
     }
 
     function refreshLocalSpotShadowForItem(item) {
@@ -1447,25 +1850,23 @@ var pipeline = ensureVisualRenderingPipeline();
             return;
         }
 
-        shadowMap.renderList = [];
+        var shadowCasterStart = getGalleryPerformanceNow();
+        var localCasterMeshes = getLocalShadowCasterMeshesForItem(item);
+        var renderListChanged = setLocalShadowRenderListIfChanged(item, shadowMap, localCasterMeshes);
 
-        localShadowCasterMeshes.forEach(function (mesh) {
-            if (!mesh || mesh.name === "__root__") {
-                return;
-            }
+        localLightTargetDebugStats.lastShadowMs = Math.round((getGalleryPerformanceNow() - shadowCasterStart) * 100) / 100;
+        localLightTargetDebugStats.lastShadowItemId = item.id || item.name || null;
 
-            if (shadowGenerator.addShadowCaster) {
-                shadowGenerator.addShadowCaster(mesh, true);
-            } else if (shadowMap.renderList.indexOf(mesh) === -1) {
-                shadowMap.renderList.push(mesh);
-            }
-        });
+        if (renderListChanged) {
+            refreshLocalShadowReceivers();
+        }
 
-        refreshLocalShadowReceivers();
         requestLocalSpotShadowRefresh(item, true);
     }
 
-    function refreshAllLocalSpotShadows() {
+
+    function refreshAllLocalSpotShadowsImmediate() {
+        markLocalLightCameraCullingDirty();
         localLightItems.forEach(function (item) {
             if (!item) {
                 return;
@@ -1480,6 +1881,35 @@ var pipeline = ensureVisualRenderingPipeline();
                 refreshLocalSpotShadowForItem(item);
             }
         });
+    }
+
+    var localSpotShadowRefreshPending = false;
+
+    function refreshAllLocalSpotShadows(force) {
+        if (force) {
+            return measureGalleryPerformanceMetric("lightShadowsMs", function () {
+                return refreshAllLocalSpotShadowsImmediate();
+            });
+        }
+
+        if (localSpotShadowRefreshPending) {
+            return;
+        }
+
+        localSpotShadowRefreshPending = true;
+
+        var runRefresh = function () {
+            localSpotShadowRefreshPending = false;
+            measureGalleryPerformanceMetric("lightShadowsMs", function () {
+                refreshAllLocalSpotShadowsImmediate();
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runRefresh);
+        } else {
+            setTimeout(runRefresh, 0);
+        }
     }
 
     function addLocalShadowCaster(mesh) {
@@ -1712,6 +2142,54 @@ var pipeline = ensureVisualRenderingPipeline();
     var deletedArtworkNames = [];
     var artworkAuthors = [];
 
+
+    // STAGE 12C44 - STATIC SCENE MESH FREEZE
+    // Walls/floor/ceiling are static geometry. Materials may still change, but world matrices do not.
+    function freezeStaticGalleryMesh(mesh, reason) {
+        if (!mesh || !mesh.freezeWorldMatrix || (mesh.isDisposed && mesh.isDisposed())) {
+            return;
+        }
+
+        mesh.metadata = mesh.metadata || {};
+
+        if (mesh.metadata.galleryStaticWorldMatrixFrozen) {
+            return;
+        }
+
+        try {
+            if (mesh.computeWorldMatrix) {
+                mesh.computeWorldMatrix(true);
+            }
+
+            mesh.freezeWorldMatrix();
+            mesh.metadata.galleryStaticWorldMatrixFrozen = true;
+            mesh.metadata.galleryStaticWorldMatrixFrozenReason = reason || "static";
+        } catch (freezeError) {
+            mesh.metadata.galleryStaticWorldMatrixFrozen = false;
+        }
+    }
+
+    function freezeStaticGalleryMeshes(meshes, reason) {
+        (meshes || []).forEach(function (mesh) {
+            freezeStaticGalleryMesh(mesh, reason);
+        });
+    }
+
+    function unfreezeStaticGalleryMesh(mesh) {
+        if (!mesh || !mesh.unfreezeWorldMatrix) {
+            return;
+        }
+
+        try {
+            mesh.unfreezeWorldMatrix();
+        } catch (unfreezeError) {}
+
+        if (mesh.metadata) {
+            mesh.metadata.galleryStaticWorldMatrixFrozen = false;
+        }
+    }
+
+
     // STAGE 9B - VIEWER BUILT-IN COLLISION STEP 1
     // Poprzedni Stage 9 zepsul chodzenie, bo dodal agresywny custom guard
     // i reczne cofanie kamery. Tutaj uzywamy tylko natywnego systemu Babylon:
@@ -1720,11 +2198,11 @@ var pipeline = ensureVisualRenderingPipeline();
     var viewerCollisionHeight = 0.72;
     var viewerCollisionTargets = {
         walls: true,
-        // Stage 9C: na tym etapie blokujemy tylko ściany.
-        // Obiekty, obrazy i rzeźby zostają wyłączone, żeby nie psuć chodzenia.
+        // Stage 12C35: sciany nadal blokuja ruch, a rzezby dostaja lekkie collision proxy.
+        // Obrazy zostaja bez kolizji, zeby nie blokowac przejsc przy scianach.
         props: false,
         artworks: false,
-        sculptures: false
+        sculptures: true
     };
 
     var viewerWallBlockRadius = 0.72;
@@ -1838,30 +2316,29 @@ var pipeline = ensureVisualRenderingPipeline();
             });
         }
 
-        if (viewerCollisionTargets.sculptures) {
-            artSpheres.forEach(function (displayMesh) {
-                registerViewerCollisionMesh(displayMesh, "pedestal");
+        artSpheres.forEach(function (slot) {
+            if (!slot) {
+                return;
+            }
 
-                if (
-                    displayMesh &&
-                    displayMesh.metadata &&
-                    displayMesh.metadata.sculptureMesh
-                ) {
-                    registerViewerCollisionMesh(displayMesh.metadata.sculptureMesh, "sculpture");
-                }
+            unregisterViewerCollisionMesh(slot);
 
-                if (
-                    displayMesh &&
-                    displayMesh.metadata &&
-                    displayMesh.metadata.model3dRuntime &&
-                    displayMesh.metadata.model3dRuntime.meshes
-                ) {
-                    displayMesh.metadata.model3dRuntime.meshes.forEach(function (mesh) {
-                        registerViewerCollisionMesh(mesh, "sculpture");
-                    });
-                }
-            });
-        }
+            if (slot.metadata && slot.metadata.sculptureMesh) {
+                unregisterViewerCollisionMesh(slot.metadata.sculptureMesh);
+            }
+
+            if (slot.metadata && slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.meshes) {
+                slot.metadata.model3dRuntime.meshes.forEach(function (mesh) {
+                    unregisterViewerCollisionMesh(mesh);
+                });
+            }
+
+            if (viewerCollisionTargets.sculptures) {
+                refreshSculptureCollisionProxy(slot);
+            } else {
+                disableSculptureCollisionProxy(slot);
+            }
+        });
     }
 
     function moveCameraWithViewerCollisionIfActive(deltaVector) {
@@ -2140,6 +2617,33 @@ var pipeline = ensureVisualRenderingPipeline();
         camera.position.copyFrom(viewerWallLastSafeCameraPosition);
     }
 
+
+    var viewerWallCollisionLastObservedPosition = null;
+
+    function updateViewerWallCollisionIfCameraMoved() {
+        if (!camera || !camera.position) {
+            return;
+        }
+
+        if (!viewerWallCollisionLastObservedPosition) {
+            viewerWallCollisionLastObservedPosition = camera.position.clone();
+            measureGalleryPerformanceMetric("wallCollisionMs", function () {
+                resolveViewerWallCollisionAfterMovement();
+            });
+            return;
+        }
+
+        if (camera.position.subtract(viewerWallCollisionLastObservedPosition).lengthSquared() < 0.000001) {
+            return;
+        }
+
+        viewerWallCollisionLastObservedPosition = camera.position.clone();
+
+        measureGalleryPerformanceMetric("wallCollisionMs", function () {
+            resolveViewerWallCollisionAfterMovement();
+        });
+    }
+
     updateViewerCollisionMode();
 
     var lampCeilingY = -0.55;
@@ -2326,10 +2830,10 @@ var pipeline = ensureVisualRenderingPipeline();
     //
     // Ten zestaw jest celowo dużo szerszy.
     // Nadal nie robimy dynamicznego przepinania materiałów jak w 12C9.
-    var localLightWallSegmentMaxLightsPerSegment = 7;
-    var localLightWallSegmentTargetMaxCount = 38;
-    var localLightWallSegmentTargetRadius = 18.0;
-    var localLightWallSegmentSoftEdgeExtraRadius = 8.0;
+    var localLightWallSegmentMaxLightsPerSegment = 5;
+    var localLightWallSegmentTargetMaxCount = 18;
+    var localLightWallSegmentTargetRadius = 12.0;
+    var localLightWallSegmentSoftEdgeExtraRadius = 4.0;
     var localLightWallSegmentBudgetPassActive = false;
     var localLightWallSegmentBudgetMap = {};
 
@@ -2338,7 +2842,7 @@ var pipeline = ensureVisualRenderingPipeline();
     // Podczas przesuwania/rotacji ręcznej targetowanie segmentów ma być przeliczane,
     // ale nadal obowiązuje zasada: jeden segment -> maksymalnie 5 świateł.
     var localLightDynamicWallRetargetEnabled = true;
-    var localLightDynamicWallRetargetThrottleMs = 80;
+    var localLightDynamicWallRetargetThrottleMs = 220;
     var localLightDynamicWallRetargetLastTime = 0;
     var localLightDynamicWallRetargetCount = 0;
     var localLightDynamicWallRetargetLastReason = null;
@@ -2352,9 +2856,7 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function getLightingWallSegmentMeshes() {
-        return wallMeshes.filter(function (mesh) {
-            return isLightingWallSegmentMesh(mesh);
-        });
+        return ensureLocalLightSegmentMeshCache().walls || [];
     }
 
     // STAGE 12C12 - FLOOR / CEILING SEGMENT LIGHT TARGETING
@@ -2371,6 +2873,105 @@ var pipeline = ensureVisualRenderingPipeline();
     var localLightSculptureMaxLightsPerMesh = 4;
     var localLightSculptureBudgetPassActive = false;
     var localLightSculptureBudgetMap = {};
+
+    // STAGE 12C45 - LOCAL LIGHT FAST TARGETING
+    // Segment mesh lists and centers are static most of the time; cache them and rebuild only when scene lists change.
+    var localLightTargetPreviewActive = false;
+    var localLightTargetPreviewMaxSegmentsPerLight = 8;
+    var localLightTargetCacheVersion = 0;
+    var localLightSegmentMeshCache = {
+        walls: null,
+        floor: null,
+        ceiling: null,
+        signature: ""
+    };
+    var localLightSegmentCenterCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+    var localLightTargetDebugStats = {
+        lastReason: "init",
+        lastItemId: null,
+        targetChanged: 0,
+        targetUnchanged: 0,
+        lastCandidateCount: 0,
+        lastTargetCount: 0,
+        lastRefreshMode: "none",
+        lastApplyMs: 0,
+        lastShadowItemId: null,
+        lastShadowMs: 0,
+        helperPreviewSkipped: 0,
+        helperPreviewUpdated: 0,
+        helperPreviewMs: 0,
+        gizmoDragPreviewSkippedTargets: 0,
+        helperReused: 0,
+        helperRecreated: 0,
+        shadowRenderListChanged: 0,
+        shadowRenderListSkipped: 0,
+        lastShadowCasterCount: 0,
+        parameterPreviewSkippedTargets: 0,
+        parameterFinalCommits: 0,
+        parameterFinalScheduled: 0
+    };
+
+    // STAGE 12C47 - LOCAL LIGHT GIZMO DRAG PERFORMANCE
+    // Największy drop podczas przesuwania lamp nie pochodził z samej pozycji światła,
+    // tylko z rebuildów helper geometry + retargetowania segmentów + zapisu stanu w trakcie dragu.
+    // Preview ma być lekkie; pełna dokładność dopiero na dragEnd.
+    var localLightGizmoPreviewHelperThrottleMs = 180;
+
+    // STAGE 12C52 - LOCAL LIGHT CONTROL IDLE COMMIT
+    // Live slider movement updates light values/helpers only. Heavy target/shadow refresh is committed after idle.
+    var localLightControlFinalCommitDelayMs = 320;
+    var localLightControlFinalCommitStaggerMs = 70;
+    var localLightControlFinalCommitSequence = 0;
+
+    var localLightGizmoPreviewHelperPending = false;
+    var localLightGizmoPreviewHelperItem = null;
+    var localLightGizmoPreviewHelperLastTime = 0;
+
+    function getLocalLightCurrentMaxSegmentsPerLight() {
+        return localLightTargetPreviewActive
+            ? localLightTargetPreviewMaxSegmentsPerLight
+            : localLightWallSegmentTargetMaxCount;
+    }
+
+    function markLocalLightTargetCacheDirty(reason) {
+        localLightTargetCacheVersion += 1;
+        localLightSegmentMeshCache.walls = null;
+        localLightSegmentMeshCache.floor = null;
+        localLightSegmentMeshCache.ceiling = null;
+        localLightSegmentMeshCache.signature = "";
+        localLightSegmentCenterCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+        localLightTargetDebugStats.lastReason = reason || "targetCacheDirty";
+    }
+
+    function getLocalLightSegmentCacheSignature() {
+        return [
+            wallMeshes.length,
+            floorMeshes.length,
+            ceilingMeshes.length,
+            wallMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|"),
+            floorMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|"),
+            ceilingMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|")
+        ].join("#");
+    }
+
+    function ensureLocalLightSegmentMeshCache() {
+        var signature = getLocalLightSegmentCacheSignature();
+
+        if (localLightSegmentMeshCache.signature !== signature) {
+            localLightSegmentMeshCache.signature = signature;
+            localLightSegmentMeshCache.walls = wallMeshes.filter(function (mesh) {
+                return isLightingWallSegmentMesh(mesh);
+            });
+            localLightSegmentMeshCache.floor = floorMeshes.filter(function (mesh) {
+                return isLightingFloorSegmentMesh(mesh);
+            });
+            localLightSegmentMeshCache.ceiling = ceilingMeshes.filter(function (mesh) {
+                return isLightingCeilingSegmentMesh(mesh);
+            });
+        }
+
+        return localLightSegmentMeshCache;
+    }
 
     function isLightingFloorSegmentMesh(mesh) {
         return !!(
@@ -2389,15 +2990,29 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function getLightingFloorSegmentMeshes() {
-        return floorMeshes.filter(function (mesh) {
-            return isLightingFloorSegmentMesh(mesh);
-        });
+        return ensureLocalLightSegmentMeshCache().floor || [];
     }
 
     function getLightingCeilingSegmentMeshes() {
-        return ceilingMeshes.filter(function (mesh) {
-            return isLightingCeilingSegmentMesh(mesh);
-        });
+        return ensureLocalLightSegmentMeshCache().ceiling || [];
+    }
+
+    function getLocalLightSegmentCachedCenter(mesh) {
+        if (!mesh) {
+            return BABYLON.Vector3.Zero();
+        }
+
+        if (localLightSegmentCenterCache && localLightSegmentCenterCache.has(mesh)) {
+            return localLightSegmentCenterCache.get(mesh).clone();
+        }
+
+        var center = getMeshWorldCenter(mesh);
+
+        if (localLightSegmentCenterCache) {
+            localLightSegmentCenterCache.set(mesh, center.clone());
+        }
+
+        return center;
     }
 
     function getHorizontalSegmentDistanceToReference(mesh, referencePoint) {
@@ -2405,9 +3020,9 @@ var pipeline = ensureVisualRenderingPipeline();
             return Number.POSITIVE_INFINITY;
         }
 
-        var center = getMeshWorldCenter(mesh);
-        var dx = center.x - referencePoint.x;
-        var dz = center.z - referencePoint.z;
+        var targetPoint = getClosestPointOnMeshWorldBounds(mesh, referencePoint);
+        var dx = targetPoint.x - referencePoint.x;
+        var dz = targetPoint.z - referencePoint.z;
 
         return Math.sqrt(dx * dx + dz * dz);
     }
@@ -2529,16 +3144,32 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
+        var occludedCount = 0;
 
         var candidates = segmentMeshes.map(function (mesh) {
             var distance = getHorizontalSegmentDistanceToReference(mesh, referencePoint);
+            var visibleFromLight = isSurfaceSegmentVisibleFromLocalLight(
+                mesh,
+                item,
+                segmentMeshes,
+                sourceName
+            );
+
+            if (!visibleFromLight) {
+                occludedCount += 1;
+            }
 
             return {
                 mesh: mesh,
                 distance: distance,
+                visibleFromLight: visibleFromLight,
                 priority: distance <= radius ? 0 : 1
             };
         }).filter(function (candidate) {
+            if (!candidate.visibleFromLight) {
+                return false;
+            }
+
             return (
                 candidate.distance <= softRadius ||
                 (
@@ -2574,7 +3205,8 @@ var pipeline = ensureVisualRenderingPipeline();
             referencePoint: referencePoint,
             radius: radius,
             softRadius: softRadius,
-            candidates: candidates
+            candidates: candidates,
+            occludedCount: occludedCount
         };
     }
 
@@ -2624,7 +3256,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         candidates.forEach(function (candidate) {
-            if (selectedSegments.length >= localLightWallSegmentTargetMaxCount) {
+            if (selectedSegments.length >= getLocalLightCurrentMaxSegmentsPerLight()) {
                 return;
             }
 
@@ -2642,8 +3274,9 @@ var pipeline = ensureVisualRenderingPipeline();
             radius: candidateData.radius,
             softRadius: candidateData.softRadius,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
             candidateCount: candidates.length,
+            occludedCount: candidateData.occludedCount || 0,
             targetCount: selectedSegments.length,
             targetNames: selectedSegments.map(function (mesh) {
                 return mesh.name;
@@ -2678,8 +3311,8 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function getSurfaceSegmentLightTargetDebug(surfaceName, getSegments, isSegmentMeshFn, debugKey) {
-        refreshAllCommonLocalLightTargets();
-
+        // STAGE 12C46: debug reads the current target snapshot only.
+        // It must not trigger a rebuild by itself.
         var segmentLightMap = {};
 
         getSegments().forEach(function (segment) {
@@ -2733,7 +3366,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 : localLightCeilingSegmentTargetingEnabled,
             segmentCount: getSegments().length,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
             targetRadius: localLightWallSegmentTargetRadius,
             softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
             effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius,
@@ -2772,6 +3405,68 @@ var pipeline = ensureVisualRenderingPipeline();
         return mesh.position ? mesh.position.clone() : BABYLON.Vector3.Zero();
     }
 
+
+    // STAGE 12C51 - LOCAL LIGHT SURFACE TARGET POINTS
+    // Center-only tests were too strict for large floor / ceiling segments. A PointLight near a wall
+    // may legitimately touch the near part of a ceiling/floor segment even if the segment center is behind a blocker.
+    // Use the closest point on the segment bounds for distance and line-of-sight checks.
+    function getMeshWorldBoundsForLocalLight(mesh) {
+        if (!mesh || !mesh.getBoundingInfo || !mesh.computeWorldMatrix) {
+            return null;
+        }
+
+        try {
+            mesh.computeWorldMatrix(true);
+            var boundingInfo = mesh.getBoundingInfo();
+            var box = boundingInfo ? boundingInfo.boundingBox : null;
+
+            if (box && box.minimumWorld && box.maximumWorld) {
+                return {
+                    min: box.minimumWorld.clone(),
+                    max: box.maximumWorld.clone(),
+                    center: box.centerWorld ? box.centerWorld.clone() : box.minimumWorld.add(box.maximumWorld).scale(0.5)
+                };
+            }
+        } catch (error) {}
+
+        return null;
+    }
+
+    function clampNumber(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function getClosestPointOnMeshWorldBounds(mesh, point) {
+        var bounds = getMeshWorldBoundsForLocalLight(mesh);
+
+        if (!bounds || !point) {
+            return getMeshWorldCenter(mesh);
+        }
+
+        return new BABYLON.Vector3(
+            clampNumber(point.x, bounds.min.x, bounds.max.x),
+            clampNumber(point.y, bounds.min.y, bounds.max.y),
+            clampNumber(point.z, bounds.min.z, bounds.max.z)
+        );
+    }
+
+    function getLocalLightSurfaceTargetPoint(mesh, item, sourceName) {
+        var lightPosition = getLocalLightPosition(item);
+        var point = getClosestPointOnMeshWorldBounds(mesh, lightPosition);
+
+        // If the light is exactly on the surface bounds edge, move slightly toward the mesh center.
+        // This avoids zero-length rays and edge hits on neighbouring blocker segments.
+        var center = getLocalLightSegmentCachedCenter(mesh);
+        var towardCenter = center.subtract(point);
+
+        if (towardCenter.lengthSquared() > 0.000001) {
+            towardCenter.normalize();
+            point = point.add(towardCenter.scale(0.025));
+        }
+
+        return point;
+    }
+
     function getLocalLightPosition(item) {
         if (item && item.light && item.light.position) {
             return item.light.position.clone();
@@ -2796,9 +3491,207 @@ var pipeline = ensureVisualRenderingPipeline();
     // 1.0 = exact viewport. 1.22 gives a small margin outside the visible screen,
     // so lights do not fade too early while the viewer is looking at an artwork target.
     var localLightCameraCullingViewScale = 1.22;
-    var localLightCameraCullingCheckEveryFrames = 1;
+    var localLightCameraCullingCheckEveryFrames = 4;
     var localLightCameraCullingFrameCounter = 0;
+
     var localLightCameraCullingGraceMs = 900;
+    var localLightCameraCullingDirty = true;
+    var localLightCameraCullingLastCameraPosition = null;
+    var localLightCameraCullingLastCameraRotation = null;
+    var localLightCameraCullingPositionEpsilonSq = 0.0004;
+    var localLightCameraCullingRotationEpsilonSq = 0.000004;
+
+    function markLocalLightCameraCullingDirty() {
+        localLightCameraCullingDirty = true;
+    }
+
+    function hasLocalLightCameraChangedForCulling() {
+        if (!camera || !camera.position || !camera.rotation) {
+            return true;
+        }
+
+        if (!localLightCameraCullingLastCameraPosition || !localLightCameraCullingLastCameraRotation) {
+            localLightCameraCullingLastCameraPosition = camera.position.clone();
+            localLightCameraCullingLastCameraRotation = camera.rotation.clone();
+            return true;
+        }
+
+        var positionChanged = camera.position.subtract(localLightCameraCullingLastCameraPosition).lengthSquared() > localLightCameraCullingPositionEpsilonSq;
+        var rotationChanged = camera.rotation.subtract(localLightCameraCullingLastCameraRotation).lengthSquared() > localLightCameraCullingRotationEpsilonSq;
+
+        if (positionChanged || rotationChanged) {
+            localLightCameraCullingLastCameraPosition.copyFrom(camera.position);
+            localLightCameraCullingLastCameraRotation.copyFrom(camera.rotation);
+            return true;
+        }
+
+        return false;
+    }
+
+
+    // STAGE 12C43 - EDIT MODE PERFORMANCE OPTIMIZATION
+    // Light culling, popup raycasts and editor UI sync are no longer allowed to do heavy work every frame.
+    var galleryPerformanceMetrics = {
+        localLightsMs: 0,
+        popupMs: 0,
+        wallCollisionMs: 0,
+        lightTargetsMs: 0,
+        lightShadowsMs: 0,
+        dragSculptureMs: 0,
+        lastPanelUpdate: 0
+    };
+    var galleryPerformanceDebugEnabled = false;
+    var galleryPerformanceDebugPanel = null;
+    var galleryPerformanceDebugLastUpdateMs = 0;
+    var galleryPerformanceDebugUpdateMs = 500;
+
+    try {
+        galleryPerformanceDebugEnabled = !!(
+            window &&
+            window.localStorage &&
+            window.localStorage.getItem("berryboyGalleryPerfDebug") === "1"
+        );
+    } catch (galleryPerfStorageError) {}
+
+    function getGalleryPerformanceNow() {
+        return (typeof performance !== "undefined" && performance.now)
+            ? performance.now()
+            : Date.now();
+    }
+
+    function measureGalleryPerformanceMetric(name, callback) {
+        var start = getGalleryPerformanceNow();
+        var result = callback();
+        var elapsed = getGalleryPerformanceNow() - start;
+
+        galleryPerformanceMetrics[name] = elapsed;
+
+        return result;
+    }
+
+    function ensureGalleryPerformanceDebugPanel() {
+        if (galleryPerformanceDebugPanel || typeof document === "undefined") {
+            return galleryPerformanceDebugPanel;
+        }
+
+        galleryPerformanceDebugPanel = document.createElement("div");
+        galleryPerformanceDebugPanel.id = "galleryPerformanceDebugPanel";
+        galleryPerformanceDebugPanel.style.position = "absolute";
+        galleryPerformanceDebugPanel.style.left = "12px";
+        galleryPerformanceDebugPanel.style.bottom = "12px";
+        galleryPerformanceDebugPanel.style.zIndex = "7600";
+        galleryPerformanceDebugPanel.style.padding = "8px 10px";
+        galleryPerformanceDebugPanel.style.border = "1px solid rgba(255,255,255,0.28)";
+        galleryPerformanceDebugPanel.style.borderRadius = "10px";
+        galleryPerformanceDebugPanel.style.background = "rgba(0,0,0,0.62)";
+        galleryPerformanceDebugPanel.style.color = "#fff";
+        galleryPerformanceDebugPanel.style.font = "11px/1.35 Arial, sans-serif";
+        galleryPerformanceDebugPanel.style.pointerEvents = "none";
+        galleryPerformanceDebugPanel.style.whiteSpace = "pre";
+        galleryPerformanceDebugPanel.style.display = "none";
+
+        if (typeof appendGalleryUiElement === "function") {
+            appendGalleryUiElement(galleryPerformanceDebugPanel);
+        } else {
+            document.body.appendChild(galleryPerformanceDebugPanel);
+        }
+
+        return galleryPerformanceDebugPanel;
+    }
+
+    function setGalleryPerformanceDebugEnabled(enabled) {
+        galleryPerformanceDebugEnabled = !!enabled;
+
+        try {
+            if (window && window.localStorage) {
+                window.localStorage.setItem(
+                    "berryboyGalleryPerfDebug",
+                    galleryPerformanceDebugEnabled ? "1" : "0"
+                );
+            }
+        } catch (galleryPerfStoreError) {}
+
+        var panel = ensureGalleryPerformanceDebugPanel();
+
+        if (panel) {
+            panel.style.display = galleryPerformanceDebugEnabled ? "block" : "none";
+        }
+    }
+
+    function maybeUpdateGalleryPerformanceDebugPanel(force) {
+        if (!galleryPerformanceDebugEnabled) {
+            if (galleryPerformanceDebugPanel) {
+                galleryPerformanceDebugPanel.style.display = "none";
+            }
+            return;
+        }
+
+        var now = getGalleryPerformanceNow();
+
+        if (!force && now - galleryPerformanceDebugLastUpdateMs < galleryPerformanceDebugUpdateMs) {
+            return;
+        }
+
+        galleryPerformanceDebugLastUpdateMs = now;
+
+        var panel = ensureGalleryPerformanceDebugPanel();
+
+        if (!panel) {
+            return;
+        }
+
+        var activeMeshes = 0;
+        var drawCalls = 0;
+        var fps = engine && engine.getFps ? engine.getFps() : 0;
+
+        try {
+            activeMeshes = scene && scene.getActiveMeshes ? scene.getActiveMeshes().length : 0;
+        } catch (activeMeshesError) {}
+
+        try {
+            drawCalls = engine && engine._drawCalls && engine._drawCalls.current !== undefined
+                ? engine._drawCalls.current
+                : 0;
+        } catch (drawCallsError) {}
+
+        panel.style.display = "block";
+        panel.textContent = [
+            "PERF C52",
+            "FPS: " + Math.round(fps),
+            "Active meshes: " + activeMeshes,
+            "Draw calls: " + drawCalls,
+            "Local cull: " + galleryPerformanceMetrics.localLightsMs.toFixed(2) + " ms",
+            "Popup: " + galleryPerformanceMetrics.popupMs.toFixed(2) + " ms",
+            "Wall collision: " + galleryPerformanceMetrics.wallCollisionMs.toFixed(2) + " ms",
+            "Light targets: " + galleryPerformanceMetrics.lightTargetsMs.toFixed(2) + " ms",
+            "Light shadows: " + (galleryPerformanceMetrics.lightShadowsMs || 0).toFixed(2) + " ms",
+            "Light mode: " + (localLightTargetDebugStats ? localLightTargetDebugStats.lastRefreshMode : "n/a"),
+            "Light targets changed/skipped: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.targetChanged + "/" + localLightTargetDebugStats.targetUnchanged) : "n/a"),
+            "Last target count: " + (localLightTargetDebugStats ? localLightTargetDebugStats.lastTargetCount : 0),
+            "Last target build ms: " + (localLightTargetDebugStats ? localLightTargetDebugStats.lastApplyMs : 0),
+            "Last shadow item/ms: " + (localLightTargetDebugStats ? ((localLightTargetDebugStats.lastShadowItemId || "n/a") + " / " + localLightTargetDebugStats.lastShadowMs) : "n/a"),
+            "Gizmo target skips: " + (localLightTargetDebugStats ? localLightTargetDebugStats.gizmoDragPreviewSkippedTargets : 0),
+            "Gizmo helper updated/skipped/ms: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.helperPreviewUpdated + "/" + localLightTargetDebugStats.helperPreviewSkipped + " / " + localLightTargetDebugStats.helperPreviewMs) : "n/a"),
+            "Helper reused/recreated: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.helperReused + "/" + localLightTargetDebugStats.helperRecreated) : "n/a"),
+            "Shadow list changed/skipped/casters: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.shadowRenderListChanged + "/" + localLightTargetDebugStats.shadowRenderListSkipped + " / " + localLightTargetDebugStats.lastShadowCasterCount) : "n/a"),
+            "Param preview skipped/final scheduled/commits: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.parameterPreviewSkippedTargets + "/" + localLightTargetDebugStats.parameterFinalScheduled + "/" + localLightTargetDebugStats.parameterFinalCommits) : "n/a"),
+            "Drag artwork: " + (galleryPerformanceMetrics.dragArtworkMs || 0).toFixed(2) + " ms",
+            "Drag sculpture: " + galleryPerformanceMetrics.dragSculptureMs.toFixed(2) + " ms",
+            "BeforeRender observers: " + Object.keys(galleryBeforeRenderObserverRegistry || {}).length,
+            "DOM listeners: " + (galleryDomListenerRegistry ? galleryDomListenerRegistry.length : 0)
+        ].join("\n");
+    }
+
+    globalThis.toggleBerryboyGalleryPerformanceDebug = function (enabled) {
+        if (enabled === undefined) {
+            enabled = !galleryPerformanceDebugEnabled;
+        }
+
+        setGalleryPerformanceDebugEnabled(enabled);
+        maybeUpdateGalleryPerformanceDebugPanel(true);
+
+        return galleryPerformanceDebugEnabled;
+    };
 
     // STAGE 10E3 - SMOOTH CAMERA LIGHT FADE
     // Camera culling nie robi już natychmiastowego intensity 0 / userIntensity.
@@ -3189,6 +4082,7 @@ var pipeline = ensureVisualRenderingPipeline();
         item.light.intensity = nextIntensity;
     }
 
+
     function updateLocalLightsCameraCulling(force) {
         if (!localLightItems || !localLightItems.length) {
             return;
@@ -3196,14 +4090,20 @@ var pipeline = ensureVisualRenderingPipeline();
 
         localLightCameraCullingFrameCounter += 1;
 
-        var shouldRefreshCulling =
+        var cameraChangedForCulling = hasLocalLightCameraChangedForCulling();
+        var shouldRefreshCulling = !!(
             force ||
-            localLightCameraCullingCheckEveryFrames <= 1 ||
-            localLightCameraCullingFrameCounter % localLightCameraCullingCheckEveryFrames === 0;
+            localLightCameraCullingDirty ||
+            cameraChangedForCulling
+        );
 
         var deltaSeconds = engine && engine.getDeltaTime
             ? Math.min(0.1, engine.getDeltaTime() / 1000)
             : 1 / 60;
+
+        if (shouldRefreshCulling) {
+            localLightCameraCullingDirty = false;
+        }
 
         localLightItems.forEach(function (item) {
             if (shouldRefreshCulling) {
@@ -3213,6 +4113,7 @@ var pipeline = ensureVisualRenderingPipeline();
             updateLocalLightSmoothIntensity(item, deltaSeconds);
         });
     }
+
 
     function getLocalLightCameraCullingDebug() {
         updateLocalLightsCameraCulling(true);
@@ -3311,7 +4212,7 @@ var pipeline = ensureVisualRenderingPipeline();
         if (options.checkEveryFrames !== undefined) {
             localLightCameraCullingCheckEveryFrames = Math.max(
                 1,
-                Math.floor(Number(options.checkEveryFrames) || 1)
+                Math.floor(Number(options.checkEveryFrames) || 4)
             );
         }
 
@@ -3435,7 +4336,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         return BABYLON.Vector3.Distance(
-            getMeshWorldCenter(mesh),
+            getLocalLightSegmentCachedCenter(mesh),
             referencePoint
         );
     }
@@ -3445,6 +4346,115 @@ var pipeline = ensureVisualRenderingPipeline();
     // To ogranicza przypadki, gdzie światło zza ściany zużywa budżet albo daje dziwne odcięcia.
     var localLightWallSegmentFrontFacingFilterEnabled = true;
     var localLightWallSegmentFrontFacingDotLimit = -0.08;
+
+    // STAGE 12C51 - POINT LIGHT WALL LEAK GUARD
+    // A Babylon PointLight is not physically blocked by walls. We therefore keep the
+    // includedOnlyMeshes list from targeting wall segments that are behind another wall segment.
+    var localLightWallSegmentOcclusionFilterEnabled = true;
+    var localLightWallSegmentOcclusionRayEpsilon = 0.04;
+
+
+    function getLocalLightSurfaceOcclusionMeshes() {
+        var cache = ensureLocalLightSegmentMeshCache();
+        var result = [];
+
+        addMeshArrayUnique(result, cache.walls || []);
+        addMeshArrayUnique(result, cache.floor || []);
+        addMeshArrayUnique(result, cache.ceiling || []);
+
+        return result.filter(function (mesh) {
+            return !!(
+                mesh &&
+                !(mesh.isDisposed && mesh.isDisposed()) &&
+                mesh.isVisible !== false &&
+                mesh.visibility !== 0
+            );
+        });
+    }
+
+    function isSurfaceSegmentVisibleFromLocalLight(mesh, item, surfaceSegments, sourceName) {
+        if (!localLightWallSegmentOcclusionFilterEnabled) {
+            return true;
+        }
+
+        if (!mesh || !item || !item.light) {
+            return true;
+        }
+
+        // The leak problem is PointLight: Babylon does not physically block a point light with walls.
+        // For C51 we use the same visibility rule for wall/floor/ceiling targets, but the target point is
+        // the closest visible part of the surface bounds instead of the segment center.
+        if (item.type !== "point") {
+            return true;
+        }
+
+        var blockers = getLocalLightSurfaceOcclusionMeshes();
+
+        if (!blockers.length) {
+            return true;
+        }
+
+        var origin = getLocalLightPosition(item);
+        var target = getLocalLightSurfaceTargetPoint(mesh, item, sourceName);
+        var direction = target.subtract(origin);
+        var distance = direction.length();
+
+        if (distance <= 0.0001) {
+            return true;
+        }
+
+        direction.normalize();
+
+        try {
+            var ray = new BABYLON.Ray(
+                origin.add(direction.scale(localLightWallSegmentOcclusionRayEpsilon)),
+                direction,
+                Math.max(0.01, distance - localLightWallSegmentOcclusionRayEpsilon + 0.12)
+            );
+
+            var hit = scene.pickWithRay(
+                ray,
+                function (candidate) {
+                    return blockers.indexOf(candidate) !== -1;
+                }
+            );
+
+            if (!hit || !hit.hit || !hit.pickedMesh) {
+                // Do not throw away nearby ceiling/floor just because a GLTF submesh is not pickable.
+                // If the target surface itself is marked unpickable, allow it; otherwise the blocker list would
+                // create false negatives and remove all ceiling light.
+                return mesh.isPickable === false ? true : false;
+            }
+
+            if (hit.pickedMesh === mesh) {
+                return true;
+            }
+
+            // Edge case: pick may return a sibling surface from the same category at the exact same seam.
+            // Allow very-near hits only for floor/ceiling to prevent dark holes next to walls.
+            if ((sourceName === "floor" || sourceName === "ceiling") && surfaceSegments && surfaceSegments.indexOf(hit.pickedMesh) !== -1) {
+                var hitPoint = hit.pickedPoint || getMeshWorldCenter(hit.pickedMesh);
+
+                if (BABYLON.Vector3.Distance(hitPoint, target) < 0.18) {
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (error) {
+            console.warn((sourceName || "surface") + " local light occlusion warning:", error);
+            return true;
+        }
+    }
+
+    function isWallSegmentVisibleFromLocalLight(mesh, item, wallSegments) {
+        return isSurfaceSegmentVisibleFromLocalLight(
+            mesh,
+            item,
+            wallSegments,
+            "wall"
+        );
+    }
 
     function isWallSegmentFrontFacingLocalLight(mesh, item) {
         if (!localLightWallSegmentFrontFacingFilterEnabled) {
@@ -3551,18 +4561,26 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
 
+        var occludedCount = 0;
+
         var candidates = wallSegments.map(function (mesh) {
             var distance = getWallSegmentDistanceToReference(mesh, referencePoint);
             var frontFacing = isWallSegmentFrontFacingLocalLight(mesh, item);
+            var visibleFromLight = frontFacing && isWallSegmentVisibleFromLocalLight(mesh, item, wallSegments);
+
+            if (frontFacing && !visibleFromLight) {
+                occludedCount += 1;
+            }
 
             return {
                 mesh: mesh,
                 distance: distance,
                 frontFacing: frontFacing,
+                visibleFromLight: visibleFromLight,
                 priority: distance <= radius ? 0 : 1
             };
         }).filter(function (candidate) {
-            if (!candidate.frontFacing) {
+            if (!candidate.frontFacing || !candidate.visibleFromLight) {
                 return false;
             }
 
@@ -3586,7 +4604,8 @@ var pipeline = ensureVisualRenderingPipeline();
             reference &&
             reference.primaryMesh &&
             isLightingWallSegmentMesh(reference.primaryMesh) &&
-            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item)
+            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item) &&
+            isWallSegmentVisibleFromLocalLight(reference.primaryMesh, item, wallSegments)
         ) {
             var alreadyHasPrimary = candidates.some(function (candidate) {
                 return candidate.mesh === reference.primaryMesh;
@@ -3607,7 +4626,8 @@ var pipeline = ensureVisualRenderingPipeline();
             referencePoint: referencePoint,
             radius: radius,
             softRadius: softRadius,
-            candidates: candidates
+            candidates: candidates,
+            occludedCount: occludedCount
         };
     }
 
@@ -3650,7 +4670,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         candidates.forEach(function (candidate) {
-            if (selectedSegments.length >= localLightWallSegmentTargetMaxCount) {
+            if (selectedSegments.length >= getLocalLightCurrentMaxSegmentsPerLight()) {
                 return;
             }
 
@@ -3676,8 +4696,10 @@ var pipeline = ensureVisualRenderingPipeline();
             dynamicRetargetCount: localLightDynamicWallRetargetCount,
             dynamicRetargetLastReason: localLightDynamicWallRetargetLastReason,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
             candidateCountAfterFrontFilter: candidates.length,
+            occludedByWallCount: candidateData.occludedCount || 0,
+            occlusionFilterEnabled: localLightWallSegmentOcclusionFilterEnabled,
             targetCount: selectedSegments.length,
             targetNames: selectedSegments.map(function (mesh) {
                 return mesh.name;
@@ -3688,8 +4710,8 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function getWallSegmentLightTargetDebug() {
-        refreshAllCommonLocalLightTargets();
-
+        // STAGE 12C46: debug reads the current target snapshot only.
+        // It must not trigger a rebuild by itself.
         var segmentLightMap = {};
 
         getLightingWallSegmentMeshes().forEach(function (segment) {
@@ -3744,7 +4766,7 @@ var pipeline = ensureVisualRenderingPipeline();
             enabled: localLightWallSegmentTargetingEnabled,
             segmentCount: getLightingWallSegmentMeshes().length,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
             targetRadius: localLightWallSegmentTargetRadius,
             softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
             frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
@@ -3757,13 +4779,16 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function getDefaultLocalTargetOptions() {
+        // STAGE 12C45:
+        // New manual lights should not immediately target the whole gallery.
+        // They start with nearby floor/walls + owner only; other categories are opt-in.
         return {
             floor: true,
             walls: true,
-            ceiling: true,
-            artworks: true,
-            sculptures: true,
-            props: true,
+            ceiling: false,
+            artworks: false,
+            sculptures: false,
+            props: false,
             owner: true
         };
     }
@@ -3903,20 +4928,92 @@ var pipeline = ensureVisualRenderingPipeline();
         return includedMeshes;
     }
 
-    function applyCommonLocalLightTargets(item) {
+    function getLocalLightMeshListSignature(meshes) {
+        return (meshes || []).map(function (mesh) {
+            if (!mesh) {
+                return "";
+            }
+
+            return mesh.uniqueId !== undefined ? String(mesh.uniqueId) : (mesh.name || "");
+        }).sort().join("|");
+    }
+
+    function areLocalLightMeshListsSame(a, b) {
+        if (a === b) {
+            return true;
+        }
+
+        if (!a || !b || a.length !== b.length) {
+            return false;
+        }
+
+        return getLocalLightMeshListSignature(a) === getLocalLightMeshListSignature(b);
+    }
+
+    function setLocalLightIncludedMeshesIfChanged(item, meshes, reason) {
         if (!item || !item.light) {
-            return;
+            return false;
+        }
+
+        var nextMeshes = (meshes || []).filter(function (mesh, index, array) {
+            return !!mesh && array.indexOf(mesh) === index;
+        });
+
+        var previousMeshes = item.light.includedOnlyMeshes || [];
+
+        if (areLocalLightMeshListsSame(previousMeshes, nextMeshes)) {
+            localLightTargetDebugStats.targetUnchanged += 1;
+            item._lastIncludedOnlyMeshesSignature = getLocalLightMeshListSignature(nextMeshes);
+            return false;
+        }
+
+        var includedMeshes = item.light.includedOnlyMeshes;
+
+        if (!Array.isArray(includedMeshes)) {
+            includedMeshes = [];
+            item.light.includedOnlyMeshes = includedMeshes;
+        }
+
+        includedMeshes.length = 0;
+        nextMeshes.forEach(function (mesh) {
+            includedMeshes.push(mesh);
+        });
+
+        if (!Array.isArray(item.light.excludedMeshes)) {
+            item.light.excludedMeshes = [];
+        } else {
+            item.light.excludedMeshes.length = 0;
+        }
+
+        item._lastIncludedOnlyMeshesSignature = getLocalLightMeshListSignature(nextMeshes);
+        item._lastTargetUpdateReason = reason || "unknown";
+        localLightTargetDebugStats.targetChanged += 1;
+        markLocalLightCameraCullingDirty();
+        return true;
+    }
+
+    function applyCommonLocalLightTargets(item, reason) {
+        if (!item || !item.light) {
+            return false;
         }
 
         if (item.type !== "spot" && item.type !== "point") {
-            return;
+            return false;
         }
 
-        item.light.includedOnlyMeshes = getCommonLocalLightTargetMeshes(item);
-        item.light.excludedMeshes = [];
+        var targetStart = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        var targets = getCommonLocalLightTargetMeshes(item);
+        localLightTargetDebugStats.lastApplyMs = Math.round(((typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()) - targetStart) * 100) / 100;
+        localLightTargetDebugStats.lastItemId = item.id || item.name || null;
+        localLightTargetDebugStats.lastTargetCount = targets.length;
+        localLightTargetDebugStats.lastReason = reason || localLightTargetDebugStats.lastReason || "apply";
+
+        return setLocalLightIncludedMeshesIfChanged(item, targets, reason || "apply");
     }
 
-    function refreshAllCommonLocalLightTargets() {
+
+    function refreshAllCommonLocalLightTargetsImmediate() {
+        markLocalLightCameraCullingDirty();
         localLightWallSegmentBudgetMap = {};
         localLightFloorSegmentBudgetMap = {};
         localLightCeilingSegmentBudgetMap = {};
@@ -3929,11 +5026,132 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
-            applyCommonLocalLightTargets(item);
+            applyCommonLocalLightTargets(item, "fullRebuild");
         });
 
         localLightWallSegmentBudgetPassActive = false;
         localLightSculptureBudgetPassActive = false;
+    }
+
+    var localLightSingleTargetRefreshPending = false;
+    var localLightSingleTargetRefreshQueue = [];
+
+    function getLocalLightQueuedEntry(item) {
+        for (var i = 0; i < localLightSingleTargetRefreshQueue.length; i++) {
+            if (localLightSingleTargetRefreshQueue[i].item === item) {
+                return localLightSingleTargetRefreshQueue[i];
+            }
+        }
+
+        return null;
+    }
+
+    function refreshCommonLocalLightTargetsForItemImmediate(item, reason, previewMode) {
+        if (!item || item.softDeleted) {
+            return false;
+        }
+
+        var previousPreview = localLightTargetPreviewActive;
+        localLightTargetPreviewActive = !!previewMode;
+        localLightTargetDebugStats.lastRefreshMode = previewMode ? "preview" : "single";
+
+        try {
+            return measureGalleryPerformanceMetric("lightTargetsMs", function () {
+                return applyCommonLocalLightTargets(item, reason || (previewMode ? "preview" : "single"));
+            });
+        } finally {
+            localLightTargetPreviewActive = previousPreview;
+        }
+    }
+
+    function scheduleCommonLocalLightTargetsForItem(item, options) {
+        options = options || {};
+
+        if (!item || item.softDeleted) {
+            return;
+        }
+
+        var isFinal = !!options.force || !options.preview;
+
+        if (options.force) {
+            refreshCommonLocalLightTargetsForItemImmediate(
+                item,
+                options.reason || "singleForce",
+                !!options.preview
+            );
+            return;
+        }
+
+        var existingEntry = getLocalLightQueuedEntry(item);
+
+        if (existingEntry) {
+            // STAGE 12C46: options are per-light. Final wins over preview.
+            existingEntry.reason = isFinal
+                ? (options.reason || existingEntry.reason || "singleFinal")
+                : (existingEntry.reason || options.reason || "singlePreview");
+            existingEntry.preview = existingEntry.preview && !!options.preview && !isFinal;
+        } else {
+            localLightSingleTargetRefreshQueue.push({
+                item: item,
+                reason: options.reason || (options.preview ? "singlePreview" : "singleScheduled"),
+                preview: !!options.preview
+            });
+        }
+
+        if (localLightSingleTargetRefreshPending) {
+            return;
+        }
+
+        localLightSingleTargetRefreshPending = true;
+
+        var runRefresh = function () {
+            var queue = localLightSingleTargetRefreshQueue.slice();
+            localLightSingleTargetRefreshQueue = [];
+            localLightSingleTargetRefreshPending = false;
+
+            queue.forEach(function (entry) {
+                refreshCommonLocalLightTargetsForItemImmediate(
+                    entry.item,
+                    entry.reason || "singleScheduled",
+                    !!entry.preview
+                );
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runRefresh);
+        } else {
+            setTimeout(runRefresh, 0);
+        }
+    }
+
+    var localLightTargetsRefreshPending = false;
+
+    function refreshAllCommonLocalLightTargets(force) {
+        if (force) {
+            return measureGalleryPerformanceMetric("lightTargetsMs", function () {
+                return refreshAllCommonLocalLightTargetsImmediate();
+            });
+        }
+
+        if (localLightTargetsRefreshPending) {
+            return;
+        }
+
+        localLightTargetsRefreshPending = true;
+
+        var runRefresh = function () {
+            localLightTargetsRefreshPending = false;
+            measureGalleryPerformanceMetric("lightTargetsMs", function () {
+                refreshAllCommonLocalLightTargetsImmediate();
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runRefresh);
+        } else {
+            setTimeout(runRefresh, 0);
+        }
     }
 
     function requestDynamicWallSegmentRetargetForLocalLight(item, force, reason) {
@@ -3954,23 +5172,27 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var now = Date.now();
+        var isFinal = !!force || reason === "dragEnd" || reason === "final";
 
-        if (
-            !force &&
-            localLightDynamicWallRetargetThrottleMs > 0 &&
-            now - localLightDynamicWallRetargetLastTime < localLightDynamicWallRetargetThrottleMs
-        ) {
+        localLightDynamicWallRetargetLastReason = reason || "unknown";
+
+        if (!isFinal) {
+            // STAGE 12C47:
+            // Podczas ciągłego ruszania gizmo NIE przepinamy includedOnlyMeshes i nie skanujemy segmentów.
+            // Światło przesuwa się live na dotychczasowych targetach; pełny retarget robimy dopiero na dragEnd.
+            // To usuwa dropy i wizualne przeładowywanie segmentów podczas ustawiania lampy.
+            item._localLightNeedsFinalRetarget = true;
+            localLightTargetDebugStats.gizmoDragPreviewSkippedTargets += 1;
             return;
         }
 
         localLightDynamicWallRetargetLastTime = now;
-        localLightDynamicWallRetargetLastReason = reason || "unknown";
         localLightDynamicWallRetargetCount += 1;
 
-        // Budżet jest per segment, więc przy zmianie pozycji jednej lampy
-        // najbezpieczniej przeliczyć całą aktywną pulę Local Lights.
-        // To NIE jest używane przy Delete Selected; delete w Stage 10E9 pozostaje zero-touch.
-        refreshAllCommonLocalLightTargets();
+        // Final update after gizmo release is accurate for the moved light,
+        // without rebuilding every Local Light unless a caller explicitly requests all.
+        item._localLightNeedsFinalRetarget = false;
+        refreshCommonLocalLightTargetsForItemImmediate(item, reason || "final", false);
     }
 
     function updateDisplaySpotLight(ownerMesh) {
@@ -3988,7 +5210,7 @@ var pipeline = ensureVisualRenderingPipeline();
         var item = getLocalLightItemByLight(spotLight);
 
         if (item && item.manualTransformOverride) {
-            applyCommonLocalLightTargets(item);
+            applyCommonLocalLightTargets(item, "displayManual");
             item.helperLength = spotLight.range || unifiedSpotDefaults.range;
             item.helperMaxRadius = spotLight.range || unifiedSpotDefaults.range;
             item.helperSoftness = getSpotBlendFromExponent(spotLight.exponent);
@@ -4050,7 +5272,7 @@ var pipeline = ensureVisualRenderingPipeline();
         spotLight.direction.copyFrom(directionToTarget.normalize());
 
         if (item) {
-            applyCommonLocalLightTargets(item);
+            applyCommonLocalLightTargets(item, "displayAuto");
 
             item.helperLength = spotLight.range || unifiedSpotDefaults.range;
             item.helperMaxRadius = spotLight.range || unifiedSpotDefaults.range;
@@ -4087,6 +5309,25 @@ var pipeline = ensureVisualRenderingPipeline();
     var sculptureTransformScaleMin = 0.25;
     var sculptureTransformScaleMax = 3.0;
     var sculptureTransformRotationStepDegrees = 1;
+
+
+    // STAGE 12C42 - FOCUS CAMERA ROTATION PITCH + WALK BASELINE
+    // Custom focus controls are pure offsets added to the automatic frame.
+    // Normal focus, live preview and popup focus use the same final frame.
+    // Safe-path navigation must preserve the final focus height, and any movement returns to walking height.
+    var galleryObjectFocusDefaultPadding = 1.18;
+    var galleryObjectFocusMobilePadding = 1.28;
+    var galleryObjectFocusMinDistance = 1.45;
+    var galleryObjectFocusMaxDistance = 9.5;
+    var galleryObjectFocusStateSchema = "focusCamera.c42";
+    var galleryObjectFocusDefaultState = {
+        schema: galleryObjectFocusStateSchema,
+        useCustomOffset: false,
+        distanceOffset: 0,
+        cameraHeightOffset: 0,
+        viewPitchDegrees: 0
+    };
+    var gallerySculptureCollisionProxyMaterial = null;
 
     var artworkBoundsSafeMargin = 0.0;
     var artworkCollisionPadding = 0.0;
@@ -4852,6 +6093,18 @@ var pipeline = ensureVisualRenderingPipeline();
                 syncArtworkInfoWithAuthor(artwork, author);
             }
         });
+
+        artSpheres.forEach(function (slot) {
+            if (!slot || (slot.isDisposed && slot.isDisposed())) {
+                return;
+            }
+
+            var info = getSculptureInfoState(slot);
+
+            if (info && info.authorId === author.id) {
+                syncSculptureInfoWithAuthor(slot, author);
+            }
+        });
     }
 
     async function fetchAuthorPhotoBlobForVariantRebuild(author) {
@@ -5259,7 +6512,7 @@ var pipeline = ensureVisualRenderingPipeline();
         return getArtworkDimensionsForAspectRatio(imageAspect);
     }
 
-    function applyArtworkTransformToMesh(artwork) {
+    function applyArtworkTransformToMesh(artwork, options) {
         if (!artwork) {
             return null;
         }
@@ -5277,7 +6530,13 @@ var pipeline = ensureVisualRenderingPipeline();
         syncDetachedArtworkImagePlane(artwork);
 
         artwork.computeWorldMatrix(true);
-        updateArtworkLight(artwork);
+        markGalleryObjectBoundsDirty(artwork);
+
+        if (options && options.deferHeavy) {
+            scheduleArtworkDragPerformanceUpdate(artwork);
+        } else {
+            updateArtworkLight(artwork);
+        }
 
         return {
             width: baseDimensions.width * transformState.scale,
@@ -5290,7 +6549,7 @@ var pipeline = ensureVisualRenderingPipeline();
         };
     }
 
-    function setSelectedArtworkTransform(scale, rotationDegrees, shouldNotify) {
+    function setSelectedArtworkTransform(scale, rotationDegrees, shouldNotify, options) {
         var artwork = getSingleSelectedArtworkForImageUi();
 
         if (!artwork) {
@@ -5305,9 +6564,10 @@ var pipeline = ensureVisualRenderingPipeline();
         };
 
         setArtworkTransformState(artwork, nextTransform);
-        applyArtworkTransformToMesh(artwork);
+        applyArtworkTransformToMesh(artwork, options || {});
         updateArtworkTransformUi();
-        updateAlignmentPanel();
+        markAlignmentPanelDirty();
+        updateAlignmentPanelIfDirty();
 
         if (shouldNotify) {
             notifyGalleryStatus("Zmieniono transformacje obrazu. Zapisz stan galerii, aby zachowac zmiane.");
@@ -5430,6 +6690,708 @@ var pipeline = ensureVisualRenderingPipeline();
         return {
             scale: clampSculptureTransformScale(scale),
             rotationDegrees: normalizeSculptureTransformRotationDegrees(rotationDegrees)
+        };
+    }
+
+
+    // STAGE 12C42 - FOCUS CAMERA PITCH ROTATION / POPUP PARITY REFINEMENT
+    function normalizeGalleryObjectFocusCameraState(state) {
+        state = state || {};
+
+        function safeNumber(value, fallback) {
+            var numericValue = Number(value);
+            return isFinite(numericValue) ? numericValue : fallback;
+        }
+
+        // STAGE 12C42:
+        // C40/C41 values are compatible for distance and height offsets.
+        // View Angle is now applied to camera rotation after auto-look-at, so it is no longer
+        // flattened by bounding-box target math. Older C32-C39 axis experiments are not trusted.
+        var isTrustedFocusSchema = state.schema === galleryObjectFocusStateSchema || state.schema === "focusCamera.c41" || state.schema === "focusCamera.c40";
+        var useCustomOffset = isTrustedFocusSchema && state.useCustomOffset === true;
+
+        var normalized = {
+            schema: galleryObjectFocusStateSchema,
+            useCustomOffset: useCustomOffset,
+            distanceOffset: isTrustedFocusSchema ? BABYLON.Scalar.Clamp(safeNumber(state.distanceOffset, 0), -1.5, 2.5) : 0,
+            cameraHeightOffset: isTrustedFocusSchema ? BABYLON.Scalar.Clamp(safeNumber(state.cameraHeightOffset, 0), -1.8, 1.8) : 0,
+            viewPitchDegrees: isTrustedFocusSchema ? BABYLON.Scalar.Clamp(safeNumber(state.viewPitchDegrees, 0), -45, 45) : 0
+        };
+
+        // Read-only compatibility aliases for places that still expect old names in memory.
+        normalized.verticalOffset = normalized.cameraHeightOffset;
+        normalized.viewAngleOffsetDegrees = normalized.viewPitchDegrees;
+
+        return normalized;
+    }
+
+
+
+    // STAGE 12C39 - FOCUS CAMERA SAFE ADDITIVE CONTROLS
+    // The camera focus must not treat View Angle as a random direction patch.
+    // Pipeline:
+    // - target = visible bounds center and stays the thing the camera looks at
+    // - direction = horizontal side from object to camera/front
+    // - Front/Back = camera distance only
+    // - Up/Down = physical camera height offset on Y only
+    // - View Angle = pitch movement on the vertical arc around the target
+    function normalizeFocusHorizontalDirection(direction, fallbackTarget) {
+        var result = direction && direction.clone
+            ? direction.clone()
+            : null;
+
+        if (!result || result.lengthSquared() <= 0.0001) {
+            if (fallbackTarget && camera && camera.position) {
+                result = camera.position.subtract(fallbackTarget);
+            } else {
+                result = new BABYLON.Vector3(0, 0, 1);
+            }
+        }
+
+        result.y = 0;
+
+        if (result.lengthSquared() <= 0.0001) {
+            result = new BABYLON.Vector3(0, 0, 1);
+        }
+
+        return result.normalize();
+    }
+
+    function getGalleryViewerEyeHeight() {
+        var ellipsoidY = camera && camera.ellipsoid ? Number(camera.ellipsoid.y || 0) : 0.72;
+        return Math.max(0.68, ellipsoidY + 0.08);
+    }
+
+    function getGalleryDefaultWalkCameraY() {
+        var defaultY = Number(galleryDefaultWalkCameraY);
+
+        if (isFinite(defaultY)) {
+            return defaultY;
+        }
+
+        return camera && camera.position && isFinite(Number(camera.position.y))
+            ? Number(camera.position.y)
+            : -2.2;
+    }
+
+    function getGalleryFloorYAtPosition(position, fallbackY) {
+        var safeFallback = isFinite(Number(fallbackY)) ? Number(fallbackY) : (position && isFinite(position.y) ? position.y - getGalleryViewerEyeHeight() : -3);
+
+        if (!position || !floorMeshes || !floorMeshes.length || !scene || !scene.pickWithRay) {
+            return safeFallback;
+        }
+
+        try {
+            var rayOrigin = new BABYLON.Vector3(
+                Number(position.x || 0),
+                Math.max(Number(position.y || 0) + 6, safeFallback + 8),
+                Number(position.z || 0)
+            );
+            var ray = new BABYLON.Ray(rayOrigin, new BABYLON.Vector3(0, -1, 0), 18);
+            var hit = scene.pickWithRay(ray, function (mesh) {
+                return floorMeshes.indexOf(mesh) !== -1;
+            });
+
+            if (hit && hit.hit && hit.pickedPoint && isFinite(hit.pickedPoint.y)) {
+                return hit.pickedPoint.y;
+            }
+        } catch (floorFocusError) {}
+
+        return safeFallback;
+    }
+
+    function getGalleryCeilingYAtPosition(position, fallbackY) {
+        if (!position || !ceilingMeshes || !ceilingMeshes.length || !scene || !scene.pickWithRay) {
+            return isFinite(Number(fallbackY)) ? Number(fallbackY) : null;
+        }
+
+        try {
+            var rayOrigin = new BABYLON.Vector3(
+                Number(position.x || 0),
+                getGalleryFloorYAtPosition(position, Number(position.y || 0) - getGalleryViewerEyeHeight()) + 0.08,
+                Number(position.z || 0)
+            );
+            var ray = new BABYLON.Ray(rayOrigin, new BABYLON.Vector3(0, 1, 0), 8);
+            var hit = scene.pickWithRay(ray, function (mesh) {
+                return ceilingMeshes.indexOf(mesh) !== -1;
+            });
+
+            if (hit && hit.hit && hit.pickedPoint && isFinite(hit.pickedPoint.y)) {
+                return hit.pickedPoint.y;
+            }
+        } catch (ceilingFocusError) {}
+
+        return isFinite(Number(fallbackY)) ? Number(fallbackY) : null;
+    }
+
+    function getGalleryWalkCameraYAtPosition(position) {
+        // STAGE 12C42:
+        // Walking height is a stable baseline from the original scene camera, not a value
+        // derived from temporary focus/preview position. This prevents focus preview from
+        // making a too-low/too-high camera height become the new normal walking height.
+        return getGalleryDefaultWalkCameraY();
+    }
+
+    function getGalleryFocusCameraYLimits(position) {
+        var walkY = getGalleryDefaultWalkCameraY();
+        var minY = walkY - 1.05;
+        var maxY = walkY + 1.85;
+        var ceilingY = getGalleryCeilingYAtPosition(position, null);
+
+        if (isFinite(Number(ceilingY))) {
+            maxY = Math.min(maxY, Number(ceilingY) - 0.35);
+        }
+
+        if (maxY < minY + 0.24) {
+            maxY = minY + 0.24;
+        }
+
+        return {
+            walkY: walkY,
+            minY: minY,
+            maxY: maxY
+        };
+    }
+
+    // STAGE 12C42 - SAFE PREVIEW CAMERA POSITION BUILDER
+    // Contract:
+    // - target is the visible bounding-box center.
+    // - Front/Back is only an additive distance offset.
+    // - Up/Down is only a small additive physical camera-height offset.
+    // - View Angle is a limited pitch arc that keeps front/back distance stable.
+    // - zero custom values equal the automatic frame, without moving the camera above ceilings.
+    function buildFocusCameraPosition(target, horizontalDirection, autoDistance, distanceOffset, cameraHeightOffset, viewPitchDegrees) {
+        var safeTarget = target && target.clone ? target.clone() : BABYLON.Vector3.Zero();
+        var direction = normalizeFocusHorizontalDirection(horizontalDirection, safeTarget);
+
+        // STAGE 12C42:
+        // Position and look angle are separated:
+        // - Front/Back changes only the distance from the object.
+        // - Up/Down changes only the physical camera height.
+        // - View Angle does NOT move the camera anymore; it is applied later to rotation.
+        // This prevents bounding-box target math from fighting the user's pitch setting.
+        var finalDistance = BABYLON.Scalar.Clamp(
+            Number(autoDistance || 0) + Number(distanceOffset || 0),
+            galleryObjectFocusMinDistance,
+            galleryObjectFocusMaxDistance
+        );
+
+        var heightOffset = BABYLON.Scalar.Clamp(Number(cameraHeightOffset || 0), -1.8, 1.8);
+        var yLimits = getGalleryFocusCameraYLimits(safeTarget);
+        var position = safeTarget.add(direction.scale(finalDistance));
+
+        position.y = yLimits.walkY + heightOffset;
+        position.y = BABYLON.Scalar.Clamp(position.y, yLimits.minY, yLimits.maxY);
+
+        return position;
+    }
+
+    var galleryFocusPreviewRuntime = {
+        active: false,
+        returning: false,
+        source: "",
+        targetObject: null,
+        returnWalkY: null
+    };
+
+    function markGalleryFocusPreviewRuntime(targetObject, source, returnWalkY) {
+        galleryFocusPreviewRuntime.active = true;
+        galleryFocusPreviewRuntime.returning = false;
+        galleryFocusPreviewRuntime.source = source || "object-focus";
+        galleryFocusPreviewRuntime.targetObject = targetObject || null;
+        galleryFocusPreviewRuntime.returnWalkY = isFinite(Number(returnWalkY)) ? Number(returnWalkY) : null;
+    }
+
+    function clearGalleryFocusPreviewRuntime() {
+        galleryFocusPreviewRuntime.active = false;
+        galleryFocusPreviewRuntime.returning = false;
+        galleryFocusPreviewRuntime.source = "";
+        galleryFocusPreviewRuntime.targetObject = null;
+        galleryFocusPreviewRuntime.returnWalkY = null;
+    }
+
+    function updateGalleryFocusPreviewReturnToWalk(dt, hasManualInput) {
+        if (!galleryFocusPreviewRuntime.active || !camera || editMode === undefined) {
+            return false;
+        }
+
+        if (hasManualInput) {
+            galleryFocusPreviewRuntime.returning = true;
+
+            try {
+                if (typeof stopViewerSafeFocusRuntimeAnimation === "function") {
+                    stopViewerSafeFocusRuntimeAnimation();
+                }
+                scene.stopAnimation(camera);
+            } catch (focusReturnStopError) {}
+        }
+
+        if (!galleryFocusPreviewRuntime.returning) {
+            return false;
+        }
+
+        // STAGE 12C42:
+        // Always return to the stable walking height captured at scene start.
+        // Do not recalculate from the current focus preview position, because the preview
+        // may be above/below the normal walking band.
+        var walkY = isFinite(Number(galleryFocusPreviewRuntime.returnWalkY))
+            ? Number(galleryFocusPreviewRuntime.returnWalkY)
+            : getGalleryDefaultWalkCameraY();
+
+        var blend = 1 - Math.exp(-Math.max(0.001, dt || 0.016) * 8.5);
+        camera.position.y += (walkY - camera.position.y) * blend;
+
+        if (Math.abs(camera.position.y - walkY) < 0.015) {
+            camera.position.y = walkY;
+            clearGalleryFocusPreviewRuntime();
+        }
+
+        return true;
+    }
+
+    function getSculptureCollisionProxyMaterial() {
+        if (gallerySculptureCollisionProxyMaterial && !(gallerySculptureCollisionProxyMaterial.isDisposed && gallerySculptureCollisionProxyMaterial.isDisposed())) {
+            return gallerySculptureCollisionProxyMaterial;
+        }
+
+        gallerySculptureCollisionProxyMaterial = new BABYLON.StandardMaterial("SculptureCollisionProxy_Material", scene);
+        gallerySculptureCollisionProxyMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
+        gallerySculptureCollisionProxyMaterial.alpha = 0;
+        gallerySculptureCollisionProxyMaterial.disableLighting = true;
+        gallerySculptureCollisionProxyMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+
+        return gallerySculptureCollisionProxyMaterial;
+    }
+
+    function getOrCreateSculptureCollisionProxy(slot) {
+        if (!slot) {
+            return null;
+        }
+
+        slot.metadata = slot.metadata || {};
+
+        var proxy = slot.metadata.sculptureCollisionProxy || null;
+
+        if (proxy && !(proxy.isDisposed && proxy.isDisposed())) {
+            return proxy;
+        }
+
+        proxy = BABYLON.MeshBuilder.CreateBox(
+            slot.name + "_SculptureCollisionProxy",
+            { size: 1 },
+            scene
+        );
+
+        proxy.metadata = proxy.metadata || {};
+        proxy.metadata.model3dSlotName = slot.name;
+        proxy.metadata.isSculptureCollisionProxy = true;
+        proxy.metadata.displayType = "sculpture-collision-proxy";
+        proxy.isPickable = false;
+        proxy.isVisible = true;
+        proxy.visibility = 0;
+        proxy.material = getSculptureCollisionProxyMaterial();
+        proxy.checkCollisions = false;
+
+        slot.metadata.sculptureCollisionProxy = proxy;
+
+        return proxy;
+    }
+
+    function disableSculptureCollisionProxy(slot) {
+        var proxy = slot && slot.metadata ? slot.metadata.sculptureCollisionProxy : null;
+
+        if (!proxy || (proxy.isDisposed && proxy.isDisposed())) {
+            return;
+        }
+
+        proxy.checkCollisions = false;
+        proxy.setEnabled(false);
+    }
+
+    function disposeSculptureCollisionProxy(slot) {
+        var proxy = slot && slot.metadata ? slot.metadata.sculptureCollisionProxy : null;
+
+        if (!proxy) {
+            return;
+        }
+
+        try {
+            proxy.dispose();
+        } catch (disposeError) {}
+
+        if (slot.metadata) {
+            slot.metadata.sculptureCollisionProxy = null;
+        }
+    }
+
+    function refreshSculptureCollisionProxy(slot) {
+        if (!slot || !slot.metadata) {
+            return null;
+        }
+
+        var meshes = getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
+            return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()) && mesh.isVisible !== false && mesh.visibility !== 0);
+        });
+
+        // Empty sculpture placeholders are editor-only. In Viewer Mode they should not create invisible blockers.
+        if (!meshes.length || !viewerCollisionTargets.sculptures) {
+            disableSculptureCollisionProxy(slot);
+            return null;
+        }
+
+        var bounds = getCachedVisibleBoundsForGalleryObject(slot, meshes);
+
+        if (!bounds) {
+            disableSculptureCollisionProxy(slot);
+            return null;
+        }
+
+        var proxy = getOrCreateSculptureCollisionProxy(slot);
+
+        if (!proxy) {
+            return null;
+        }
+
+        var padding = 0.18;
+        var width = Math.max(bounds.size.x + padding, 0.42);
+        var height = Math.max(bounds.size.y, 0.55);
+        var depth = Math.max(bounds.size.z + padding, 0.42);
+
+        proxy.setEnabled(true);
+        proxy.position.copyFrom(bounds.center);
+        proxy.scaling.copyFrom(new BABYLON.Vector3(width, height, depth));
+        proxy.rotation.copyFrom(BABYLON.Vector3.Zero());
+        proxy.isVisible = true;
+        proxy.visibility = 0;
+        proxy.isPickable = false;
+        proxy.checkCollisions = !!viewerCollisionTargets.sculptures;
+        proxy.computeWorldMatrix(true);
+
+        return proxy;
+    }
+
+    function refreshAllSculptureCollisionProxies() {
+        artSpheres.forEach(function (slot) {
+            refreshSculptureCollisionProxy(slot);
+        });
+    }
+
+    function getSculptureStableFocusDirection(slot) {
+        if (!slot) {
+            return new BABYLON.Vector3(0, 0, 1);
+        }
+
+        try {
+            slot.computeWorldMatrix && slot.computeWorldMatrix(true);
+
+            var baseDirection = BABYLON.Vector3.TransformNormal(
+                new BABYLON.Vector3(0, 0, 1),
+                slot.getWorldMatrix ? slot.getWorldMatrix() : BABYLON.Matrix.Identity()
+            );
+
+            baseDirection.y = 0;
+
+            if (baseDirection.lengthSquared() > 0.0001) {
+                return baseDirection.normalize();
+            }
+        } catch (directionError) {}
+
+        return new BABYLON.Vector3(0, 0, 1);
+    }
+
+    function getGalleryObjectFocusCameraState(object) {
+        var storedState = null;
+
+        if (object && object.metadata) {
+            storedState = object.metadata.focusCamera || object.metadata.cameraFocus || object.metadata.artworkFocusCamera || object.metadata.sculptureFocusCamera || null;
+        }
+
+        return normalizeGalleryObjectFocusCameraState(storedState || galleryObjectFocusDefaultState);
+    }
+
+    function setGalleryObjectFocusCameraState(object, state) {
+        if (!object) {
+            return normalizeGalleryObjectFocusCameraState();
+        }
+
+        var normalized = normalizeGalleryObjectFocusCameraState(state);
+
+        object.metadata = object.metadata || {};
+        object.metadata.focusCamera = {
+            schema: galleryObjectFocusStateSchema,
+            useCustomOffset: normalized.useCustomOffset,
+            distanceOffset: normalized.distanceOffset,
+            cameraHeightOffset: normalized.cameraHeightOffset,
+            viewPitchDegrees: normalized.viewPitchDegrees
+        };
+
+        delete object.metadata.cameraFocus;
+        delete object.metadata.artworkFocusCamera;
+        delete object.metadata.sculptureFocusCamera;
+
+        return normalizeGalleryObjectFocusCameraState(object.metadata.focusCamera);
+    }
+
+    function resetGalleryObjectFocusCameraState(object) {
+        return setGalleryObjectFocusCameraState(object, galleryObjectFocusDefaultState);
+    }
+
+
+
+    // STAGE 12C44 - dirty-only cached visible bounds for popup/focus and imported GLB meshes.
+    // No short TTL: bounds are recomputed only when the owning gallery object marks them dirty.
+    function cloneGalleryVisibleBounds(bounds) {
+        if (!bounds) {
+            return null;
+        }
+
+        return {
+            min: bounds.min ? bounds.min.clone() : null,
+            max: bounds.max ? bounds.max.clone() : null,
+            center: bounds.center ? bounds.center.clone() : null,
+            size: bounds.size ? bounds.size.clone() : null,
+            radius: Number(bounds.radius) || 0
+        };
+    }
+
+    function markGalleryObjectBoundsDirty(object) {
+        if (!object) {
+            return;
+        }
+
+        object.metadata = object.metadata || {};
+        object.metadata.galleryObjectBoundsDirty = true;
+    }
+
+    function markAllGalleryObjectBoundsDirty() {
+        artworks.forEach(markGalleryObjectBoundsDirty);
+        artSpheres.forEach(markGalleryObjectBoundsDirty);
+    }
+
+    function getCachedVisibleBoundsForGalleryObject(object, meshes) {
+        if (!object) {
+            return getVisibleBoundsFromMeshes(meshes);
+        }
+
+        object.metadata = object.metadata || {};
+
+        var cache = object.metadata.galleryObjectBoundsCache;
+
+        if (cache && !object.metadata.galleryObjectBoundsDirty) {
+            return cloneGalleryVisibleBounds(cache.bounds);
+        }
+
+        var bounds = getVisibleBoundsFromMeshes(meshes);
+
+        object.metadata.galleryObjectBoundsCache = {
+            bounds: cloneGalleryVisibleBounds(bounds)
+        };
+        object.metadata.galleryObjectBoundsDirty = false;
+
+        return bounds;
+    }
+
+
+    function getVisibleBoundsFromMeshes(meshes) {
+        var min = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+        var max = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+        var hasBounds = false;
+
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+                return;
+            }
+
+            if (mesh.isVisible === false || mesh.visibility === 0) {
+                return;
+            }
+
+            if (!mesh.getBoundingInfo || !mesh.computeWorldMatrix) {
+                return;
+            }
+
+            try {
+                mesh.computeWorldMatrix(true);
+                var bbox = mesh.getBoundingInfo().boundingBox;
+
+                if (bbox && bbox.minimumWorld && bbox.maximumWorld) {
+                    BABYLON.Vector3.MinimizeToRef(min, bbox.minimumWorld, min);
+                    BABYLON.Vector3.MaximizeToRef(max, bbox.maximumWorld, max);
+                    hasBounds = true;
+                }
+            } catch (boundsError) {}
+        });
+
+        if (!hasBounds) {
+            return null;
+        }
+
+        var center = min.add(max).scale(0.5);
+        var size = max.subtract(min);
+        var radius = Math.max(size.length() * 0.5, 0.18);
+
+        return {
+            min: min,
+            max: max,
+            center: center,
+            size: size,
+            radius: radius
+        };
+    }
+
+    function getArtworkFocusMeshes(artwork) {
+        if (!artwork) {
+            return [];
+        }
+
+        var result = [];
+
+        if (
+            artwork.metadata &&
+            artwork.metadata.imagePlane &&
+            !(artwork.metadata.imagePlane.isDisposed && artwork.metadata.imagePlane.isDisposed()) &&
+            artwork.metadata.imagePlane.isVisible !== false &&
+            artwork.metadata.imagePlane.visibility !== 0
+        ) {
+            result.push(artwork.metadata.imagePlane);
+        }
+
+        result.push(artwork);
+
+        return result;
+    }
+
+    function getSculptureFocusMeshes(slot) {
+        if (!slot) {
+            return [];
+        }
+
+        return getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
+            return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()) && mesh.isVisible !== false && mesh.visibility !== 0);
+        });
+    }
+
+    function getGalleryObjectFromFocusTarget(targetMesh) {
+        var artwork = getArtworkFromPopupPickMesh(targetMesh);
+
+        if (artwork) {
+            return {
+                type: "artwork",
+                object: artwork
+            };
+        }
+
+        var sculptureSlot = getModel3dSlotFromPickedMesh(targetMesh) || (isSculptureSlotObject(targetMesh) ? targetMesh : null);
+
+        if (sculptureSlot) {
+            return {
+                type: "sculpture",
+                object: sculptureSlot
+            };
+        }
+
+        if (targetMesh && artworks.indexOf(targetMesh) >= 0) {
+            return {
+                type: "artwork",
+                object: targetMesh
+            };
+        }
+
+        if (targetMesh && artSpheres.indexOf(targetMesh) >= 0) {
+            return {
+                type: "sculpture",
+                object: targetMesh
+            };
+        }
+
+        return {
+            type: "mesh",
+            object: targetMesh
+        };
+    }
+
+    function getFocusDistanceForBounds(bounds, type, focusState) {
+        if (!bounds) {
+            return type === "artwork" ? 3 : 3.2;
+        }
+
+        var renderWidth = scene && scene.getEngine ? scene.getEngine().getRenderWidth() : 1;
+        var renderHeight = scene && scene.getEngine ? scene.getEngine().getRenderHeight() : 1;
+        var aspect = renderHeight > 0 ? renderWidth / renderHeight : 1;
+        var verticalFov = camera && camera.fov ? camera.fov : 0.8;
+        var horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+        var limitingFov = Math.max(0.24, Math.min(verticalFov, horizontalFov));
+        var padding = isMobileViewerActive && isMobileViewerActive()
+            ? galleryObjectFocusMobilePadding
+            : galleryObjectFocusDefaultPadding;
+
+        if (type === "sculpture") {
+            padding += 0.08;
+        }
+
+        // Automatic frame only. Custom Front/Back is added later in buildFocusCameraPosition().
+        var distance = bounds.radius / Math.sin(limitingFov / 2) * padding;
+
+        return BABYLON.Scalar.Clamp(distance, galleryObjectFocusMinDistance, galleryObjectFocusMaxDistance);
+    }
+
+    function getGalleryObjectFocusFrame(targetMesh) {
+        var resolved = getGalleryObjectFromFocusTarget(targetMesh);
+        var object = resolved.object;
+        var type = resolved.type;
+        var meshes = [];
+
+        if (type === "artwork") {
+            meshes = getArtworkFocusMeshes(object);
+        } else if (type === "sculpture") {
+            meshes = getSculptureFocusMeshes(object);
+        } else if (object) {
+            meshes = [object];
+        }
+
+        var bounds = getVisibleBoundsFromMeshes(meshes);
+        var focusState = getGalleryObjectFocusCameraState(object);
+        var target = bounds && bounds.center
+            ? bounds.center.clone()
+            : object && object.getAbsolutePosition
+                ? object.getAbsolutePosition().clone()
+                : object && object.position
+                    ? object.position.clone()
+                    : BABYLON.Vector3.Zero();
+
+        // STAGE 12C36:
+        // Do not move the target with Up/Down. The camera must keep looking at the visible object center.
+        // Up/Down is applied later as camera height only.
+        var viewDirection;
+
+        if (type === "artwork") {
+            try {
+                viewDirection = getArtworkVisualNormal(object).normalize();
+            } catch (artworkNormalError) {
+                viewDirection = BABYLON.Vector3.TransformNormal(
+                    new BABYLON.Vector3(0, 0, 1),
+                    object.getWorldMatrix()
+                ).normalize();
+            }
+        } else {
+            // STAGE 12C35:
+            // For sculptures we keep the current viewing side instead of forcing slot +Z.
+            // The previous stable-slot direction could jump the camera to a wrong side and then pitch toward the ceiling.
+            viewDirection = camera && camera.position
+                ? camera.position.subtract(target)
+                : new BABYLON.Vector3(0, 0, 1);
+        }
+
+        viewDirection = normalizeFocusHorizontalDirection(viewDirection, target);
+
+        return {
+            type: type,
+            object: object,
+            target: target,
+            bounds: bounds,
+            viewDirection: viewDirection,
+            distance: getFocusDistanceForBounds(bounds, type, focusState),
+            focusState: focusState
         };
     }
 
@@ -5569,7 +7531,7 @@ var pipeline = ensureVisualRenderingPipeline();
         return true;
     }
 
-    function applySculptureTransformToSlot(slot) {
+    function applySculptureTransformToSlot(slot, options) {
         if (!slot) {
             return null;
         }
@@ -5595,7 +7557,14 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         applySculptureSlotVisualState(slot);
-        refreshSculptureOutlines();
+        markGalleryObjectBoundsDirty(slot);
+
+        if (options && options.deferHeavy) {
+            scheduleSculptureDragPerformanceUpdate(slot);
+        } else {
+            refreshSculptureCollisionProxy(slot);
+            refreshSculptureOutlines();
+        }
 
         return transformState;
     }
@@ -5623,9 +7592,14 @@ var pipeline = ensureVisualRenderingPipeline();
         };
 
         slot.metadata.sculptureTransform = nextTransform;
-        applySculptureTransformToSlot(slot);
+        applySculptureTransformToSlot(slot, {
+            deferHeavy: !shouldNotify
+        });
 
-        updatePedestalLight(slot);
+        if (shouldNotify) {
+            updatePedestalLight(slot);
+        }
+
         updateModel3dTransformUi();
 
         if (shouldNotify) {
@@ -6373,13 +8347,18 @@ var pipeline = ensureVisualRenderingPipeline();
     var selectedSphere = null;
     var isDraggingSphere = false;
 
-    // STAGE 12B - MODEL SLOT SELECTION LIKE ARTWORKS
-    // selectedSphere zostaje jako aktywne zaznaczenie slotu, a nie tylko obiekt chwilowo chwytany.
+    // STAGE 12C29 - SCULPTURE SELECTION PARITY WITH ARTWORKS
+    // Rzezby/model slots maja teraz wlasny, czysty selection model analogiczny do artworkow.
+    // selectedSphere zostaje tylko aliasem kompatybilnosci dla starszych miejsc w kodzie.
     var activeModel3dSlot = null;
-    var model3dSlotSelectionOutlineColor = new BABYLON.Color3(0.55, 0.72, 1.0);
-    var model3dSlotSelectionEdgesColor = new BABYLON.Color4(0.55, 0.72, 1.0, 1.0);
-    var model3dSlotSelectionEdgesWidth = 2.6;
-    var model3dSlotSelectionPlaceholderEdgesWidth = 3.6;
+    var selectedSculptures = [];
+    var primarySculpture = null;
+    var referenceSculpture = null;
+    var lastSculptureClickTime = 0;
+    var lastSculptureClickSlot = null;
+    var model3dSlotSelectionEdgesColor = new BABYLON.Color4(1, 1, 1, 1);
+    var model3dSlotSelectionEdgesWidth = 3.0;
+    var model3dSlotSelectionPlaceholderEdgesWidth = 3.0;
 
     var dragMoved = false;
 
@@ -9713,12 +11692,647 @@ var pipeline = ensureVisualRenderingPipeline();
     model3dSectionData.section.appendChild(model3dNote);
     editorScroll.appendChild(model3dSectionData.section);
 
-    // STAGE 12C - model UI ma siedzieć w tym samym miejscu co panel artworka.
-    // Fizycznie przenosimy sekcję przed ARTWORK IMAGE, żeby po zaznaczeniu obiektu
-    // nie trzeba było szukać kontrolek niżej przy globalnej optymalizacji.
     if (artworkImageSectionData && artworkImageSectionData.section) {
         editorScroll.insertBefore(model3dSectionData.section, artworkImageSectionData.section);
     }
+
+    // STAGE 12C31 - SCULPTURE INFO USES ARTWORK INFO SYSTEM 1:1
+    // This section intentionally mirrors ARTWORK INFO structure/classes instead of inventing
+    // sculpture-only UI. Sculpture info uses the same author library, author photo, find author,
+    // upload author photo, title/description layout, popup and saved data shape as artworks.
+    var sculptureInfoSectionData = createEditorSection("SCULPTURE INFO");
+    sculptureInfoSectionData.section.classList.add("gallery-artwork-info-section", "is-hidden");
+
+    function createSculptureTextInputCompat(placeholder) {
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "gallery-editor-text-input";
+        input.placeholder = placeholder || "";
+        return input;
+    }
+
+    var sculptureInfoAuthorPhotoInput = createSculptureTextInputCompat("https://... image URL");
+    var sculptureInfoAuthorPhotoFileInput = document.createElement("input");
+    sculptureInfoAuthorPhotoFileInput.type = "file";
+    sculptureInfoAuthorPhotoFileInput.accept = "image/jpeg,image/png,image/webp,image/avif";
+    sculptureInfoAuthorPhotoFileInput.style.display = "none";
+
+    var sculptureInfoUploadPhotoButton = document.createElement("button");
+    sculptureInfoUploadPhotoButton.type = "button";
+    sculptureInfoUploadPhotoButton.className = "gallery-editor-action-button is-primary";
+    sculptureInfoUploadPhotoButton.innerText = "UPLOAD PHOTO";
+
+    var sculptureInfoFindAuthorButton = document.createElement("button");
+    sculptureInfoFindAuthorButton.type = "button";
+    sculptureInfoFindAuthorButton.className = "gallery-editor-action-button is-primary";
+    sculptureInfoFindAuthorButton.innerText = "FIND AUTHOR";
+
+    var sculptureInfoAuthorInput = createSculptureTextInputCompat("Author name");
+    var sculptureInfoTitleInput = createSculptureTextInputCompat("Sculpture title");
+    var sculptureInfoDescriptionInput = document.createElement("textarea");
+    sculptureInfoDescriptionInput.className = "gallery-artwork-info-textarea";
+    sculptureInfoDescriptionInput.placeholder = "Description";
+
+    var sculptureInfoEditorGrid = document.createElement("div");
+    sculptureInfoEditorGrid.className = "gallery-artwork-info-editor-grid";
+
+    var sculptureInfoAuthorCard = document.createElement("div");
+    sculptureInfoAuthorCard.className = "gallery-artwork-info-editor-card";
+
+    var sculptureInfoPhotoPreview = document.createElement("div");
+    sculptureInfoPhotoPreview.className = "gallery-artwork-info-editor-photo-preview";
+
+    var sculptureInfoPhotoPreviewImage = document.createElement("img");
+    sculptureInfoPhotoPreviewImage.alt = "Author photo preview";
+
+    var sculptureInfoPhotoPreviewPlaceholder = document.createElement("div");
+    sculptureInfoPhotoPreviewPlaceholder.className = "gallery-artwork-info-editor-photo-placeholder";
+    sculptureInfoPhotoPreviewPlaceholder.innerText = "Author photo";
+
+    sculptureInfoPhotoPreview.appendChild(sculptureInfoPhotoPreviewImage);
+    sculptureInfoPhotoPreview.appendChild(sculptureInfoPhotoPreviewPlaceholder);
+
+    var sculptureInfoAuthorNameGroup = document.createElement("div");
+    sculptureInfoAuthorNameGroup.className = "gallery-artwork-info-field-group";
+    var sculptureInfoAuthorNameLabel = document.createElement("label");
+    sculptureInfoAuthorNameLabel.className = "gallery-editor-field-label";
+    sculptureInfoAuthorNameLabel.innerText = "AUTHOR NAME";
+    sculptureInfoAuthorNameGroup.appendChild(sculptureInfoAuthorNameLabel);
+    sculptureInfoAuthorNameGroup.appendChild(sculptureInfoAuthorInput);
+    sculptureInfoAuthorCard.appendChild(sculptureInfoAuthorNameGroup);
+
+    sculptureInfoAuthorCard.appendChild(sculptureInfoPhotoPreview);
+
+    var sculptureInfoAuthorPhotoGroup = document.createElement("div");
+    sculptureInfoAuthorPhotoGroup.className = "gallery-artwork-info-field-group";
+    var sculptureInfoAuthorPhotoLabel = document.createElement("label");
+    sculptureInfoAuthorPhotoLabel.className = "gallery-editor-field-label";
+    sculptureInfoAuthorPhotoLabel.innerText = "AUTHOR PHOTO";
+    sculptureInfoAuthorPhotoGroup.appendChild(sculptureInfoAuthorPhotoLabel);
+    sculptureInfoAuthorPhotoGroup.appendChild(sculptureInfoAuthorPhotoInput);
+    sculptureInfoAuthorCard.appendChild(sculptureInfoAuthorPhotoGroup);
+
+    var sculptureInfoAuthorPhotoActions = document.createElement("div");
+    sculptureInfoAuthorPhotoActions.className = "gallery-artwork-image-actions";
+    sculptureInfoAuthorPhotoActions.style.gridTemplateColumns = "1fr";
+    sculptureInfoAuthorPhotoActions.appendChild(sculptureInfoUploadPhotoButton);
+    sculptureInfoAuthorCard.appendChild(sculptureInfoAuthorPhotoActions);
+
+    var sculptureInfoDetailsCard = document.createElement("div");
+    sculptureInfoDetailsCard.className = "gallery-artwork-info-editor-card";
+
+    var sculptureInfoAuthorTools = document.createElement("div");
+    sculptureInfoAuthorTools.className = "gallery-artwork-info-author-tools";
+
+    var sculptureInfoFindAuthorLabel = document.createElement("label");
+    sculptureInfoFindAuthorLabel.className = "gallery-editor-field-label";
+    sculptureInfoFindAuthorLabel.innerText = "FIND AUTHOR";
+    sculptureInfoAuthorTools.appendChild(sculptureInfoFindAuthorLabel);
+
+    var sculptureInfoFindAuthorNote = document.createElement("p");
+    sculptureInfoFindAuthorNote.className = "gallery-artwork-info-author-tools-note";
+    sculptureInfoFindAuthorNote.innerText = "Looks for an existing author by name and reuses their photo.";
+    sculptureInfoAuthorTools.appendChild(sculptureInfoFindAuthorNote);
+
+    sculptureInfoAuthorTools.appendChild(sculptureInfoFindAuthorButton);
+
+    var sculptureInfoAuthorFound = document.createElement("div");
+    sculptureInfoAuthorFound.className = "gallery-artwork-info-author-found";
+    sculptureInfoAuthorFound.innerText = "No author selected.";
+    sculptureInfoAuthorTools.appendChild(sculptureInfoAuthorFound);
+
+    var sculptureInfoFields = document.createElement("div");
+    sculptureInfoFields.className = "gallery-artwork-info-artwork-fields";
+
+    var sculptureInfoTitleGroup = document.createElement("div");
+    sculptureInfoTitleGroup.className = "gallery-artwork-info-field-group";
+    var sculptureInfoTitleLabel = document.createElement("label");
+    sculptureInfoTitleLabel.className = "gallery-editor-field-label";
+    sculptureInfoTitleLabel.innerText = "SCULPTURE TITLE";
+    sculptureInfoTitleGroup.appendChild(sculptureInfoTitleLabel);
+    sculptureInfoTitleGroup.appendChild(sculptureInfoTitleInput);
+    sculptureInfoFields.appendChild(sculptureInfoTitleGroup);
+
+    var sculptureInfoDescriptionGroup = document.createElement("div");
+    sculptureInfoDescriptionGroup.className = "gallery-artwork-info-field-group";
+    var sculptureInfoDescriptionLabel = document.createElement("label");
+    sculptureInfoDescriptionLabel.className = "gallery-editor-field-label";
+    sculptureInfoDescriptionLabel.innerText = "DESCRIPTION";
+    sculptureInfoDescriptionGroup.appendChild(sculptureInfoDescriptionLabel);
+    sculptureInfoDescriptionGroup.appendChild(sculptureInfoDescriptionInput);
+    sculptureInfoFields.appendChild(sculptureInfoDescriptionGroup);
+
+    sculptureInfoDetailsCard.appendChild(sculptureInfoAuthorTools);
+    sculptureInfoDetailsCard.appendChild(sculptureInfoFields);
+
+    sculptureInfoEditorGrid.appendChild(sculptureInfoAuthorCard);
+    sculptureInfoEditorGrid.appendChild(sculptureInfoDetailsCard);
+
+    var sculptureInfoActions = document.createElement("div");
+    sculptureInfoActions.className = "gallery-artwork-image-actions";
+
+    var sculptureInfoApplyButton = document.createElement("button");
+    sculptureInfoApplyButton.type = "button";
+    sculptureInfoApplyButton.className = "gallery-editor-action-button is-primary";
+    sculptureInfoApplyButton.innerText = "APPLY INFO";
+
+    var sculptureInfoClearButton = document.createElement("button");
+    sculptureInfoClearButton.type = "button";
+    sculptureInfoClearButton.className = "gallery-editor-action-button";
+    sculptureInfoClearButton.innerText = "CLEAR";
+
+    var sculptureInfoNote = document.createElement("p");
+    sculptureInfoNote.className = "gallery-artwork-image-note";
+    sculptureInfoNote.innerText = "Shown near the sculpture in Viewer Mode and Edit Mode.";
+
+    sculptureInfoActions.appendChild(sculptureInfoApplyButton);
+    sculptureInfoActions.appendChild(sculptureInfoClearButton);
+    sculptureInfoSectionData.section.appendChild(sculptureInfoAuthorPhotoFileInput);
+    sculptureInfoSectionData.section.appendChild(sculptureInfoEditorGrid);
+    sculptureInfoSectionData.section.appendChild(sculptureInfoActions);
+    sculptureInfoSectionData.section.appendChild(sculptureInfoNote);
+    editorScroll.appendChild(sculptureInfoSectionData.section);
+
+    if (model3dSectionData && model3dSectionData.section) {
+        editorScroll.insertBefore(sculptureInfoSectionData.section, model3dSectionData.section.nextSibling);
+    }
+
+    function updateSculptureInfoEditorPhotoPreview(url) {
+        var hasPhoto = !!(url && String(url).trim());
+
+        if (hasPhoto) {
+            sculptureInfoPhotoPreviewImage.src = String(url).trim();
+            sculptureInfoPhotoPreviewImage.classList.add("is-visible");
+            sculptureInfoPhotoPreviewPlaceholder.style.display = "none";
+        } else {
+            sculptureInfoPhotoPreviewImage.removeAttribute("src");
+            sculptureInfoPhotoPreviewImage.classList.remove("is-visible");
+            sculptureInfoPhotoPreviewPlaceholder.style.display = "flex";
+        }
+    }
+
+    function getSculptureInfoUiTarget() {
+        return selectedSculptures.length === 1 ? selectedSculptures[0] : null;
+    }
+
+    function updateSculptureAuthorFoundUi(author) {
+        if (!sculptureInfoAuthorFound) {
+            return;
+        }
+
+        if (!author) {
+            sculptureInfoAuthorFound.innerText = "No existing author found.";
+            return;
+        }
+
+        sculptureInfoAuthorFound.innerText = "Found: " + author.name + (author.photoUrl ? " — photo ready" : " — no photo yet");
+    }
+
+    function updateSculptureInfoUi() {
+        if (!sculptureInfoSectionData || !sculptureInfoSectionData.section) {
+            return;
+        }
+
+        var slot = getSculptureInfoUiTarget();
+        var isVisible = editMode && !!slot;
+
+        sculptureInfoSectionData.section.classList.toggle("is-hidden", !isVisible);
+
+        sculptureInfoAuthorPhotoInput.disabled = !isVisible;
+        sculptureInfoUploadPhotoButton.disabled = !isVisible;
+        sculptureInfoFindAuthorButton.disabled = !isVisible;
+        sculptureInfoAuthorInput.disabled = !isVisible;
+        sculptureInfoTitleInput.disabled = !isVisible;
+        sculptureInfoDescriptionInput.disabled = !isVisible;
+        sculptureInfoApplyButton.disabled = !isVisible;
+        sculptureInfoClearButton.disabled = !isVisible;
+
+        if (!isVisible) {
+            updateSculptureInfoEditorPhotoPreview("");
+            updateSculptureAuthorFoundUi(null);
+            return;
+        }
+
+        var info = getSculptureInfoState(slot);
+
+        if (document.activeElement !== sculptureInfoAuthorPhotoInput) {
+            sculptureInfoAuthorPhotoInput.value = getOriginalAuthorPhotoUrlFromInfo(info);
+        }
+
+        if (document.activeElement !== sculptureInfoAuthorInput) {
+            sculptureInfoAuthorInput.value = info.authorName;
+        }
+
+        if (document.activeElement !== sculptureInfoTitleInput) {
+            sculptureInfoTitleInput.value = info.title;
+        }
+
+        if (document.activeElement !== sculptureInfoDescriptionInput) {
+            sculptureInfoDescriptionInput.value = info.description;
+        }
+
+        updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
+        updateSculptureAuthorFoundUi(getAuthorById(info.authorId) || getAuthorByName(info.authorName));
+    }
+
+    sculptureInfoAuthorPhotoInput.addEventListener("input", function () {
+        updateSculptureInfoEditorPhotoPreview(sculptureInfoAuthorPhotoInput.value);
+    });
+
+    function syncSculptureInfoWithAuthor(slot, author) {
+        if (!slot || !author) {
+            return null;
+        }
+
+        author = normalizeAuthorRecord(author);
+
+        if (!author.id) {
+            return null;
+        }
+
+        var info = getSculptureInfoState(slot);
+
+        info.authorId = author.id;
+        info.authorName = author.name || info.authorName;
+        info.authorPhotoUrl = author.photoUrl || info.authorPhotoUrl;
+        info.authorPhotoUrlOriginal = author.photoUrlOriginal || author.photoUrl || info.authorPhotoUrlOriginal;
+        info.authorPhotoUrlWeb = author.photoUrlWeb || info.authorPhotoUrlWeb;
+        info.authorPhotoUrlMobile = author.photoUrlMobile || info.authorPhotoUrlMobile;
+        info.authorPhotoUrlPreview = author.photoUrlPreview || info.authorPhotoUrlPreview;
+        info.authorPhotoPath = author.photoPath || info.authorPhotoPath;
+        info.authorPhotoPathWeb = author.photoPathWeb || info.authorPhotoPathWeb;
+        info.authorPhotoPathMobile = author.photoPathMobile || info.authorPhotoPathMobile;
+        info.authorPhotoPathPreview = author.photoPathPreview || info.authorPhotoPathPreview;
+        info.authorPhotoBucket = author.photoBucket || info.authorPhotoBucket;
+        info.authorPhotoOriginalName = author.photoOriginalName || info.authorPhotoOriginalName;
+        info.authorPhotoMimeType = author.photoMimeType || info.authorPhotoMimeType;
+        info.authorPhotoMimeTypeWeb = author.photoMimeTypeWeb || info.authorPhotoMimeTypeWeb;
+        info.authorPhotoMimeTypeMobile = author.photoMimeTypeMobile || info.authorPhotoMimeTypeMobile;
+        info.authorPhotoMimeTypePreview = author.photoMimeTypePreview || info.authorPhotoMimeTypePreview;
+        info.authorPhotoSize = author.photoSize || info.authorPhotoSize;
+        info.authorPhotoSizeWeb = author.photoSizeWeb || info.authorPhotoSizeWeb;
+        info.authorPhotoSizeMobile = author.photoSizeMobile || info.authorPhotoSizeMobile;
+        info.authorPhotoSizePreview = author.photoSizePreview || info.authorPhotoSizePreview;
+        info.authorPhotoWidthWeb = author.photoWidthWeb || info.authorPhotoWidthWeb;
+        info.authorPhotoHeightWeb = author.photoHeightWeb || info.authorPhotoHeightWeb;
+        info.authorPhotoWidthMobile = author.photoWidthMobile || info.authorPhotoWidthMobile;
+        info.authorPhotoHeightMobile = author.photoHeightMobile || info.authorPhotoHeightMobile;
+        info.authorPhotoWidthPreview = author.photoWidthPreview || info.authorPhotoWidthPreview;
+        info.authorPhotoHeightPreview = author.photoHeightPreview || info.authorPhotoHeightPreview;
+        info.authorPhotoUploadedAt = author.photoUploadedAt || info.authorPhotoUploadedAt;
+        info.authorPhotoVariantsGeneratedAt = author.photoVariantsGeneratedAt || info.authorPhotoVariantsGeneratedAt;
+        info.authorPhotoVariantsRebuiltAt = author.photoVariantsRebuiltAt || info.authorPhotoVariantsRebuiltAt;
+
+        setSculptureInfoState(slot, info);
+
+        return info;
+    }
+
+    function findAndApplyAuthorForCurrentSculpture() {
+        var slot = getSculptureInfoUiTarget();
+
+        if (!slot) {
+            notifyGalleryStatus("Select one sculpture first.");
+            return null;
+        }
+
+        var authorName = sculptureInfoAuthorInput.value.trim();
+
+        if (!authorName) {
+            notifyGalleryStatus("Type author name first.");
+            updateSculptureAuthorFoundUi(null);
+            return null;
+        }
+
+        var author = getAuthorByName(authorName);
+        var info = getSculptureInfoState(slot);
+
+        info.authorId = getAuthorIdFromName(authorName);
+        info.authorName = authorName;
+
+        if (!author) {
+            setSculptureInfoState(slot, info);
+            updateSculptureAuthorFoundUi(null);
+            notifyGalleryStatus("No existing author found. Upload a photo to create this author.");
+            return null;
+        }
+
+        syncSculptureInfoWithAuthor(slot, author);
+
+        sculptureInfoAuthorPhotoInput.value = author.photoUrlOriginal || author.photoUrl || "";
+        updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(author));
+        updateArtworkInfoPopupContent(slot);
+        updateSculptureAuthorFoundUi(author);
+
+        notifyGalleryStatus("Existing author applied. Save state to keep the change.");
+
+        return author;
+    }
+
+    async function uploadAuthorPhotoForSculpture(slot, file) {
+        if (!slot || !file) {
+            notifyGalleryStatus("Select one sculpture and choose an author photo.");
+            return false;
+        }
+
+        if (!galleryArtworkUploadEnabled) {
+            notifyGalleryStatus("Upload is disabled in this version.");
+            return false;
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            notifyGalleryStatus("Supabase Storage is not configured.");
+            return false;
+        }
+
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Log in as editor to upload author photo.");
+            return false;
+        }
+
+        if (!file.type || file.type.indexOf("image/") !== 0) {
+            notifyGalleryStatus("Choose an image file.");
+            return false;
+        }
+
+        var authorNameForUpload = sculptureInfoAuthorInput
+            ? sculptureInfoAuthorInput.value.trim()
+            : "";
+
+        if (!authorNameForUpload) {
+            notifyGalleryStatus("Type author name before uploading photo.");
+            return false;
+        }
+
+        var previousInfo = normalizeSculptureInfo(getSculptureInfoState(slot));
+        var info = normalizeSculptureInfo(previousInfo);
+        var storagePath = createAuthorPhotoStoragePath(slot, file);
+
+        notifyGalleryStatus("Uploading author photo and creating variants...");
+
+        var uploadResponse = await client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .upload(storagePath, file, {
+                cacheControl: "3600",
+                upsert: false,
+                contentType: file.type
+            });
+
+        if (uploadResponse.error) {
+            var message = uploadResponse.error.message || "Unknown upload error";
+            console.warn("Sculpture author photo upload error:", uploadResponse.error);
+            notifyGalleryStatus("Author photo upload failed: " + message);
+            return false;
+        }
+
+        var publicUrlResponse = client
+            .storage
+            .from(galleryArtworkStorageBucket)
+            .getPublicUrl(storagePath);
+
+        info.authorPhotoUrl = publicUrlResponse &&
+            publicUrlResponse.data &&
+            publicUrlResponse.data.publicUrl
+                ? publicUrlResponse.data.publicUrl
+                : "";
+
+        var authorVariantState = {};
+
+        try {
+            authorVariantState = await createAndUploadAuthorPhotoVariants(
+                file,
+                storagePath,
+                client
+            );
+        } catch (authorVariantError) {
+            console.warn("Sculpture author photo variants warning:", authorVariantError);
+            notifyGalleryStatus("Author photo uploaded, but web/mobile variants failed. Check console.");
+        }
+
+        info = Object.assign(
+            info,
+            {
+                authorPhotoUrl: info.authorPhotoUrl,
+                authorPhotoUrlOriginal: info.authorPhotoUrl,
+                authorPhotoPath: storagePath,
+                authorPhotoBucket: galleryArtworkStorageBucket,
+                authorPhotoOriginalName: file.name || "",
+                authorPhotoMimeType: file.type || "",
+                authorPhotoSize: file.size || 0,
+                authorPhotoUploadedAt: new Date().toISOString(),
+                authorName: authorNameForUpload,
+                authorId: getAuthorIdFromName(authorNameForUpload)
+            },
+            authorVariantState || {}
+        );
+
+        var authorRecord = upsertAuthorRecord({
+            id: info.authorId,
+            name: info.authorName,
+            photoUrl: info.authorPhotoUrl,
+            photoUrlOriginal: info.authorPhotoUrlOriginal,
+            photoUrlWeb: info.authorPhotoUrlWeb,
+            photoUrlMobile: info.authorPhotoUrlMobile,
+            photoUrlPreview: info.authorPhotoUrlPreview,
+            photoPath: info.authorPhotoPath,
+            photoPathWeb: info.authorPhotoPathWeb,
+            photoPathMobile: info.authorPhotoPathMobile,
+            photoPathPreview: info.authorPhotoPathPreview,
+            photoBucket: info.authorPhotoBucket,
+            photoOriginalName: info.authorPhotoOriginalName,
+            photoMimeType: info.authorPhotoMimeType,
+            photoMimeTypeWeb: info.authorPhotoMimeTypeWeb,
+            photoMimeTypeMobile: info.authorPhotoMimeTypeMobile,
+            photoMimeTypePreview: info.authorPhotoMimeTypePreview,
+            photoSize: info.authorPhotoSize,
+            photoSizeWeb: info.authorPhotoSizeWeb,
+            photoSizeMobile: info.authorPhotoSizeMobile,
+            photoSizePreview: info.authorPhotoSizePreview,
+            photoWidthWeb: info.authorPhotoWidthWeb,
+            photoHeightWeb: info.authorPhotoHeightWeb,
+            photoWidthMobile: info.authorPhotoWidthMobile,
+            photoHeightMobile: info.authorPhotoHeightMobile,
+            photoWidthPreview: info.authorPhotoWidthPreview,
+            photoHeightPreview: info.authorPhotoHeightPreview,
+            photoUploadedAt: info.authorPhotoUploadedAt,
+            photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt
+        });
+
+        if (authorRecord) {
+            syncSculptureInfoWithAuthor(slot, authorRecord);
+        } else {
+            setSculptureInfoState(slot, info);
+        }
+
+        if (sculptureInfoAuthorPhotoInput) {
+            sculptureInfoAuthorPhotoInput.value = info.authorPhotoUrlOriginal || info.authorPhotoUrl;
+        }
+
+        updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
+        updateArtworkInfoPopupContent(slot);
+        updateSculptureAuthorFoundUi(authorRecord);
+
+        if (
+            previousInfo.authorPhotoPath &&
+            previousInfo.authorPhotoPath !== storagePath
+        ) {
+            deleteAuthorPhotoFromSupabase(previousInfo)
+                .catch(function (error) {
+                    console.warn("Previous sculpture author photo delete warning:", error);
+                });
+        }
+
+        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Save state to keep the change.");
+        return true;
+    }
+
+    function applySculptureInfoFromUi() {
+        var slot = getSculptureInfoUiTarget();
+
+        if (!slot) {
+            notifyGalleryStatus("Select one sculpture/model slot to edit info.");
+            return;
+        }
+
+        var currentInfo = normalizeSculptureInfo(getSculptureInfoState(slot));
+        var previousPhotoUrl = currentInfo.authorPhotoUrl;
+
+        currentInfo.authorPhotoUrl = sculptureInfoAuthorPhotoInput.value.trim();
+        currentInfo.authorName = sculptureInfoAuthorInput.value.trim();
+        currentInfo.authorId = getAuthorIdFromName(currentInfo.authorName);
+        currentInfo.title = sculptureInfoTitleInput.value.trim();
+        currentInfo.description = sculptureInfoDescriptionInput.value.trim();
+
+        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            currentInfo.authorPhotoUrlOriginal = currentInfo.authorPhotoUrl;
+            currentInfo.authorPhotoUrlWeb = "";
+            currentInfo.authorPhotoUrlMobile = "";
+            currentInfo.authorPhotoUrlPreview = "";
+            currentInfo.authorPhotoPath = "";
+            currentInfo.authorPhotoPathWeb = "";
+            currentInfo.authorPhotoPathMobile = "";
+            currentInfo.authorPhotoPathPreview = "";
+            currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
+            currentInfo.authorPhotoOriginalName = "";
+            currentInfo.authorPhotoMimeType = "";
+            currentInfo.authorPhotoMimeTypeWeb = "";
+            currentInfo.authorPhotoMimeTypeMobile = "";
+            currentInfo.authorPhotoMimeTypePreview = "";
+            currentInfo.authorPhotoSize = 0;
+            currentInfo.authorPhotoSizeWeb = 0;
+            currentInfo.authorPhotoSizeMobile = 0;
+            currentInfo.authorPhotoSizePreview = 0;
+            currentInfo.authorPhotoUploadedAt = "";
+            currentInfo.authorPhotoVariantsGeneratedAt = "";
+            currentInfo.authorPhotoVariantsRebuiltAt = "";
+        }
+
+        if (currentInfo.authorId) {
+            var existingAuthor = getAuthorById(currentInfo.authorId);
+
+            if (existingAuthor && existingAuthor.photoUrl && !currentInfo.authorPhotoUrl) {
+                syncSculptureInfoWithAuthor(slot, existingAuthor);
+                currentInfo = getSculptureInfoState(slot);
+            } else {
+                upsertAuthorRecord({
+                    id: currentInfo.authorId,
+                    name: currentInfo.authorName,
+                    photoUrl: currentInfo.authorPhotoUrl,
+                    photoUrlOriginal: currentInfo.authorPhotoUrlOriginal || currentInfo.authorPhotoUrl,
+                    photoUrlWeb: currentInfo.authorPhotoUrlWeb,
+                    photoUrlMobile: currentInfo.authorPhotoUrlMobile,
+                    photoUrlPreview: currentInfo.authorPhotoUrlPreview,
+                    photoPath: currentInfo.authorPhotoPath,
+                    photoPathWeb: currentInfo.authorPhotoPathWeb,
+                    photoPathMobile: currentInfo.authorPhotoPathMobile,
+                    photoPathPreview: currentInfo.authorPhotoPathPreview,
+                    photoBucket: currentInfo.authorPhotoBucket,
+                    photoOriginalName: currentInfo.authorPhotoOriginalName,
+                    photoMimeType: currentInfo.authorPhotoMimeType,
+                    photoMimeTypeWeb: currentInfo.authorPhotoMimeTypeWeb,
+                    photoMimeTypeMobile: currentInfo.authorPhotoMimeTypeMobile,
+                    photoMimeTypePreview: currentInfo.authorPhotoMimeTypePreview,
+                    photoSize: currentInfo.authorPhotoSize,
+                    photoSizeWeb: currentInfo.authorPhotoSizeWeb,
+                    photoSizeMobile: currentInfo.authorPhotoSizeMobile,
+                    photoSizePreview: currentInfo.authorPhotoSizePreview,
+                    photoUploadedAt: currentInfo.authorPhotoUploadedAt,
+                    photoVariantsGeneratedAt: currentInfo.authorPhotoVariantsGeneratedAt,
+                    photoVariantsRebuiltAt: currentInfo.authorPhotoVariantsRebuiltAt
+                });
+
+                setSculptureInfoState(slot, currentInfo);
+            }
+        } else {
+            setSculptureInfoState(slot, currentInfo);
+        }
+
+        updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
+        updateArtworkInfoPopupContent(slot);
+        updateSculptureAuthorFoundUi(getAuthorById(currentInfo.authorId));
+        notifyGalleryStatus("Sculpture info updated. Save state to keep the change.");
+    }
+
+    sculptureInfoApplyButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        applySculptureInfoFromUi();
+    };
+
+    sculptureInfoClearButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var slot = getSculptureInfoUiTarget();
+
+        if (!slot) {
+            return;
+        }
+
+        setSculptureInfoState(slot, null);
+        updateSculptureInfoUi();
+        updateArtworkInfoPopupContent(slot);
+        notifyGalleryStatus("Sculpture info cleared. Save state to keep the change.");
+    };
+
+    sculptureInfoFindAuthorButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        findAndApplyAuthorForCurrentSculpture();
+    };
+
+    sculptureInfoUploadPhotoButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!getSculptureInfoUiTarget()) {
+            notifyGalleryStatus("Select one sculpture first.");
+            return;
+        }
+
+        sculptureInfoAuthorPhotoFileInput.value = "";
+        sculptureInfoAuthorPhotoFileInput.click();
+    };
+
+    sculptureInfoAuthorPhotoFileInput.onchange = function () {
+        var slot = getSculptureInfoUiTarget();
+        var file = sculptureInfoAuthorPhotoFileInput.files && sculptureInfoAuthorPhotoFileInput.files[0]
+            ? sculptureInfoAuthorPhotoFileInput.files[0]
+            : null;
+
+        if (!slot || !file) {
+            return;
+        }
+
+        uploadAuthorPhotoForSculpture(slot, file)
+            .catch(function (error) {
+                console.warn("Sculpture author photo upload failed:", error);
+                notifyGalleryStatus("Author photo upload failed.");
+            });
+    };
 
     var model3dTransformSectionData = createEditorSection("SCULPTURE TRANSFORM");
     model3dTransformSectionData.section.classList.add("gallery-artwork-transform-section", "is-hidden");
@@ -9787,7 +12401,7 @@ var pipeline = ensureVisualRenderingPipeline();
         model3dTransformRotationRow.value.innerText = transformState.rotationDegrees + "°";
     }
 
-    function applyModel3dTransformSliderValues(shouldNotify) {
+    function applyModel3dTransformSliderValues(shouldNotify, isLiveInput) {
         if (!selectedSphere && activeModel3dSlot) {
             selectedSphere = activeModel3dSlot;
         }
@@ -9809,7 +12423,7 @@ var pipeline = ensureVisualRenderingPipeline();
     model3dTransformScaleRow.input.addEventListener("input", function (event) {
         event.preventDefault();
         event.stopPropagation();
-        applyModel3dTransformSliderValues(false);
+        scheduleModel3dTransformSliderPreview();
     });
 
     model3dTransformScaleRow.input.addEventListener("change", function (event) {
@@ -9821,7 +12435,7 @@ var pipeline = ensureVisualRenderingPipeline();
     model3dTransformRotationRow.input.addEventListener("input", function (event) {
         event.preventDefault();
         event.stopPropagation();
-        applyModel3dTransformSliderValues(false);
+        scheduleModel3dTransformSliderPreview();
     });
 
     model3dTransformRotationRow.input.addEventListener("change", function (event) {
@@ -10268,6 +12882,18 @@ var pipeline = ensureVisualRenderingPipeline();
             }
 
             var info = getArtworkInfoState(artwork);
+
+            if (info && info.authorId === authorId) {
+                count++;
+            }
+        });
+
+        artSpheres.forEach(function (slot) {
+            if (!slot || slot === exceptArtwork || (slot.isDisposed && slot.isDisposed())) {
+                return;
+            }
+
+            var info = getSculptureInfoState(slot);
 
             if (info && info.authorId === authorId) {
                 count++;
@@ -10882,21 +13508,24 @@ var pipeline = ensureVisualRenderingPipeline();
         artworkTransformRotationRow.value.innerText = transformState.rotationDegrees + "°";
     }
 
-    function applyArtworkTransformSliderValues(shouldNotify) {
+    function applyArtworkTransformSliderValues(shouldNotify, isLiveInput) {
         var scaleValue = Number(artworkTransformScaleRow.input.value) / 100;
         var rotationValue = Number(artworkTransformRotationRow.input.value);
 
         setSelectedArtworkTransform(
             scaleValue,
             rotationValue,
-            !!shouldNotify
+            !!shouldNotify,
+            {
+                deferHeavy: !!isLiveInput
+            }
         );
     }
 
     artworkTransformScaleRow.input.addEventListener("input", function (event) {
         event.preventDefault();
         event.stopPropagation();
-        applyArtworkTransformSliderValues(false);
+        scheduleArtworkTransformSliderPreview();
     });
 
     artworkTransformScaleRow.input.addEventListener("change", function (event) {
@@ -10908,7 +13537,7 @@ var pipeline = ensureVisualRenderingPipeline();
     artworkTransformRotationRow.input.addEventListener("input", function (event) {
         event.preventDefault();
         event.stopPropagation();
-        applyArtworkTransformSliderValues(false);
+        scheduleArtworkTransformSliderPreview();
     });
 
     artworkTransformRotationRow.input.addEventListener("change", function (event) {
@@ -10921,6 +13550,280 @@ var pipeline = ensureVisualRenderingPipeline();
         event.preventDefault();
         event.stopPropagation();
         resetSelectedArtworkTransform();
+    };
+
+
+    // STAGE 12C32 - SHARED FOCUS CAMERA UI FOR ARTWORKS AND SCULPTURES
+    var focusCameraSectionData = createEditorSection("FOCUS CAMERA");
+    focusCameraSectionData.section.classList.add("gallery-artwork-transform-section", "is-hidden");
+
+    var focusCameraManualLabel = document.createElement("label");
+    focusCameraManualLabel.className = "gallery-lighting-checkbox-row";
+
+    var focusCameraManualInput = document.createElement("input");
+    focusCameraManualInput.type = "checkbox";
+
+    var focusCameraManualText = document.createElement("span");
+    focusCameraManualText.innerText = "Use Custom Focus View";
+
+    focusCameraManualLabel.appendChild(focusCameraManualInput);
+    focusCameraManualLabel.appendChild(focusCameraManualText);
+
+    var focusCameraGrid = document.createElement("div");
+    focusCameraGrid.className = "gallery-artwork-transform-grid";
+
+    var focusCameraDistanceRow = createArtworkTransformSliderRow("Front / Back", -150, 250, 5);
+    var focusCameraVerticalRow = createArtworkTransformSliderRow("Up / Down", -180, 180, 2);
+    var focusCameraViewAngleRow = createArtworkTransformSliderRow("View Angle", -45, 45, 1);
+
+    focusCameraGrid.appendChild(focusCameraDistanceRow.row);
+    focusCameraGrid.appendChild(focusCameraVerticalRow.row);
+    focusCameraGrid.appendChild(focusCameraViewAngleRow.row);
+
+    var focusCameraActions = document.createElement("div");
+    focusCameraActions.className = "gallery-artwork-image-actions";
+
+    var focusCameraTestButton = document.createElement("button");
+    focusCameraTestButton.type = "button";
+    focusCameraTestButton.className = "gallery-editor-action-button is-primary";
+    focusCameraTestButton.innerText = "LIVE PREVIEW";
+
+    var focusCameraResetButton = document.createElement("button");
+    focusCameraResetButton.type = "button";
+    focusCameraResetButton.className = "gallery-editor-action-button";
+    focusCameraResetButton.innerText = "RESET";
+
+    // STAGE 12C37: slider edits preview live, so the old TEST FOCUS button is no longer shown.
+    focusCameraTestButton.style.display = "none";
+    focusCameraActions.appendChild(focusCameraResetButton);
+
+    var focusCameraNote = document.createElement("p");
+    focusCameraNote.className = "gallery-artwork-image-note";
+    focusCameraNote.innerText = "Auto framing uses visible bounds. Custom view only adds offsets to the automatic frame. Front/Back changes only distance. Up/Down changes only physical camera height. View Angle changes only camera pitch/rotation, without changing camera position or distance. Popup distance follows this focus frame.";
+
+    focusCameraSectionData.section.appendChild(focusCameraManualLabel);
+    focusCameraSectionData.section.appendChild(focusCameraGrid);
+    focusCameraSectionData.section.appendChild(focusCameraActions);
+    focusCameraSectionData.section.appendChild(focusCameraNote);
+    editorScroll.appendChild(focusCameraSectionData.section);
+
+    function getFocusCameraUiTarget() {
+        if (selectedArtworks.length === 1) {
+            return {
+                type: "artwork",
+                object: selectedArtworks[0]
+            };
+        }
+
+        if (selectedSculptures.length === 1) {
+            return {
+                type: "sculpture",
+                object: selectedSculptures[0]
+            };
+        }
+
+        return null;
+    }
+
+    function setFocusCameraSliderRowEnabled(row, enabled) {
+        if (!row || !row.input) {
+            return;
+        }
+
+        row.input.disabled = !enabled;
+        row.row.style.opacity = enabled ? "" : "0.48";
+    }
+
+    function setFocusCameraMeterRowValue(row, value) {
+        var centimeters = Math.round(Number(value || 0) * 100);
+        row.input.value = String(centimeters);
+        row.value.innerText = (centimeters / 100).toFixed(2) + "m";
+    }
+
+    function getFocusCameraMeterRowValue(row) {
+        return Number(row.input.value || 0) / 100;
+    }
+
+    function setFocusCameraAngleRowValue(row, value) {
+        var degrees = Math.round(Number(value || 0));
+        row.input.value = String(degrees);
+        row.value.innerText = degrees + "°";
+    }
+
+    function getFocusCameraAngleRowValue(row) {
+        return Number(row.input.value || 0);
+    }
+
+    function updateFocusCameraUi() {
+        if (!focusCameraSectionData || !focusCameraSectionData.section) {
+            return;
+        }
+
+        var target = getFocusCameraUiTarget();
+        var isVisible = !!(editMode && target && target.object);
+
+        focusCameraSectionData.section.classList.toggle("is-hidden", !isVisible);
+
+        focusCameraManualInput.disabled = !isVisible;
+        focusCameraTestButton.disabled = !isVisible;
+        focusCameraResetButton.disabled = !isVisible;
+
+        if (!isVisible) {
+            setFocusCameraSliderRowEnabled(focusCameraDistanceRow, false);
+            setFocusCameraSliderRowEnabled(focusCameraVerticalRow, false);
+            setFocusCameraSliderRowEnabled(focusCameraViewAngleRow, false);
+            focusCameraManualInput.checked = false;
+            return;
+        }
+
+        var state = getGalleryObjectFocusCameraState(target.object);
+        var useCustomOffset = !!state.useCustomOffset;
+
+        focusCameraManualInput.checked = useCustomOffset;
+        setFocusCameraMeterRowValue(focusCameraDistanceRow, state.distanceOffset);
+        setFocusCameraMeterRowValue(focusCameraVerticalRow, state.cameraHeightOffset);
+        setFocusCameraAngleRowValue(focusCameraViewAngleRow, state.viewPitchDegrees);
+
+        setFocusCameraSliderRowEnabled(focusCameraDistanceRow, useCustomOffset);
+        setFocusCameraSliderRowEnabled(focusCameraVerticalRow, useCustomOffset);
+        setFocusCameraSliderRowEnabled(focusCameraViewAngleRow, useCustomOffset);
+    }
+
+    var focusCameraLivePreviewFrame = null;
+
+    function runFocusCameraLivePreview() {
+        focusCameraLivePreviewFrame = null;
+
+        var target = getFocusCameraUiTarget();
+
+        if (!target || !target.object) {
+            return;
+        }
+
+        // STAGE 12C37:
+        // UI preview must show the exact current slider result immediately.
+        // Bypass safe-path animation here; safe path is for normal viewer focus movement,
+        // not for interactive slider tuning in the editor panel.
+        focusCameraOnObject(target.object, {
+            immediate: true,
+            skipSafePath: true,
+            fromFocusCameraUi: true
+        });
+    }
+
+    function scheduleFocusCameraLivePreview() {
+        if (focusCameraLivePreviewFrame !== null && typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(focusCameraLivePreviewFrame);
+            focusCameraLivePreviewFrame = null;
+        }
+
+        if (typeof requestAnimationFrame === "function") {
+            focusCameraLivePreviewFrame = requestAnimationFrame(runFocusCameraLivePreview);
+            return;
+        }
+
+        setTimeout(runFocusCameraLivePreview, 0);
+    }
+
+    function applyFocusCameraUiValues(shouldNotify, shouldPreview) {
+        var target = getFocusCameraUiTarget();
+
+        if (!target || !target.object) {
+            return;
+        }
+
+        var state = normalizeGalleryObjectFocusCameraState({
+            schema: galleryObjectFocusStateSchema,
+            useCustomOffset: focusCameraManualInput.checked,
+            distanceOffset: getFocusCameraMeterRowValue(focusCameraDistanceRow),
+            cameraHeightOffset: getFocusCameraMeterRowValue(focusCameraVerticalRow),
+            viewPitchDegrees: getFocusCameraAngleRowValue(focusCameraViewAngleRow)
+        });
+
+        setGalleryObjectFocusCameraState(target.object, state);
+        updateFocusCameraUi();
+
+        if (shouldPreview) {
+            scheduleFocusCameraLivePreview();
+        }
+
+        if (shouldNotify) {
+            notifyGalleryStatus("Updated focus camera settings. Save state to keep the change.");
+        }
+    }
+
+    focusCameraManualInput.addEventListener("change", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var target = getFocusCameraUiTarget();
+
+        if (!target || !target.object) {
+            return;
+        }
+
+        // STAGE 12C42:
+        // The checkbox only enables/disables custom offsets. It must not throw the camera anywhere.
+        // If enabling custom view for the first time, start from zero offsets.
+        var currentState = getGalleryObjectFocusCameraState(target.object);
+        var nextState = normalizeGalleryObjectFocusCameraState({
+            schema: galleryObjectFocusStateSchema,
+            useCustomOffset: focusCameraManualInput.checked,
+            distanceOffset: focusCameraManualInput.checked ? currentState.distanceOffset : 0,
+            cameraHeightOffset: focusCameraManualInput.checked ? currentState.cameraHeightOffset : 0,
+            viewPitchDegrees: focusCameraManualInput.checked ? currentState.viewPitchDegrees : 0
+        });
+
+        setGalleryObjectFocusCameraState(target.object, nextState);
+        updateFocusCameraUi();
+        notifyGalleryStatus(focusCameraManualInput.checked ? "Custom focus view enabled. Move a slider to preview." : "Custom focus view disabled.");
+    });
+
+    [
+        focusCameraDistanceRow,
+        focusCameraVerticalRow,
+        focusCameraViewAngleRow
+    ].forEach(function (row) {
+        row.input.addEventListener("input", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            applyFocusCameraUiValues(false, true);
+        });
+
+        row.input.addEventListener("change", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            applyFocusCameraUiValues(true, true);
+        });
+    });
+
+    focusCameraResetButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var target = getFocusCameraUiTarget();
+
+        if (!target || !target.object) {
+            return;
+        }
+
+        resetGalleryObjectFocusCameraState(target.object);
+        updateFocusCameraUi();
+        scheduleFocusCameraLivePreview();
+        notifyGalleryStatus("Focus camera offset reset. Save state to keep the change.");
+    };
+
+    focusCameraTestButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        var target = getFocusCameraUiTarget();
+
+        if (!target || !target.object) {
+            return;
+        }
+
+        applyFocusCameraUiValues(false, true);
     };
 
     artworkImageUploadButton.onclick = function (event) {
@@ -11331,15 +14234,10 @@ var pipeline = ensureVisualRenderingPipeline();
     // STAGE 12C2 - MODEL / SCULPTURE OBJECT SELECTION GLOW
     // Rzeźby i sloty modeli nie używają już płaskiego rectangular plane jak obrazy.
     // Highlight idzie po sylwetce/krawędziach całego zaznaczonego obiektu.
-    var model3dSelectionHighlightLayer = new BABYLON.HighlightLayer(
-        "Model3dSelectionHighlightLayer",
-        scene
-    );
-    model3dSelectionHighlightLayer.outerGlow = true;
-    model3dSelectionHighlightLayer.innerGlow = false;
-    model3dSelectionHighlightLayer.blurHorizontalSize = 1.55;
-    model3dSelectionHighlightLayer.blurVerticalSize = 1.55;
-
+    // STAGE 12C29:
+    // Rzezby nie korzystaja juz z osobnego HighlightLayer/renderOutline/overlay.
+    // Zostaje jeden selection visual: EdgesRenderer w kolorze zgodnym z artwork glow.
+    var model3dSelectionHighlightLayer = null;
     var model3dSelectionGlowColor = new BABYLON.Color3(1, 1, 1);
 
     var localLightUiRefs = {
@@ -11381,6 +14279,23 @@ var pipeline = ensureVisualRenderingPipeline();
         );
     }
 
+
+    // STAGE 12C46 - LIGHT / LOOK FINAL RESPONSIBILITY
+    // Lighting UI helpers are shared by MAIN LIGHT and VISUAL LOOK sections.
+    // A control key starting with "visual" must never persist/sync Main Light state.
+    function persistLightingUiControlState(controlKey) {
+        if (typeof controlKey === "string" && controlKey.indexOf("visual") === 0) {
+            if (typeof persistCurrentVisualSettings === "function") {
+                persistCurrentVisualSettings();
+            }
+            return;
+        }
+
+        if (typeof persistCurrentLightingSettings === "function") {
+            persistCurrentLightingSettings();
+        }
+    }
+
     function createLightingSection(title) {
         var section = document.createElement("section");
         section.className = "gallery-lighting-section";
@@ -11418,7 +14333,7 @@ var pipeline = ensureVisualRenderingPipeline();
             var parsedValue = parseFloat(input.value);
             valueLabel.innerText = parsedValue.toFixed(decimals);
             onInput(parsedValue);
-            persistCurrentLightingSettings();
+            persistLightingUiControlState(key);
         };
 
         row.appendChild(label);
@@ -11452,7 +14367,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         input.onchange = function () {
             onChange(input.checked);
-            persistCurrentLightingSettings();
+            persistLightingUiControlState(key);
         };
 
         label.appendChild(input);
@@ -11484,7 +14399,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         input.oninput = function () {
             onInput(hexToColor3(input.value));
-            persistCurrentLightingSettings();
+            persistLightingUiControlState(key);
         };
 
         row.appendChild(label);
@@ -11895,7 +14810,7 @@ var pipeline = ensureVisualRenderingPipeline();
             disableLocalPointLightShadow(item);
         }
 
-        applyCommonLocalLightTargets(item);
+        applyCommonLocalLightTargets(item, "restoreState");
         updateLocalLightHelper(item);
         updateLocalLightVisualState(item);
         requestLocalSpotShadowRefresh(item, true);
@@ -12149,7 +15064,45 @@ var pipeline = ensureVisualRenderingPipeline();
         }
     };
 
-    function updateLocalLightAfterParameterChange(item, forceShadowRefresh) {
+    function clearLocalLightParameterFinalCommit(item) {
+        if (!item || !item._localLightParameterFinalCommitTimer) {
+            return;
+        }
+
+        clearTimeout(item._localLightParameterFinalCommitTimer);
+        item._localLightParameterFinalCommitTimer = null;
+    }
+
+    function scheduleLocalLightParameterFinalCommit(item, reason, delayMs) {
+        if (!item || item.softDeleted || !item.light) {
+            return;
+        }
+
+        clearLocalLightParameterFinalCommit(item);
+
+        localLightControlFinalCommitSequence += 1;
+        var stagger = (localLightControlFinalCommitSequence % 4) * localLightControlFinalCommitStaggerMs;
+        var delay = Math.max(0, Number(delayMs != null ? delayMs : localLightControlFinalCommitDelayMs) || 0) + stagger;
+
+        localLightTargetDebugStats.parameterFinalScheduled += 1;
+        item._localLightParameterFinalCommitReason = reason || "parameterIdle";
+
+        item._localLightParameterFinalCommitTimer = setTimeout(function () {
+            item._localLightParameterFinalCommitTimer = null;
+
+            if (!item || item.softDeleted || !item.light) {
+                return;
+            }
+
+            localLightTargetDebugStats.parameterFinalCommits += 1;
+            updateLocalLightAfterParameterChange(item, true, {
+                fromScheduledCommit: true,
+                reason: item._localLightParameterFinalCommitReason || reason || "parameterIdle"
+            });
+        }, delay);
+    }
+
+    function updateLocalLightAfterParameterChange(item, forceShadowRefresh, options) {
         if (!item || !item.light) {
             return;
         }
@@ -12174,9 +15127,41 @@ var pipeline = ensureVisualRenderingPipeline();
             }
         }
 
-        updateLocalLightHelper(item);
+        options = options || {};
+
+        // Helper/range guide can update during live slider motion, but heavy segment retargeting cannot.
+        scheduleLocalLightHelperUpdateDuringDrag(item, !!forceShadowRefresh);
         updateLocalLightVisualState(item);
-        requestLocalSpotShadowRefresh(item, !!forceShadowRefresh);
+
+        if (!forceShadowRefresh) {
+            // STAGE 12C52:
+            // Live parameter preview should not rebuild includedOnlyMeshes, wall/ceiling/floor segment targets or shadows.
+            // It only updates the actual light value and helper preview, then schedules one final commit after idle.
+            localLightTargetDebugStats.parameterPreviewSkippedTargets += 1;
+            scheduleLocalLightParameterFinalCommit(item, options.reason || "parameterPreviewIdle");
+            return;
+        }
+
+        clearLocalLightParameterFinalCommit(item);
+
+        // Final commit is still deferred through the per-light queue instead of forcing an immediate rebuild.
+        // This keeps the UI responsive when the user releases a slider or changes several controls quickly.
+        scheduleCommonLocalLightTargetsForItem(item, {
+            reason: options.reason || "parameterFinal",
+            preview: false,
+            force: false
+        });
+
+        if (item.type === "spot") {
+            // Shadow map refresh is delayed slightly after target rebuild to avoid a single-frame spike.
+            setTimeout(function () {
+                if (!item || item.softDeleted || !item.light) {
+                    return;
+                }
+
+                requestLocalSpotShadowRefresh(item, true);
+            }, 120);
+        }
     }
 
     function updateLocalLightMarkerColor(item, color) {
@@ -12207,6 +15192,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
             if (key === "enabled") {
                 item.userEnabled = !!value;
+                markLocalLightCameraCullingDirty();
                 applyLocalLightRuntimeEnabled(item);
             } else if (key === "color") {
                 var color = hexToColor3(value);
@@ -12215,8 +15201,10 @@ var pipeline = ensureVisualRenderingPipeline();
                 updateLocalLightMarkerColor(item, color);
             } else if (key === "intensity") {
                 setLocalLightUserIntensity(item, value);
+                markLocalLightCameraCullingDirty();
             } else if (key === "range") {
                 item.light.range = Math.max(0.1, Number(value));
+                markLocalLightCameraCullingDirty();
                 needsGeometryUpdate = true;
             } else if (key === "spotAngle") {
                 if (item.type === "spot") {
@@ -12234,27 +15222,21 @@ var pipeline = ensureVisualRenderingPipeline();
                 }
             } else if (key === "targetFloor") {
                 setLocalTargetOption(item, "floor", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             } else if (key === "targetWalls") {
                 setLocalTargetOption(item, "walls", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             } else if (key === "targetCeiling") {
                 setLocalTargetOption(item, "ceiling", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             } else if (key === "targetArtworks") {
                 setLocalTargetOption(item, "artworks", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             } else if (key === "targetSculptures") {
                 setLocalTargetOption(item, "sculptures", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             } else if (key === "targetProps") {
                 setLocalTargetOption(item, "props", value);
-                applyCommonLocalLightTargets(item);
                 needsGeometryUpdate = true;
             }
 
@@ -12298,11 +15280,12 @@ var pipeline = ensureVisualRenderingPipeline();
             valueLabel.classList.remove("is-mixed");
             valueLabel.innerText = parsedValue.toFixed(decimals) + (suffix || "");
 
-            applyLocalLightControlValue(key, parsedValue, typeFilter || null, false);
+            applyLocalLightControlValue(key, parsedValue, typeFilter || null, false, true);
         };
 
         input.onchange = function () {
-            applyLocalLightControlValue(key, parseFloat(input.value), typeFilter || null, true);
+            // STAGE 12C52: release/change still commits through the idle pipeline instead of immediate retarget.
+            applyLocalLightControlValue(key, parseFloat(input.value), typeFilter || null, false);
         };
 
         row.appendChild(label);
@@ -12345,7 +15328,8 @@ var pipeline = ensureVisualRenderingPipeline();
 
         input.onchange = function () {
             input.indeterminate = false;
-            applyLocalLightControlValue(key, input.checked, typeFilter || null, true);
+            // STAGE 12C52: target toggles are committed after idle to avoid UI hitches.
+            applyLocalLightControlValue(key, input.checked, typeFilter || null, false);
         };
 
         label.appendChild(input);
@@ -12714,8 +15698,7 @@ var pipeline = ensureVisualRenderingPipeline();
             disableLocalPointLightShadow(item);
         }
 
-        updateLocalLightHelper(item);
-        updateLocalLightVisualState(item);
+        scheduleLocalLightHelperUpdateDuringDrag(item, !!forceShadowRefresh);
 
         requestDynamicWallSegmentRetargetForLocalLight(
             item,
@@ -12723,11 +15706,13 @@ var pipeline = ensureVisualRenderingPipeline();
             forceShadowRefresh ? "dragEnd" : "drag"
         );
 
-        if (item.type === "spot") {
-            requestLocalSpotShadowRefresh(item, !!forceShadowRefresh);
+        if (item.type === "spot" && forceShadowRefresh) {
+            requestLocalSpotShadowRefresh(item, true);
         }
 
-        schedulePersistLocalLightState(false);
+        if (forceShadowRefresh) {
+            schedulePersistLocalLightState(false);
+        }
     }
 
     function ensureLocalLightGizmoManager() {
@@ -13208,6 +16193,9 @@ var pipeline = ensureVisualRenderingPipeline();
         item.runtimeTargetIntensity = 0;
         item.runtimeCurrentIntensity = 0;
         item.targetOptions = normalizeLocalTargetOptions(null);
+        if (isPoint) {
+            item.targetOptions.ceiling = true;
+        }
         item.localShadowGenerator = null;
         item.helperMesh = null;
         item.helperMeshes = [];
@@ -13265,12 +16253,11 @@ var pipeline = ensureVisualRenderingPipeline();
 
         localLightItems.push(item);
 
-        refreshCommonLightingMaterialSupport();
-        applyCommonLocalLightTargets(item);
+        applyInitialLocalLightSpawnTargets(item);
         disableLocalPointLightShadow(item);
-        ensureCommonLightShadowLogic(item);
         updateLocalLightHelper(item);
         applyLocalLightRuntimeEnabled(item);
+        scheduleDeferredLocalLightSpawnSetup(item, "reuseDeferred");
         updateLocalLightsUi();
         updateViewerModePlaceholderVisibility();
 
@@ -13537,6 +16524,75 @@ var pipeline = ensureVisualRenderingPipeline();
         return coneDirection.normalize();
     }
 
+
+    // STAGE 12C48 - LOCAL LIGHT HELPER REUSE
+    // The old helper path disposed and recreated line meshes during updates. Reusing the
+    // same LineSystem instance removes a visible hitch while moving light gizmos.
+    function isReusableLocalLightHelperMesh(mesh, expectedTag) {
+        return !!(
+            mesh &&
+            (!mesh.isDisposed || !mesh.isDisposed()) &&
+            mesh.metadata &&
+            mesh.metadata.localLightHelperTag === expectedTag
+        );
+    }
+
+    function createOrUpdateLocalLightLineSystem(item, index, tag, name, lines, color) {
+        var existingMesh = item && item.helperMeshes && item.helperMeshes[index]
+            ? item.helperMeshes[index]
+            : null;
+        var canReuse = isReusableLocalLightHelperMesh(existingMesh, tag);
+        var options = {
+            lines: lines,
+            updatable: true
+        };
+
+        if (canReuse) {
+            options.instance = existingMesh;
+        }
+
+        var mesh = null;
+
+        try {
+            mesh = BABYLON.MeshBuilder.CreateLineSystem(
+                name,
+                options,
+                scene
+            );
+        } catch (error) {
+            if (existingMesh && existingMesh.dispose) {
+                try {
+                    existingMesh.dispose();
+                } catch (disposeError) {}
+            }
+
+            mesh = BABYLON.MeshBuilder.CreateLineSystem(
+                name,
+                {
+                    lines: lines,
+                    updatable: true
+                },
+                scene
+            );
+            canReuse = false;
+        }
+
+        mesh.color = color;
+        mesh.isPickable = false;
+        mesh.isVisible = false;
+        mesh.metadata = mesh.metadata || {};
+        mesh.metadata.localLightHelperFor = item.id;
+        mesh.metadata.localLightHelperTag = tag;
+
+        if (canReuse) {
+            localLightTargetDebugStats.helperReused += 1;
+        } else {
+            localLightTargetDebugStats.helperRecreated += 1;
+        }
+
+        return mesh;
+    }
+
     function createSpotLightHelperLines(item) {
         if (!item || !item.light || item.type !== "spot") {
             return null;
@@ -13575,7 +16631,7 @@ var pipeline = ensureVisualRenderingPipeline();
         var blendLines = [];
         var outerPoints = [];
         var innerPoints = [];
-        var segments = 32;
+        var segments = 20;
 
         for (var i = 0; i < segments; i++) {
             var t = (Math.PI * 2 * i) / segments;
@@ -13645,34 +16701,24 @@ var pipeline = ensureVisualRenderingPipeline();
 
         outerLines.push([position, centerPoint]);
 
-        var outerMesh = BABYLON.MeshBuilder.CreateLineSystem(
+        var outerMesh = createOrUpdateLocalLightLineSystem(
+            item,
+            0,
+            "spotOuter",
             item.id + "_HelperConeAngle",
-            {
-                lines: outerLines
-            },
-            scene
-        );
-
-        outerMesh.color = new BABYLON.Color3(1.0, 0.78, 0.18);
-        outerMesh.isPickable = false;
-        outerMesh.isVisible = false;
-        outerMesh.metadata = outerMesh.metadata || {};
-        outerMesh.metadata.localLightHelperFor = item.id;
-
-        var blendMesh = BABYLON.MeshBuilder.CreateLineSystem(
-            item.id + "_HelperConeBlend",
-            {
-                lines: blendLines
-            },
-            scene
+            outerLines,
+            new BABYLON.Color3(1.0, 0.78, 0.18)
         );
 
         // Blend jest celowo jasniejszy, zeby nie znikal na tle zoltego Angle.
-        blendMesh.color = new BABYLON.Color3(0.35, 0.95, 1.0);
-        blendMesh.isPickable = false;
-        blendMesh.isVisible = false;
-        blendMesh.metadata = blendMesh.metadata || {};
-        blendMesh.metadata.localLightHelperFor = item.id;
+        var blendMesh = createOrUpdateLocalLightLineSystem(
+            item,
+            1,
+            "spotBlend",
+            item.id + "_HelperConeBlend",
+            blendLines,
+            new BABYLON.Color3(0.35, 0.95, 1.0)
+        );
 
         item.helperMeshes = [outerMesh, blendMesh];
 
@@ -13717,7 +16763,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var position = getLocalLightWorldPosition(item);
         var rangeLines = [];
-        var segments = 40;
+        var segments = 24;
 
         function circlePoint(axis, angle) {
             var c = Math.cos(angle) * radius;
@@ -13744,19 +16790,14 @@ var pipeline = ensureVisualRenderingPipeline();
             }
         });
 
-        var rangeMesh = BABYLON.MeshBuilder.CreateLineSystem(
+        var rangeMesh = createOrUpdateLocalLightLineSystem(
+            item,
+            0,
+            "pointRange",
             item.id + "_HelperPointRange",
-            {
-                lines: rangeLines
-            },
-            scene
+            rangeLines,
+            new BABYLON.Color3(0.35, 0.95, 1.0)
         );
-
-        rangeMesh.color = new BABYLON.Color3(0.35, 0.95, 1.0);
-        rangeMesh.isPickable = false;
-        rangeMesh.isVisible = false;
-        rangeMesh.metadata = rangeMesh.metadata || {};
-        rangeMesh.metadata.localLightHelperFor = item.id;
 
         item.helperMeshes = [rangeMesh];
 
@@ -13768,12 +16809,85 @@ var pipeline = ensureVisualRenderingPipeline();
             return;
         }
 
-        disposeLocalLightHelper(item);
+        // STAGE 12C48:
+        // Reuse existing helper line meshes when the helper type is unchanged.
+        // Only dispose when switching between spot and point or when helper metadata is incompatible.
+        var expectedFirstTag = item.type === "spot" ? "spotOuter" : item.type === "point" ? "pointRange" : "";
+        var firstHelper = item.helperMeshes && item.helperMeshes[0] ? item.helperMeshes[0] : null;
+
+        if (
+            firstHelper &&
+            firstHelper.metadata &&
+            firstHelper.metadata.localLightHelperTag &&
+            firstHelper.metadata.localLightHelperTag !== expectedFirstTag
+        ) {
+            disposeLocalLightHelper(item);
+        }
 
         if (item.type === "spot") {
             item.helperMesh = createSpotLightHelperLines(item);
         } else if (item.type === "point") {
             item.helperMesh = createPointLightHelperLines(item);
+        }
+    }
+
+    function updateLocalLightHelperMeasured(item, reason) {
+        var start = getGalleryPerformanceNow();
+
+        updateLocalLightHelper(item);
+
+        localLightTargetDebugStats.helperPreviewMs = Math.round((getGalleryPerformanceNow() - start) * 100) / 100;
+        localLightTargetDebugStats.lastReason = reason || localLightTargetDebugStats.lastReason || "helperUpdate";
+    }
+
+    function scheduleLocalLightHelperUpdateDuringDrag(item, finalUpdate) {
+        if (!item || item.softDeleted) {
+            return;
+        }
+
+        if (finalUpdate) {
+            localLightGizmoPreviewHelperPending = false;
+            localLightGizmoPreviewHelperItem = null;
+            updateLocalLightHelperMeasured(item, "gizmoHelperFinal");
+            updateLocalLightVisualState(item);
+            return;
+        }
+
+        var now = getGalleryPerformanceNow();
+
+        if (now - localLightGizmoPreviewHelperLastTime < localLightGizmoPreviewHelperThrottleMs) {
+            localLightTargetDebugStats.helperPreviewSkipped += 1;
+            return;
+        }
+
+        localLightGizmoPreviewHelperLastTime = now;
+        localLightGizmoPreviewHelperItem = item;
+
+        if (localLightGizmoPreviewHelperPending) {
+            return;
+        }
+
+        localLightGizmoPreviewHelperPending = true;
+
+        var runPreviewHelper = function () {
+            var helperItem = localLightGizmoPreviewHelperItem;
+
+            localLightGizmoPreviewHelperPending = false;
+            localLightGizmoPreviewHelperItem = null;
+
+            if (!helperItem || helperItem.softDeleted) {
+                return;
+            }
+
+            localLightTargetDebugStats.helperPreviewUpdated += 1;
+            updateLocalLightHelperMeasured(helperItem, "gizmoHelperPreview");
+            updateLocalLightVisualState(helperItem);
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runPreviewHelper);
+        } else {
+            setTimeout(runPreviewHelper, 0);
         }
     }
 
@@ -13903,6 +17017,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         item.userEnabled = !!isEnabled;
+        markLocalLightCameraCullingDirty();
         applyLocalLightRuntimeEnabled(item);
 
         if (item.type === "point") {
@@ -14045,6 +17160,126 @@ var pipeline = ensureVisualRenderingPipeline();
         updateLocalLightGizmoAttachment();
     }
 
+
+    // STAGE 12C51 - LOCAL LIGHT SPAWN DEFER
+    // New lights start with a tiny safe includedOnlyMeshes list, so an empty list never means "light the whole scene".
+    // Expensive material support / full target rebuild / shadows are deferred past the spawn frame.
+    var localLightDeferredSpawnQueue = [];
+    var localLightDeferredSpawnPending = false;
+
+    function getInitialLocalLightSpawnTargets(item) {
+        var targets = [];
+
+        if (!item) {
+            return targets;
+        }
+
+        if (item.ownerMesh) {
+            addMeshUnique(targets, item.ownerMesh);
+        }
+
+        if (item.markerMesh) {
+            addMeshUnique(targets, item.markerMesh);
+        }
+
+        var quarantineDummy = getLocalLightQuarantineDummyMesh ? getLocalLightQuarantineDummyMesh() : null;
+
+        if (!targets.length && quarantineDummy) {
+            addMeshUnique(targets, quarantineDummy);
+        }
+
+        return targets;
+    }
+
+    function applyInitialLocalLightSpawnTargets(item) {
+        if (!item || !item.light) {
+            return;
+        }
+
+        setLocalLightIncludedMeshesIfChanged(
+            item,
+            getInitialLocalLightSpawnTargets(item),
+            "registerMinimal"
+        );
+    }
+
+    var localLightSpawnTargetDelayMs = 180;
+    var localLightSpawnMaterialDelayMs = 420;
+    var localLightSpawnShadowDelayMs = 700;
+
+    function scheduleDeferredLocalLightSpawnSetup(item, reason) {
+        if (!item || item.softDeleted) {
+            return;
+        }
+
+        if (localLightDeferredSpawnQueue.indexOf(item) === -1) {
+            localLightDeferredSpawnQueue.push(item);
+        }
+
+        if (localLightDeferredSpawnPending) {
+            return;
+        }
+
+        localLightDeferredSpawnPending = true;
+
+        var schedule = function (fn, delay) {
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(function () {
+                    setTimeout(fn, delay);
+                });
+            } else {
+                setTimeout(fn, delay + 16);
+            }
+        };
+
+        schedule(function () {
+            var queue = localLightDeferredSpawnQueue.slice();
+            localLightDeferredSpawnQueue.length = 0;
+            localLightDeferredSpawnPending = false;
+
+            // Accurate targets first, but only after the spawn frame. This avoids the visible FPS drop
+            // at the exact moment the marker/light is created.
+            measureGalleryPerformanceMetric("localLightSpawnTargetMs", function () {
+                queue.forEach(function (queuedItem) {
+                    if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
+                        return;
+                    }
+
+                    refreshCommonLocalLightTargetsForItemImmediate(
+                        queuedItem,
+                        reason || "registerDeferredTargets",
+                        false
+                    );
+
+                    if (queuedItem.type !== "spot") {
+                        disableLocalPointLightShadow(queuedItem);
+                    }
+                });
+            });
+
+            // Material support and shadows are intentionally separated from targeting. Doing all three
+            // in one frame was the remaining create Point/Spot drop.
+            setTimeout(function () {
+                scheduleCommonLightingMaterialSupport(reason || "localLightSpawnDeferredMaterial");
+            }, localLightSpawnMaterialDelayMs);
+
+            setTimeout(function () {
+                queue.forEach(function (queuedItem) {
+                    if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
+                        return;
+                    }
+
+                    if (queuedItem.type === "spot") {
+                        ensureCommonLightShadowLogic(queuedItem);
+                        requestLocalSpotShadowRefresh(queuedItem, true);
+                    } else {
+                        disableLocalPointLightShadow(queuedItem);
+                    }
+                });
+            }, localLightSpawnShadowDelayMs);
+        }, localLightSpawnTargetDelayMs);
+    }
+
     function registerLocalLight(options) {
         if (!options || !options.light || !options.markerMesh) {
             return null;
@@ -14088,6 +17323,12 @@ var pipeline = ensureVisualRenderingPipeline();
             cameraCulled: false
         };
 
+        // STAGE 12C51: PointLight is spherical, so it should include the nearby ceiling by default.
+        // SpotLight stays more selective for performance unless the user enables Ceiling manually.
+        if (item.type === "point" && !(options.targetOptions && Object.prototype.hasOwnProperty.call(options.targetOptions, "ceiling"))) {
+            item.targetOptions.ceiling = true;
+        }
+
         options.markerMesh.isPickable = editMode;
         options.markerMesh.renderOutline = false;
         options.markerMesh.metadata = options.markerMesh.metadata || {};
@@ -14095,12 +17336,11 @@ var pipeline = ensureVisualRenderingPipeline();
 
         localLightItems.push(item);
 
-        refreshCommonLightingMaterialSupport();
-        applyCommonLocalLightTargets(item);
+        applyInitialLocalLightSpawnTargets(item);
         disableLocalPointLightShadow(item);
-        ensureCommonLightShadowLogic(item);
         updateLocalLightHelper(item);
         applyLocalLightRuntimeEnabled(item);
+        scheduleDeferredLocalLightSpawnSetup(item, "registerDeferred");
 
         updateLocalLightsUi();
 
@@ -14325,8 +17565,6 @@ var pipeline = ensureVisualRenderingPipeline();
 
     function readLightingSettingsFromScene() {
         return {
-            exposure: scene.imageProcessingConfiguration.exposure,
-            contrast: scene.imageProcessingConfiguration.contrast,
             environmentIntensity: scene.environmentIntensity,
             environmentRotation: environmentRotationY,
 
@@ -14353,8 +17591,6 @@ var pipeline = ensureVisualRenderingPipeline();
         {
             name: "Neutral",
             settings: {
-                exposure: 0.95,
-                contrast: 1.05,
                 environmentIntensity: 0.55,
                 environmentRotation: 0,
                 hemiEnabled: true,
@@ -14374,8 +17610,6 @@ var pipeline = ensureVisualRenderingPipeline();
         {
             name: "Warm",
             settings: {
-                exposure: 0.92,
-                contrast: 1.10,
                 environmentIntensity: 0.68,
                 environmentRotation: 35,
                 hemiEnabled: true,
@@ -14395,8 +17629,6 @@ var pipeline = ensureVisualRenderingPipeline();
         {
             name: "Cool",
             settings: {
-                exposure: 1.00,
-                contrast: 1.02,
                 environmentIntensity: 0.62,
                 environmentRotation: -30,
                 hemiEnabled: true,
@@ -14446,8 +17678,6 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     function syncLightingControls(settings) {
-        lightingControlRefs.exposure.setValue(settings.exposure);
-        lightingControlRefs.contrast.setValue(settings.contrast);
         lightingControlRefs.environmentIntensity.setValue(settings.environmentIntensity);
         lightingControlRefs.environmentRotation.setValue(settings.environmentRotation);
 
@@ -14499,8 +17729,8 @@ var pipeline = ensureVisualRenderingPipeline();
             }
         }
 
-        scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
-        scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
+        // STAGE 12C45:
+        // Main Light no longer owns exposure/contrast. Visual Settings owns post-process look.
         scene.environmentIntensity = Number(settings.environmentIntensity);
         setEnvironmentRotationY(settings.environmentRotation);
 
@@ -14753,15 +17983,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (lightingContentMode === "visual") {
-            var currentVisualSettings = readVisualSettingsFromScene();
-
-            syncVisualControls(currentVisualSettings);
-
-            if (typeof requestAnimationFrame === "function") {
-                requestAnimationFrame(function () {
-                    syncVisualControls(currentVisualSettings);
-                });
-            }
+            scheduleVisualControlsSync(readVisualSettingsFromScene());
         }
 
         if (lightingContentStack) {
@@ -14794,15 +18016,7 @@ var pipeline = ensureVisualRenderingPipeline();
     lightingContentStack.appendChild(visualLightingContent);
     lightingScroll.appendChild(lightingContentStack);
 
-    var globalLookSection = createLightingSection("GLOBAL LOOK");
-
-    createLightingSlider(globalLookSection, "exposure", "Exposure", 0.2, 2.5, 0.01, scene.imageProcessingConfiguration.exposure, 2, function (value) {
-        scene.imageProcessingConfiguration.exposure = value;
-    });
-
-    createLightingSlider(globalLookSection, "contrast", "Contrast", 0.5, 2.0, 0.01, scene.imageProcessingConfiguration.contrast, 2, function (value) {
-        scene.imageProcessingConfiguration.contrast = value;
-    });
+    var globalLookSection = createLightingSection("ENVIRONMENT");
 
     createLightingSlider(globalLookSection, "environmentIntensity", "Environment Reflections", 0, 2.5, 0.01, scene.environmentIntensity, 2, function (value) {
         scene.environmentIntensity = value;
@@ -15279,7 +18493,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
     var visualPresetHint = document.createElement("p");
     visualPresetHint.className = "gallery-visual-hint";
-    visualPresetHint.innerText = "Presets change the final public viewer look. They are saved in gallery state.";
+    visualPresetHint.innerText = "Presets preview the final look locally. Use Save State when this look should become public.";
     visualPresetSection.appendChild(visualPresetHint);
 
     visualLightingContent.appendChild(visualPresetSection);
@@ -15501,13 +18715,10 @@ var pipeline = ensureVisualRenderingPipeline();
     }
 
     addVisualActionButton("SAVE LOOK", function () {
+        // STAGE 12C46: Save Look is local Visual Look storage only.
+        // Publishing still belongs to normal Save State / gallery_state.
         persistCurrentVisualSettings();
-
-        if (typeof saveGalleryStateToSupabase === "function") {
-            saveGalleryStateToSupabase();
-        }
-
-        syncVisualControls(readVisualSettingsFromScene());
+        scheduleVisualControlsSync(readVisualSettingsFromScene());
     });
 
     addVisualActionButton("LOAD SAVED", function () {
@@ -15531,7 +18742,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
     var visualActionsHint = document.createElement("p");
     visualActionsHint.className = "gallery-visual-hint";
-    visualActionsHint.innerText = "SAVE LOOK stores the current visual look. LOAD SAVED restores it. RESET returns to Neutral Gallery defaults. CLEAR SAVED removes the stored visual look and resets.";
+    visualActionsHint.innerText = "SAVE LOOK stores only the local Visual Look. Save State publishes the current look with the gallery.";
     visualActionsSection.appendChild(visualActionsHint);
 
     visualLightingContent.appendChild(visualActionsSection);
@@ -15757,7 +18968,10 @@ var pipeline = ensureVisualRenderingPipeline();
     var wallPaintTextureOrientation = {
         invertY: false,
         flipU: false,
-        flipV: false,
+        // STAGE 12C36:
+        // Wall color PNGs are used on GLTF wall UVs. Keep invertY=false, but flip V so painted
+        // segment textures are not visually upside down on the imported wall segments.
+        flipV: true,
         rotate180: false
     };
 
@@ -16390,11 +19604,11 @@ var pipeline = ensureVisualRenderingPipeline();
         );
     }
 
-    // STAGE 12C28 CLEAN - UNIFIED SCULPTURE SLOT FLOW
-    // Rzezba dziala teraz jak artwork: jeden wlasciciel slotu + widoczny placeholder albo model.
-    // ArtSphere_* jest tylko rootem/ownerem transformu. Widoczny cube jest osobnym childem.
+    // STAGE 12C29 - REAL SCULPTURE / ARTWORK PARITY FLOW
+    // Rzezba dziala jak artwork: selection array + primary/reference + jeden owner slot.
+    // ArtSphere_* jest tylko rootem/ownerem transformu. Widoczny cube albo GLB sa childami.
     function getActiveModel3dSlot() {
-        return activeModel3dSlot || selectedSphere || null;
+        return primarySculpture || activeModel3dSlot || selectedSphere || null;
     }
 
     function isModel3dSlot(slot) {
@@ -16446,9 +19660,9 @@ var pipeline = ensureVisualRenderingPipeline();
         placeholder.metadata.isModel3dPlaceholderMesh = true;
         placeholder.metadata.displayType = "sculpture-placeholder";
 
-        try {
-            registerViewerCollisionMesh(placeholder, "pedestal");
-        } catch (collisionError) {}
+        // STAGE 12C35: raw placeholder does not carry viewer collision.
+        // Sculpture collision uses one lightweight proxy generated from visible bounds.
+        placeholder.checkCollisions = false;
 
         try {
             registerCommonShadowMesh(placeholder, {
@@ -16467,24 +19681,40 @@ var pipeline = ensureVisualRenderingPipeline();
             return;
         }
 
-        slot.isPickable = false;
-        slot.isVisible = true;
-        slot.visibility = 1;
+        // STAGE 12C29:
+        // Owner slot nie jest juz widoczna geometria. Moze byc TransformNode albo stary mesh.
+        // Nie tworzymy zadnego materialu alpha=0, bo to bylo zrodlo konfliktow widocznosci.
+        if (slot.isPickable !== undefined) {
+            slot.isPickable = false;
+        }
 
-        if (!slot.material || !slot.material.metadata || !slot.material.metadata.isModel3dSlotRootMaterial) {
-            var rootMaterial = new BABYLON.StandardMaterial(slot.name + "_RootInvisibleMat", scene);
-            rootMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
-            rootMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
-            rootMaterial.alpha = 0;
-            rootMaterial.disableDepthWrite = true;
-            rootMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-            rootMaterial.metadata = rootMaterial.metadata || {};
-            rootMaterial.metadata.isModel3dSlotRootMaterial = true;
-            slot.material = rootMaterial;
-        } else {
-            slot.material.alpha = 0;
-            slot.material.disableDepthWrite = true;
-            slot.material.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+        if (slot.isVisible !== undefined) {
+            slot.isVisible = true;
+        }
+
+        if (slot.visibility !== undefined) {
+            slot.visibility = 1;
+        }
+
+        if (slot.material && slot.material.metadata && slot.material.metadata.isModel3dSlotRootMaterial) {
+            try {
+                slot.material.dispose();
+            } catch (rootMaterialDisposeError) {}
+            slot.material = null;
+        }
+
+        if (slot.renderOutline !== undefined) {
+            slot.renderOutline = false;
+        }
+
+        if (slot.renderOverlay !== undefined) {
+            slot.renderOverlay = false;
+        }
+
+        if (slot.disableEdgesRendering) {
+            try {
+                slot.disableEdgesRendering();
+            } catch (rootEdgesDisableError) {}
         }
 
         try {
@@ -16537,6 +19767,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         setEditorOnlyMeshVisible(placeholder, shouldShow, shouldPick);
+        placeholder.checkCollisions = false;
         placeholder.metadata = placeholder.metadata || {};
         placeholder.metadata.model3dSlotName = slot.name;
         placeholder.metadata.isModel3dPlaceholderMesh = true;
@@ -16554,6 +19785,7 @@ var pipeline = ensureVisualRenderingPipeline();
             shouldShow,
             shouldPick
         );
+        mesh.checkCollisions = false;
 
         return shouldShow ? 0 : 1;
     }
@@ -16591,6 +19823,8 @@ var pipeline = ensureVisualRenderingPipeline();
                 });
             }
         }
+
+        refreshSculptureCollisionProxy(slot);
 
         return hiddenCount;
     }
@@ -17350,6 +20584,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var inputState = getViewerWASDInputState();
         var hasInput = inputState.hasInput;
+        updateGalleryFocusPreviewReturnToWalk(dt, hasInput || mobileJoystickTurnActive);
         var speedBeforeStop = viewerMovementVelocity.length();
 
         if (hasInput && inputState.direction.lengthSquared() > 0.00001) {
@@ -17765,20 +21000,40 @@ var pipeline = ensureVisualRenderingPipeline();
     ensureGalleryScrollContainmentStyles();
     setupGalleryScrollContainment();
 
+
+    var mobileViewerModeRefreshPending = false;
+    var mobileViewerModeRefreshTimer = null;
+
+    function scheduleRefreshMobileViewerMode() {
+        if (mobileViewerModeRefreshPending) {
+            return;
+        }
+
+        mobileViewerModeRefreshPending = true;
+
+        if (mobileViewerModeRefreshTimer) {
+            clearTimeout(mobileViewerModeRefreshTimer);
+            mobileViewerModeRefreshTimer = null;
+        }
+
+        mobileViewerModeRefreshTimer = setTimeout(function () {
+            mobileViewerModeRefreshTimer = null;
+            mobileViewerModeRefreshPending = false;
+            refreshMobileViewerMode();
+        }, 80);
+    }
+
+
     function setupMobileViewerControls() {
         createMobileViewerUi();
 
-        scene.onBeforeRenderObservable.add(function () {
-            updateViewerWASDMovement();
-        });
-
-        window.addEventListener("resize", function () {
-            refreshMobileViewerMode();
+        registerGalleryDomEvent("mobileViewerWindowResize", window, "resize", function () {
+            scheduleRefreshMobileViewerMode();
         });
 
         if (scene && scene.getEngine && scene.getEngine().onResizeObservable) {
-            scene.getEngine().onResizeObservable.add(function () {
-                refreshMobileViewerMode();
+            registerGalleryEngineResizeObserver("mobileViewerEngineResize", function () {
+                scheduleRefreshMobileViewerMode();
             });
         }
 
@@ -17794,19 +21049,156 @@ var pipeline = ensureVisualRenderingPipeline();
 
     setupMobileViewerControls();
 
-    scene.onBeforeRenderObservable.add(function () {
-        resolveViewerWallCollisionAfterMovement();
-    });
-
-    scene.onBeforeRenderObservable.add(function () {
-        updateLocalLightsCameraCulling(false);
-    });
+    if (galleryPerformanceDebugEnabled) {
+        setGalleryPerformanceDebugEnabled(true);
+    }
 
 
-    scene.onBeforeRenderObservable.add(function () {
-        updateArtworkInfoPopup();
-    });
+    function runGalleryFrameTick() {
+        updateViewerWASDMovement();
+        updateViewerWallCollisionIfCameraMoved();
 
+        measureGalleryPerformanceMetric("localLightsMs", function () {
+            updateLocalLightsCameraCulling(false);
+        });
+
+        updateArtworkInfoPopupThrottled(false);
+        updateEditModeMovementFrame();
+        maybeUpdateGalleryPerformanceDebugPanel(false);
+    }
+
+    registerGalleryBeforeRenderObserver("mainFrameTick", runGalleryFrameTick);
+
+
+
+    // STAGE 12C43 - pointermove may fire much faster than the render loop.
+    // Heavy sculpture updates are merged into one requestAnimationFrame pass.
+    var sculptureDragPerformanceUpdatePending = false;
+    var sculptureDragPerformanceUpdateSlot = null;
+
+    function scheduleSculptureDragPerformanceUpdate(slot) {
+        sculptureDragPerformanceUpdateSlot = slot;
+
+        if (slot) {
+            markGalleryObjectBoundsDirty(slot);
+        }
+
+        if (sculptureDragPerformanceUpdatePending) {
+            return;
+        }
+
+        sculptureDragPerformanceUpdatePending = true;
+
+        var runUpdate = function () {
+            sculptureDragPerformanceUpdatePending = false;
+
+            var currentSlot = sculptureDragPerformanceUpdateSlot;
+            sculptureDragPerformanceUpdateSlot = null;
+
+            if (!currentSlot || (currentSlot.isDisposed && currentSlot.isDisposed())) {
+                return;
+            }
+
+            measureGalleryPerformanceMetric("dragSculptureMs", function () {
+                snapModel3dSlotRuntimeToFloor(currentSlot);
+                refreshSculptureCollisionProxy(currentSlot);
+                updatePedestalLight(currentSlot);
+                updateViewerModePlaceholderVisibility();
+                updateModel3dTransformUi();
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runUpdate);
+        } else {
+            setTimeout(runUpdate, 0);
+        }
+    }
+
+
+    // STAGE 12C44 - artwork drag / live transform performance merge.
+    var artworkDragPerformanceUpdatePending = false;
+    var artworkDragPerformanceUpdateArtwork = null;
+
+    function scheduleArtworkDragPerformanceUpdate(artwork) {
+        artworkDragPerformanceUpdateArtwork = artwork;
+
+        if (artwork) {
+            markGalleryObjectBoundsDirty(artwork);
+            markAlignmentPanelDirty();
+        }
+
+        if (artworkDragPerformanceUpdatePending) {
+            return;
+        }
+
+        artworkDragPerformanceUpdatePending = true;
+
+        var runUpdate = function () {
+            artworkDragPerformanceUpdatePending = false;
+
+            var currentArtwork = artworkDragPerformanceUpdateArtwork;
+            artworkDragPerformanceUpdateArtwork = null;
+
+            if (!currentArtwork || (currentArtwork.isDisposed && currentArtwork.isDisposed())) {
+                return;
+            }
+
+            measureGalleryPerformanceMetric("dragArtworkMs", function () {
+                updateArtworkLight(currentArtwork);
+                updateArtworkTransformUi();
+                updateAlignmentPanelIfDirty();
+            });
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runUpdate);
+        } else {
+            setTimeout(runUpdate, 0);
+        }
+    }
+
+    var artworkTransformSliderPreviewPending = false;
+
+    function scheduleArtworkTransformSliderPreview() {
+        if (artworkTransformSliderPreviewPending) {
+            return;
+        }
+
+        artworkTransformSliderPreviewPending = true;
+
+        var runPreview = function () {
+            artworkTransformSliderPreviewPending = false;
+            applyArtworkTransformSliderValues(false, true);
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runPreview);
+        } else {
+            setTimeout(runPreview, 0);
+        }
+    }
+
+    var model3dTransformSliderPreviewPending = false;
+
+    function scheduleModel3dTransformSliderPreview() {
+        if (model3dTransformSliderPreviewPending) {
+            return;
+        }
+
+        model3dTransformSliderPreviewPending = true;
+
+        var runPreview = function () {
+            model3dTransformSliderPreviewPending = false;
+            applyModel3dTransformSliderValues(false, true);
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(runPreview);
+        } else {
+            setTimeout(runPreview, 0);
+        }
+    }
 
 
     function updateModel3dSlotUi() {
@@ -17980,8 +21372,10 @@ var pipeline = ensureVisualRenderingPipeline();
         if (selectedStatus) {
             var selectedLabel = "None";
 
-            if (activeModel3dSlot) {
+            if (selectedSculptures.length === 1 && activeModel3dSlot) {
                 selectedLabel = "Sculpture: " + activeModel3dSlot.name;
+            } else if (selectedSculptures.length > 1 && primarySculpture) {
+                selectedLabel = "Sculpture: " + primarySculpture.name + " + " + (selectedSculptures.length - 1);
             } else if (selectedArtworks.length === 1 && selectedArtworks[0]) {
                 selectedLabel = selectedArtworks[0].name;
             } else if (selectedArtworks.length > 1 && primaryArtwork) {
@@ -17992,7 +21386,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (countStatus) {
-            countStatus.innerText = "Selected Count: " + (activeModel3dSlot ? 1 : selectedArtworks.length);
+            countStatus.innerText = "Selected Count: " + (selectedSculptures.length ? selectedSculptures.length : selectedArtworks.length);
         }
 
         if (colorStatus) {
@@ -18012,6 +21406,7 @@ var pipeline = ensureVisualRenderingPipeline();
         updateArtworkInfoUi();
         updateArtworkTransformUi();
         updateModel3dSlotUi();
+        updateSculptureInfoUi();
         updateAlignmentPanel();
     }
 
@@ -18320,6 +21715,10 @@ var pipeline = ensureVisualRenderingPipeline();
 
         clearWallColorSelection();
         refreshArtworkOutlines();
+        updateArtworkImageUi();
+        updateArtworkInfoUi();
+        updateArtworkTransformUi();
+        updateFocusCameraUi();
         updateEditHelpStatus();
         updateAlignmentPanel();
     }
@@ -18349,6 +21748,10 @@ var pipeline = ensureVisualRenderingPipeline();
         artworkAlignPanel.style.display = "none";
 
         attachGalleryCameraControl();
+        updateArtworkImageUi();
+        updateArtworkInfoUi();
+        updateArtworkTransformUi();
+        updateFocusCameraUi();
         updateEditHelpStatus();
     }
 
@@ -18377,6 +21780,8 @@ var pipeline = ensureVisualRenderingPipeline();
 
         lastArtworkClickTime = 0;
         lastArtworkClickMesh = null;
+        lastSculptureClickTime = 0;
+        lastSculptureClickSlot = null;
 
         artworkAlignPanel.style.display = "none";
 
@@ -18429,7 +21834,7 @@ var pipeline = ensureVisualRenderingPipeline();
         clearEditMoveKeys();
     });
 
-    window.addEventListener("keydown", function (event) {
+    registerGalleryDomEvent("keyboardKeyDown", window, "keydown", function (event) {
 
         if (isGalleryTextEditingElement(event.target)) {
             clearEditMoveKeys();
@@ -18453,7 +21858,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
     });
 
-    window.addEventListener("keyup", function (event) {
+    registerGalleryDomEvent("keyboardKeyUp", window, "keyup", function (event) {
 
         if (isGalleryTextEditingElement(event.target)) {
             clearEditMoveKeys();
@@ -18475,7 +21880,8 @@ var pipeline = ensureVisualRenderingPipeline();
         }
     });
 
-    scene.onBeforeRenderObservable.add(function () {
+
+    function updateEditModeMovementFrame() {
 
         if (!editMode || isDraggingArtwork || isDraggingSphere) {
             return;
@@ -18513,7 +21919,11 @@ var pipeline = ensureVisualRenderingPipeline();
             moveDirection.subtractInPlace(right);
         }
 
-        if (moveDirection.lengthSquared() > 0) {
+        var hasEditMoveInput = moveDirection.lengthSquared() > 0;
+        var editDeltaTime = scene.getEngine().getDeltaTime() / 1000;
+        updateGalleryFocusPreviewReturnToWalk(editDeltaTime, hasEditMoveInput);
+
+        if (hasEditMoveInput) {
             moveDirection.normalize();
 
             var delta = scene.getEngine().getDeltaTime() / 16.666;
@@ -18523,8 +21933,8 @@ var pipeline = ensureVisualRenderingPipeline();
             );
         }
 
-        updateAlignmentPanel();
-    });
+        updateAlignmentPanelIfDirty();
+    }
 
     function getArtworkHalfSizeOnAxis(artwork, axis) {
 
@@ -20502,6 +23912,22 @@ var pipeline = ensureVisualRenderingPipeline();
         updateAlignmentPanel();
     }
 
+
+    var alignmentPanelDirty = true;
+
+    function markAlignmentPanelDirty() {
+        alignmentPanelDirty = true;
+    }
+
+    function updateAlignmentPanelIfDirty() {
+        if (!alignmentPanelDirty) {
+            return;
+        }
+
+        alignmentPanelDirty = false;
+        updateAlignmentPanel();
+    }
+
     function updateAlignmentPanel() {
 
         if (!artworkAlignPanel || !alignSectionData || !alignSectionData.section) {
@@ -20751,7 +24177,13 @@ var pipeline = ensureVisualRenderingPipeline();
             isAlignmentWallSegmentMesh(pickWall.pickedMesh)
         );
 
-        updateArtworkLight(artwork);
+        markGalleryObjectBoundsDirty(artwork);
+
+        if (isDraggingArtwork) {
+            scheduleArtworkDragPerformanceUpdate(artwork);
+        } else {
+            updateArtworkLight(artwork);
+        }
     }
 
 
@@ -20768,15 +24200,10 @@ var pipeline = ensureVisualRenderingPipeline();
             excludedMeshes.push(mesh);
         });
 
-        artSpheres.forEach(function (displayMesh) {
-            excludedMeshes.push(displayMesh);
-
-            if (
-                displayMesh.metadata &&
-                displayMesh.metadata.sculptureMesh
-            ) {
-                excludedMeshes.push(displayMesh.metadata.sculptureMesh);
-            }
+        artSpheres.forEach(function (slot) {
+            getModel3dSlotLightingMeshes(slot).forEach(function (mesh) {
+                excludedMeshes.push(mesh);
+            });
         });
 
         return excludedMeshes;
@@ -21238,69 +24665,61 @@ var pipeline = ensureVisualRenderingPipeline();
         });
     }
 
-    function focusCameraOnObject(targetMesh) {
+    function focusCameraOnObject(targetMesh, options) {
+        options = options || {};
 
         enterMobileFocusState();
 
-        let objectPosition = targetMesh.position.clone();
+        var focusFrame = getGalleryObjectFocusFrame(targetMesh);
+        var objectPosition = focusFrame.target.clone();
+        var viewDirection = focusFrame.viewDirection.clone();
+        var autoFocusDistance = focusFrame.distance;
+        var useCustomFocus = !!(focusFrame.focusState && focusFrame.focusState.useCustomOffset);
 
-        // Dla postumentu ustawiamy fokus na rzezbie, a nie na samym piedestale.
-        if (
-            targetMesh &&
-            targetMesh.metadata &&
-            targetMesh.metadata.sculptureMesh &&
-            targetMesh.metadata.sculptureMesh.getAbsolutePosition
-        ) {
-            objectPosition = targetMesh.metadata.sculptureMesh.getAbsolutePosition().clone();
-        }
-
-        let viewDirection;
-
-        // Jesli klikniety obiekt jest obrazem, kamera podjezdza frontem do obrazu.
-        if (artworks.includes(targetMesh)) {
-            viewDirection = BABYLON.Vector3.TransformNormal(
-                new BABYLON.Vector3(0, 0, 1),
-                targetMesh.getWorldMatrix()
-            ).normalize();
-        }
-        // Jesli to postument, kamera podjezdza od aktualnego kierunku patrzenia.
-        else {
-            let cameraToObject = objectPosition.subtract(camera.position).normalize();
-            viewDirection = cameraToObject.scale(-1);
-        }
-
-        let focusDistance = 3;
-
-        if (isMobileViewerActive() && artworks.includes(targetMesh)) {
-            focusDistance = getMobileArtworkFocusDistance(targetMesh);
-        }
-
-        let targetCameraPosition = objectPosition.add(
-            viewDirection.scale(focusDistance)
+        // STAGE 12C39:
+        // Custom values are offsets added to automatic focus, not absolute camera coordinates.
+        // Checkbox ON with all sliders at zero equals the automatic focus result.
+        var targetCameraPosition = buildFocusCameraPosition(
+            objectPosition,
+            viewDirection,
+            autoFocusDistance,
+            useCustomFocus ? focusFrame.focusState.distanceOffset : 0,
+            useCustomFocus ? focusFrame.focusState.cameraHeightOffset : 0,
+            useCustomFocus ? focusFrame.focusState.viewPitchDegrees : 0
         );
 
-        targetCameraPosition.y = camera.position.y;
+        var focusReturnWalkY = getGalleryDefaultWalkCameraY();
 
-        let startPosition = camera.position.clone();
-        let startRotation = camera.rotation.clone();
+        var startPosition = camera.position.clone();
+        var startRotation = camera.rotation.clone();
 
-        let focusPath = findViewerSafeFocusPath(
-            startPosition,
-            targetCameraPosition
-        );
+        var focusPath = options.skipSafePath
+            ? [targetCameraPosition.clone()]
+            : findViewerSafeFocusPath(
+                startPosition,
+                targetCameraPosition
+            );
 
-        let finalCameraPosition = focusPath && focusPath.length
+        // STAGE 12C42:
+        // Safe-path collision planning is horizontal, but the final focus frame must keep
+        // the custom Up/Down and View Angle height. Earlier code flattened the last point
+        // to the current walk height, so saved focus settings were ignored after walking away.
+        if (focusPath && focusPath.length && targetCameraPosition && isFinite(Number(targetCameraPosition.y))) {
+            focusPath[focusPath.length - 1].y = targetCameraPosition.y;
+        }
+
+        var finalCameraPosition = focusPath && focusPath.length
             ? focusPath[focusPath.length - 1].clone()
             : targetCameraPosition.clone();
 
-        let tempCamera = new BABYLON.UniversalCamera(
+        var tempCamera = new BABYLON.UniversalCamera(
             "tempCamera",
             finalCameraPosition.clone(),
             scene
         );
 
         tempCamera.setTarget(objectPosition);
-        let targetRotation = tempCamera.rotation.clone();
+        var targetRotation = tempCamera.rotation.clone();
         tempCamera.dispose();
 
         function fixRotation(target, current) {
@@ -21319,8 +24738,44 @@ var pipeline = ensureVisualRenderingPipeline();
         targetRotation.y = fixRotation(targetRotation.y, startRotation.y);
         targetRotation.z = fixRotation(targetRotation.z, startRotation.z);
 
-        // STAGE 12C5:
-        // Jeżeli direct focus przecina ścianę, animujemy po waypointach.
+        // STAGE 12C42:
+        // View Angle is a camera pitch override/addition, not a position change.
+        // The object center defines the automatic look direction, then the user pitch is
+        // added on top so the setting cannot be cancelled by setTarget(bounds.center).
+        if (useCustomFocus && focusFrame.focusState) {
+            var customPitchRadians = BABYLON.Tools.ToRadians(
+                BABYLON.Scalar.Clamp(Number(focusFrame.focusState.viewPitchDegrees || 0), -45, 45)
+            );
+
+            targetRotation.x = BABYLON.Scalar.Clamp(
+                targetRotation.x + customPitchRadians,
+                BABYLON.Tools.ToRadians(-82),
+                BABYLON.Tools.ToRadians(82)
+            );
+        }
+
+        if (options.immediate) {
+            stopViewerSafeFocusRuntimeAnimation();
+            scene.stopAnimation(camera);
+            camera.position.copyFrom(finalCameraPosition);
+            camera.rotation.copyFrom(targetRotation);
+            camera.rotation.z = 0;
+
+            markGalleryFocusPreviewRuntime(
+                focusFrame.object,
+                options.fromFocusCameraUi ? "focus-camera-ui" : "object-focus",
+                focusReturnWalkY
+            );
+
+            return;
+        }
+
+        markGalleryFocusPreviewRuntime(
+            focusFrame.object,
+            options.fromFocusCameraUi ? "focus-camera-ui" : "object-focus",
+            focusReturnWalkY
+        );
+
         animateViewerFocusPositionPath(
             focusPath,
             targetRotation,
@@ -21349,6 +24804,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 });
             });
 
+            freezeStaticGalleryMeshes(floorMeshes, "floor");
             updateMobileFloorBounds();
             applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshViewerCollisionMeshes();
@@ -21393,6 +24849,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 });
             });
 
+            freezeStaticGalleryMeshes(wallMeshes, "wall");
             console.log("Wall GLTF loaded", {
                 rootUrl: wallModelRootUrl,
                 file: "Wall_segments.gltf",
@@ -21471,6 +24928,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 });
             });
 
+            freezeStaticGalleryMeshes(ceilingMeshes, "ceiling");
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
@@ -21609,6 +25067,7 @@ var pipeline = ensureVisualRenderingPipeline();
         mesh.metadata.model3dSlotName = slot.name;
         mesh.metadata.isModel3dRuntimeMesh = true;
         mesh.isPickable = true;
+        mesh.checkCollisions = false;
 
         if (mesh.isVisible !== undefined) {
             mesh.isVisible = true;
@@ -21718,6 +25177,7 @@ var pipeline = ensureVisualRenderingPipeline();
             applySculptureTransformToSlot(slot);
             applySculptureSlotVisualState(slot);
             snapModel3dSlotRuntimeToFloor(slot);
+            refreshSculptureCollisionProxy(slot);
             refreshSculptureOutlines();
 
             galleryModel3dLastDebug = {
@@ -21773,6 +25233,7 @@ var pipeline = ensureVisualRenderingPipeline();
         slot.metadata.model3d = null;
 
         applySculptureSlotVisualState(slot);
+        disableSculptureCollisionProxy(slot);
         refreshSculptureOutlines();
         updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
@@ -21955,38 +25416,6 @@ var pipeline = ensureVisualRenderingPipeline();
         var result = [];
 
         function addMesh(mesh) {
-            if (!mesh) {
-                return;
-            }
-
-            if (mesh.isDisposed && mesh.isDisposed()) {
-                return;
-            }
-
-            if (result.indexOf(mesh) !== -1) {
-                return;
-            }
-
-            result.push(mesh);
-        }
-
-        if (slot && hasLoadedModel3dRuntime(slot)) {
-            var runtime = slot.metadata.model3dRuntime;
-
-            (runtime.meshes || []).forEach(function (mesh) {
-                addMesh(mesh);
-            });
-        } else {
-            addMesh(getModel3dSlotPlaceholderMesh(slot));
-        }
-
-        return result;
-    }
-
-    function getModel3dSlotLightingMeshes(slot) {
-        var result = [];
-
-        function addMesh(mesh) {
             if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
                 return;
             }
@@ -21997,12 +25426,26 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (slot && hasLoadedModel3dRuntime(slot)) {
-            (slot.metadata.model3dRuntime.meshes || []).forEach(addMesh);
+            var runtime = slot.metadata.model3dRuntime;
+
+            (runtime.meshes || []).forEach(function (mesh) {
+                if (mesh && mesh.getTotalVertices && mesh.getTotalVertices() > 0) {
+                    addMesh(mesh);
+                }
+            });
         } else {
             addMesh(getModel3dSlotPlaceholderMesh(slot));
         }
 
         return result;
+    }
+
+    function getModel3dSlotLightingMeshes(slot) {
+        // Local lights dostaja tylko widoczna zawartosc slotu: placeholder albo GLB meshe.
+        // Nigdy niewidzialny owner/root slotu.
+        return getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
+            return !!(mesh && mesh.isVisible !== false && mesh.visibility !== 0);
+        });
     }
 
     function clearModel3dSlotSelectionGlow(slot) {
@@ -22011,12 +25454,14 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var storedMeshes = slot.metadata.model3dSelectionGlowMeshes || [];
+        var allMeshes = storedMeshes.concat(getModel3dSlotSelectionMeshes(slot));
 
-        function clearMeshSelection(mesh) {
+        allMeshes.forEach(function (mesh) {
             if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
                 return;
             }
 
+            // STAGE 12C29 cleanup: usuwamy WSZYSTKIE stare efekty, ale nie dokladamy nowych.
             if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
                 try {
                     model3dSelectionHighlightLayer.removeMesh(mesh);
@@ -22036,15 +25481,12 @@ var pipeline = ensureVisualRenderingPipeline();
                     mesh.disableEdgesRendering();
                 } catch (edgesDisableError) {}
             }
-        }
-
-        storedMeshes.forEach(clearMeshSelection);
-        getModel3dSlotSelectionMeshes(slot).forEach(clearMeshSelection);
+        });
 
         slot.metadata.model3dSelectionGlowMeshes = [];
     }
 
-    function applyModel3dSlotSelectionGlow(slot) {
+    function applyModel3dSlotSelectionGlow(slot, styleName) {
         if (!slot || !slot.metadata) {
             return;
         }
@@ -22052,6 +25494,13 @@ var pipeline = ensureVisualRenderingPipeline();
         var meshes = getModel3dSlotSelectionMeshes(slot);
         var appliedMeshes = [];
         var hasRuntime = hasLoadedModel3dRuntime(slot);
+        var width = hasRuntime ? model3dSlotSelectionEdgesWidth : model3dSlotSelectionPlaceholderEdgesWidth;
+
+        if (styleName === "reference") {
+            width = Math.max(2.2, width - 0.45);
+        } else if (styleName === "primary") {
+            width += 0.35;
+        }
 
         meshes.forEach(function (mesh) {
             if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
@@ -22062,35 +25511,24 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
+            // Jeden system zaznaczenia rzezb: EdgesRenderer, kolor bialy jak artwork glow.
+            // Bez HighlightLayer i bez renderOutline, zeby nie bylo podwojnych obrysow.
+            if (mesh.renderOutline !== undefined) {
+                mesh.renderOutline = false;
+            }
+
             if (mesh.renderOverlay !== undefined) {
                 mesh.renderOverlay = false;
             }
 
-            if (mesh.renderOutline !== undefined) {
-                mesh.renderOutline = true;
-                mesh.outlineColor = model3dSlotSelectionOutlineColor;
-                mesh.outlineWidth = hasRuntime ? 0.075 : 0.09;
-            }
-
             if (mesh.enableEdgesRendering) {
                 try {
-                    mesh.enableEdgesRendering(0.96, true);
+                    mesh.enableEdgesRendering(0.92, true);
                     mesh.edgesColor = model3dSlotSelectionEdgesColor;
-                    mesh.edgesWidth = hasRuntime
-                        ? model3dSlotSelectionEdgesWidth
-                        : model3dSlotSelectionPlaceholderEdgesWidth;
+                    mesh.edgesWidth = width;
+                    appliedMeshes.push(mesh);
                 } catch (edgesError) {}
             }
-
-            // HighlightLayer tylko jako zewnetrzna poswiata po krawedzi.
-            // innerGlow jest globalnie false, wiec nie zalewa bryly jak stary bialy highlight.
-            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.addMesh) {
-                try {
-                    model3dSelectionHighlightLayer.addMesh(mesh, model3dSlotSelectionOutlineColor);
-                } catch (highlightAddError) {}
-            }
-
-            appliedMeshes.push(mesh);
         });
 
         slot.metadata.model3dSelectionGlowMeshes = appliedMeshes;
@@ -22104,27 +25542,31 @@ var pipeline = ensureVisualRenderingPipeline();
         clearModel3dSlotSelectionGlow(slot);
 
         if (isSelected) {
-            applyModel3dSlotSelectionGlow(slot);
+            applyModel3dSlotSelectionGlow(slot, slot === referenceSculpture ? "reference" : slot === primarySculpture ? "primary" : "default");
         }
     }
 
     function refreshSculptureOutlines() {
         artSpheres.forEach(function (slot) {
-            if (!slot) {
+            clearModel3dSlotSelectionGlow(slot);
+        });
+
+        selectedSculptures.forEach(function (slot) {
+            if (!slot || artSpheres.indexOf(slot) === -1) {
                 return;
             }
 
-            if (slot !== activeModel3dSlot) {
-                clearModel3dSlotSelectionGlow(slot);
-            }
-        });
+            var styleName = slot === referenceSculpture
+                ? "reference"
+                : slot === primarySculpture
+                    ? "primary"
+                    : "default";
 
-        if (activeModel3dSlot) {
-            applyModel3dSlotSelectionGlow(activeModel3dSlot);
-        }
+            applyModel3dSlotSelectionGlow(slot, styleName);
+        });
     }
 
-    function selectModel3dSlot(slot) {
+    function selectModel3dSlot(slot, addToSelection) {
         if (!slot) {
             return false;
         }
@@ -22134,31 +25576,64 @@ var pipeline = ensureVisualRenderingPipeline();
         deselectArtwork();
         clearWallColorSelection();
 
-        activeModel3dSlot = slot;
-        selectedSphere = slot;
+        if (addToSelection) {
+            var existingIndex = selectedSculptures.indexOf(slot);
 
-        applySculptureSlotVisualState(slot);
+            if (existingIndex >= 0) {
+                selectedSculptures.splice(existingIndex, 1);
+
+                if (primarySculpture === slot) {
+                    primarySculpture = selectedSculptures.length > 0
+                        ? selectedSculptures[selectedSculptures.length - 1]
+                        : null;
+                }
+            } else {
+                selectedSculptures.push(slot);
+                primarySculpture = slot;
+            }
+        } else {
+            selectedSculptures = [slot];
+            primarySculpture = slot;
+        }
+
+        referenceSculpture = selectedSculptures.length > 0 ? selectedSculptures[0] : null;
+        activeModel3dSlot = primarySculpture;
+        selectedSphere = primarySculpture;
+
+        selectedSculptures.forEach(function (selectedSlot) {
+            applySculptureSlotVisualState(selectedSlot);
+        });
+
         refreshSculptureOutlines();
         updateModel3dSlotUi();
         updateModel3dTransformUi();
+        updateSculptureInfoUi();
+        updateFocusCameraUi();
         updateEditHelpStatus();
 
         return true;
     }
 
     function clearModel3dSlotSelection(skipUiUpdate) {
-        if (activeModel3dSlot) {
-            clearModel3dSlotSelectionGlow(activeModel3dSlot);
-        }
+        selectedSculptures.forEach(function (slot) {
+            clearModel3dSlotSelectionGlow(slot);
+        });
 
+        selectedSculptures = [];
+        primarySculpture = null;
+        referenceSculpture = null;
         activeModel3dSlot = null;
         selectedSphere = null;
         isDraggingSphere = false;
+        lastSculptureClickTime = 0;
+        lastSculptureClickSlot = null;
         refreshSculptureOutlines();
 
         if (!skipUiUpdate) {
             updateModel3dSlotUi();
             updateModel3dTransformUi();
+            updateSculptureInfoUi();
+            updateFocusCameraUi();
         }
     }
 
@@ -22247,16 +25722,19 @@ var pipeline = ensureVisualRenderingPipeline();
 
         disposeModel3dSlotRuntime(slot);
 
-        if (slot.metadata && slot.metadata.sculptureMesh) {
-            unregisterViewerCollisionMesh(slot.metadata.sculptureMesh);
+        var placeholderToDispose = slot.metadata && (slot.metadata.placeholderMesh || slot.metadata.sculptureMesh);
+
+        if (placeholderToDispose) {
+            unregisterViewerCollisionMesh(placeholderToDispose);
 
             try {
-                slot.metadata.sculptureMesh.dispose();
+                placeholderToDispose.dispose();
             } catch (sculptureDisposeError) {
                 console.warn("Sculpture placeholder dispose warning:", sculptureDisposeError);
             }
 
             slot.metadata.sculptureMesh = null;
+            slot.metadata.placeholderMesh = null;
         }
 
         unregisterViewerCollisionMesh(slot);
@@ -22320,13 +25798,13 @@ var pipeline = ensureVisualRenderingPipeline();
             return {
                 name: slot ? slot.name : null,
                 index: index,
-                selected: slot === selectedSphere,
+                selected: selectedSculptures.indexOf(slot) !== -1,
                 active: slot === activeModel3dSlot,
                 hasModel: !!modelState,
                 modelUrl: modelState ? modelState.modelUrl : "",
                 modelPath: modelState ? modelState.modelPath : "",
                 runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
-                placeholderVisible: slot ? !!slot.isVisible : false,
+                placeholderVisible: !!(getModel3dSlotPlaceholderMesh(slot) && getModel3dSlotPlaceholderMesh(slot).isVisible !== false && getModel3dSlotPlaceholderMesh(slot).visibility !== 0),
                 clipboardHasModel: !!galleryModel3dClipboardState,
                 deletedModel3dSlotNames: deletedModel3dSlotNames.slice()
             };
@@ -22370,38 +25848,25 @@ var pipeline = ensureVisualRenderingPipeline();
 
     function createPedestalDisplay(position, index) {
 
-        var pedestal = BABYLON.MeshBuilder.CreateBox(
+        // STAGE 12C29:
+        // ArtSphere_* jest od teraz czystym ownerem/slotem, nie ukrytym cube meshem.
+        // Widoczny placeholder cube i GLB model sa dziecmi tego ownera.
+        var pedestal = new BABYLON.TransformNode(
             "ArtSphere_" + index,
-            {
-                width: 0.95,
-                height: 1.1,
-                depth: 0.95
-            },
             scene
         );
 
-        // STAGE 12C28 CLEAN:
-        // ArtSphere_* jest wlascicielem/slotem transformu i kotwica na podlodze.
-        // Widoczny cube placeholder jest osobnym childem, a GLB osobnym modelRoot.
         pedestal.position = position.clone();
-        pedestal.isPickable = false;
-
-        var pedestalMat = new BABYLON.StandardMaterial("Model3dSlotRootMat_" + index, scene);
-        pedestalMat.diffuseColor = new BABYLON.Color3(0, 0, 0);
-        pedestalMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        pedestalMat.alpha = 0;
-        pedestalMat.disableDepthWrite = true;
-        pedestalMat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-        pedestalMat.metadata = pedestalMat.metadata || {};
-        pedestalMat.metadata.isModel3dSlotRootMaterial = true;
-        pedestal.material = pedestalMat;
-
+        pedestal.rotation = BABYLON.Vector3.Zero();
+        pedestal.scaling = new BABYLON.Vector3(1, 1, 1);
         pedestal.metadata = pedestal.metadata || {};
         pedestal.metadata.displayType = "pedestal";
         pedestal.metadata.sculptureTransform = pedestal.metadata.sculptureTransform || {
             scale: 1,
             rotationDegrees: 0
         };
+        pedestal.metadata.sculptureInfo = pedestal.metadata.sculptureInfo || null;
+        pedestal.metadata.focusCamera = normalizeGalleryObjectFocusCameraState(pedestal.metadata.focusCamera);
         pedestal.metadata.isModel3dSlot = true;
         pedestal.metadata.model3d = pedestal.metadata.model3d || null;
         pedestal.metadata.model3dRuntime = pedestal.metadata.model3dRuntime || null;
@@ -22461,6 +25926,7 @@ var pipeline = ensureVisualRenderingPipeline();
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkImage = null;
         artwork.metadata.artworkInfo = normalizeArtworkInfo();
+        artwork.metadata.focusCamera = normalizeGalleryObjectFocusCameraState(artwork.metadata.focusCamera);
         artwork.metadata.lampMesh = null;
         artwork.metadata.spotLight = null;
         artwork.metadata.isDynamicArtwork = false;
@@ -23322,6 +26788,37 @@ var pipeline = ensureVisualRenderingPipeline();
         return 3.9;
     }
 
+    function getGalleryObjectPopupDistance(targetObject) {
+        var baseDistance = getArtworkPopupDistance();
+
+        if (!targetObject) {
+            return baseDistance;
+        }
+
+        try {
+            var frame = getGalleryObjectFocusFrame(targetObject);
+            var focusState = frame && frame.focusState ? frame.focusState : null;
+            var customDistanceOffset = focusState && focusState.useCustomOffset
+                ? Math.max(0, Number(focusState.distanceOffset || 0))
+                : 0;
+            var focusDistance = frame && isFinite(Number(frame.distance))
+                ? Number(frame.distance) + customDistanceOffset + 0.9
+                : baseDistance;
+
+            return BABYLON.Scalar.Clamp(
+                Math.max(baseDistance, focusDistance),
+                baseDistance,
+                getArtworkInfoPopupMobileMode() ? 10.5 : 8.5
+            );
+        } catch (popupDistanceError) {
+            return baseDistance;
+        }
+    }
+
+    function getGalleryInfoPopupRayDistance() {
+        return getArtworkInfoPopupMobileMode() ? 11.5 : 9.5;
+    }
+
     // STAGE 11E - CENTER RAY POPUP TARGET
     // Popup nie wybiera już najbliższego obrazu w promieniu.
     // Najpierw musi trafić "niewidzialnym punktem" w środku kamery / ekranu.
@@ -23362,11 +26859,14 @@ var pipeline = ensureVisualRenderingPipeline();
     function isArtworkPopupRayCandidate(mesh) {
         var artwork = getArtworkFromPopupPickMesh(mesh);
 
-        if (!artwork) {
-            return false;
-        }
+        return isArtworkEligibleForInfoPopup(artwork);
+    }
 
-        if (artwork.isDisposed && artwork.isDisposed()) {
+    // STAGE 12C51 - POPUP ELIGIBILITY
+    // Edit Mode can show popup previews while setting info.
+    // Viewer Mode must not show hidden/empty placeholders.
+    function artworkHasVisiblePopupDisplay(artwork) {
+        if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
             return false;
         }
 
@@ -23374,7 +26874,51 @@ var pipeline = ensureVisualRenderingPipeline();
             return false;
         }
 
-        return true;
+        var imageState = typeof getArtworkImageState === "function"
+            ? getArtworkImageState(artwork)
+            : null;
+        var hasImageUrl = !!getArtworkImageUrlFromState(imageState);
+        var imagePlane = artwork.metadata && artwork.metadata.imagePlane
+            ? artwork.metadata.imagePlane
+            : null;
+        var imagePlaneVisible = !!(
+            imagePlane &&
+            !(imagePlane.isDisposed && imagePlane.isDisposed()) &&
+            imagePlane.isVisible !== false &&
+            imagePlane.visibility !== 0 &&
+            imagePlane.isEnabled &&
+            imagePlane.isEnabled()
+        );
+
+        return !!(hasImageUrl || imagePlaneVisible);
+    }
+
+    function isArtworkEligibleForInfoPopup(artwork) {
+        if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
+            return false;
+        }
+
+        if (typeof isArtworkDeleted === "function" && isArtworkDeleted(artwork)) {
+            return false;
+        }
+
+        if (editMode) {
+            return true;
+        }
+
+        return artworkHasVisiblePopupDisplay(artwork) && hasArtworkInfo(getArtworkInfoState(artwork));
+    }
+
+    function isSculptureEligibleForInfoPopup(slot) {
+        if (!slot || (slot.isDisposed && slot.isDisposed())) {
+            return false;
+        }
+
+        if (editMode) {
+            return true;
+        }
+
+        return hasLoadedModel3dRuntime(slot) && hasSculptureInfo(getSculptureInfoState(slot));
     }
 
     function getCenterRayArtworkForInfoPopup() {
@@ -23382,8 +26926,8 @@ var pipeline = ensureVisualRenderingPipeline();
             return null;
         }
 
-        var maxDistance = getArtworkPopupDistance();
-        var rayLength = maxDistance + artworkInfoPopupCenterRayLengthExtra;
+        var baseMaxDistance = getArtworkPopupDistance();
+        var rayLength = Math.max(baseMaxDistance + artworkInfoPopupCenterRayLengthExtra, getGalleryInfoPopupRayDistance());
         var ray;
 
         try {
@@ -23402,7 +26946,7 @@ var pipeline = ensureVisualRenderingPipeline();
             artworkInfoPopupLastTargetDebug = {
                 mode: "centerRay",
                 hit: false,
-                maxDistance: maxDistance
+                maxDistance: baseMaxDistance
             };
             return null;
         }
@@ -23419,9 +26963,19 @@ var pipeline = ensureVisualRenderingPipeline();
             return null;
         }
 
-        var artworkPosition = artwork.getAbsolutePosition
-            ? artwork.getAbsolutePosition()
-            : artwork.position;
+        var maxDistance = getGalleryObjectPopupDistance(artwork);
+        var artworkFrame = null;
+        var artworkPosition;
+
+        try {
+            artworkFrame = getGalleryObjectFocusFrame(artwork);
+        } catch (artworkFrameError) {}
+
+        artworkPosition = artworkFrame && artworkFrame.target
+            ? artworkFrame.target
+            : artwork.getAbsolutePosition
+                ? artwork.getAbsolutePosition()
+                : artwork.position;
 
         var distance = BABYLON.Vector3.Distance(
             camera.position,
@@ -23458,7 +27012,15 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (artworkInfoPopupCenterRayEnabled) {
-            return getCenterRayArtworkForInfoPopup();
+            var centerRayArtwork = getCenterRayArtworkForInfoPopup();
+
+            if (centerRayArtwork) {
+                return centerRayArtwork;
+            }
+
+            // STAGE 12C48 POPUP RECOVERY:
+            // If the center ray misses because an imagePlane/pick layer is not active, fall back to
+            // the same distance-based lookup instead of returning null forever.
         }
 
         var activeArtworks = typeof getActiveArtworks === "function"
@@ -23467,20 +27029,28 @@ var pipeline = ensureVisualRenderingPipeline();
 
         var nearestArtwork = null;
         var nearestDistance = Infinity;
-        var maxDistance = getArtworkPopupDistance();
+        var fallbackMaxDistance = getArtworkPopupDistance();
 
         activeArtworks.forEach(function (artwork) {
-            if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
+            if (!isArtworkEligibleForInfoPopup(artwork)) {
                 return;
             }
 
-            if (typeof isArtworkDeleted === "function" && isArtworkDeleted(artwork)) {
-                return;
-            }
+            var maxDistance = getGalleryObjectPopupDistance(artwork);
+            var artworkFrame = null;
+            var artworkPosition;
+
+            try {
+                artworkFrame = getGalleryObjectFocusFrame(artwork);
+            } catch (artworkFrameError) {}
+
+            artworkPosition = artworkFrame && artworkFrame.target
+                ? artworkFrame.target
+                : artwork.getAbsolutePosition();
 
             var distance = BABYLON.Vector3.Distance(
                 camera.position,
-                artwork.getAbsolutePosition()
+                artworkPosition
             );
 
             if (distance < maxDistance && distance < nearestDistance) {
@@ -23493,10 +27063,106 @@ var pipeline = ensureVisualRenderingPipeline();
             mode: "nearestFallback",
             artwork: nearestArtwork ? nearestArtwork.name : null,
             distance: nearestDistance,
-            maxDistance: maxDistance
+            maxDistance: fallbackMaxDistance
         };
 
         return nearestArtwork;
+    }
+
+    function normalizeSculptureInfo(info) {
+        info = info || {};
+
+        var normalized = normalizeArtworkInfo(info);
+
+        // Legacy aliases from earlier sculpture stages are read only as fallbacks.
+        if (!normalized.title) {
+            normalized.title = String(info.title || info.name || "").trim();
+        }
+
+        if (!normalized.authorName) {
+            normalized.authorName = String(info.authorName || info.artist || "").trim();
+        }
+
+        if (!normalized.authorId && normalized.authorName) {
+            normalized.authorId = getAuthorIdFromName(normalized.authorName);
+        }
+
+        return normalized;
+    }
+
+    function getSculptureInfoState(slot) {
+        if (!slot || !slot.metadata) {
+            return normalizeSculptureInfo();
+        }
+
+        // No fake defaults here. Empty sculpture info must stay empty, like artwork info.
+        return normalizeSculptureInfo(slot.metadata.sculptureInfo);
+    }
+
+    function setSculptureInfoState(slot, info) {
+        if (!slot) {
+            return;
+        }
+
+        slot.metadata = slot.metadata || {};
+        slot.metadata.sculptureInfo = normalizeSculptureInfo(info);
+    }
+
+    function hasSculptureInfo(info) {
+        return hasArtworkInfo(normalizeSculptureInfo(info));
+    }
+
+    function isSculptureSlotObject(target) {
+        return !!(target && artSpheres.indexOf(target) !== -1);
+    }
+
+    function getSculptureSlotCenterWorldPosition(slot) {
+        var meshes = getModel3dSlotSelectionMeshes(slot);
+        var bounds = getCachedVisibleBoundsForGalleryObject(slot, meshes);
+
+        if (bounds && bounds.center) {
+            return bounds.center.clone();
+        }
+
+        return slot && slot.getAbsolutePosition
+            ? slot.getAbsolutePosition().clone()
+            : slot && slot.position
+                ? slot.position.clone()
+                : BABYLON.Vector3.Zero();
+    }
+
+    function getModel3dSlotFocusTarget(slot) {
+        var meshes = getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
+            return !!(mesh && mesh.isVisible !== false && mesh.visibility !== 0);
+        });
+
+        return meshes.length ? meshes[0] : slot;
+    }
+
+    function getNearestSculptureForInfoPopup() {
+        if (!camera) {
+            return null;
+        }
+
+        var nearestSlot = null;
+        var nearestDistance = Infinity;
+
+        artSpheres.forEach(function (slot) {
+            if (!isSculptureEligibleForInfoPopup(slot)) {
+                return;
+            }
+
+            var center = getSculptureSlotCenterWorldPosition(slot);
+            var maxDistance = getGalleryObjectPopupDistance(slot);
+            var distance = BABYLON.Vector3.Distance(camera.position, center);
+
+            if (distance < maxDistance && distance < nearestDistance) {
+                nearestSlot = slot;
+                nearestDistance = distance;
+            }
+        });
+
+        return nearestSlot;
     }
 
     function updateArtworkInfoPopupContent(artwork) {
@@ -23504,8 +27170,13 @@ var pipeline = ensureVisualRenderingPipeline();
             return;
         }
 
-        var info = getArtworkInfoState(artwork);
-        var hasInfo = hasArtworkInfo(info);
+        var isSculpture = isSculptureSlotObject(artwork);
+        var info = isSculpture
+            ? getSculptureInfoState(artwork)
+            : getArtworkInfoState(artwork);
+        var hasInfo = isSculpture
+            ? hasSculptureInfo(info)
+            : hasArtworkInfo(info);
 
         if (artworkInfoPopupRefs.photo) {
             var popupAuthorPhotoUrl = getBestAuthorPhotoUrlFromInfo(info);
@@ -23533,7 +27204,7 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (artworkInfoPopupRefs.title) {
-            artworkInfoPopupRefs.title.innerText = info.title || "Untitled artwork";
+            artworkInfoPopupRefs.title.innerText = info.title || (isSculpture ? "Untitled sculpture" : "Untitled artwork");
             artworkInfoPopupRefs.title.style.display = hasInfo ? "" : "none";
         }
 
@@ -23543,6 +27214,9 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         if (artworkInfoPopupRefs.empty) {
+            artworkInfoPopupRefs.empty.innerText = isSculpture
+                ? "No sculpture information added yet."
+                : "No artwork information added yet.";
             artworkInfoPopupRefs.empty.style.display = hasInfo ? "none" : "";
         }
     }
@@ -23573,6 +27247,80 @@ var pipeline = ensureVisualRenderingPipeline();
         currentArtworkInfoPopupMesh = null;
     }
 
+
+
+    var artworkInfoPopupThrottleMs = 150;
+    var artworkInfoPopupIdlePollMs = 450;
+    var artworkInfoPopupLastUpdateMs = 0;
+    var artworkInfoPopupLastCameraPosition = null;
+    var artworkInfoPopupLastCameraRotation = null;
+    var artworkInfoPopupCameraPositionEpsilonSq = 0.0009;
+    var artworkInfoPopupCameraRotationEpsilonSq = 0.000009;
+
+    function isArtworkInfoPopupVisible() {
+        return !!(
+            artworkInfoPopup &&
+            artworkInfoPopup.classList &&
+            artworkInfoPopup.classList.contains("is-visible")
+        );
+    }
+
+    function hasArtworkInfoPopupCameraChanged() {
+        if (!camera || !camera.position || !camera.rotation) {
+            return true;
+        }
+
+        if (!artworkInfoPopupLastCameraPosition || !artworkInfoPopupLastCameraRotation) {
+            artworkInfoPopupLastCameraPosition = camera.position.clone();
+            artworkInfoPopupLastCameraRotation = camera.rotation.clone();
+            return true;
+        }
+
+        var positionChanged = camera.position.subtract(artworkInfoPopupLastCameraPosition).lengthSquared() > artworkInfoPopupCameraPositionEpsilonSq;
+        var rotationChanged = camera.rotation.subtract(artworkInfoPopupLastCameraRotation).lengthSquared() > artworkInfoPopupCameraRotationEpsilonSq;
+
+        if (positionChanged || rotationChanged) {
+            artworkInfoPopupLastCameraPosition.copyFrom(camera.position);
+            artworkInfoPopupLastCameraRotation.copyFrom(camera.rotation);
+            return true;
+        }
+
+        return false;
+    }
+
+    function updateArtworkInfoPopupThrottled(force) {
+        if (isDraggingArtwork || isDraggingSphere) {
+            if (currentArtworkInfoPopupMesh || isArtworkInfoPopupVisible()) {
+                hideArtworkInfoPopup();
+            }
+            return;
+        }
+
+        var now = getGalleryPerformanceNow();
+        var cameraChanged = hasArtworkInfoPopupCameraChanged();
+        var popupVisible = isArtworkInfoPopupVisible();
+        var needsIdlePoll = !popupVisible && now - artworkInfoPopupLastUpdateMs >= artworkInfoPopupIdlePollMs;
+
+        // STAGE 12C51 POPUP RECOVERY:
+        // C43/C44 made popup updates camera-change driven. That is good for performance,
+        // but mode switches / hidden popup states can leave the popup asleep forever.
+        // When hidden, poll gently even if camera has not moved.
+        if (!force && !cameraChanged && !needsIdlePoll) {
+            return;
+        }
+
+        if (!force && !needsIdlePoll && now - artworkInfoPopupLastUpdateMs < artworkInfoPopupThrottleMs) {
+            return;
+        }
+
+        artworkInfoPopupLastUpdateMs = now;
+
+        measureGalleryPerformanceMetric("popupMs", function () {
+            updateArtworkInfoPopup();
+        });
+    }
+
+
     function updateArtworkInfoPopup() {
         if (artworkInfoPopup) {
             artworkInfoPopup.classList.toggle(
@@ -23582,13 +27330,23 @@ var pipeline = ensureVisualRenderingPipeline();
         }
 
         var artwork = getNearestArtworkForInfoPopup();
+        var sculpture = getNearestSculptureForInfoPopup();
+        var target = null;
 
-        if (!artwork) {
+        if (artwork && sculpture) {
+            var artworkDistance = BABYLON.Vector3.Distance(camera.position, artwork.getAbsolutePosition());
+            var sculptureDistance = BABYLON.Vector3.Distance(camera.position, getSculptureSlotCenterWorldPosition(sculpture));
+            target = sculptureDistance < artworkDistance ? sculpture : artwork;
+        } else {
+            target = artwork || sculpture;
+        }
+
+        if (!target) {
             hideArtworkInfoPopup();
             return;
         }
 
-        showArtworkInfoPopup(artwork);
+        showArtworkInfoPopup(target);
     }
 
     scene.onPointerDown = function (evt, pickResult) {
@@ -23744,25 +27502,42 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
-            // TRYB EDYCJI = klik w postument zaczyna przeciaganie po podlodze.
-            // Jesli tylko klikniesz bez przeciagania, kamera podjedzie do postumentu.
+            // TRYB EDYCJI = klik w rzezbe/model slot dziala jak klik w artwork.
+            // Klik = zaznaczenie, Shift = multi-select, drag = przesuwanie po podlodze, double click = focus.
             if (
                 editMode &&
                 pickResult.hit &&
-                (
-                    artSpheres.includes(pickResult.pickedMesh) ||
-                    getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
-                )
+                getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
             ) {
-                var clickedModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh;
+                var clickedModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
+                var currentSculptureClickTime = Date.now();
+                var isSculptureDoubleClick =
+                    lastSculptureClickSlot === clickedModel3dSlot &&
+                    currentSculptureClickTime - lastSculptureClickTime <= doubleClickDelay;
 
-                selectModel3dSlot(clickedModel3dSlot);
+                selectModel3dSlot(clickedModel3dSlot, evt.shiftKey);
 
-                // Klik nadal może rozpocząć drag, ale zaznaczenie zostaje po puszczeniu.
-                isDraggingSphere = true;
-                dragMoved = false;
+                if (!evt.shiftKey) {
+                    selectedSphere = clickedModel3dSlot;
+                    isDraggingSphere = true;
+                    dragMoved = false;
+                    camera.detachControl(canvas);
+                }
 
-                camera.detachControl(canvas);
+                if (isSculptureDoubleClick && !evt.shiftKey) {
+                    focusCameraOnObject(getModel3dSlotFocusTarget(clickedModel3dSlot));
+
+                    isDraggingSphere = false;
+                    selectedSphere = null;
+
+                    attachGalleryCameraControl();
+
+                    lastSculptureClickSlot = null;
+                    lastSculptureClickTime = 0;
+                } else {
+                    lastSculptureClickSlot = clickedModel3dSlot;
+                    lastSculptureClickTime = currentSculptureClickTime;
+                }
 
                 return;
             }
@@ -23794,16 +27569,14 @@ var pipeline = ensureVisualRenderingPipeline();
                 return;
             }
 
-            // TRYB OGLADANIA = klik w postument podjezdza kamera do postumentu.
+            // TRYB OGLADANIA = klik w rzezbe/model podjezdza kamera do widocznej zawartosci slotu.
             if (
                 !editMode &&
                 pickResult.hit &&
-                (
-                    artSpheres.includes(pickResult.pickedMesh) ||
-                    getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
-                )
+                getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
             ) {
-                focusCameraOnObject(getModel3dSlotFromPickedMesh(pickResult.pickedMesh) || pickResult.pickedMesh);
+                var viewerModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
+                focusCameraOnObject(getModel3dSlotFocusTarget(viewerModel3dSlot));
                 return;
             }
 
@@ -23874,8 +27647,7 @@ var pipeline = ensureVisualRenderingPipeline();
                     selectedArtwork,
                     pickWall
                 );
-
-                updateAlignmentPanel();
+                scheduleArtworkDragPerformanceUpdate(selectedArtwork);
             }
         }
 
@@ -23903,11 +27675,7 @@ var pipeline = ensureVisualRenderingPipeline();
                 // Slot rzezby jest kotwica na podlodze. Przy dragowaniu po podlodze
                 // Y też bierzemy z trafionego floor segmentu, a model runtime dociagamy do podlogi.
                 selectedSphere.position.y = floorPoint.y;
-                snapModel3dSlotRuntimeToFloor(selectedSphere);
-
-                updatePedestalLight(selectedSphere);
-                updateViewerModePlaceholderVisibility();
-                updateModel3dTransformUi();
+                scheduleSculptureDragPerformanceUpdate(selectedSphere);
             }
         }
     };
@@ -23942,8 +27710,14 @@ var pipeline = ensureVisualRenderingPipeline();
                 );
             }
 
+            if (releasedArtwork) {
+                updateArtworkLight(releasedArtwork);
+                markGalleryObjectBoundsDirty(releasedArtwork);
+            }
+
             attachGalleryCameraControl();
-            updateAlignmentPanel();
+            markAlignmentPanelDirty();
+            updateAlignmentPanelIfDirty();
         }
 
         if (editMode && isDraggingSphere) {
@@ -24139,6 +27913,7 @@ var pipeline = ensureVisualRenderingPipeline();
                     material: getMaterialState(artwork.material),
                     image: getArtworkImageState(artwork),
                     artworkTransform: getArtworkTransformState(artwork),
+                    focusCamera: getGalleryObjectFocusCameraState(artwork),
                     info: getArtworkInfoState(artwork)
                 };
             }),
@@ -24155,6 +27930,10 @@ var pipeline = ensureVisualRenderingPipeline();
                     sculptureTransform: sphere.metadata && sphere.metadata.sculptureTransform
                         ? Object.assign({}, sphere.metadata.sculptureTransform)
                         : getModel3dSlotTransformState(sphere),
+                    sculptureInfo: sphere.metadata && sphere.metadata.sculptureInfo
+                        ? normalizeSculptureInfo(sphere.metadata.sculptureInfo)
+                        : null,
+                    focusCamera: getGalleryObjectFocusCameraState(sphere),
                     model3d: getModel3dState(sphere)
                 };
             })
@@ -24269,6 +28048,11 @@ var pipeline = ensureVisualRenderingPipeline();
                 setArtworkInfoState(
                     artwork,
                     artworkState.info || artworkState.artworkInfo || null
+                );
+
+                setGalleryObjectFocusCameraState(
+                    artwork,
+                    artworkState.focusCamera || artworkState.cameraFocus || artworkState.artworkFocusCamera || null
                 );
 
                 try {
@@ -24445,6 +28229,16 @@ var pipeline = ensureVisualRenderingPipeline();
                     }
                     : getModel3dSlotTransformState(sphere);
 
+
+                sphere.metadata.sculptureInfo = normalizeSculptureInfo(
+                    sphereState.sculptureInfo || sphereState.info || null
+                );
+
+                setGalleryObjectFocusCameraState(
+                    sphere,
+                    sphereState.focusCamera || sphereState.cameraFocus || sphereState.sculptureFocusCamera || null
+                );
+
                 ensureModel3dSlotUnifiedStructure(sphere, sphereState.index !== undefined ? Number(sphereState.index) : artSpheres.indexOf(sphere));
                 applySculptureTransformToSlot(sphere);
 
@@ -24477,6 +28271,7 @@ var pipeline = ensureVisualRenderingPipeline();
         refreshAllLocalSpotShadows();
         updateEditHelpStatus();
         updateAlignmentPanel();
+        updateFocusCameraUi();
     }
 
     function serializeGalleryState() {
@@ -25241,7 +29036,7 @@ var pipeline = ensureVisualRenderingPipeline();
 
             return {
                 maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-                maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+                maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
                 radius: localLightWallSegmentTargetRadius,
                 softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
                 effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
@@ -25250,7 +29045,7 @@ var pipeline = ensureVisualRenderingPipeline();
         getLocalLightSegmentSearchSettings: function () {
             return {
                 maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-                maxSegmentsPerLight: localLightWallSegmentTargetMaxCount,
+                maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
                 radius: localLightWallSegmentTargetRadius,
                 softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
                 effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
