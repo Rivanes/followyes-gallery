@@ -1,35 +1,43 @@
-Berryboy Art Gallery — Stage 12C52
-Local Light Parameter Idle Commit Fix
+Berryboy Art Gallery — Stage 12C62S5
+Asset Retry Loader / Critical Import Resilience
 
-Base: Stage 12C51 — PointLight Surface Reach + Spawn Stagger Fix
+Base: Stage 12C62S4 — Production Asset Loading Guard + Popup Frosted UI
 
 Goal
-- Reduce FPS drops that happen after changing Local Light settings, especially Range, Angle, Blend and target checkboxes.
-- Keep live feedback responsive, but delay heavy target/shadow recomputation until the user stops interacting.
+- Keep the production gallery from opening in a half-loaded state when critical GLB assets fail or time out.
+- Retry critical asset imports before showing a failure screen.
+- Preserve the current No Hard Cut Local Lights line: Range / Angle / Blend target assignment, colored target debug outlines, no shader Hard Cut, no Proof View, no native bypass.
 
 Changed
-1. Local Light slider input is now light-preview only.
-   - Updates actual light value live.
-   - Updates helper/range guide through existing throttled helper pipeline.
-   - Does not rebuild includedOnlyMeshes / wall/floor/ceiling targets on every input.
+1. Full project package restored.
+   - index.html
+   - package.json
+   - README.md
+   - src/Gallery_V0_7.js
+   - src/Gallery_V0_8.js
+   - src/Gallery_V0_10.js
+   - src/Gallery_V0_11.js
+   - login-disabled stage TXT
 
-2. Parameter final commit after idle.
-   - Heavy target rebuild is scheduled after idle instead of immediate slider release.
-   - Multiple changes are merged per light.
-   - Multiple selected lights are staggered slightly to avoid one-frame spikes.
+2. Current engine copied into both active V0_11 and compatibility V0_10 files.
+   - src/Gallery_V0_11.js
+   - src/Gallery_V0_10.js
 
-3. Target checkboxes use the same idle commit path.
-   - Floor/Walls/Ceiling/Artworks/Sculptures/Props toggles no longer force immediate heavy retarget.
+3. Critical asset retry loader.
+   - floor: 3 attempts, critical
+   - wall: 3 attempts, critical
+   - ceiling: 3 attempts, critical
+   - props: 2 attempts, optional
+   - each attempt has a timeout guard
 
-4. Spot shadow refresh delayed.
-   - Spot shadow map refresh happens after the final target commit, not during the live parameter motion.
+4. Critical loading gate.
+   - Viewer is blocked only after final failure of floor / wall / ceiling.
+   - Props can fail without blocking the gallery.
+   - Retry loading button remains available after final critical failure.
 
-5. UI sync reduced during slider motion.
-   - Slider `input` events skip full control resync.
-   - `change` events resync UI, but still avoid immediate heavy target rebuild.
-
-6. Debug additions.
-   - Performance debug now shows parameter preview skips / final scheduled / final commits.
+5. Debug hooks.
+   - BerryboyArtGalleryLoading.getDebug()
+   - BerryboyArtGalleryLoading.getRetryConfig()
 
 Validation
 - node --check src/Gallery_V0_11.js
@@ -38,5 +46,6 @@ Validation
 - unzip -t ZIP
 
 Notes
-- This stage does not change Popup, PointLight occlusion, Visual Settings or Focus Camera.
-- It only optimizes Local Light parameter changes after C51.
+- This package restores the older full-project ZIP layout.
+- No Hard Cut / Proof View / shader overlay / native bypass was added back.
+- Local Lights target assignment remains the production path.

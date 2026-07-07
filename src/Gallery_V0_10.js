@@ -16,6 +16,14 @@
   - Stage 12C29 Clean: unified sculpture/model slot system with artwork-like flow.
   - Stage 12C44: Observer Lifecycle + Deep Edit Performance Cleanup.
   - Stage 12C45: Local Lights + Look Responsibility Cleanup.
+  - Stage 12C60B3A: Startup Clean Target Rebuild — load-time full retarget ignores stale target cache/committed segment maps.
+  - Stage 12C60B3: Segment-aware local retarget + load-time light stabilization.
+  - Stage 12C60B3F: Spot Floor Footprint Target Assist — floor segment wewnątrz stożka Spota może zostać dodany jako protected target, żeby usunąć twarde dziury bez ruszania całej strategii loadingu.
+  - Stage 12C60B3C: Unified Local Light Final Commit + Segment Relation Refresh.
+  - Stage 12C60B3E: Safe rollback to C60B3C baseline before B3D/B3D1 floor-target experiments.
+  - Stage 12C60B: Wall Texture Cache + Segment Target Cache.
+  - Stage 12C60B1: Segment Target Budget Priority Fix.
+  - Stage 12C60A: Local Light Budget Stabilization — tiered material light budgets, active Spot shadow budget and soft-delete pool limit.
   - Etap 7: Local Light Groups dostaly batch actions: Enable / Disable / Solo.
   - Etap 7: Solo Group zapisuje poprzednie stany Enabled i potrafi je przywrocic.
   - Poprawka: Targets przeniesione do zwijanej sekcji ADVANCED.
@@ -26,6 +34,22 @@
   - TARGET FIX: Roof/Ceiling dodany jako osobny target lokalnych lamp, wlaczony domyslnie.
   - Etap 9: zapis i odczyt pelnego stanu Local Lights: lampy, parametry, transform, targets i groups.
   - WEB: zapis/odczyt online przez GalleryApp + Supabase gallery_state / id = main.
+  - Stage 12C60A: Local Light Budget Stabilization — material light budgets, Spot shadow budget, soft-delete pool limit.
+  - Stage 12C60A1 Hotfix: Wall/Artwork light budget safety — segmenty ścian nie powinny już gubić lamp przy niższym globalnym budżecie.
+  - Stage 12C60A2 Hotfix: Spot Wall Occlusion Safety — SpotLight nie targetuje segmentów za blokującą ścianą.
+  - Stage 12C60A3 Hotfix: Spot Floor Occlusion Safety — SpotLight nie targetuje podłogi za blokującą ścianą.
+  - Stage 12C60A4 Hotfix: Spot Floor Contact Leak Hardening — mocniejsze lokalne cienie Spota + brak primary floor bypass.
+  - Stage 12C60A5 Hotfix: Spot Floor Multi-Sample Occlusion — floor targety Spota nie są już odcinane jednym punktem segmentu.
+  - Stage 12C61A: Dead Code Cleanup Pass 1 — usunieto ukryty focusCameraTestButton i legacy model3dSelectionHighlightLayer z aktywnego kodu.
+  - Stage 12C62J: Target Resolver Clean Base — usunieto aktywne hard-cut / occluder-cut / shadow-cut eksperymenty z targetowania. Spot targetuje tylko po helper cone per surface; targety sa czysta optymalizacja i baza pod osobny shader/per-fragment light cut.
+  - Stage 12C62L: Helper-Ray First-Hit Target Resolver — Spot targetuje wall/floor/ceiling przez realne pierwsze trafienie helper-raya.
+  - Stage 12C62M: First-Hit Resolver Cleanup / Legacy Removal — usunieto aktywne legacy edge/occlusion knobs ze Spota, cache key i debug/API oczyszczone pod first-hit.
+  - Stage 12C62N: Spot Target Assignment Restore / No Hard Cut — produkcyjny powrot do targetowania Spota przez Range / Angle / Blend, kolorowe przypisane segmenty widoczne bez przyciskow, bez shader Hard Cut / Proof View / native bypass.
+  - Stage 12C62N1: Low Angle Blend Softness Boost — Blend 1.0 ma mocniejszy soft edge przy waskim Angle; bez Hard Cut i bez dodatkowych przyciskow.
+  - Stage 12C62S4: Production Asset Loading Guard + Popup Frosted UI — krytyczne assety floor/wall/ceiling blokują wejście do viewer mode, loader ma timeout/debug; popupy artwork/sculpture dostają spójny dark frosted glass styl.
+  - Stage 12C62S5: Asset Retry Loader / Critical Import Resilience — krytyczne assety floor/wall/ceiling mają 3 próby importu z timeoutem per próba; props ma 2 próby jako optional. Viewer jest blokowany dopiero po finalnym failu krytycznych assetów.
+  - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
+  - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
 
   Zasada dalszej pracy:
@@ -1479,9 +1503,55 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var shadowCasterMeshes = [];
     var mainShadowSoftnessValue = 34;
     var localLightingShadowsEnabled = true;
-    var localSpotShadowMapSize = 1024;
+    // STAGE 12C60A - LOCAL LIGHT BUDGET STABILIZATION
+    // 24 swiatla na kazdym materiale bylo zbyt drogim globalnym shader budgetem.
+    // Zostawiamy wiele lamp w scenie, ale material liczy tylko tyle swiatel, ile ma sens dla swojej roli.
+    // STAGE 12C60A1 HOTFIX:
+    // Pierwszy budzet byl zbyt agresywny dla scian/ekspozycji i segmenty zaczely "walczyc" o lampy.
+    // Podnosimy bezpieczny budzet powierzchni ekspozycyjnych, ale helpery/propsy zostaja tanie.
+    var localSpotShadowMapSize = 512;
+    var localMaxActiveSpotShadows = 2;
+    // STAGE 12C60A4/A5 HOTFIX:
+    // A4 proved that solving floor leakage with stronger darkness is too blunt: it can create
+    // a dark contact strip near walls. A5 keeps wall caster priority, but moves the main fix
+    // back into target selection: Spot floor visibility is now multi-sampled before a whole
+    // floor segment is accepted or removed from includedOnlyMeshes.
+    var localSpotShadowOcclusionDarkness = 0.35;
+    var localSpotShadowCasterLimit = 96;
+    var localSpotShadowWallCasterPriorityEnabled = true;
     var localShadowRefreshThrottleMs = 90;
-    var commonLightingMaxSimultaneousLights = 24;
+    var commonLightingMaxSimultaneousLights = 8;
+    var commonLightingMaterialBudgets = {
+        helper: 1,
+        floor: 6,
+        ceiling: 8,
+        wall: 12,
+        prop: 4,
+        sculpture: 8,
+        artwork: 12,
+        high: 12,
+        default: 6
+    };
+    var commonLightingMaterialSupportPassId = 0;
+    var commonLightingBudgetDebugStats = {
+        materialConfiguredCount: 0,
+        lastMaterialName: null,
+        lastMaterialRole: null,
+        lastMaterialBudget: null,
+        configuredRoles: {},
+        configuredBudgets: {},
+        lastReason: "initial"
+    };
+    var localSpotShadowBudgetDebugStats = {
+        maxActiveSpotShadows: localMaxActiveSpotShadows,
+        shadowMapSize: localSpotShadowMapSize,
+        candidateCount: 0,
+        activeShadowIds: [],
+        budgetDisabledIds: [],
+        pointDisabledIds: [],
+        lastRefreshReason: "initial",
+        lastRefreshTime: null
+    };
     var localShadowCasterMeshes = [];
     var localShadowReceiverMeshes = [];
 
@@ -1544,17 +1614,164 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mesh.receiveShadows = !!shouldReceive;
     }
 
-    function configureMaterialForCommonLighting(material) {
+    function getCommonLightingMeshRole(mesh) {
+        if (!mesh) {
+            return "default";
+        }
+
+        var metadata = mesh.metadata || {};
+
+        if (metadata.hiddenHelper || metadata.localLightId || metadata.role === "localLightHelper") {
+            return "helper";
+        }
+
+        if (Array.isArray(wallMeshes) && wallMeshes.indexOf(mesh) !== -1) {
+            return "wall";
+        }
+
+        if (Array.isArray(floorMeshes) && floorMeshes.indexOf(mesh) !== -1) {
+            return "floor";
+        }
+
+        if (Array.isArray(ceilingMeshes) && ceilingMeshes.indexOf(mesh) !== -1) {
+            return "ceiling";
+        }
+
+        if (Array.isArray(propMeshes) && propMeshes.indexOf(mesh) !== -1) {
+            return "prop";
+        }
+
+        if (Array.isArray(artworks) && artworks.indexOf(mesh) !== -1) {
+            return "artwork";
+        }
+
+        if (Array.isArray(artSpheres) && artSpheres.indexOf(mesh) !== -1) {
+            return "sculpture";
+        }
+
+        if (metadata.artworkSlot || metadata.detachedArtworkImagePlane || metadata.galleryArtworkImagePlane) {
+            return "artwork";
+        }
+
+        if (metadata.sculptureMesh || metadata.model3dRuntime || metadata.model3dMesh) {
+            return "sculpture";
+        }
+
+        return "default";
+    }
+
+    function getCommonLightingMaterialRole(material, mesh) {
+        if (material && material.metadata && material.metadata.galleryLightBudgetRoleOverride) {
+            return material.metadata.galleryLightBudgetRoleOverride;
+        }
+
+        var meshRole = getCommonLightingMeshRole(mesh);
+
+        if (meshRole && meshRole !== "default") {
+            return meshRole;
+        }
+
+        var name = String(
+            (material && (material.name || material.id)) ||
+            (mesh && mesh.name) ||
+            ""
+        ).toLowerCase();
+
+        if (name.indexOf("wall") !== -1 || name.indexOf("segment") !== -1) {
+            return "wall";
+        }
+
+        if (name.indexOf("floor") !== -1 || name.indexOf("podloga") !== -1) {
+            return "floor";
+        }
+
+        if (name.indexOf("ceiling") !== -1 || name.indexOf("roof") !== -1 || name.indexOf("sufit") !== -1) {
+            return "ceiling";
+        }
+
+        if (name.indexOf("artwork") !== -1 || name.indexOf("image") !== -1 || name.indexOf("painting") !== -1) {
+            return "artwork";
+        }
+
+        if (name.indexOf("sculpt") !== -1 || name.indexOf("model3d") !== -1 || name.indexOf("pedestal") !== -1) {
+            return "sculpture";
+        }
+
+        if (name.indexOf("helper") !== -1 || name.indexOf("marker") !== -1 || name.indexOf("gizmo") !== -1) {
+            return "helper";
+        }
+
+        return "default";
+    }
+
+    function getCommonLightingBudgetForMaterial(material, mesh) {
+        var role = getCommonLightingMaterialRole(material, mesh);
+        var budget = commonLightingMaterialBudgets[role];
+
+        if (budget === undefined || budget === null) {
+            budget = commonLightingMaterialBudgets.default;
+        }
+
+        budget = Math.max(1, Math.min(16, Math.floor(Number(budget) || commonLightingMaxSimultaneousLights || 6)));
+
+        return {
+            role: role,
+            budget: budget
+        };
+    }
+
+    function recordCommonLightingBudgetDebug(material, mesh, info) {
+        commonLightingBudgetDebugStats.materialConfiguredCount += 1;
+        commonLightingBudgetDebugStats.lastMaterialName = material ? (material.name || material.id || null) : null;
+        commonLightingBudgetDebugStats.lastMaterialRole = info.role;
+        commonLightingBudgetDebugStats.lastMaterialBudget = info.budget;
+        commonLightingBudgetDebugStats.configuredRoles[info.role] = (commonLightingBudgetDebugStats.configuredRoles[info.role] || 0) + 1;
+        commonLightingBudgetDebugStats.configuredBudgets[String(info.budget)] = (commonLightingBudgetDebugStats.configuredBudgets[String(info.budget)] || 0) + 1;
+
+        if (material) {
+            material.metadata = material.metadata || {};
+            material.metadata.galleryLightBudgetRole = info.role;
+            material.metadata.galleryLightBudget = info.budget;
+        }
+
+        if (mesh) {
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.galleryLightBudgetRole = info.role;
+        }
+    }
+
+    function configureMaterialForCommonLighting(material, mesh) {
         if (!material) {
             return;
         }
 
         // Babylon domyslnie liczy ograniczona liczbe swiatel na material.
-        // Przy obrazach, rzezbach i nowych lampach recznie dodany Spot/Point mogl istniec,
-        // ale shader materialu go ignorowal. To byl powod, dla ktorego nowe lampy
-        // wygladaly jakby nie swiecily.
+        // Stage 12C60A: nie podbijamy juz kazdego materialu do 24, bo to robi ciezkie shadery.
+        // Budzet zalezy od roli materialu/mesha: sciany/podloga sa taniej, obrazy moga miec wiecej swiatla.
         if ("maxSimultaneousLights" in material) {
-            material.maxSimultaneousLights = commonLightingMaxSimultaneousLights;
+            var budgetInfo = getCommonLightingBudgetForMaterial(material, mesh);
+
+            // STAGE 12C60A1:
+            // Jeden material bywa wspoldzielony przez kilka mesh'y. W jednej rundzie material support
+            // nie wolno go najpierw podniesc dla sciany, a potem przypadkiem obnizyc przez inny mesh/default.
+            material.metadata = material.metadata || {};
+
+            if (
+                material.metadata.galleryLightBudgetPassId === commonLightingMaterialSupportPassId &&
+                Number(material.metadata.galleryLightBudget || 0) > budgetInfo.budget
+            ) {
+                budgetInfo = {
+                    role: material.metadata.galleryLightBudgetRole || budgetInfo.role,
+                    budget: Number(material.metadata.galleryLightBudget || budgetInfo.budget)
+                };
+            }
+
+            if (material.maxSimultaneousLights !== budgetInfo.budget) {
+                material.maxSimultaneousLights = budgetInfo.budget;
+            }
+
+            material.metadata.galleryLightBudgetPassId = commonLightingMaterialSupportPassId;
+            recordCommonLightingBudgetDebug(material, mesh, budgetInfo);
         }
 
         // Sciany z GLTF potrafia byc cienkie / jednostronne.
@@ -1569,17 +1786,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        configureMaterialForCommonLighting(mesh.material);
+        configureMaterialForCommonLighting(mesh.material, mesh);
     }
 
     function refreshCommonLightingMaterialSupport() {
+        commonLightingMaterialSupportPassId += 1;
+        commonLightingBudgetDebugStats.materialConfiguredCount = 0;
+        commonLightingBudgetDebugStats.configuredRoles = {};
+        commonLightingBudgetDebugStats.configuredBudgets = {};
+
         scene.materials.forEach(function (material) {
-            configureMaterialForCommonLighting(material);
+            configureMaterialForCommonLighting(material, null);
         });
 
         scene.meshes.forEach(function (mesh) {
             if (mesh && mesh.material) {
-                configureMaterialForCommonLighting(mesh.material);
+                configureMaterialForCommonLighting(mesh.material, mesh);
             }
         });
     }
@@ -1593,6 +1815,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function scheduleCommonLightingMaterialSupport(reason) {
         commonLightingMaterialSupportLastReason = reason || commonLightingMaterialSupportLastReason || "deferred";
+        commonLightingBudgetDebugStats.lastReason = commonLightingMaterialSupportLastReason;
 
         if (commonLightingMaterialSupportDeferredPending) {
             return;
@@ -1652,10 +1875,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         shadowGenerator.usePercentageCloserFiltering = true;
         shadowGenerator.useContactHardeningShadow = false;
         shadowGenerator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
-        shadowGenerator.bias = 0.00015;
-        shadowGenerator.normalBias = 0.03;
+        shadowGenerator.bias = 0.00006;
+        shadowGenerator.normalBias = 0.006;
         shadowGenerator.depthScale = 50;
-        shadowGenerator.darkness = 0.02;
+        // C60A4: 0.02 made local shadows almost invisible, so wall blockers could not
+        // mask Spot contribution on floor meshes that continue behind a corner.
+        shadowGenerator.darkness = localSpotShadowOcclusionDarkness;
         shadowGenerator.forceBackFacesOnly = false;
 
         var shadowMap = shadowGenerator.getShadowMap();
@@ -1761,6 +1986,47 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return BABYLON.Vector3.DistanceSquared(lightPosition, approx.center) <= maxDistance * maxDistance;
     }
 
+    function isLocalSpotWallShadowBlockerMesh(mesh) {
+        if (!mesh || mesh.name === "__root__") {
+            return false;
+        }
+
+        if (typeof isLightingWallSegmentMesh === "function" && isLightingWallSegmentMesh(mesh)) {
+            return true;
+        }
+
+        if (Array.isArray(wallMeshes) && wallMeshes.indexOf(mesh) !== -1) {
+            return true;
+        }
+
+        var name = String(mesh.name || "").toLowerCase();
+        return name.indexOf("wall") !== -1 || name.indexOf("segment_wall") !== -1;
+    }
+
+    function getLocalShadowCasterSortWeight(item, mesh, lightPosition) {
+        if (!mesh) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        var approx = getMeshShadowApproxCenterAndRadius(mesh);
+        var distance = BABYLON.Vector3.DistanceSquared(lightPosition, approx.center);
+
+        // C61A3: contact leaks przy scianach/podlodze byly wzmacniane przez to,
+        // ze local shadow renderList priorytetyzowal tylko Wall_segment_*.
+        // Po resolver parity sufit/podloga/sciany moga byc fallback meshami, wiec
+        // kazdy realny wall mesh musi byc traktowany jako blocker pierwszej klasy.
+        if (
+            item &&
+            item.type === "spot" &&
+            localSpotShadowWallCasterPriorityEnabled &&
+            isLocalSpotWallShadowBlockerMesh(mesh)
+        ) {
+            distance -= 100000000;
+        }
+
+        return distance;
+    }
+
     function getLocalShadowCasterMeshesForItem(item) {
         var candidates = [];
 
@@ -1773,14 +2039,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var lightPosition = getLocalLightWorldPosition(item);
 
         candidates.sort(function (a, b) {
-            var ca = getMeshShadowApproxCenterAndRadius(a).center;
-            var cb = getMeshShadowApproxCenterAndRadius(b).center;
-
-            return BABYLON.Vector3.DistanceSquared(lightPosition, ca) - BABYLON.Vector3.DistanceSquared(lightPosition, cb);
+            return getLocalShadowCasterSortWeight(item, a, lightPosition) - getLocalShadowCasterSortWeight(item, b, lightPosition);
         });
 
-        // Keep the list bounded. Spot shadows mainly need nearby casters; distant casters were causing spikes.
-        return candidates.slice(0, 48);
+        // Keep the list bounded, but leave enough room for wall blockers after prioritization.
+        return candidates.slice(0, localSpotShadowCasterLimit);
     }
 
     function setLocalShadowRenderListIfChanged(item, shadowMap, nextMeshes) {
@@ -1865,27 +2128,103 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+    function getLocalSpotShadowPriority(item) {
+        if (!item || !item.light) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        var selectedBonus = Array.isArray(selectedLocalLights) && selectedLocalLights.indexOf(item) !== -1
+            ? -1000000
+            : 0;
+
+        var enabledBonus = getLocalLightUserEnabled(item) ? 0 : 100000;
+        var lightPosition = getLocalLightWorldPosition(item);
+        var distance = camera && camera.position
+            ? BABYLON.Vector3.DistanceSquared(camera.position, lightPosition)
+            : 0;
+
+        return selectedBonus + enabledBonus + distance;
+    }
+
+    function disableLocalSpotShadowByBudget(item, reason) {
+        if (!item) {
+            return;
+        }
+
+        item._localSpotShadowBudgetDisabled = true;
+        item._localSpotShadowBudgetDisabledReason = reason || "budget";
+
+        if (item.localShadowGenerator && item.localShadowGenerator.getShadowMap) {
+            var shadowMap = item.localShadowGenerator.getShadowMap();
+
+            if (shadowMap) {
+                shadowMap.renderList = [];
+                item._lastLocalShadowRenderListSignature = "__budget_disabled__";
+
+                if (shadowMap.resetRefreshCounter) {
+                    shadowMap.resetRefreshCounter();
+                }
+            }
+        }
+    }
+
     function refreshAllLocalSpotShadowsImmediate() {
         markLocalLightCameraCullingDirty();
+
+        var shadowCandidates = [];
+        localSpotShadowBudgetDebugStats.activeShadowIds = [];
+        localSpotShadowBudgetDebugStats.budgetDisabledIds = [];
+        localSpotShadowBudgetDebugStats.pointDisabledIds = [];
+        localSpotShadowBudgetDebugStats.maxActiveSpotShadows = localMaxActiveSpotShadows;
+        localSpotShadowBudgetDebugStats.shadowMapSize = localSpotShadowMapSize;
+        localSpotShadowBudgetDebugStats.lastRefreshTime = Date.now();
+
         localLightItems.forEach(function (item) {
-            if (!item) {
+            if (!item || !item.light || item.softDeleted) {
                 return;
             }
 
             if (BABYLON.PointLight && item.light instanceof BABYLON.PointLight) {
                 disableLocalPointLightShadow(item);
+                localSpotShadowBudgetDebugStats.pointDisabledIds.push(item.id || item.name || null);
+                return;
+            }
+
+            if (!getLocalLightUserEnabled(item)) {
+                disableLocalSpotShadowByBudget(item, "disabled");
                 return;
             }
 
             if (isLocalLightNativeShadowCapable(item)) {
-                refreshLocalSpotShadowForItem(item);
+                shadowCandidates.push(item);
             }
+        });
+
+        shadowCandidates.sort(function (a, b) {
+            return getLocalSpotShadowPriority(a) - getLocalSpotShadowPriority(b);
+        });
+
+        localSpotShadowBudgetDebugStats.candidateCount = shadowCandidates.length;
+
+        shadowCandidates.forEach(function (item, index) {
+            if (index < localMaxActiveSpotShadows) {
+                item._localSpotShadowBudgetDisabled = false;
+                item._localSpotShadowBudgetDisabledReason = null;
+                localSpotShadowBudgetDebugStats.activeShadowIds.push(item.id || item.name || null);
+                refreshLocalSpotShadowForItem(item);
+                return;
+            }
+
+            disableLocalSpotShadowByBudget(item, "overBudget");
+            localSpotShadowBudgetDebugStats.budgetDisabledIds.push(item.id || item.name || null);
         });
     }
 
     var localSpotShadowRefreshPending = false;
 
     function refreshAllLocalSpotShadows(force) {
+        localSpotShadowBudgetDebugStats.lastRefreshReason = force ? "force" : "deferred";
+
         if (force) {
             return measureGalleryPerformanceMetric("lightShadowsMs", function () {
                 return refreshAllLocalSpotShadowsImmediate();
@@ -2084,8 +2423,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
-    canvas.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
+    registerGalleryDomEvent("canvasContextMenu", canvas, "contextmenu", function (event) {
+        if (event && event.preventDefault) {
+            event.preventDefault();
+        }
     });
 
     // UI ANCHOR FIX
@@ -2143,6 +2484,69 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var artworkAuthors = [];
 
 
+    // STAGE 12C62S - STATIC WORLD BOUNDS CACHE
+    // Static floor/wall/ceiling meshes are frozen. Bounds are cached so debug/target helpers
+    // do not keep forcing computeWorldMatrix(true) on unchanged gallery geometry.
+    var galleryStaticWorldBoundsCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+
+    function clearGalleryStaticWorldBoundsCache(reason) {
+        galleryStaticWorldBoundsCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+        if (typeof localLightTargetDebugStats !== "undefined") {
+            localLightTargetDebugStats.lastStaticBoundsClearReason = reason || "staticBoundsClear";
+        }
+    }
+
+    function getCachedMeshWorldBounds(mesh, forceRefresh) {
+        if (!mesh || !mesh.getBoundingInfo) {
+            return null;
+        }
+
+        var isFrozenStatic = !!(mesh.metadata && mesh.metadata.galleryStaticWorldMatrixFrozen);
+
+        if (!forceRefresh && isFrozenStatic && galleryStaticWorldBoundsCache && galleryStaticWorldBoundsCache.has(mesh)) {
+            var cached = galleryStaticWorldBoundsCache.get(mesh);
+            return cached
+                ? {
+                    min: cached.min.clone(),
+                    max: cached.max.clone(),
+                    center: cached.center.clone()
+                }
+                : null;
+        }
+
+        try {
+            if (mesh.computeWorldMatrix && (!isFrozenStatic || forceRefresh)) {
+                mesh.computeWorldMatrix(true);
+            }
+
+            var boundingInfo = mesh.getBoundingInfo();
+            var box = boundingInfo ? boundingInfo.boundingBox : null;
+
+            if (!box || !box.minimumWorld || !box.maximumWorld) {
+                return null;
+            }
+
+            var bounds = {
+                min: box.minimumWorld.clone(),
+                max: box.maximumWorld.clone(),
+                center: box.centerWorld ? box.centerWorld.clone() : box.minimumWorld.add(box.maximumWorld).scale(0.5)
+            };
+
+            if (isFrozenStatic && galleryStaticWorldBoundsCache) {
+                galleryStaticWorldBoundsCache.set(mesh, bounds);
+            }
+
+            return {
+                min: bounds.min.clone(),
+                max: bounds.max.clone(),
+                center: bounds.center.clone()
+            };
+        } catch (boundsError) {
+            return null;
+        }
+    }
+
+
     // STAGE 12C44 - STATIC SCENE MESH FREEZE
     // Walls/floor/ceiling are static geometry. Materials may still change, but world matrices do not.
     function freezeStaticGalleryMesh(mesh, reason) {
@@ -2164,6 +2568,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mesh.freezeWorldMatrix();
             mesh.metadata.galleryStaticWorldMatrixFrozen = true;
             mesh.metadata.galleryStaticWorldMatrixFrozenReason = reason || "static";
+            getCachedMeshWorldBounds(mesh, true);
         } catch (freezeError) {
             mesh.metadata.galleryStaticWorldMatrixFrozen = false;
         }
@@ -2186,6 +2591,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (mesh.metadata) {
             mesh.metadata.galleryStaticWorldMatrixFrozen = false;
+        }
+
+        if (galleryStaticWorldBoundsCache) {
+            try {
+                galleryStaticWorldBoundsCache.delete(mesh);
+            } catch (cacheDeleteError) {}
         }
     }
 
@@ -2657,17 +3068,29 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         blend: 0.66
     };
 
+    // STAGE 12C62S - SAFE SPOT BLEND MAPPING
+    // Babylon SpotLight.exponent działa odwrotnie niż intuicyjny UI Blend:
+    // większy exponent = ostrzejsze / bardziej skupione światło.
+    // Dlatego Blend 0.00 = ostro, Blend 1.00 = miękko.
+    // UI zostaje 0..1, bez nowych kontrolek i bez shader Hard Cut.
+    var localSpotBlendExponentSharp = 128.0;
+    var localSpotBlendExponentSoft = 0.5;
+
     function getSpotBlendFromExponent(exponent) {
         var safeExponent = isFinite(exponent) ? Number(exponent) : 1.0;
-        var normalized = Math.min(Math.max((safeExponent - 0.5) / 127.5, 0), 1);
+        var normalizedSharpness = Math.min(
+            Math.max((safeExponent - localSpotBlendExponentSoft) / Math.max(1, localSpotBlendExponentSharp - localSpotBlendExponentSoft), 0),
+            1
+        );
 
-        return Math.sqrt(normalized);
+        return Math.max(0, Math.min(1, 1 - Math.sqrt(normalizedSharpness)));
     }
 
     function getExponentFromSpotBlend(blend) {
         var safeBlend = Math.max(0, Math.min(1, Number(blend)));
+        var sharpness = Math.pow(1 - safeBlend, 2);
 
-        return 0.5 + Math.pow(safeBlend, 2) * 127.5;
+        return localSpotBlendExponentSoft + sharpness * Math.max(1, localSpotBlendExponentSharp - localSpotBlendExponentSoft);
     }
 
     function forceStandardSpotFalloff(light) {
@@ -2818,24 +3241,92 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Local Lights z targetem Walls nie powinny już trafiać we wszystkie wallMeshes,
     // tylko w najbliższe segmenty ściany.
     var localLightWallSegmentTargetingEnabled = true;
-    // STAGE 10C:
-    // Poprzednio limit 5 oznaczał: jedna lampa -> maksymalnie 5 segmentów.
-    // To dawało twarde odcięcia światła na granicach segmentów.
-    // Teraz limit oznacza: jeden segment -> maksymalnie 5 świateł.
-    // STAGE 12C13 - WIDER SEGMENT LIGHT SEARCH
-    // 12C12 było za ciasne:
-    // - max 14 segmentów na lampę
-    // - radius 8.5 + soft 2.0
-    // To dawało widoczne, ostre ucięcia światła na Floor/Wall/Ceiling segmentach.
-    //
-    // Ten zestaw jest celowo dużo szerszy.
-    // Nadal nie robimy dynamicznego przepinania materiałów jak w 12C9.
+    // STAGE 12C62M:
+    // C62L/C62M nie używa już radius/softExtra jako heurystyki targetowania Spota.
+    // Dla Spota decyduje wyłącznie first-hit helper-ray; poniższe limity dotyczą budżetu
+    // segmentów i maksymalnej liczby targetów w snapshotach/debugu.
     var localLightWallSegmentMaxLightsPerSegment = 5;
     var localLightWallSegmentTargetMaxCount = 18;
-    var localLightWallSegmentTargetRadius = 12.0;
-    var localLightWallSegmentSoftEdgeExtraRadius = 4.0;
     var localLightWallSegmentBudgetPassActive = false;
     var localLightWallSegmentBudgetMap = {};
+
+    // STAGE 12C60B1 - SEGMENT TARGET BUDGET PRIORITY FIX
+    // Segment budgets must be spent only by real active editor lights. Disabled lights
+    // used to keep old includedOnlyMeshes and could steal segment slots during full rebuild.
+    // The selected/manual light now gets first priority so APPLY LIGHT TARGETS cannot leave
+    // visible holes just because older registered lights consumed the segment budget first.
+    var localLightSegmentBudgetSkipDisabledEnabled = true;
+    var localLightSegmentBudgetSelectedPriorityEnabled = true;
+    var localLightSegmentBudgetDebugStats = {
+        disabledSkipped: 0,
+        budgetBlocked: 0,
+        priorityBypasses: 0,
+        targetCacheClearedForTransform: 0,
+        lastDisabledItemId: null,
+        lastBlockedItemId: null,
+        lastBlockedSegmentName: null,
+        lastBlockedSurface: null,
+        lastPriorityItemId: null,
+        lastPrioritySurface: null
+    };
+
+
+    // STAGE 12C60B3 - SEGMENT-AWARE LOCAL RETARGET + LOAD-TIME STABILIZATION
+    // C60B2 was correct logically but too expensive: one moved light triggered a full
+    // active-light retarget pass. C60B3 keeps one full pass for load/startup only,
+    // and during editing retargets only the moved light plus lights sharing its old/new segments.
+    var localLightSegmentAwareRetargetEnabled = true;
+    var localLightSegmentAwareRetargetDelayMs = 120;
+    var localLightSegmentAwareDiscoveryActive = false;
+    var localLightLoadTimeRetargetEnabled = true;
+    var localLightLoadTimeRetargetDelayMs = 340;
+    var localLightLoadTimeRetargetTimer = null;
+    var localLightLoadTimeRetargetReason = null;
+    var localLightSegmentToLightMap = {};
+    var localLightSegmentAwareRetargetDebugStats = {
+        runs: 0,
+        scheduled: 0,
+        canceled: 0,
+        loadFullRuns: 0,
+        loadFullScheduled: 0,
+        loadFullCanceled: 0,
+        loadFullProcessed: 0,
+        loadFullSkippedDisabled: 0,
+        loadFullSkippedSoftDeleted: 0,
+        lastMode: "none",
+        lastReason: null,
+        lastMovedLightId: null,
+        lastAffectedSegments: [],
+        lastAffectedLights: [],
+        lastRetargetedLights: [],
+        lastSkippedDisabled: 0,
+        lastSkippedSoftDeleted: 0,
+        lastRelationExpandedLights: [],
+        lastPotentialCheckedLights: 0,
+        lastPotentialMatchedLights: 0,
+        lastCommitScope: "none",
+        lastSegmentMapSize: 0,
+        lastMs: 0,
+        lastLoadMs: 0
+    };
+
+    // STAGE 12C60B3A - STARTUP CLEAN TARGET REBUILD
+    // Startup must not trust target cache / committed segment maps captured too early during load.
+    // One load-time pass now clears per-light committed target segments, disables target cache for the rebuild,
+    // rebuilds segment budget maps from zero, then stores a fresh segment->light map for editing.
+    var localLightStartupCleanTargetRebuildActive = false;
+    var localLightStartupCleanTargetRebuildDebugStats = {
+        runs: 0,
+        lastReason: null,
+        processed: 0,
+        skippedDisabled: 0,
+        skippedSoftDeleted: 0,
+        clearedLights: 0,
+        retargetedLights: [],
+        segmentMapSize: 0,
+        cacheBypassCount: 0,
+        lastMs: 0
+    };
 
     // STAGE 10F - DYNAMIC WALL SEGMENT RETARGETING WHILE MOVING LOCAL LIGHTS
     // Lampa nie może zostać przypisana raz na stałe do starych segmentów.
@@ -2879,6 +3370,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var localLightTargetPreviewActive = false;
     var localLightTargetPreviewMaxSegmentsPerLight = 8;
     var localLightTargetCacheVersion = 0;
+    // STAGE 12C60B - WALL TEXTURE + SEGMENT TARGET CACHE
+    // Target cache is deliberately conservative: key = light transform + target options +
+    // geometry/surface/object versions. Full rebuild budget passes still calculate normally.
+    var galleryGeometryVersion = 1;
+    var gallerySurfaceVersion = 1;
+    var galleryObjectVersion = 1;
+    var localLightTargetMeshCacheEnabled = true;
+    var localLightTargetMeshCacheDebugStats = {
+        hits: 0,
+        misses: 0,
+        stores: 0,
+        bypassPreview: 0,
+        bypassBudgetPass: 0,
+        bypassStartupClean: 0,
+        invalidations: 0,
+        lastHitItemId: null,
+        lastMissItemId: null,
+        lastStoreItemId: null,
+        lastCacheKey: null,
+        lastDirtyReason: null
+    };
     var localLightSegmentMeshCache = {
         walls: null,
         floor: null,
@@ -2908,14 +3420,45 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         lastShadowCasterCount: 0,
         parameterPreviewSkippedTargets: 0,
         parameterFinalCommits: 0,
-        parameterFinalScheduled: 0
+        parameterFinalScheduled: 0,
+        gizmoFinalRetargetScheduled: 0,
+        gizmoFinalRetargetExecuted: 0,
+        gizmoFinalRetargetCanceled: 0,
+        atomicTargetCommits: 0,
+        atomicTargetCommitCanceled: 0,
+        fastHelperRaycastSkipped: 0,
+        helperRecovered: 0,
+        spawnFullTargetScanSkipped: 0,
+        targetCacheHits: 0,
+        targetCacheMisses: 0,
+        targetCacheStores: 0
     };
 
-    // STAGE 12C47 - LOCAL LIGHT GIZMO DRAG PERFORMANCE
-    // Największy drop podczas przesuwania lamp nie pochodził z samej pozycji światła,
-    // tylko z rebuildów helper geometry + retargetowania segmentów + zapisu stanu w trakcie dragu.
-    // Preview ma być lekkie; pełna dokładność dopiero na dragEnd.
-    var localLightGizmoPreviewHelperThrottleMs = 180;
+
+    // STAGE 12C60B3G - TECHNICAL DEBUG BUILD / LIGHT SEGMENT DIAGNOSTICS
+    // This build intentionally does not change light targeting rules. It records why each
+    // wall/floor/ceiling segment was included or rejected and can overlay target segments
+    // for the currently selected local light.
+    // C62N: assigned target segment outlines are part of the Local Lights editing workflow.
+    // They are intentionally visible without extra UI buttons; console spam stays off.
+    var localLightSegmentDiagnosticsEnabled = true;
+    var localLightSegmentDiagnosticsConsoleEnabled = false;
+    var localLightSegmentDiagnosticsOutlineEnabled = true;
+    var localLightSegmentDiagnosticsOutlineAutoRefresh = true;
+    var localLightSegmentDiagnosticsMaxRows = 260;
+    var localLightSegmentDiagnosticsHistoryMax = 40;
+    var localLightSegmentDiagnosticsHistory = [];
+    var localLightSegmentDiagnosticsLastDump = null;
+    var localLightSegmentDiagnosticsOutlinedMeshes = [];
+    var localLightSegmentDiagnosticsOutlineLayer = null;
+    var localLightSegmentDiagnosticsPrintReasonFilter = "all";
+
+    // STAGE 12C54 - LOCAL LIGHT HELPER RESTORE + DEFERRED SEGMENT COMMIT
+    // Helpery muszą być płynne podczas ustawiania lampy. Źródłem dropów nie był sam helper,
+    // tylko przepinanie targetów segmentów/includedOnlyMeshes. Dlatego helper aktualizuje się prawie co frame,
+    // a ciężki segment retarget jest odkładany dopiero po zakończeniu dragu.
+    var localLightGizmoPreviewHelperThrottleMs = 16;
+    var localLightGizmoFinalRetargetDelayMs = 220;
 
     // STAGE 12C52 - LOCAL LIGHT CONTROL IDLE COMMIT
     // Live slider movement updates light values/helpers only. Heavy target/shadow refresh is committed after idle.
@@ -2933,6 +3476,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             : localLightWallSegmentTargetMaxCount;
     }
 
+    function clearLocalLightTargetMeshCacheForAll(reason) {
+        if (Array.isArray(localLightItems)) {
+            localLightItems.forEach(function (item) {
+                if (!item) {
+                    return;
+                }
+
+                item._cachedTargetKey = null;
+                item._cachedTargetMeshes = null;
+            });
+        }
+
+        localLightTargetMeshCacheDebugStats.invalidations += 1;
+        localLightTargetMeshCacheDebugStats.lastDirtyReason = reason || "targetCacheDirty";
+    }
+
     function markLocalLightTargetCacheDirty(reason) {
         localLightTargetCacheVersion += 1;
         localLightSegmentMeshCache.walls = null;
@@ -2940,7 +3499,35 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         localLightSegmentMeshCache.ceiling = null;
         localLightSegmentMeshCache.signature = "";
         localLightSegmentCenterCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+        clearGalleryStaticWorldBoundsCache(reason || "targetCacheDirty");
+        clearLocalLightTargetMeshCacheForAll(reason || "targetCacheDirty");
         localLightTargetDebugStats.lastReason = reason || "targetCacheDirty";
+    }
+
+    function markGalleryGeometryDirty(reason) {
+        galleryGeometryVersion += 1;
+        markLocalLightTargetCacheDirty(reason || "geometryDirty");
+    }
+
+    function markGallerySurfaceDirty(reason) {
+        gallerySurfaceVersion += 1;
+        markLocalLightTargetCacheDirty(reason || "surfaceDirty");
+    }
+
+    function markGalleryObjectsDirty(reason) {
+        galleryObjectVersion += 1;
+        markLocalLightTargetCacheDirty(reason || "objectsDirty");
+    }
+
+    function markLocalLightTargetItemCacheDirty(item, reason) {
+        if (!item) {
+            return;
+        }
+
+        item._cachedTargetKey = null;
+        item._cachedTargetMeshes = null;
+        localLightTargetMeshCacheDebugStats.invalidations += 1;
+        localLightTargetMeshCacheDebugStats.lastDirtyReason = reason || "itemTargetDirty";
     }
 
     function getLocalLightSegmentCacheSignature() {
@@ -3027,16 +3614,61 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    function addSurfaceSegmentBudgetUse(mesh, item, budgetMap, isSegmentMeshFn) {
+    function getLocalLightBudgetItemId(item) {
+        return item ? (item.id || item.name || (item.light && item.light.name) || null) : null;
+    }
+
+    function isLocalLightSelectedForBudgetPriority(item) {
+        return !!(
+            item &&
+            localLightSegmentBudgetSelectedPriorityEnabled &&
+            Array.isArray(selectedLocalLights) &&
+            selectedLocalLights.indexOf(item) !== -1
+        );
+    }
+
+    function isLocalLightEligibleForSegmentBudget(item) {
+        if (!item || item.softDeleted || item.hardDisposed || !item.light) {
+            return false;
+        }
+
+        if (
+            localLightSegmentBudgetSkipDisabledEnabled &&
+            !getLocalLightUserEnabled(item)
+        ) {
+            localLightSegmentBudgetDebugStats.disabledSkipped += 1;
+            localLightSegmentBudgetDebugStats.lastDisabledItemId = getLocalLightBudgetItemId(item);
+            return false;
+        }
+
+        return true;
+    }
+
+    function compactLocalLightSegmentBudgetList(list) {
+        return (list || []).filter(function (budgetItem, index, array) {
+            return !!budgetItem &&
+                array.indexOf(budgetItem) === index &&
+                isLocalLightEligibleForSegmentBudget(budgetItem);
+        });
+    }
+
+    function addSurfaceSegmentBudgetUse(mesh, item, budgetMap, isSegmentMeshFn, surfaceName) {
         if (!mesh || !isSegmentMeshFn(mesh)) {
             return false;
         }
 
+        if (!isLocalLightEligibleForSegmentBudget(item)) {
+            return false;
+        }
+
+        // C60B3: discovery of affected segments must not mutate the shared budget maps.
+        if (localLightSegmentAwareDiscoveryActive) {
+            return true;
+        }
+
         var key = mesh.name;
 
-        if (!budgetMap[key]) {
-            budgetMap[key] = [];
-        }
+        budgetMap[key] = compactLocalLightSegmentBudgetList(budgetMap[key] || []);
 
         if (budgetMap[key].indexOf(item) !== -1) {
             return true;
@@ -3046,6 +3678,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             localLightWallSegmentBudgetPassActive &&
             budgetMap[key].length >= localLightWallSegmentMaxLightsPerSegment
         ) {
+            if (isLocalLightSelectedForBudgetPriority(item)) {
+                budgetMap[key].push(item);
+                localLightSegmentBudgetDebugStats.priorityBypasses += 1;
+                localLightSegmentBudgetDebugStats.lastPriorityItemId = getLocalLightBudgetItemId(item);
+                localLightSegmentBudgetDebugStats.lastPrioritySurface = surfaceName || "surface";
+                return true;
+            }
+
+            localLightSegmentBudgetDebugStats.budgetBlocked += 1;
+            localLightSegmentBudgetDebugStats.lastBlockedItemId = getLocalLightBudgetItemId(item);
+            localLightSegmentBudgetDebugStats.lastBlockedSegmentName = mesh.name || null;
+            localLightSegmentBudgetDebugStats.lastBlockedSurface = surfaceName || "surface";
             return false;
         }
 
@@ -3053,261 +3697,984 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    function getLocalLightSurfaceHitFromSpotRay(item, segmentMeshes, sourceName) {
-        if (
-            !item ||
-            item.type !== "spot" ||
-            !item.light ||
-            !item.light.position ||
-            !item.light.direction ||
-            !segmentMeshes ||
-            !segmentMeshes.length
-        ) {
+
+    // STAGE 12C60B3R - REMOVED OLD RADIUS SURFACE TARGETING
+    // Surface target selection is now resolved by the pure shape resolvers below.
+
+    function getLocalLightDiagnosticItemId(item) {
+        if (!item) {
+            return "unknown-light";
+        }
+
+        return item.id || item.name || (item.light && item.light.name) || "local-light";
+    }
+
+    function getLocalLightSegmentDiagnosticSurface(mesh) {
+        if (isLightingWallSegmentMesh(mesh) || (Array.isArray(wallMeshes) && wallMeshes.indexOf(mesh) !== -1)) {
+            return "wall";
+        }
+
+        if (isLightingFloorSegmentMesh(mesh) || (Array.isArray(floorMeshes) && floorMeshes.indexOf(mesh) !== -1)) {
+            return "floor";
+        }
+
+        if (isLightingCeilingSegmentMesh(mesh) || (Array.isArray(ceilingMeshes) && ceilingMeshes.indexOf(mesh) !== -1)) {
+            return "ceiling";
+        }
+
+        return "other";
+    }
+
+    function getLocalLightSegmentDiagnosticColor(surfaceName) {
+        if (surfaceName === "wall") {
+            return new BABYLON.Color3(0.25, 0.55, 1.0);
+        }
+
+        if (surfaceName === "floor") {
+            return new BABYLON.Color3(0.25, 1.0, 0.45);
+        }
+
+        if (surfaceName === "ceiling") {
+            return new BABYLON.Color3(1.0, 0.85, 0.25);
+        }
+
+        return new BABYLON.Color3(1.0, 1.0, 1.0);
+    }
+
+    function roundLocalLightDiagnosticNumber(value) {
+        value = Number(value);
+
+        if (!isFinite(value)) {
             return null;
         }
 
-        var direction = item.light.direction.clone();
+        return Math.round(value * 1000) / 1000;
+    }
 
-        if (direction.lengthSquared() <= 0.0001) {
+    function getLocalLightSegmentDecisionReason(candidate, candidateAccepted, selected, budgetRejected, maxLimitReached, candidateData) {
+        if (selected) {
             return null;
         }
 
-        direction.normalize();
-
-        var range = item.light.range && isFinite(item.light.range)
-            ? item.light.range
-            : 12;
-
-        try {
-            var ray = new BABYLON.Ray(
-                item.light.position.clone(),
-                direction,
-                range + 0.75
-            );
-
-            var hit = scene.pickWithRay(
-                ray,
-                function (mesh) {
-                    return segmentMeshes.indexOf(mesh) !== -1;
-                }
-            );
-
-            if (hit && hit.hit && hit.pickedMesh && segmentMeshes.indexOf(hit.pickedMesh) !== -1) {
-                return {
-                    source: sourceName + "SpotRay",
-                    point: hit.pickedPoint ? hit.pickedPoint.clone() : getMeshWorldCenter(hit.pickedMesh),
-                    primaryMesh: hit.pickedMesh
-                };
-            }
-        } catch (error) {
-            console.warn(sourceName + " segment ray reference warning:", error);
+        if (budgetRejected) {
+            return "segmentBudget";
         }
 
-        return null;
-    }
-
-    function getLocalLightSurfaceReference(item, segmentMeshes, sourceName) {
-        var spotHit = getLocalLightSurfaceHitFromSpotRay(item, segmentMeshes, sourceName);
-
-        if (spotHit) {
-            return spotHit;
+        if (!candidate) {
+            return "notScanned";
         }
 
-        if (item && item.ownerMesh && item.ownerMesh.position) {
-            return {
-                source: sourceName + "OwnerPosition",
-                point: item.ownerMesh.position.clone(),
-                primaryMesh: null
-            };
+        if (candidate.frontFacing === false) {
+            return "frontFacing";
         }
 
-        return {
-            source: sourceName + "LightPosition",
-            point: getLocalLightPosition(item),
-            primaryMesh: null
-        };
-    }
-
-    function getSurfaceSegmentCandidateListForLocalLight(item, segmentMeshes, sourceName) {
-        var reference = getLocalLightSurfaceReference(item, segmentMeshes, sourceName);
-        var referencePoint = reference && reference.point
-            ? reference.point
-            : getLocalLightPosition(item);
-
-        var radius = localLightWallSegmentTargetRadius;
-
-        if (item && item.light && item.light.range) {
-            radius = Math.max(
-                radius,
-                Math.min(item.light.range * 0.9, 10.0)
-            );
+        if (candidate.visibleFromLight === false) {
+            return "occlusion";
         }
 
-        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
-        var occludedCount = 0;
-
-        var candidates = segmentMeshes.map(function (mesh) {
-            var distance = getHorizontalSegmentDistanceToReference(mesh, referencePoint);
-            var visibleFromLight = isSurfaceSegmentVisibleFromLocalLight(
-                mesh,
-                item,
-                segmentMeshes,
-                sourceName
-            );
-
-            if (!visibleFromLight) {
-                occludedCount += 1;
-            }
-
-            return {
-                mesh: mesh,
-                distance: distance,
-                visibleFromLight: visibleFromLight,
-                priority: distance <= radius ? 0 : 1
-            };
-        }).filter(function (candidate) {
-            if (!candidate.visibleFromLight) {
-                return false;
-            }
-
-            return (
-                candidate.distance <= softRadius ||
-                (
-                    reference &&
-                    reference.primaryMesh &&
-                    candidate.mesh === reference.primaryMesh
-                )
-            );
-        }).sort(function (a, b) {
-            if (a.priority !== b.priority) {
-                return a.priority - b.priority;
-            }
-
-            return a.distance - b.distance;
-        });
-
-        if (reference && reference.primaryMesh) {
-            var alreadyHasPrimary = candidates.some(function (candidate) {
-                return candidate.mesh === reference.primaryMesh;
-            });
-
-            if (!alreadyHasPrimary) {
-                candidates.unshift({
-                    mesh: reference.primaryMesh,
-                    distance: 0,
-                    priority: -1
-                });
-            }
-        }
-
-        return {
-            reference: reference,
-            referencePoint: referencePoint,
-            radius: radius,
-            softRadius: softRadius,
-            candidates: candidates,
-            occludedCount: occludedCount
-        };
-    }
-
-    function addSurfaceSegmentTargetsForLocalLight(targetList, item, options) {
-        options = options || {};
-
-        if (!options.enabled) {
-            addMeshArrayUnique(targetList, options.fallbackMeshes || []);
-            return;
-        }
-
-        var segmentMeshes = options.getSegments ? options.getSegments() : [];
-
-        if (!segmentMeshes.length) {
-            addMeshArrayUnique(targetList, options.fallbackMeshes || []);
-            return;
-        }
-
-        var candidateData = getSurfaceSegmentCandidateListForLocalLight(
-            item,
-            segmentMeshes,
-            options.sourceName || "surface"
-        );
-
-        var candidates = candidateData.candidates;
-        var selectedSegments = [];
-        var isSegmentMeshFn = options.isSegmentMesh || function () { return true; };
-        var budgetMap = options.budgetMap || {};
-
-        function addSegment(mesh) {
+        if (!candidateAccepted) {
             if (
-                mesh &&
-                isSegmentMeshFn(mesh) &&
-                selectedSegments.indexOf(mesh) === -1 &&
-                addSurfaceSegmentBudgetUse(mesh, item, budgetMap, isSegmentMeshFn)
+                candidateData &&
+                candidateData.reference &&
+                candidateData.reference.primaryMesh &&
+                candidate.mesh === candidateData.reference.primaryMesh
             ) {
-                selectedSegments.push(mesh);
-            }
-        }
-
-        if (
-            candidateData.reference &&
-            candidateData.reference.primaryMesh &&
-            isSegmentMeshFn(candidateData.reference.primaryMesh)
-        ) {
-            addSegment(candidateData.reference.primaryMesh);
-        }
-
-        candidates.forEach(function (candidate) {
-            if (selectedSegments.length >= getLocalLightCurrentMaxSegmentsPerLight()) {
-                return;
+                return "primaryRejected";
             }
 
-            addSegment(candidate.mesh);
+            return "range";
+        }
+
+        if (maxLimitReached) {
+            return "maxSegmentsPerLight";
+        }
+
+        return "candidateNotSelected";
+    }
+
+    function buildLocalLightSurfaceSegmentDiagnostic(item, surfaceName, segmentMeshes, candidateData, selectedSegments, selectedByName, rejectedByBudgetNames) {
+        candidateData = candidateData || {};
+        selectedSegments = selectedSegments || [];
+        selectedByName = selectedByName || {};
+        rejectedByBudgetNames = rejectedByBudgetNames || {};
+
+        var acceptedByName = {};
+        (candidateData.candidates || []).forEach(function (candidate) {
+            if (candidate && candidate.mesh) {
+                acceptedByName[candidate.mesh.name] = candidate;
+            }
         });
 
-        if (!selectedSegments.length && candidates.length) {
-            selectedSegments.push(candidates[0].mesh);
-        }
+        var allByName = {};
+        (candidateData.allCandidates || candidateData.candidates || []).forEach(function (candidate) {
+            if (candidate && candidate.mesh) {
+                allByName[candidate.mesh.name] = candidate;
+            }
+        });
 
-        item[options.debugKey] = {
-            mode: "segmentLightBudget",
+        var selectedNameMap = {};
+        selectedSegments.forEach(function (mesh) {
+            if (mesh && mesh.name) {
+                selectedNameMap[mesh.name] = true;
+            }
+        });
+
+        var rows = (segmentMeshes || []).map(function (mesh) {
+            var name = mesh && mesh.name ? mesh.name : "unknown-segment";
+            var candidate = allByName[name] || null;
+            var accepted = !!acceptedByName[name];
+            var selected = !!selectedNameMap[name];
+            var budgetRejected = !!rejectedByBudgetNames[name];
+            var maxLimitReached = selectedSegments.length >= getLocalLightCurrentMaxSegmentsPerLight();
+            var rejectReason = getLocalLightSegmentDecisionReason(
+                candidate,
+                accepted,
+                selected,
+                budgetRejected,
+                maxLimitReached,
+                candidateData
+            );
+
+            return {
+                segment: name,
+                surface: surfaceName,
+                candidate: accepted,
+                scanned: !!candidate,
+                included: selected,
+                includedBy: selected ? (selectedByName[name] || "target") : null,
+                rejectReason: rejectReason,
+                distance: candidate ? roundLocalLightDiagnosticNumber(candidate.distance) : null,
+                priority: candidate ? candidate.priority : null,
+                frontFacing: candidate && candidate.frontFacing !== undefined ? !!candidate.frontFacing : null,
+                visibleFromLight: candidate && candidate.visibleFromLight !== undefined ? !!candidate.visibleFromLight : null
+            };
+        });
+
+        var rejectedRows = rows.filter(function (row) {
+            return !row.included && !!row.rejectReason;
+        });
+
+        var summary = {
+            surface: surfaceName,
+            lightId: getLocalLightDiagnosticItemId(item),
+            lightType: item ? item.type : null,
             source: candidateData.reference ? candidateData.reference.source : "unknown",
             referencePoint: candidateData.referencePoint ? serializeVector3(candidateData.referencePoint) : null,
             radius: candidateData.radius,
             softRadius: candidateData.softRadius,
-            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-            candidateCount: candidates.length,
+            segmentCount: rows.length,
+            candidateCount: (candidateData.candidates || []).length,
+            scannedCount: (candidateData.allCandidates || []).length,
+            includedCount: selectedSegments.length,
+            rejectedCount: rejectedRows.length,
             occludedCount: candidateData.occludedCount || 0,
-            targetCount: selectedSegments.length,
-            targetNames: selectedSegments.map(function (mesh) {
-                return mesh.name;
-            })
+            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
+            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment
         };
 
-        addMeshArrayUnique(targetList, selectedSegments);
+        var reasonCounts = {};
+        rejectedRows.forEach(function (row) {
+            reasonCounts[row.rejectReason] = (reasonCounts[row.rejectReason] || 0) + 1;
+        });
+        summary.rejectReasons = reasonCounts;
+
+        return {
+            summary: summary,
+            rows: rows.slice(0, localLightSegmentDiagnosticsMaxRows),
+            rejected: rejectedRows.slice(0, localLightSegmentDiagnosticsMaxRows),
+            included: rows.filter(function (row) {
+                return row.included;
+            })
+        };
     }
 
-    function addFloorSegmentTargetsForLocalLight(targetList, item) {
-        addSurfaceSegmentTargetsForLocalLight(targetList, item, {
-            enabled: localLightFloorSegmentTargetingEnabled,
-            fallbackMeshes: floorMeshes,
-            getSegments: getLightingFloorSegmentMeshes,
-            isSegmentMesh: isLightingFloorSegmentMesh,
-            budgetMap: localLightFloorSegmentBudgetMap,
-            sourceName: "floor",
-            debugKey: "_floorSegmentTargetDebug"
+    function storeLocalLightSurfaceSegmentDiagnostic(item, surfaceName, diagnostic) {
+        if (!item || !diagnostic) {
+            return;
+        }
+
+        item._localLightSegmentDiagnostics = item._localLightSegmentDiagnostics || {};
+        item._localLightSegmentDiagnostics[surfaceName] = diagnostic;
+
+        localLightSegmentDiagnosticsLastDump = {
+            lightId: getLocalLightDiagnosticItemId(item),
+            lightType: item.type || null,
+            surface: surfaceName,
+            summary: diagnostic.summary,
+            rejected: diagnostic.rejected,
+            included: diagnostic.included
+        };
+
+        localLightSegmentDiagnosticsHistory.push(localLightSegmentDiagnosticsLastDump);
+
+        while (localLightSegmentDiagnosticsHistory.length > localLightSegmentDiagnosticsHistoryMax) {
+            localLightSegmentDiagnosticsHistory.shift();
+        }
+    }
+
+    function getLocalLightSurfaceDiagnosticSummary(item) {
+        var diagnostics = item && item._localLightSegmentDiagnostics
+            ? item._localLightSegmentDiagnostics
+            : {};
+
+        return {
+            wall: diagnostics.wall ? diagnostics.wall.summary : null,
+            floor: diagnostics.floor ? diagnostics.floor.summary : null,
+            ceiling: diagnostics.ceiling ? diagnostics.ceiling.summary : null
+        };
+    }
+
+    function shouldPrintLocalLightSegmentDiagnostics(reason) {
+        if (!localLightSegmentDiagnosticsEnabled || !localLightSegmentDiagnosticsConsoleEnabled) {
+            return false;
+        }
+
+        if (!localLightSegmentDiagnosticsPrintReasonFilter || localLightSegmentDiagnosticsPrintReasonFilter === "all") {
+            return true;
+        }
+
+        return String(reason || "").indexOf(localLightSegmentDiagnosticsPrintReasonFilter) !== -1;
+    }
+
+    function printLocalLightSegmentDiagnostics(item, reason, targetMeshes, changed) {
+        if (!shouldPrintLocalLightSegmentDiagnostics(reason) || typeof console === "undefined") {
+            return;
+        }
+
+        var diagnostics = item && item._localLightSegmentDiagnostics
+            ? item._localLightSegmentDiagnostics
+            : {};
+        var summaries = [];
+        ["wall", "floor", "ceiling"].forEach(function (surfaceName) {
+            if (diagnostics[surfaceName] && diagnostics[surfaceName].summary) {
+                summaries.push(diagnostics[surfaceName].summary);
+            }
+        });
+
+        if (!summaries.length) {
+            return;
+        }
+
+        var label = "[B3G LocalLight Diagnostics] " + getLocalLightDiagnosticItemId(item) + " / " + (item ? item.type : "unknown") + " / " + (reason || "apply");
+
+        try {
+            if (console.groupCollapsed) {
+                console.groupCollapsed(label);
+            } else {
+                console.log(label);
+            }
+
+            if (console.table) {
+                console.table(summaries.map(function (summary) {
+                    return {
+                        surface: summary.surface,
+                        candidates: summary.candidateCount,
+                        included: summary.includedCount,
+                        rejected: summary.rejectedCount,
+                        occluded: summary.occludedCount,
+                        range: summary.rejectReasons ? (summary.rejectReasons.range || 0) : 0,
+                        occlusion: summary.rejectReasons ? (summary.rejectReasons.occlusion || 0) : 0,
+                        budget: summary.rejectReasons ? (summary.rejectReasons.segmentBudget || 0) : 0,
+                        maxLimit: summary.rejectReasons ? (summary.rejectReasons.maxSegmentsPerLight || 0) : 0
+                    };
+                }));
+            } else {
+                console.log("summary", summaries);
+            }
+
+            console.log("changed", !!changed, "includedOnlyMeshes", targetMeshes ? targetMeshes.length : 0);
+            console.log("full diagnostics", getLocalLightTargetDiagnosticsForItem(item));
+        } catch (error) {
+            console.warn("B3G LocalLight diagnostics print failed", error);
+        } finally {
+            if (console.groupEnd) {
+                console.groupEnd();
+            }
+        }
+    }
+
+    function clearLocalLightSegmentDiagnosticOutline() {
+        if (localLightSegmentDiagnosticsOutlineLayer && localLightSegmentDiagnosticsOutlineLayer.removeMesh) {
+            localLightSegmentDiagnosticsOutlinedMeshes.forEach(function (mesh) {
+                if (mesh && !(mesh.isDisposed && mesh.isDisposed())) {
+                    localLightSegmentDiagnosticsOutlineLayer.removeMesh(mesh);
+                }
+            });
+        }
+
+        localLightSegmentDiagnosticsOutlinedMeshes = [];
+    }
+
+    function refreshSelectedLocalLightTargetOutline() {
+        clearLocalLightSegmentDiagnosticOutline();
+
+        if (!localLightSegmentDiagnosticsEnabled || !localLightSegmentDiagnosticsOutlineEnabled) {
+            return getSelectedLocalLightTargetDiagnostics();
+        }
+
+        if (!localLightSegmentDiagnosticsOutlineLayer || !localLightSegmentDiagnosticsOutlineLayer.addMesh) {
+            return getSelectedLocalLightTargetDiagnostics();
+        }
+
+        var items = Array.isArray(selectedLocalLights) ? selectedLocalLights.slice(0, 2) : [];
+        items.forEach(function (item) {
+            if (!item || !item.light || !Array.isArray(item.light.includedOnlyMeshes)) {
+                return;
+            }
+
+            item.light.includedOnlyMeshes.forEach(function (mesh) {
+                var surfaceName = getLocalLightSegmentDiagnosticSurface(mesh);
+
+                if (surfaceName !== "wall" && surfaceName !== "floor" && surfaceName !== "ceiling") {
+                    return;
+                }
+
+                if (localLightSegmentDiagnosticsOutlinedMeshes.indexOf(mesh) !== -1) {
+                    return;
+                }
+
+                try {
+                    localLightSegmentDiagnosticsOutlineLayer.addMesh(
+                        mesh,
+                        getLocalLightSegmentDiagnosticColor(surfaceName)
+                    );
+                    localLightSegmentDiagnosticsOutlinedMeshes.push(mesh);
+                } catch (error) {
+                    console.warn("B3G segment outline failed for", mesh.name, error);
+                }
+            });
+        });
+
+        return getSelectedLocalLightTargetDiagnostics();
+    }
+
+    function getLocalLightTargetDiagnosticsForItem(item) {
+        if (!item) {
+            return null;
+        }
+
+        var included = item.light && Array.isArray(item.light.includedOnlyMeshes)
+            ? item.light.includedOnlyMeshes
+            : [];
+
+        function namesFor(surfaceName) {
+            return included.filter(function (mesh) {
+                return getLocalLightSegmentDiagnosticSurface(mesh) === surfaceName;
+            }).map(function (mesh) {
+                return mesh.name;
+            });
+        }
+
+        var diagnostics = item._localLightSegmentDiagnostics || {};
+
+        return {
+            lightId: getLocalLightDiagnosticItemId(item),
+            name: item.name || null,
+            type: item.type || null,
+            enabled: getLocalLightUserEnabled(item),
+            runtimeEnabled: item.light && item.light.isEnabled ? item.light.isEnabled() : null,
+            range: item.light ? item.light.range : null,
+            angle: item.light && item.light.angle !== undefined ? item.light.angle : null,
+            includedOnlyMeshesCount: included.length,
+            targetNames: {
+                wall: namesFor("wall"),
+                floor: namesFor("floor"),
+                ceiling: namesFor("ceiling")
+            },
+            summary: getLocalLightSurfaceDiagnosticSummary(item),
+            diagnostics: diagnostics
+        };
+    }
+
+    function getSelectedLocalLightTargetDiagnostics() {
+        var item = null;
+
+        if (Array.isArray(selectedLocalLights) && selectedLocalLights.length) {
+            item = selectedLocalLights[0];
+        }
+
+        return getLocalLightTargetDiagnosticsForItem(item);
+    }
+
+    function dumpSelectedLocalLightRejectedSegments() {
+        var dump = getSelectedLocalLightTargetDiagnostics();
+
+        if (!dump) {
+            if (typeof console !== "undefined") {
+                console.warn("B3G LocalLight diagnostics: no selected local light.");
+            }
+            return null;
+        }
+
+        if (typeof console !== "undefined") {
+            try {
+                console.groupCollapsed("[B3G Rejected Segments] " + dump.lightId);
+                ["wall", "floor", "ceiling"].forEach(function (surfaceName) {
+                    var diag = dump.diagnostics && dump.diagnostics[surfaceName];
+                    if (!diag) {
+                        return;
+                    }
+
+                    console.log(surfaceName + " summary", diag.summary);
+                    if (console.table) {
+                        console.table(diag.rejected || []);
+                    } else {
+                        console.log(surfaceName + " rejected", diag.rejected || []);
+                    }
+                });
+            } finally {
+                if (console.groupEnd) {
+                    console.groupEnd();
+                }
+            }
+        }
+
+        return dump;
+    }
+
+    function setLocalLightSegmentDiagnostics(options) {
+        options = options || {};
+
+        if (options.enabled !== undefined) {
+            localLightSegmentDiagnosticsEnabled = !!options.enabled;
+        }
+
+        if (options.console !== undefined) {
+            localLightSegmentDiagnosticsConsoleEnabled = !!options.console;
+        }
+
+        if (options.outline !== undefined) {
+            localLightSegmentDiagnosticsOutlineEnabled = !!options.outline;
+        }
+
+        if (options.autoRefreshOutline !== undefined) {
+            localLightSegmentDiagnosticsOutlineAutoRefresh = !!options.autoRefreshOutline;
+        }
+
+        if (options.maxRows !== undefined) {
+            localLightSegmentDiagnosticsMaxRows = Math.max(20, Math.min(1000, Math.floor(Number(options.maxRows) || localLightSegmentDiagnosticsMaxRows)));
+        }
+
+        if (options.printReasonFilter !== undefined) {
+            localLightSegmentDiagnosticsPrintReasonFilter = String(options.printReasonFilter || "all");
+        }
+
+        if (!localLightSegmentDiagnosticsOutlineEnabled) {
+            clearLocalLightSegmentDiagnosticOutline();
+        } else {
+            refreshSelectedLocalLightTargetOutline();
+        }
+
+        return getLocalLightSegmentDiagnosticsSettings();
+    }
+
+    function getLocalLightSegmentDiagnosticsSettings() {
+        return {
+            enabled: !!localLightSegmentDiagnosticsEnabled,
+            console: !!localLightSegmentDiagnosticsConsoleEnabled,
+            outline: !!localLightSegmentDiagnosticsOutlineEnabled,
+            autoRefreshOutline: !!localLightSegmentDiagnosticsOutlineAutoRefresh,
+            maxRows: localLightSegmentDiagnosticsMaxRows,
+            printReasonFilter: localLightSegmentDiagnosticsPrintReasonFilter,
+            historySize: localLightSegmentDiagnosticsHistory.length,
+            lastDump: localLightSegmentDiagnosticsLastDump
+        };
+    }
+
+
+    // STAGE 12C62N - SPOT TARGET ASSIGNMENT RESTORE / NO HARD CUT
+    // Production path returns to pure target assignment only: no shader Hard Cut, no Proof View,
+    // no overlay light pass and no native-bypass/excludedMeshes manipulation.
+    // Spot target assignment is based on Range, Angle and Blend-informed helper rays.
+    // A target is selected only when it is the nearest real helper-ray first hit.
+    // Assigned wall/floor/ceiling segment outlines are visible by default for editing.
+    // PointLight keeps the simple range/surface sample resolver.
+    var localLightShapeResolverMaxSpotRays = 420;
+    var localLightShapeResolverMinRings = 2;
+    var localLightShapeResolverMaxRings = 7;
+    var localLightShapeResolverMinSegments = 16;
+    var localLightShapeResolverMaxSegments = 56;
+    var localLightShapeResolverPointSamplesPerSurface = 7;
+    // STAGE 12C62J - TARGET RESOLVER CLEAN BASE
+    // Target resolver does not cut light and does not reject targets through occluders.
+    // includedOnlyMeshes is only an optimization / logical target set.
+    // Actual hard light blocking must be implemented in a separate per-fragment/shader pass.
+
+    function clampLocalLightShapeResolverNumber(value, min, max) {
+        value = Number(value);
+        if (!isFinite(value)) {
+            value = min;
+        }
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function getLocalSpotTargetingDirectionForShapeResolver(item) {
+        var direction = null;
+        try {
+            direction = getSpotDirectionFromMarker(item);
+        } catch (error) {
+            direction = null;
+        }
+        if ((!direction || direction.lengthSquared() <= 0.0001) && item && item.light && item.light.direction) {
+            direction = item.light.direction.clone();
+        }
+        if (!direction || direction.lengthSquared() <= 0.0001) {
+            return null;
+        }
+        return direction.normalize();
+    }
+
+    function getLocalLightShapeSurfaceConfigs(item) {
+        return [
+            { name: "wall", enabled: getLocalTargetOption(item, "walls"), segments: getLightingWallSegmentMeshes(), fallbackMeshes: wallMeshes, isSegmentMesh: isLightingWallSegmentMesh, budgetMap: localLightWallSegmentBudgetMap, debugKey: "_wallSegmentTargetDebug" },
+            { name: "floor", enabled: getLocalTargetOption(item, "floor"), segments: getLightingFloorSegmentMeshes(), fallbackMeshes: floorMeshes, isSegmentMesh: isLightingFloorSegmentMesh, budgetMap: localLightFloorSegmentBudgetMap, debugKey: "_floorSegmentTargetDebug" },
+            { name: "ceiling", enabled: getLocalTargetOption(item, "ceiling"), segments: getLightingCeilingSegmentMeshes(), fallbackMeshes: ceilingMeshes, isSegmentMesh: isLightingCeilingSegmentMesh, budgetMap: localLightCeilingSegmentBudgetMap, debugKey: "_ceilingSegmentTargetDebug" }
+        ];
+    }
+
+    // STAGE 12C61A2 - SURFACE MESH RESOLVER PARITY FIX
+    // Helper raycasts and Local Light target resolver must see the same real surface meshes.
+    // If a surface has segment meshes, the resolver targets those segments.
+    // If a surface has no segment meshes, it falls back to the real wall/floor/ceiling meshes
+    // instead of silently ignoring that surface, which was especially visible on ceilings.
+    function getLocalLightShapeConfigTargetMeshes(config) {
+        if (!config || !config.enabled) {
+            return [];
+        }
+
+        if (config.segments && config.segments.length) {
+            return config.segments.filter(function (mesh) { return !!mesh && mesh.name !== "__root__"; });
+        }
+
+        return (config.fallbackMeshes || []).filter(function (mesh) { return !!mesh && mesh.name !== "__root__"; });
+    }
+
+    function isLocalLightShapeConfigTargetMesh(mesh, config) {
+        if (!mesh || !config || !config.enabled) {
+            return false;
+        }
+
+        if (config.segments && config.segments.length) {
+            return !!config.isSegmentMesh(mesh);
+        }
+
+        return (config.fallbackMeshes || []).indexOf(mesh) !== -1;
+    }
+
+    function getLocalLightShapeSurfaceByMesh(mesh, configs) {
+        for (var i = 0; i < configs.length; i++) {
+            var config = configs[i];
+            if (isLocalLightShapeConfigTargetMesh(mesh, config)) {
+                return config;
+            }
+        }
+        return null;
+    }
+
+    function getLocalLightShapeMeshKey(mesh) {
+        return mesh ? (mesh.uniqueId !== undefined ? String(mesh.uniqueId) : (mesh.name || "mesh")) : "";
+    }
+
+    function addLocalLightShapeBudgetedTarget(targetList, item, mesh, config) {
+        if (!mesh || !config || !isLocalLightShapeConfigTargetMesh(mesh, config)) {
+            return false;
+        }
+
+        if (config.isSegmentMesh(mesh)) {
+            if (!addSurfaceSegmentBudgetUse(mesh, item, config.budgetMap, config.isSegmentMesh, config.name)) {
+                return false;
+            }
+        }
+
+        addMeshUnique(targetList, mesh);
+        return true;
+    }
+
+    function getLocalLightShapeSegmentSize(mesh) {
+        try {
+            var bbox = mesh.getBoundingInfo().boundingBox;
+            var e = bbox.extendSizeWorld || bbox.extendSize;
+            var dims = [Math.abs(e.x || 0) * 2, Math.abs(e.y || 0) * 2, Math.abs(e.z || 0) * 2]
+                .filter(function (value) { return value > 0.03; })
+                .sort(function (a, b) { return a - b; });
+            return dims.length ? dims[Math.floor(dims.length / 2)] : 1;
+        } catch (error) {
+            return 1;
+        }
+    }
+
+    function getLocalLightShapeMedianSegmentSize(configs) {
+        var sizes = [];
+        configs.forEach(function (config) {
+            getLocalLightShapeConfigTargetMeshes(config).forEach(function (mesh) { sizes.push(getLocalLightShapeSegmentSize(mesh)); });
+        });
+        if (!sizes.length) { return 1; }
+        sizes.sort(function (a, b) { return a - b; });
+        return sizes[Math.floor(sizes.length / 2)] || 1;
+    }
+
+    function getLocalLightShapeBasisFromDirection(direction) {
+        var upSeed = Math.abs(BABYLON.Vector3.Dot(direction, BABYLON.Axis.Y)) > 0.92 ? BABYLON.Axis.X.clone() : BABYLON.Axis.Y.clone();
+        var right = BABYLON.Vector3.Cross(direction, upSeed);
+        if (right.lengthSquared() <= 0.0001) { right = BABYLON.Axis.X.clone(); } else { right.normalize(); }
+        var up = BABYLON.Vector3.Cross(right, direction);
+        if (up.lengthSquared() <= 0.0001) { up = BABYLON.Axis.Y.clone(); } else { up.normalize(); }
+        return { right: right, up: up };
+    }
+
+    function getLocalLightSpotTargetBlend01(item) {
+        if (!item || !item.light || item.type !== "spot") {
+            return 1;
+        }
+
+        var exponent = item.light.exponent;
+        if (!isFinite(exponent)) {
+            return 1;
+        }
+
+        return Math.max(0, Math.min(1, getSpotBlendFromExponent(exponent)));
+    }
+
+    function getLocalLightSpotTargetBlendCoverage(item) {
+        // C62S1: Target assignment must stay conservative and use the full Spot Angle.
+        // Blend controls visual softness / helper soft band, but it must not shrink the
+        // includedOnlyMeshes cone. Low Blend previously narrowed target coverage to 72%,
+        // which made assigned segment outlines disappear even while native Spot still lit them.
+        getLocalLightSpotTargetBlend01(item); // keep diagnostics/cache path stable without using it to shrink targets.
+        return 1.0;
+    }
+
+    function getLocalLightShapeAdaptiveSpotSampling(item, configs) {
+        var rawHelperLength = Math.max(0.15, getSpotLightHelperLength(item));
+        var helperLength = rawHelperLength;
+        var angle = item && item.light && isFinite(item.light.angle) ? item.light.angle : Math.PI / 3;
+        var fullHalfAngle = clampLocalLightShapeResolverNumber(
+            angle * 0.5,
+            0.025,
+            Math.PI * 0.49
+        );
+        var targetBlend01 = getLocalLightSpotTargetBlend01(item);
+        var targetBlendCoverage = getLocalLightSpotTargetBlendCoverage(item);
+        var halfAngle = clampLocalLightShapeResolverNumber(
+            fullHalfAngle * targetBlendCoverage,
+            0.025,
+            fullHalfAngle
+        );
+        var coneRadius = Math.tan(halfAngle) * helperLength;
+        var segmentSize = clampLocalLightShapeResolverNumber(getLocalLightShapeMedianSegmentSize(configs), 0.25, 3.5);
+        var step = clampLocalLightShapeResolverNumber(segmentSize * 0.55, 0.28, 1.15);
+        var rings = Math.max(localLightShapeResolverMinRings, Math.min(localLightShapeResolverMaxRings, Math.ceil(coneRadius / step)));
+        var segments = Math.max(localLightShapeResolverMinSegments, Math.min(localLightShapeResolverMaxSegments, Math.ceil((Math.PI * 2 * Math.max(coneRadius, 0.35)) / step)));
+        while ((1 + rings * segments) > localLightShapeResolverMaxSpotRays && segments > localLightShapeResolverMinSegments) {
+            segments -= 2;
+        }
+        return {
+            helperLength: helperLength,
+            rawHelperLength: rawHelperLength,
+            halfAngle: halfAngle,
+            fullHalfAngle: fullHalfAngle,
+            targetBlend01: targetBlend01,
+            targetBlendCoverage: targetBlendCoverage,
+            coneRadius: coneRadius,
+            segmentSize: segmentSize,
+            rings: rings,
+            segments: segments
+        };
+    }
+
+    function getLocalLightSpotHelperRaySamples(direction, sampling, basis) {
+        var samples = [];
+
+        if (!direction || !sampling || !basis) {
+            return samples;
+        }
+
+        samples.push({ direction: direction.clone(), radial01: 0 });
+
+        for (var ring = 1; ring <= sampling.rings; ring++) {
+            var radial01 = ring / sampling.rings;
+            var ringHalfAngle = sampling.halfAngle * radial01;
+
+            for (var i = 0; i < sampling.segments; i++) {
+                samples.push({
+                    direction: getSpotHelperRayDirection(
+                        direction,
+                        basis.right,
+                        basis.up,
+                        ringHalfAngle,
+                        (Math.PI * 2 * i) / sampling.segments
+                    ),
+                    radial01: radial01
+                });
+            }
+        }
+
+        if (samples.length > localLightShapeResolverMaxSpotRays) {
+            return samples.slice(0, localLightShapeResolverMaxSpotRays);
+        }
+
+        return samples;
+    }
+
+    function recordLocalLightShapeHit(hitMap, mesh, config, radial01, distance, pickedPoint) {
+        var key = getLocalLightShapeMeshKey(mesh);
+        var record = hitMap[key];
+
+        if (!record) {
+            record = {
+                mesh: mesh,
+                config: config,
+                rawHits: 0,
+                totalHits: 0,
+                coreHits: 0,
+                bestRadial: 1,
+                minDistance: Number.POSITIVE_INFINITY,
+                hitPoints: []
+            };
+
+            hitMap[key] = record;
+        }
+
+        record.rawHits += 1;
+        record.totalHits += 1;
+
+        if (radial01 <= 0.58) {
+            record.coreHits += 1;
+        }
+
+        record.bestRadial = Math.min(record.bestRadial, radial01);
+        record.minDistance = Math.min(record.minDistance, distance || Number.POSITIVE_INFINITY);
+
+        if (pickedPoint && record.hitPoints.length < 12) {
+            record.hitPoints.push(pickedPoint.clone ? pickedPoint.clone() : pickedPoint);
+        }
+    }
+
+    function createLocalLightShapeDiagnostic(item, surfaceName, segments, selectedSegments, hitRecords, mode) {
+        var selectedByName = {};
+        (selectedSegments || []).forEach(function (mesh) { selectedByName[mesh.name] = true; });
+        var hitByName = {};
+        (hitRecords || []).forEach(function (record) { if (record && record.mesh) { hitByName[record.mesh.name] = record; } });
+        var included = (selectedSegments || []).map(function (mesh) {
+            var record = hitByName[mesh.name] || {};
+            return { segment: mesh.name, reason: record.acceptReason || mode, hits: record.totalHits || 0, coreHits: record.coreHits || 0, bestRadial: roundLocalLightDiagnosticNumber(record.bestRadial) };
+        });
+        var rejected = (segments || []).filter(function (mesh) { return !selectedByName[mesh.name]; }).map(function (mesh) {
+            var record = hitByName[mesh.name];
+            return { segment: mesh.name, reason: record ? (record.rejectReason || "firstHitBudgetBlocked") : "notHitByLightShape", hits: record ? record.totalHits : 0, coreHits: record ? record.coreHits : 0, bestRadial: record ? roundLocalLightDiagnosticNumber(record.bestRadial) : null };
+        });
+        var reasonCounts = {};
+        rejected.forEach(function (row) { reasonCounts[row.reason] = (reasonCounts[row.reason] || 0) + 1; });
+        return { summary: { surface: surfaceName, mode: mode, candidateCount: hitRecords ? hitRecords.length : 0, includedCount: included.length, rejectedCount: rejected.length, occludedCount: reasonCounts.notHitByLightShape || 0, rejectReasons: reasonCounts }, included: included, rejected: rejected.slice(0, localLightSegmentDiagnosticsMaxRows) };
+    }
+
+    function storeLocalLightShapeDiagnostics(item, configs, selectedBySurface, hitRecordsBySurface, mode) {
+        configs.forEach(function (config) {
+            var selected = selectedBySurface[config.name] || [];
+            var records = hitRecordsBySurface[config.name] || [];
+            var diagnostic = createLocalLightShapeDiagnostic(item, config.name, getLocalLightShapeConfigTargetMeshes(config), selected, records, config.enabled ? mode : mode + "Disabled");
+            storeLocalLightSurfaceSegmentDiagnostic(item, config.name, diagnostic);
+            item[config.debugKey] = { mode: diagnostic.summary.mode, targetCount: selected.length, targetNames: selected.map(function (mesh) { return mesh.name; }), diagnosticSummary: diagnostic.summary, rejectedSegments: diagnostic.rejected };
         });
     }
 
-    function addCeilingSegmentTargetsForLocalLight(targetList, item) {
-        addSurfaceSegmentTargetsForLocalLight(targetList, item, {
-            enabled: localLightCeilingSegmentTargetingEnabled,
-            fallbackMeshes: ceilingMeshes,
-            getSegments: getLightingCeilingSegmentMeshes,
-            isSegmentMesh: isLightingCeilingSegmentMesh,
-            budgetMap: localLightCeilingSegmentBudgetMap,
-            sourceName: "ceiling",
-            debugKey: "_ceilingSegmentTargetDebug"
+    function resolveSpotSurfaceTargetsFromHelperCone(targetList, item) {
+        var configs = getLocalLightShapeSurfaceConfigs(item);
+        var targetConfigs = configs.filter(function (config) {
+            return config.enabled && getLocalLightShapeConfigTargetMeshes(config).length > 0;
         });
+
+        if (!targetConfigs.length) {
+            configs.forEach(function (config) {
+                if (config.enabled) {
+                    addMeshArrayUnique(targetList, config.fallbackMeshes || []);
+                }
+            });
+
+            return;
+        }
+
+        var position = getLocalLightPosition(item);
+        var direction = getLocalSpotTargetingDirectionForShapeResolver(item);
+        var selectedBySurface = { wall: [], floor: [], ceiling: [] };
+        var hitRecordsBySurface = { wall: [], floor: [], ceiling: [] };
+
+        if (!direction) {
+            storeLocalLightShapeDiagnostics(item, configs, selectedBySurface, hitRecordsBySurface, "helperRayFirstHitMissingDirection");
+            return;
+        }
+
+        var sampling = getLocalLightShapeAdaptiveSpotSampling(item, targetConfigs);
+        var basis = getLocalLightShapeBasisFromDirection(direction);
+        var hitMap = {};
+        var helperRayDebug = {
+            mode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
+            rays: 0,
+            firstHitCount: 0,
+            targetFirstHitCount: 0,
+            blockedFirstHitCount: 0,
+            missCount: 0,
+            helperLength: roundLocalLightDiagnosticNumber(sampling.helperLength),
+            rawHelperLength: roundLocalLightDiagnosticNumber(sampling.rawHelperLength),
+            halfAngle: roundLocalLightDiagnosticNumber(sampling.halfAngle),
+            fullHalfAngle: roundLocalLightDiagnosticNumber(sampling.fullHalfAngle),
+            targetBlend01: roundLocalLightDiagnosticNumber(sampling.targetBlend01),
+            targetBlendCoverage: roundLocalLightDiagnosticNumber(sampling.targetBlendCoverage),
+            rings: sampling.rings,
+            segments: sampling.segments,
+            targetNames: [],
+            blockerNames: {},
+            lastFirstHitName: null,
+            lastTargetName: null,
+            lastBlockerName: null
+        };
+
+        function recordHelperRayBlocker(mesh) {
+            if (!mesh) {
+                return;
+            }
+
+            var name = mesh.name || mesh.id || "unnamed";
+            helperRayDebug.blockedFirstHitCount += 1;
+            helperRayDebug.blockerNames[name] = (helperRayDebug.blockerNames[name] || 0) + 1;
+            helperRayDebug.lastBlockerName = name;
+        }
+
+        function castShapeRay(rayDirection, radial01) {
+            if (!rayDirection || rayDirection.lengthSquared() <= 0.0001) {
+                return;
+            }
+
+            rayDirection = rayDirection.normalize();
+            helperRayDebug.rays += 1;
+
+            try {
+                var ray = new BABYLON.Ray(position.clone(), rayDirection, sampling.helperLength);
+
+                // C62M: first-hit remains the key rule.
+                // We do NOT cast once per surface anymore.
+                // One helper ray is cast through the real scene and only the nearest valid hit is considered.
+                // If a wall / column / solid object is first, the ray stops there and nothing behind it becomes a target.
+                var hit = scene.pickWithRay(ray, function (mesh) {
+                    return isMeshValidForLocalLightHelperHit(mesh, item);
+                }, false);
+
+                if (!hit || !hit.hit || !hit.pickedMesh) {
+                    helperRayDebug.missCount += 1;
+                    return;
+                }
+
+                helperRayDebug.firstHitCount += 1;
+                helperRayDebug.lastFirstHitName = hit.pickedMesh.name || hit.pickedMesh.id || null;
+
+                var hitConfig = getLocalLightShapeSurfaceByMesh(hit.pickedMesh, configs);
+
+                if (!hitConfig || !hitConfig.enabled) {
+                    recordHelperRayBlocker(hit.pickedMesh);
+                    return;
+                }
+
+                var distance = hit.distance || (
+                    hit.pickedPoint
+                        ? BABYLON.Vector3.Distance(position, hit.pickedPoint)
+                        : sampling.helperLength
+                );
+
+                recordLocalLightShapeHit(
+                    hitMap,
+                    hit.pickedMesh,
+                    hitConfig,
+                    radial01,
+                    distance,
+                    hit.pickedPoint || null
+                );
+
+                helperRayDebug.targetFirstHitCount += 1;
+                helperRayDebug.lastTargetName = hit.pickedMesh.name || hit.pickedMesh.id || null;
+            } catch (error) {
+                console.warn("Spot helper-ray first-hit target ray failed", error);
+            }
+        }
+
+        getLocalLightSpotHelperRaySamples(direction, sampling, basis).forEach(function (sample) {
+            castShapeRay(sample.direction, sample.radial01);
+        });
+
+        Object.keys(hitMap).map(function (key) {
+            return hitMap[key];
+        }).forEach(function (record) {
+            // C62M: first-hit is the acceptance rule.
+            // Thresholds / edge-contact heuristics are no longer used for Spot target acceptance.
+            record.acceptReason = "helperRayFirstHit";
+            record.rejectReason = null;
+
+            hitRecordsBySurface[record.config.name].push(record);
+
+            if (addLocalLightShapeBudgetedTarget(targetList, item, record.mesh, record.config)) {
+                selectedBySurface[record.config.name].push(record.mesh);
+                helperRayDebug.targetNames.push(record.mesh.name || record.mesh.id || "unnamed");
+            }
+        });
+
+        helperRayDebug.targetNames = helperRayDebug.targetNames.filter(function (name, index, array) {
+            return array.indexOf(name) === index;
+        });
+
+        item._spotHelperRayFirstHitTargetDebug = helperRayDebug;
+
+        storeLocalLightShapeDiagnostics(item, configs, selectedBySurface, hitRecordsBySurface, "helperRayFirstHitTargets");
+    }
+
+    function getLocalLightPointSurfaceSamples(mesh) {
+        var samples = [getLocalLightSegmentCachedCenter(mesh)];
+        try {
+            var bounds = getCachedMeshWorldBounds(mesh, false);
+            var min = bounds ? bounds.min : null;
+            var max = bounds ? bounds.max : null;
+
+            if (min && max) {
+                samples.push(new BABYLON.Vector3(min.x, min.y, min.z));
+                samples.push(new BABYLON.Vector3(max.x, max.y, max.z));
+                samples.push(new BABYLON.Vector3(min.x, min.y, max.z));
+                samples.push(new BABYLON.Vector3(max.x, max.y, min.z));
+                samples.push(new BABYLON.Vector3((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5));
+                samples.push(new BABYLON.Vector3((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5));
+            }
+        } catch (error) {}
+        return samples.slice(0, localLightShapeResolverPointSamplesPerSurface);
+    }
+
+    function isPointLightSurfaceSampleVisible(item, point, targetMesh, configs) {
+        var position = getLocalLightPosition(item);
+        var toPoint = point.subtract(position);
+        var distance = toPoint.length();
+        var range = item && item.light && item.light.range && isFinite(item.light.range) ? item.light.range : 10;
+        if (distance <= 0.001 || distance > range) { return false; }
+        var direction = toPoint.scale(1 / distance);
+        try {
+            var ray = new BABYLON.Ray(position.clone(), direction, distance + 0.03);
+            var hit = scene.pickWithRay(ray, function (mesh) { return !!getLocalLightShapeSurfaceByMesh(mesh, configs); });
+            return !!(hit && hit.hit && hit.pickedMesh === targetMesh && BABYLON.Vector3.Distance(position, hit.pickedPoint || point) <= distance + 0.08);
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function resolvePointSurfaceTargetsFromSphere(targetList, item) {
+        var configs = getLocalLightShapeSurfaceConfigs(item);
+        var selectedBySurface = { wall: [], floor: [], ceiling: [] };
+        var hitRecordsBySurface = { wall: [], floor: [], ceiling: [] };
+        configs.forEach(function (config) {
+            var targetMeshes = getLocalLightShapeConfigTargetMeshes(config);
+            if (!targetMeshes.length) { return; }
+            targetMeshes.forEach(function (mesh) {
+                var accepted = getLocalLightPointSurfaceSamples(mesh).some(function (point) { return isPointLightSurfaceSampleVisible(item, point, mesh, configs); });
+                var record = { mesh: mesh, config: config, totalHits: accepted ? 1 : 0, coreHits: accepted ? 1 : 0, bestRadial: accepted ? 0 : 1, minDistance: BABYLON.Vector3.Distance(getLocalLightPosition(item), getLocalLightSegmentCachedCenter(mesh)) };
+                hitRecordsBySurface[config.name].push(record);
+                if (accepted && addLocalLightShapeBudgetedTarget(targetList, item, mesh, config)) { selectedBySurface[config.name].push(mesh); }
+            });
+        });
+        storeLocalLightShapeDiagnostics(item, configs, selectedBySurface, hitRecordsBySurface, "pointSphereShape");
     }
 
     function getSurfaceSegmentLightTargetDebug(surfaceName, getSegments, isSegmentMeshFn, debugKey) {
@@ -3367,12 +4734,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             segmentCount: getSegments().length,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
             maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-            targetRadius: localLightWallSegmentTargetRadius,
-            softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
-            effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius,
-            widerSearchStage: "12C13",
-            effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius,
-            widerSearchStage: "12C13",
+            resolverMode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
             lights: lightDebug,
             segments: Object.keys(segmentLightMap).sort().map(function (name) {
                 return segmentLightMap[name];
@@ -3386,9 +4748,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return mesh && mesh.position ? mesh.position.clone() : BABYLON.Vector3.Zero();
         }
 
-        try {
-            mesh.computeWorldMatrix(true);
+        var cachedBounds = getCachedMeshWorldBounds(mesh, false);
 
+        if (cachedBounds && cachedBounds.center) {
+            return cachedBounds.center.clone();
+        }
+
+        try {
             var boundingInfo = mesh.getBoundingInfo();
 
             if (
@@ -3411,25 +4777,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // may legitimately touch the near part of a ceiling/floor segment even if the segment center is behind a blocker.
     // Use the closest point on the segment bounds for distance and line-of-sight checks.
     function getMeshWorldBoundsForLocalLight(mesh) {
-        if (!mesh || !mesh.getBoundingInfo || !mesh.computeWorldMatrix) {
+        if (!mesh || !mesh.getBoundingInfo) {
             return null;
         }
 
-        try {
-            mesh.computeWorldMatrix(true);
-            var boundingInfo = mesh.getBoundingInfo();
-            var box = boundingInfo ? boundingInfo.boundingBox : null;
-
-            if (box && box.minimumWorld && box.maximumWorld) {
-                return {
-                    min: box.minimumWorld.clone(),
-                    max: box.maximumWorld.clone(),
-                    center: box.centerWorld ? box.centerWorld.clone() : box.minimumWorld.add(box.maximumWorld).scale(0.5)
-                };
-            }
-        } catch (error) {}
-
-        return null;
+        return getCachedMeshWorldBounds(mesh, false);
     }
 
     function clampNumber(value, min, max) {
@@ -3656,7 +5008,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         panel.style.display = "block";
         panel.textContent = [
-            "PERF C52",
+            "PERF C56",
             "FPS: " + Math.round(fps),
             "Active meshes: " + activeMeshes,
             "Draw calls: " + drawCalls,
@@ -3675,6 +5027,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             "Helper reused/recreated: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.helperReused + "/" + localLightTargetDebugStats.helperRecreated) : "n/a"),
             "Shadow list changed/skipped/casters: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.shadowRenderListChanged + "/" + localLightTargetDebugStats.shadowRenderListSkipped + " / " + localLightTargetDebugStats.lastShadowCasterCount) : "n/a"),
             "Param preview skipped/final scheduled/commits: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.parameterPreviewSkippedTargets + "/" + localLightTargetDebugStats.parameterFinalScheduled + "/" + localLightTargetDebugStats.parameterFinalCommits) : "n/a"),
+            "Atomic commits/canceled: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.atomicTargetCommits + "/" + localLightTargetDebugStats.atomicTargetCommitCanceled) : "n/a"),
+            "Helper recovered / fast ray skips: " + (localLightTargetDebugStats ? (localLightTargetDebugStats.helperRecovered + " / " + localLightTargetDebugStats.fastHelperRaycastSkipped) : "n/a"),
+            "Spawn target scans skipped: " + (localLightTargetDebugStats ? localLightTargetDebugStats.spawnFullTargetScanSkipped : 0),
             "Drag artwork: " + (galleryPerformanceMetrics.dragArtworkMs || 0).toFixed(2) + " ms",
             "Drag sculpture: " + galleryPerformanceMetrics.dragSculptureMs.toFixed(2) + " ms",
             "BeforeRender observers: " + Object.keys(galleryBeforeRenderObserverRegistry || {}).length,
@@ -4115,6 +5470,152 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+    function getLocalLightBudgetDebug() {
+        return {
+            materialBudget: {
+                defaultMaxSimultaneousLights: commonLightingMaxSimultaneousLights,
+                supportPassId: commonLightingMaterialSupportPassId,
+                budgets: Object.assign({}, commonLightingMaterialBudgets),
+                materialConfiguredCount: commonLightingBudgetDebugStats.materialConfiguredCount,
+                configuredRoles: Object.assign({}, commonLightingBudgetDebugStats.configuredRoles),
+                configuredBudgets: Object.assign({}, commonLightingBudgetDebugStats.configuredBudgets),
+                lastMaterialName: commonLightingBudgetDebugStats.lastMaterialName,
+                lastMaterialRole: commonLightingBudgetDebugStats.lastMaterialRole,
+                lastMaterialBudget: commonLightingBudgetDebugStats.lastMaterialBudget,
+                lastReason: commonLightingBudgetDebugStats.lastReason
+            },
+            shadowBudget: {
+                enabled: !!localLightingShadowsEnabled,
+                shadowMapSize: localSpotShadowMapSize,
+                maxActiveSpotShadows: localMaxActiveSpotShadows,
+                shadowOcclusionDarkness: localSpotShadowOcclusionDarkness,
+                shadowCasterLimit: localSpotShadowCasterLimit,
+                wallCasterPriorityEnabled: !!localSpotShadowWallCasterPriorityEnabled,
+                candidateCount: localSpotShadowBudgetDebugStats.candidateCount,
+                activeShadowIds: localSpotShadowBudgetDebugStats.activeShadowIds.slice(),
+                budgetDisabledIds: localSpotShadowBudgetDebugStats.budgetDisabledIds.slice(),
+                pointDisabledIds: localSpotShadowBudgetDebugStats.pointDisabledIds.slice(),
+                lastRefreshReason: localSpotShadowBudgetDebugStats.lastRefreshReason,
+                lastRefreshTime: localSpotShadowBudgetDebugStats.lastRefreshTime
+            },
+            segmentBudget: {
+                skipDisabledEnabled: !!localLightSegmentBudgetSkipDisabledEnabled,
+                selectedPriorityEnabled: !!localLightSegmentBudgetSelectedPriorityEnabled,
+                disabledSkipped: localLightSegmentBudgetDebugStats.disabledSkipped,
+                budgetBlocked: localLightSegmentBudgetDebugStats.budgetBlocked,
+                priorityBypasses: localLightSegmentBudgetDebugStats.priorityBypasses,
+                targetCacheClearedForTransform: localLightSegmentBudgetDebugStats.targetCacheClearedForTransform,
+                lastDisabledItemId: localLightSegmentBudgetDebugStats.lastDisabledItemId,
+                lastBlockedItemId: localLightSegmentBudgetDebugStats.lastBlockedItemId,
+                lastBlockedSegmentName: localLightSegmentBudgetDebugStats.lastBlockedSegmentName,
+                lastBlockedSurface: localLightSegmentBudgetDebugStats.lastBlockedSurface,
+                lastPriorityItemId: localLightSegmentBudgetDebugStats.lastPriorityItemId,
+                lastPrioritySurface: localLightSegmentBudgetDebugStats.lastPrioritySurface
+            },
+            targetCache: getLocalLightTargetCacheDebug(),
+            softDeletePool: {
+                poolLimit: localLightSoftDeletePoolLimit,
+                pendingTrim: !!localLightSoftDeleteTrimPending,
+                poolCount: localLightSoftDeletedItems.length,
+                spotCount: localLightSoftDeletedItems.filter(function (item) {
+                    return item && item.type === "spot";
+                }).length,
+                pointCount: localLightSoftDeletedItems.filter(function (item) {
+                    return item && item.type === "point";
+                }).length,
+                trimRequests: localLightSoftDeleteDebugStats.trimRequests,
+                hardDisposedByTrim: localLightSoftDeleteDebugStats.hardDisposedByTrim,
+                lastTrimmedCount: localLightSoftDeleteDebugStats.lastTrimmedCount,
+                lastTrimReason: localLightSoftDeleteDebugStats.lastTrimReason,
+                lastTrimTime: localLightSoftDeleteDebugStats.lastTrimTime
+            }
+        };
+    }
+
+    function setLocalLightBudgetOptions(options) {
+        options = options || {};
+
+        if (options.maxActiveSpotShadows !== undefined) {
+            localMaxActiveSpotShadows = Math.max(0, Math.min(8, Math.floor(Number(options.maxActiveSpotShadows) || 0)));
+            localSpotShadowBudgetDebugStats.maxActiveSpotShadows = localMaxActiveSpotShadows;
+            refreshAllLocalSpotShadows(true);
+        }
+
+        if (options.shadowMapSize !== undefined) {
+            localSpotShadowMapSize = Math.max(256, Math.min(2048, Math.floor(Number(options.shadowMapSize) || 512)));
+            localSpotShadowBudgetDebugStats.shadowMapSize = localSpotShadowMapSize;
+        }
+
+        if (options.shadowOcclusionDarkness !== undefined) {
+            localSpotShadowOcclusionDarkness = Math.max(0, Math.min(1, Number(options.shadowOcclusionDarkness) || 0));
+            localLightItems.forEach(function (item) {
+                if (item && item.localShadowGenerator) {
+                    configureShadowGeneratorForLocalSpot(item.localShadowGenerator);
+                }
+            });
+            refreshAllLocalSpotShadows(true);
+        }
+
+        if (options.shadowCasterLimit !== undefined) {
+            localSpotShadowCasterLimit = Math.max(16, Math.min(160, Math.floor(Number(options.shadowCasterLimit) || 64)));
+            refreshAllLocalSpotShadows(true);
+        }
+
+        if (options.wallCasterPriorityEnabled !== undefined) {
+            localSpotShadowWallCasterPriorityEnabled = !!options.wallCasterPriorityEnabled;
+            refreshAllLocalSpotShadows(true);
+        }
+
+        if (options.softDeletePoolLimit !== undefined) {
+            localLightSoftDeletePoolLimit = Math.max(0, Math.min(64, Math.floor(Number(options.softDeletePoolLimit) || 0)));
+            localLightSoftDeleteDebugStats.poolLimit = localLightSoftDeletePoolLimit;
+            scheduleLocalLightSoftDeletePoolTrim("debugOptions");
+        }
+
+        if (options.segmentBudgetSkipDisabled !== undefined) {
+            localLightSegmentBudgetSkipDisabledEnabled = !!options.segmentBudgetSkipDisabled;
+            markLocalLightTargetCacheDirty("segmentBudgetSkipDisabledOption");
+            refreshLocalLightTargetsForAll("segmentBudgetSkipDisabledOption");
+        }
+
+        if (options.segmentBudgetSelectedPriority !== undefined) {
+            localLightSegmentBudgetSelectedPriorityEnabled = !!options.segmentBudgetSelectedPriority;
+            markLocalLightTargetCacheDirty("segmentBudgetSelectedPriorityOption");
+            refreshLocalLightTargetsForAll("segmentBudgetSelectedPriorityOption");
+        }
+
+        if (options.segmentAwareRetargetEnabled !== undefined) {
+            localLightSegmentAwareRetargetEnabled = !!options.segmentAwareRetargetEnabled;
+        }
+
+        if (options.segmentAwareRetargetDelayMs !== undefined) {
+            localLightSegmentAwareRetargetDelayMs = Math.max(0, Math.min(1000, Math.floor(Number(options.segmentAwareRetargetDelayMs) || 0)));
+        }
+
+        if (options.loadTimeRetargetEnabled !== undefined) {
+            localLightLoadTimeRetargetEnabled = !!options.loadTimeRetargetEnabled;
+        }
+
+        if (options.loadTimeRetargetDelayMs !== undefined) {
+            localLightLoadTimeRetargetDelayMs = Math.max(0, Math.min(3000, Math.floor(Number(options.loadTimeRetargetDelayMs) || 0)));
+        }
+
+        if (options.materialBudgets && typeof options.materialBudgets === "object") {
+            Object.keys(options.materialBudgets).forEach(function (key) {
+                if (commonLightingMaterialBudgets[key] === undefined) {
+                    return;
+                }
+
+                commonLightingMaterialBudgets[key] = Math.max(1, Math.min(16, Math.floor(Number(options.materialBudgets[key]) || commonLightingMaterialBudgets[key])));
+            });
+
+            commonLightingMaxSimultaneousLights = commonLightingMaterialBudgets.default || commonLightingMaxSimultaneousLights;
+            scheduleCommonLightingMaterialSupport("budgetOptions");
+        }
+
+        return getLocalLightBudgetDebug();
+    }
+
     function getLocalLightCameraCullingDebug() {
         updateLocalLightsCameraCulling(true);
 
@@ -4138,6 +5639,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             softDeletedCount: localLightSoftDeletedItems.length,
             reusePoolCount: localLightSoftDeletedItems.length,
             cleanDisabledLightsAvailable: localLightSoftDeletedItems.length > 0,
+            lightBudget: getLocalLightBudgetDebug(),
             zeroTouchDeleteMode: true,
             reusePoolByType: {
                 spot: localLightSoftDeletedItems.filter(function (item) {
@@ -4341,373 +5843,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
     }
 
-    // STAGE 10D - FRONT-FACING WALL SEGMENT LIGHT FILTER
-    // Segment ściany powinien być targetowany tylko wtedy, gdy światło jest po jego frontowej stronie.
-    // To ogranicza przypadki, gdzie światło zza ściany zużywa budżet albo daje dziwne odcięcia.
-    var localLightWallSegmentFrontFacingFilterEnabled = true;
-    var localLightWallSegmentFrontFacingDotLimit = -0.08;
-
-    // STAGE 12C51 - POINT LIGHT WALL LEAK GUARD
-    // A Babylon PointLight is not physically blocked by walls. We therefore keep the
-    // includedOnlyMeshes list from targeting wall segments that are behind another wall segment.
-    var localLightWallSegmentOcclusionFilterEnabled = true;
-    var localLightWallSegmentOcclusionRayEpsilon = 0.04;
-
-
-    function getLocalLightSurfaceOcclusionMeshes() {
-        var cache = ensureLocalLightSegmentMeshCache();
-        var result = [];
-
-        addMeshArrayUnique(result, cache.walls || []);
-        addMeshArrayUnique(result, cache.floor || []);
-        addMeshArrayUnique(result, cache.ceiling || []);
-
-        return result.filter(function (mesh) {
-            return !!(
-                mesh &&
-                !(mesh.isDisposed && mesh.isDisposed()) &&
-                mesh.isVisible !== false &&
-                mesh.visibility !== 0
-            );
-        });
-    }
-
-    function isSurfaceSegmentVisibleFromLocalLight(mesh, item, surfaceSegments, sourceName) {
-        if (!localLightWallSegmentOcclusionFilterEnabled) {
-            return true;
-        }
-
-        if (!mesh || !item || !item.light) {
-            return true;
-        }
-
-        // The leak problem is PointLight: Babylon does not physically block a point light with walls.
-        // For C51 we use the same visibility rule for wall/floor/ceiling targets, but the target point is
-        // the closest visible part of the surface bounds instead of the segment center.
-        if (item.type !== "point") {
-            return true;
-        }
-
-        var blockers = getLocalLightSurfaceOcclusionMeshes();
-
-        if (!blockers.length) {
-            return true;
-        }
-
-        var origin = getLocalLightPosition(item);
-        var target = getLocalLightSurfaceTargetPoint(mesh, item, sourceName);
-        var direction = target.subtract(origin);
-        var distance = direction.length();
-
-        if (distance <= 0.0001) {
-            return true;
-        }
-
-        direction.normalize();
-
-        try {
-            var ray = new BABYLON.Ray(
-                origin.add(direction.scale(localLightWallSegmentOcclusionRayEpsilon)),
-                direction,
-                Math.max(0.01, distance - localLightWallSegmentOcclusionRayEpsilon + 0.12)
-            );
-
-            var hit = scene.pickWithRay(
-                ray,
-                function (candidate) {
-                    return blockers.indexOf(candidate) !== -1;
-                }
-            );
-
-            if (!hit || !hit.hit || !hit.pickedMesh) {
-                // Do not throw away nearby ceiling/floor just because a GLTF submesh is not pickable.
-                // If the target surface itself is marked unpickable, allow it; otherwise the blocker list would
-                // create false negatives and remove all ceiling light.
-                return mesh.isPickable === false ? true : false;
-            }
-
-            if (hit.pickedMesh === mesh) {
-                return true;
-            }
-
-            // Edge case: pick may return a sibling surface from the same category at the exact same seam.
-            // Allow very-near hits only for floor/ceiling to prevent dark holes next to walls.
-            if ((sourceName === "floor" || sourceName === "ceiling") && surfaceSegments && surfaceSegments.indexOf(hit.pickedMesh) !== -1) {
-                var hitPoint = hit.pickedPoint || getMeshWorldCenter(hit.pickedMesh);
-
-                if (BABYLON.Vector3.Distance(hitPoint, target) < 0.18) {
-                    return true;
-                }
-            }
-
-            return false;
-        } catch (error) {
-            console.warn((sourceName || "surface") + " local light occlusion warning:", error);
-            return true;
-        }
-    }
-
-    function isWallSegmentVisibleFromLocalLight(mesh, item, wallSegments) {
-        return isSurfaceSegmentVisibleFromLocalLight(
-            mesh,
-            item,
-            wallSegments,
-            "wall"
-        );
-    }
-
-    function isWallSegmentFrontFacingLocalLight(mesh, item) {
-        if (!localLightWallSegmentFrontFacingFilterEnabled) {
-            return true;
-        }
-
-        if (!mesh || !isLightingWallSegmentMesh(mesh)) {
-            return false;
-        }
-
-        var origin = getLocalLightPosition(item);
-        var target = getMeshWorldCenter(mesh);
-        var direction = target.subtract(origin);
-        var distance = direction.length();
-
-        if (distance <= 0.0001) {
-            return true;
-        }
-
-        direction.normalize();
-
-        try {
-            var ray = new BABYLON.Ray(
-                origin,
-                direction,
-                distance + 0.2
-            );
-
-            var hit = scene.pickWithRay(
-                ray,
-                function (candidate) {
-                    return candidate === mesh;
-                }
-            );
-
-            if (!hit || !hit.hit || !hit.pickedMesh) {
-                return false;
-            }
-
-            if (!hit.getNormal) {
-                return true;
-            }
-
-            var normal = hit.getNormal(true, true);
-
-            if (!normal || normal.lengthSquared() <= 0.0001) {
-                return true;
-            }
-
-            normal.normalize();
-
-            // Ray direction idzie od światła do ściany.
-            // Frontowa strona ściany ma normalną skierowaną w stronę światła,
-            // więc normal dot direction powinien być ujemny.
-            var facingDot = BABYLON.Vector3.Dot(normal, direction);
-
-            return facingDot <= localLightWallSegmentFrontFacingDotLimit;
-        } catch (error) {
-            console.warn("Wall segment front-facing light filter warning:", error);
-            return true;
-        }
-    }
-
-    function addWallSegmentBudgetUse(mesh, item) {
-        if (!mesh || !isLightingWallSegmentMesh(mesh)) {
-            return false;
-        }
-
-        var key = mesh.name;
-
-        if (!localLightWallSegmentBudgetMap[key]) {
-            localLightWallSegmentBudgetMap[key] = [];
-        }
-
-        if (localLightWallSegmentBudgetMap[key].indexOf(item) !== -1) {
-            return true;
-        }
-
-        if (
-            localLightWallSegmentBudgetPassActive &&
-            localLightWallSegmentBudgetMap[key].length >= localLightWallSegmentMaxLightsPerSegment
-        ) {
-            return false;
-        }
-
-        localLightWallSegmentBudgetMap[key].push(item);
-        return true;
-    }
-
-    function getWallSegmentCandidateListForLocalLight(item, wallSegments) {
-        var reference = getLocalLightWallReference(item, wallSegments);
-        var referencePoint = reference && reference.point
-            ? reference.point
-            : getLocalLightPosition(item);
-
-        var radius = localLightWallSegmentTargetRadius;
-
-        if (item && item.light && item.light.range) {
-            radius = Math.max(
-                radius,
-                Math.min(item.light.range * 0.9, 10.0)
-            );
-        }
-
-        var softRadius = radius + localLightWallSegmentSoftEdgeExtraRadius;
-
-        var occludedCount = 0;
-
-        var candidates = wallSegments.map(function (mesh) {
-            var distance = getWallSegmentDistanceToReference(mesh, referencePoint);
-            var frontFacing = isWallSegmentFrontFacingLocalLight(mesh, item);
-            var visibleFromLight = frontFacing && isWallSegmentVisibleFromLocalLight(mesh, item, wallSegments);
-
-            if (frontFacing && !visibleFromLight) {
-                occludedCount += 1;
-            }
-
-            return {
-                mesh: mesh,
-                distance: distance,
-                frontFacing: frontFacing,
-                visibleFromLight: visibleFromLight,
-                priority: distance <= radius ? 0 : 1
-            };
-        }).filter(function (candidate) {
-            if (!candidate.frontFacing || !candidate.visibleFromLight) {
-                return false;
-            }
-
-            return (
-                candidate.distance <= softRadius ||
-                (
-                    reference &&
-                    reference.primaryMesh &&
-                    candidate.mesh === reference.primaryMesh
-                )
-            );
-        }).sort(function (a, b) {
-            if (a.priority !== b.priority) {
-                return a.priority - b.priority;
-            }
-
-            return a.distance - b.distance;
-        });
-
-        if (
-            reference &&
-            reference.primaryMesh &&
-            isLightingWallSegmentMesh(reference.primaryMesh) &&
-            isWallSegmentFrontFacingLocalLight(reference.primaryMesh, item) &&
-            isWallSegmentVisibleFromLocalLight(reference.primaryMesh, item, wallSegments)
-        ) {
-            var alreadyHasPrimary = candidates.some(function (candidate) {
-                return candidate.mesh === reference.primaryMesh;
-            });
-
-            if (!alreadyHasPrimary) {
-                candidates.unshift({
-                    mesh: reference.primaryMesh,
-                    distance: 0,
-                    frontFacing: true,
-                    priority: -1
-                });
-            }
-        }
-
-        return {
-            reference: reference,
-            referencePoint: referencePoint,
-            radius: radius,
-            softRadius: softRadius,
-            candidates: candidates,
-            occludedCount: occludedCount
-        };
-    }
-
-    function addWallSegmentTargetsForLocalLight(targetList, item) {
-        if (!localLightWallSegmentTargetingEnabled) {
-            addMeshArrayUnique(targetList, wallMeshes);
-            return;
-        }
-
-        var wallSegments = getLightingWallSegmentMeshes();
-
-        // Fallback dla starego modelu bez segmentów.
-        if (!wallSegments.length) {
-            addMeshArrayUnique(targetList, wallMeshes);
-            return;
-        }
-
-        var candidateData = getWallSegmentCandidateListForLocalLight(item, wallSegments);
-        var candidates = candidateData.candidates;
-        var selectedSegments = [];
-
-        function addSegment(mesh) {
-            if (
-                mesh &&
-                isLightingWallSegmentMesh(mesh) &&
-                selectedSegments.indexOf(mesh) === -1 &&
-                addWallSegmentBudgetUse(mesh, item)
-            ) {
-                selectedSegments.push(mesh);
-            }
-        }
-
-        // Primary segment jest najważniejszy, ale też szanuje budżet segmentu.
-        if (
-            candidateData.reference &&
-            candidateData.reference.primaryMesh &&
-            isLightingWallSegmentMesh(candidateData.reference.primaryMesh)
-        ) {
-            addSegment(candidateData.reference.primaryMesh);
-        }
-
-        candidates.forEach(function (candidate) {
-            if (selectedSegments.length >= getLocalLightCurrentMaxSegmentsPerLight()) {
-                return;
-            }
-
-            addSegment(candidate.mesh);
-        });
-
-        // Fallback awaryjny: jeśli budżet zablokował wszystko, bierzemy najbliższy segment.
-        // To zapobiega sytuacji, w której aktywna lampa z targetem Walls nie świeci na żadną ścianę.
-        if (!selectedSegments.length && candidates.length) {
-            selectedSegments.push(candidates[0].mesh);
-        }
-
-        item._wallSegmentTargetDebug = {
-            mode: "segmentLightBudget",
-            source: candidateData.reference ? candidateData.reference.source : "unknown",
-            referencePoint: candidateData.referencePoint ? serializeVector3(candidateData.referencePoint) : null,
-            radius: candidateData.radius,
-            softRadius: candidateData.softRadius,
-            frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
-            frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
-            dynamicRetargetEnabled: localLightDynamicWallRetargetEnabled,
-            dynamicRetargetThrottleMs: localLightDynamicWallRetargetThrottleMs,
-            dynamicRetargetCount: localLightDynamicWallRetargetCount,
-            dynamicRetargetLastReason: localLightDynamicWallRetargetLastReason,
-            maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
-            maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-            candidateCountAfterFrontFilter: candidates.length,
-            occludedByWallCount: candidateData.occludedCount || 0,
-            occlusionFilterEnabled: localLightWallSegmentOcclusionFilterEnabled,
-            targetCount: selectedSegments.length,
-            targetNames: selectedSegments.map(function (mesh) {
-                return mesh.name;
-            })
-        };
-
-        addMeshArrayUnique(targetList, selectedSegments);
-    }
+    // STAGE 12C62M - LEGACY SPOT OCCLUSION GUARD REMOVED
+    // Spot wall/floor visibility is now handled by helper-ray first-hit target resolving.
+    // The old post-filter occlusion guard and front-facing wall filter were removed from
+    // the active code path to avoid double decisions and stale debug/cache flags.
+
+    // STAGE 12C60B3R - REMOVED OLD WALL CANDIDATE / ADD PATH
+    // Old wall candidate/add path removed from the active code.
 
     function getWallSegmentLightTargetDebug() {
         // STAGE 12C46: debug reads the current target snapshot only.
@@ -4767,10 +5909,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             segmentCount: getLightingWallSegmentMeshes().length,
             maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
             maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-            targetRadius: localLightWallSegmentTargetRadius,
-            softEdgeExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
-            frontFacingFilterEnabled: localLightWallSegmentFrontFacingFilterEnabled,
-            frontFacingDotLimit: localLightWallSegmentFrontFacingDotLimit,
+            resolverMode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
             lights: lightDebug,
             segments: Object.keys(segmentLightMap).sort().map(function (name) {
                 return segmentLightMap[name];
@@ -4785,7 +5924,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             floor: true,
             walls: true,
-            ceiling: false,
+            ceiling: true,
             artworks: false,
             sculptures: false,
             props: false,
@@ -4817,6 +5956,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         item.targetOptions = normalizeLocalTargetOptions(item.targetOptions);
         item.targetOptions[key] = !!value;
+        markLocalLightTargetItemCacheDirty(item, "targetOptionsChanged");
     }
 
     function addArtworkMeshesUnique(targetList) {
@@ -4879,6 +6019,194 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         addMeshArrayUnique(targetList, propMeshes);
     }
 
+    function roundLocalLightCacheNumber(value, scale) {
+        value = Number(value);
+
+        if (!isFinite(value)) {
+            value = 0;
+        }
+
+        return Math.round(value * scale) / scale;
+    }
+
+    function getLocalLightTargetOptionsSignature(item) {
+        var options = normalizeLocalTargetOptions(item ? item.targetOptions : null);
+
+        return [
+            options.floor !== false ? 1 : 0,
+            options.walls !== false ? 1 : 0,
+            options.ceiling !== false ? 1 : 0,
+            options.artworks !== false ? 1 : 0,
+            options.sculptures !== false ? 1 : 0,
+            options.props !== false ? 1 : 0,
+            options.owner !== false ? 1 : 0
+        ].join("");
+    }
+
+    function getLocalLightTargetSignature(item) {
+        if (!item || !item.light) {
+            return "";
+        }
+
+        var position = getLocalLightPosition(item);
+        var direction = item.type === "spot"
+            ? (getLocalSpotTargetingDirectionForShapeResolver(item) || BABYLON.Vector3.Zero())
+            : (item.light.direction || BABYLON.Vector3.Zero());
+        var ownerKey = item.ownerMesh
+            ? (item.ownerMesh.uniqueId !== undefined ? String(item.ownerMesh.uniqueId) : item.ownerMesh.name || "owner")
+            : "noOwner";
+
+        return [
+            item.type || "local",
+            item.id || item.name || item.light.name || "",
+            ownerKey,
+            roundLocalLightCacheNumber(position.x, 20),
+            roundLocalLightCacheNumber(position.y, 20),
+            roundLocalLightCacheNumber(position.z, 20),
+            roundLocalLightCacheNumber(direction.x, 100),
+            roundLocalLightCacheNumber(direction.y, 100),
+            roundLocalLightCacheNumber(direction.z, 100),
+            roundLocalLightCacheNumber(item.light.range || 0, 10),
+            item.light.angle !== undefined ? roundLocalLightCacheNumber(item.light.angle, 100) : "",
+            item.light.exponent !== undefined ? roundLocalLightCacheNumber(item.light.exponent, 10) : "",
+            getLocalLightTargetOptionsSignature(item)
+        ].join("|");
+    }
+
+    function getLocalLightTargetCacheKey(item) {
+        return [
+            getLocalLightTargetSignature(item),
+            galleryGeometryVersion,
+            gallerySurfaceVersion,
+            galleryObjectVersion,
+            localLightTargetCacheVersion,
+            localLightWallSegmentTargetMaxCount,
+            localLightWallSegmentMaxLightsPerSegment,
+            localLightShapeResolverMaxSpotRays,
+            localLightShapeResolverMinRings,
+            localLightShapeResolverMaxRings,
+            localLightShapeResolverMinSegments,
+            localLightShapeResolverMaxSegments,
+            localLightShapeResolverPointSamplesPerSurface,
+            "C62N1-low-angle-blend-softness-boost-no-hardcut"
+        ].join("#");
+    }
+
+    function shouldBypassLocalLightTargetMeshCache() {
+        if (!localLightTargetMeshCacheEnabled) {
+            return true;
+        }
+
+        if (localLightTargetPreviewActive) {
+            localLightTargetMeshCacheDebugStats.bypassPreview += 1;
+            return true;
+        }
+
+        if (localLightWallSegmentBudgetPassActive || localLightSculptureBudgetPassActive) {
+            localLightTargetMeshCacheDebugStats.bypassBudgetPass += 1;
+            return true;
+        }
+
+        if (localLightStartupCleanTargetRebuildActive) {
+            localLightTargetMeshCacheDebugStats.bypassStartupClean += 1;
+            localLightStartupCleanTargetRebuildDebugStats.cacheBypassCount += 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    function readCachedCommonLocalLightTargetMeshes(item, cacheKey) {
+        if (!item || !cacheKey || shouldBypassLocalLightTargetMeshCache()) {
+            return null;
+        }
+
+        if (item._cachedTargetKey === cacheKey && Array.isArray(item._cachedTargetMeshes)) {
+            localLightTargetMeshCacheDebugStats.hits += 1;
+            localLightTargetDebugStats.targetCacheHits += 1;
+            localLightTargetMeshCacheDebugStats.lastHitItemId = item.id || item.name || null;
+            localLightTargetMeshCacheDebugStats.lastCacheKey = cacheKey;
+            return item._cachedTargetMeshes.filter(function (mesh) {
+                return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()));
+            }).slice();
+        }
+
+        localLightTargetMeshCacheDebugStats.misses += 1;
+        localLightTargetDebugStats.targetCacheMisses += 1;
+        localLightTargetMeshCacheDebugStats.lastMissItemId = item.id || item.name || null;
+        localLightTargetMeshCacheDebugStats.lastCacheKey = cacheKey;
+        return null;
+    }
+
+    function storeCommonLocalLightTargetMeshesInCache(item, cacheKey, meshes) {
+        if (!item || !cacheKey || shouldBypassLocalLightTargetMeshCache()) {
+            return;
+        }
+
+        item._cachedTargetKey = cacheKey;
+        item._cachedTargetMeshes = (meshes || []).filter(function (mesh, index, array) {
+            return !!mesh && array.indexOf(mesh) === index;
+        }).slice();
+        localLightTargetMeshCacheDebugStats.stores += 1;
+        localLightTargetDebugStats.targetCacheStores += 1;
+        localLightTargetMeshCacheDebugStats.lastStoreItemId = item.id || item.name || null;
+        localLightTargetMeshCacheDebugStats.lastCacheKey = cacheKey;
+    }
+
+    function getLocalLightTargetCacheDebug() {
+        return {
+            enabled: !!localLightTargetMeshCacheEnabled,
+            geometryVersion: galleryGeometryVersion,
+            surfaceVersion: gallerySurfaceVersion,
+            objectVersion: galleryObjectVersion,
+            targetCacheVersion: localLightTargetCacheVersion,
+            hits: localLightTargetMeshCacheDebugStats.hits,
+            misses: localLightTargetMeshCacheDebugStats.misses,
+            stores: localLightTargetMeshCacheDebugStats.stores,
+            bypassPreview: localLightTargetMeshCacheDebugStats.bypassPreview,
+            bypassBudgetPass: localLightTargetMeshCacheDebugStats.bypassBudgetPass,
+            bypassStartupClean: localLightTargetMeshCacheDebugStats.bypassStartupClean,
+            invalidations: localLightTargetMeshCacheDebugStats.invalidations,
+            lastHitItemId: localLightTargetMeshCacheDebugStats.lastHitItemId,
+            lastMissItemId: localLightTargetMeshCacheDebugStats.lastMissItemId,
+            lastStoreItemId: localLightTargetMeshCacheDebugStats.lastStoreItemId,
+            lastDirtyReason: localLightTargetMeshCacheDebugStats.lastDirtyReason,
+            segmentBudget: {
+                skipDisabledEnabled: !!localLightSegmentBudgetSkipDisabledEnabled,
+                selectedPriorityEnabled: !!localLightSegmentBudgetSelectedPriorityEnabled,
+                disabledSkipped: localLightSegmentBudgetDebugStats.disabledSkipped,
+                budgetBlocked: localLightSegmentBudgetDebugStats.budgetBlocked,
+                priorityBypasses: localLightSegmentBudgetDebugStats.priorityBypasses,
+                targetCacheClearedForTransform: localLightSegmentBudgetDebugStats.targetCacheClearedForTransform,
+                lastDisabledItemId: localLightSegmentBudgetDebugStats.lastDisabledItemId,
+                lastBlockedItemId: localLightSegmentBudgetDebugStats.lastBlockedItemId,
+                lastBlockedSegmentName: localLightSegmentBudgetDebugStats.lastBlockedSegmentName,
+                lastBlockedSurface: localLightSegmentBudgetDebugStats.lastBlockedSurface,
+                lastPriorityItemId: localLightSegmentBudgetDebugStats.lastPriorityItemId,
+                lastPrioritySurface: localLightSegmentBudgetDebugStats.lastPrioritySurface
+            },
+            segmentAwareRetarget: getSegmentAwareRetargetDebug(),
+            shapeResolver: {
+                mode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
+                spot: "singleSceneRayNearestHelperHit",
+                point: "rangeSphereVisibleSamples",
+                legacySpotOcclusionGuardRemoved: true,
+                legacySpotEdgeThresholdsRemoved: true,
+                forceSpotCeilingRemoved: true,
+                maxSpotRays: localLightShapeResolverMaxSpotRays,
+                minRings: localLightShapeResolverMinRings,
+                maxRings: localLightShapeResolverMaxRings,
+                minSegments: localLightShapeResolverMinSegments,
+                maxSegments: localLightShapeResolverMaxSegments,
+                pointSamplesPerSurface: localLightShapeResolverPointSamplesPerSurface,
+                targetBlendInfluence: "effectiveHalfAngle = Angle * (0.72 + Blend * 0.28); Blend 0=sharp, Blend 1=soft; no Hard Cut",
+                assignedSegmentOutlinesDefaultOn: true,
+                hardCutRemovedFromProductionPath: true,
+                helperRayFirstHitDebugKey: "_spotHelperRayFirstHitTargetDebug"
+            }
+        };
+    }
+
     function getCommonLocalLightTargetMeshes(item) {
         var includedMeshes = [];
 
@@ -4888,42 +6216,50 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         item.targetOptions = normalizeLocalTargetOptions(item.targetOptions);
 
-        if (getLocalTargetOption(item, "floor")) {
-            addFloorSegmentTargetsForLocalLight(includedMeshes, item);
+        var cacheKey = getLocalLightTargetCacheKey(item);
+        var cachedMeshes = readCachedCommonLocalLightTargetMeshes(item, cacheKey);
+
+        if (cachedMeshes) {
+            return cachedMeshes;
         }
 
-        if (getLocalTargetOption(item, "walls")) {
-            addWallSegmentTargetsForLocalLight(includedMeshes, item);
+        if (item.type === "spot") {
+            resolveSpotSurfaceTargetsFromHelperCone(includedMeshes, item);
+        } else if (item.type === "point") {
+            resolvePointSurfaceTargetsFromSphere(includedMeshes, item);
         }
 
-        if (getLocalTargetOption(item, "ceiling")) {
-            addCeilingSegmentTargetsForLocalLight(includedMeshes, item);
-        }
-
-        // Lampy przypisane do ekspozycji zawsze moga zachowac swoj owner jako
-        // glowny target. Reszta kategorii nadal steruje dodatkowymi odbiornikami.
         if (item.ownerMesh && getLocalTargetOption(item, "owner")) {
             addMeshUnique(includedMeshes, item.ownerMesh);
 
-            if (
-                item.ownerMesh.metadata &&
-                item.ownerMesh.metadata.sculptureMesh
-            ) {
+            if (item.ownerMesh.metadata && item.ownerMesh.metadata.sculptureMesh) {
                 addMeshUnique(includedMeshes, item.ownerMesh.metadata.sculptureMesh);
             }
         }
 
-        if (!item.ownerMesh && getLocalTargetOption(item, "artworks")) {
+        var allowBroadObjectCategoryTargets = item.type !== "spot";
+
+        if (!allowBroadObjectCategoryTargets && item._spotHelperRayFirstHitTargetDebug) {
+            item._spotHelperRayFirstHitTargetDebug.broadObjectCategoryTargetsSkipped = {
+                artworks: !!getLocalTargetOption(item, "artworks"),
+                sculptures: !!getLocalTargetOption(item, "sculptures"),
+                props: !!getLocalTargetOption(item, "props")
+            };
+        }
+
+        if (allowBroadObjectCategoryTargets && !item.ownerMesh && getLocalTargetOption(item, "artworks")) {
             addArtworkMeshesUnique(includedMeshes);
         }
 
-        if (!item.ownerMesh && getLocalTargetOption(item, "sculptures")) {
+        if (allowBroadObjectCategoryTargets && !item.ownerMesh && getLocalTargetOption(item, "sculptures")) {
             addSculptureMeshesUnique(includedMeshes, item);
         }
 
-        if (getLocalTargetOption(item, "props")) {
+        if (allowBroadObjectCategoryTargets && getLocalTargetOption(item, "props")) {
             addPropMeshesUnique(includedMeshes);
         }
+
+        storeCommonLocalLightTargetMeshesInCache(item, cacheKey, includedMeshes);
 
         return includedMeshes;
     }
@@ -4964,6 +6300,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (areLocalLightMeshListsSame(previousMeshes, nextMeshes)) {
             localLightTargetDebugStats.targetUnchanged += 1;
             item._lastIncludedOnlyMeshesSignature = getLocalLightMeshListSignature(nextMeshes);
+            item._lastCommittedTargetSegmentNames = getLocalLightTargetSegmentNamesFromMeshes(nextMeshes);
             return false;
         }
 
@@ -4986,6 +6323,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         item._lastIncludedOnlyMeshesSignature = getLocalLightMeshListSignature(nextMeshes);
+        item._lastCommittedTargetSegmentNames = getLocalLightTargetSegmentNamesFromMeshes(nextMeshes);
         item._lastTargetUpdateReason = reason || "unknown";
         localLightTargetDebugStats.targetChanged += 1;
         markLocalLightCameraCullingDirty();
@@ -5008,9 +6346,764 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         localLightTargetDebugStats.lastTargetCount = targets.length;
         localLightTargetDebugStats.lastReason = reason || localLightTargetDebugStats.lastReason || "apply";
 
-        return setLocalLightIncludedMeshesIfChanged(item, targets, reason || "apply");
+        var changed = setLocalLightIncludedMeshesIfChanged(item, targets, reason || "apply");
+        printLocalLightSegmentDiagnostics(item, reason || "apply", targets, changed);
+
+        if (localLightSegmentDiagnosticsOutlineAutoRefresh) {
+            refreshSelectedLocalLightTargetOutline();
+        }
+
+        return changed;
     }
 
+
+    function getLocalLightFullRebuildPriority(item) {
+        if (!item) {
+            return Number.POSITIVE_INFINITY;
+        }
+
+        var selectedScore = isLocalLightSelectedForBudgetPriority(item) ? 0 : 1000000;
+        var enabledScore = getLocalLightUserEnabled(item) ? 0 : 100000;
+        var needsRetargetScore = item._localLightNeedsFinalRetarget ? -50000 : 0;
+        var idScore = Number(String(item.id || item.name || "").replace(/\D+/g, "")) || 0;
+
+        return selectedScore + enabledScore + needsRetargetScore + idScore;
+    }
+
+    function getLocalLightTargetRebuildItems() {
+        return localLightItems
+            .filter(function (item) {
+                return !!(item && !item.softDeleted && item.light);
+            })
+            .sort(function (a, b) {
+                return getLocalLightFullRebuildPriority(a) - getLocalLightFullRebuildPriority(b);
+            });
+    }
+
+
+    function isLocalLightSegmentTargetMesh(mesh) {
+        return !!(
+            isLightingWallSegmentMesh(mesh) ||
+            isLightingFloorSegmentMesh(mesh) ||
+            isLightingCeilingSegmentMesh(mesh)
+        );
+    }
+
+    function getLocalLightTargetSegmentNamesFromMeshes(meshes) {
+        var names = [];
+
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.name || !isLocalLightSegmentTargetMesh(mesh)) {
+                return;
+            }
+
+            if (names.indexOf(mesh.name) === -1) {
+                names.push(mesh.name);
+            }
+        });
+
+        return names.sort();
+    }
+
+    function getLocalLightCurrentTargetSegmentNames(item) {
+        if (!item || !item.light) {
+            return [];
+        }
+
+        var currentNames = getLocalLightTargetSegmentNamesFromMeshes(item.light.includedOnlyMeshes || []);
+
+        if (currentNames.length) {
+            return currentNames;
+        }
+
+        if (Array.isArray(item._lastCommittedTargetSegmentNames)) {
+            return item._lastCommittedTargetSegmentNames.slice();
+        }
+
+        return [];
+    }
+
+    function unionLocalLightSegmentNameLists() {
+        var result = [];
+
+        for (var a = 0; a < arguments.length; a++) {
+            (arguments[a] || []).forEach(function (name) {
+                if (name && result.indexOf(name) === -1) {
+                    result.push(name);
+                }
+            });
+        }
+
+        return result.sort();
+    }
+
+    function isLocalLightActiveForRetarget(item) {
+        return !!(
+            item &&
+            item.light &&
+            !item.softDeleted &&
+            !item.hardDisposed &&
+            (item.type === "spot" || item.type === "point") &&
+            getLocalLightUserEnabled(item)
+        );
+    }
+
+    function buildLocalLightSegmentToLightMap(reason) {
+        var map = {};
+
+        (localLightItems || []).forEach(function (item) {
+            if (!isLocalLightActiveForRetarget(item)) {
+                return;
+            }
+
+            var segmentNames = getLocalLightCurrentTargetSegmentNames(item);
+            item._lastCommittedTargetSegmentNames = segmentNames.slice();
+
+            segmentNames.forEach(function (name) {
+                if (!map[name]) {
+                    map[name] = [];
+                }
+
+                if (map[name].indexOf(item) === -1) {
+                    map[name].push(item);
+                }
+            });
+        });
+
+        localLightSegmentToLightMap = map;
+        localLightSegmentAwareRetargetDebugStats.lastSegmentMapSize = Object.keys(map).length;
+        localLightSegmentAwareRetargetDebugStats.lastReason = reason || localLightSegmentAwareRetargetDebugStats.lastReason;
+
+        return map;
+    }
+
+    function getLocalLightItemsForSegmentNames(segmentNames, map) {
+        var result = [];
+        map = map || localLightSegmentToLightMap || {};
+
+        (segmentNames || []).forEach(function (segmentName) {
+            (map[segmentName] || []).forEach(function (item) {
+                if (item && result.indexOf(item) === -1) {
+                    result.push(item);
+                }
+            });
+        });
+
+        return result;
+    }
+
+    function getPotentialTargetSegmentNamesForLocalLight(item, reason) {
+        if (!item || !item.light) {
+            return [];
+        }
+
+        var previousDiscovery = localLightSegmentAwareDiscoveryActive;
+        var previousPreview = localLightTargetPreviewActive;
+        var segmentNames = [];
+
+        try {
+            localLightSegmentAwareDiscoveryActive = true;
+            localLightTargetPreviewActive = false;
+            markLocalLightTargetItemCacheDirty(item, reason || "segmentAwareDiscovery");
+            segmentNames = getLocalLightTargetSegmentNamesFromMeshes(getCommonLocalLightTargetMeshes(item));
+        } catch (error) {
+            console.warn("Segment-aware retarget discovery warning:", error);
+            segmentNames = getLocalLightCurrentTargetSegmentNames(item);
+        } finally {
+            localLightSegmentAwareDiscoveryActive = previousDiscovery;
+            localLightTargetPreviewActive = previousPreview;
+        }
+
+        return segmentNames;
+    }
+
+    function seedLocalLightSegmentBudgetMapsFromCurrentTargets(excludedItems) {
+        excludedItems = excludedItems || [];
+        localLightWallSegmentBudgetMap = {};
+        localLightFloorSegmentBudgetMap = {};
+        localLightCeilingSegmentBudgetMap = {};
+        localLightSculptureBudgetMap = {};
+
+        (localLightItems || []).forEach(function (item) {
+            if (!isLocalLightActiveForRetarget(item) || excludedItems.indexOf(item) !== -1) {
+                return;
+            }
+
+            (item.light.includedOnlyMeshes || []).forEach(function (mesh) {
+                var map = null;
+
+                if (isLightingWallSegmentMesh(mesh)) {
+                    map = localLightWallSegmentBudgetMap;
+                } else if (isLightingFloorSegmentMesh(mesh)) {
+                    map = localLightFloorSegmentBudgetMap;
+                } else if (isLightingCeilingSegmentMesh(mesh)) {
+                    map = localLightCeilingSegmentBudgetMap;
+                }
+
+                if (!map || !mesh || !mesh.name) {
+                    return;
+                }
+
+                map[mesh.name] = compactLocalLightSegmentBudgetList(map[mesh.name] || []);
+
+                if (map[mesh.name].indexOf(item) === -1) {
+                    map[mesh.name].push(item);
+                }
+            });
+        });
+    }
+
+    function refreshLocalSpotShadowsForItems(items) {
+        (items || []).forEach(function (item) {
+            if (!item || !item.light) {
+                return;
+            }
+
+            if (item.type === "spot") {
+                requestLocalSpotShadowRefresh(item, true);
+            } else if (item.type === "point") {
+                disableLocalPointLightShadow(item);
+            }
+        });
+    }
+
+    function sortLocalLightRetargetItems(items) {
+        return (items || []).filter(function (item, index, array) {
+            return !!item && array.indexOf(item) === index;
+        }).sort(function (a, b) {
+            return getLocalLightFullRebuildPriority(a) - getLocalLightFullRebuildPriority(b);
+        });
+    }
+
+    // STAGE 12C60B3C - UNIFIED LOCAL LIGHT FINAL COMMIT + SEGMENT RELATION REFRESH
+    // Startup and dragEnd used to reach similar results through different refresh paths.
+    // Keep one final commit body for both: sync runtime, clear target cache, rebuild targets,
+    // rebuild segment->light relation, then refresh only the affected Spot shadows.
+    function doLocalLightSegmentListsIntersect(a, b) {
+        if (!a || !b || !a.length || !b.length) {
+            return false;
+        }
+
+        for (var i = 0; i < a.length; i++) {
+            if (b.indexOf(a[i]) !== -1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function getAllActiveLocalLightRetargetItems() {
+        return sortLocalLightRetargetItems((localLightItems || []).filter(function (candidate) {
+            return !!(candidate && candidate.light && (candidate.type === "spot" || candidate.type === "point"));
+        }));
+    }
+
+    function syncLocalLightRuntimeFromMarkerForFinalCommit(item, reason) {
+        if (!item || !item.light || !item.markerMesh) {
+            return false;
+        }
+
+        try {
+            if (item.markerMesh.computeWorldMatrix) {
+                item.markerMesh.computeWorldMatrix(true);
+            }
+        } catch (markerMatrixError) {}
+
+        if (item.light.position && item.markerMesh.position) {
+            item.light.position.copyFrom(item.markerMesh.position);
+        }
+
+        if (item.type === "spot" && item.light.direction) {
+            item.light.direction.copyFrom(getSpotDirectionFromMarker(item));
+
+            if (isFinite(item.light.range) && item.light.range > 0) {
+                item.light.shadowMaxZ = item.light.range + 2;
+                item.helperLength = item.light.range;
+                item.helperMaxRadius = item.light.range;
+            }
+        }
+
+        if (item.type === "point") {
+            if (isFinite(item.light.range) && item.light.range > 0) {
+                item.helperMaxRadius = item.light.range;
+            }
+
+            disableLocalPointLightShadow(item);
+        }
+
+        return true;
+    }
+
+    function expandAffectedLocalLightItemsBySegmentRelations(affectedItems, affectedSegments, movedItem, reason) {
+        affectedItems = sortLocalLightRetargetItems(affectedItems || []);
+        affectedSegments = unionLocalLightSegmentNameLists(affectedSegments || []);
+
+        var expanded = [];
+        var checked = 0;
+        var matched = 0;
+        var changed = true;
+        var guard = 0;
+
+        while (changed && guard < 3) {
+            changed = false;
+            guard += 1;
+
+            getAllActiveLocalLightRetargetItems().forEach(function (candidate) {
+                if (!candidate || affectedItems.indexOf(candidate) !== -1) {
+                    return;
+                }
+
+                if (!isLocalLightActiveForRetarget(candidate)) {
+                    return;
+                }
+
+                checked += 1;
+
+                var currentSegments = getLocalLightCurrentTargetSegmentNames(candidate);
+                var potentialSegments = getPotentialTargetSegmentNamesForLocalLight(
+                    candidate,
+                    (reason || "segmentAware") + "RelationDiscovery"
+                );
+                var combinedSegments = unionLocalLightSegmentNameLists(currentSegments, potentialSegments);
+
+                if (doLocalLightSegmentListsIntersect(combinedSegments, affectedSegments)) {
+                    affectedItems.push(candidate);
+                    affectedSegments = unionLocalLightSegmentNameLists(affectedSegments, combinedSegments);
+                    expanded.push(candidate);
+                    matched += 1;
+                    changed = true;
+                }
+            });
+        }
+
+        localLightSegmentAwareRetargetDebugStats.lastRelationExpandedLights = expanded.map(function (expandedItem) {
+            return getLocalLightBudgetItemId(expandedItem);
+        });
+        localLightSegmentAwareRetargetDebugStats.lastPotentialCheckedLights = checked;
+        localLightSegmentAwareRetargetDebugStats.lastPotentialMatchedLights = matched;
+
+        return {
+            items: sortLocalLightRetargetItems(affectedItems),
+            segments: affectedSegments,
+            expanded: expanded
+        };
+    }
+
+    function commitLocalLightFinalTargetGroupImmediate(items, reason, options) {
+        options = options || {};
+        var start = getGalleryPerformanceNow();
+        var commitReason = reason || "finalGroupCommit";
+        var commitItems = sortLocalLightRetargetItems(items || []);
+        var skippedDisabled = 0;
+        var skippedSoftDeleted = 0;
+        var processed = 0;
+        var retargeted = [];
+        var previousWallBudgetPass = localLightWallSegmentBudgetPassActive;
+        var previousSculptureBudgetPass = localLightSculptureBudgetPassActive;
+        var previousStartupClean = localLightStartupCleanTargetRebuildActive;
+
+        if (options.startupClean) {
+            localLightStartupCleanTargetRebuildActive = true;
+        }
+
+        if (options.seedBudgetFromCurrent !== false) {
+            seedLocalLightSegmentBudgetMapsFromCurrentTargets(commitItems);
+        }
+
+        localLightWallSegmentBudgetPassActive = true;
+        localLightSculptureBudgetPassActive = true;
+
+        try {
+            commitItems.forEach(function (commitItem) {
+                if (!commitItem || !commitItem.light || (commitItem.type !== "spot" && commitItem.type !== "point")) {
+                    return;
+                }
+
+                if (commitItem.softDeleted || commitItem.hardDisposed) {
+                    skippedSoftDeleted += 1;
+                    return;
+                }
+
+                if (!getLocalLightUserEnabled(commitItem) || !isLocalLightEligibleForSegmentBudget(commitItem)) {
+                    skippedDisabled += 1;
+                    setLocalLightIncludedMeshesIfChanged(commitItem, [], commitReason + "DisabledSkip");
+                    return;
+                }
+
+                syncLocalLightRuntimeFromMarkerForFinalCommit(commitItem, commitReason);
+                markLocalLightTargetItemCacheDirty(commitItem, commitReason);
+                applyCommonLocalLightTargets(commitItem, commitReason);
+                commitItem._localLightNeedsFinalRetarget = false;
+                processed += 1;
+                retargeted.push(commitItem);
+            });
+        } finally {
+            localLightWallSegmentBudgetPassActive = previousWallBudgetPass;
+            localLightSculptureBudgetPassActive = previousSculptureBudgetPass;
+            localLightStartupCleanTargetRebuildActive = previousStartupClean;
+        }
+
+        buildLocalLightSegmentToLightMap(commitReason);
+        refreshLocalSpotShadowsForItems(retargeted);
+
+        if (options.persist !== false) {
+            schedulePersistLocalLightState(false);
+        }
+
+        if (options.updateUi !== false) {
+            updateLocalLightsUi();
+        }
+
+        if (localLightSegmentDiagnosticsOutlineAutoRefresh) {
+            refreshSelectedLocalLightTargetOutline();
+        }
+
+        localLightSegmentAwareRetargetDebugStats.lastCommitScope = options.scope || "group";
+        localLightSegmentAwareRetargetDebugStats.lastRetargetedLights = retargeted.map(function (retargetedItem) {
+            return getLocalLightBudgetItemId(retargetedItem);
+        });
+        localLightSegmentAwareRetargetDebugStats.lastSkippedDisabled = skippedDisabled;
+        localLightSegmentAwareRetargetDebugStats.lastSkippedSoftDeleted = skippedSoftDeleted;
+        localLightSegmentAwareRetargetDebugStats.lastMs = Math.round((getGalleryPerformanceNow() - start) * 100) / 100;
+        localLightTargetDebugStats.lastRefreshMode = options.scope || "finalGroup";
+        localLightTargetDebugStats.lastReason = commitReason;
+
+        return {
+            reason: commitReason,
+            scope: options.scope || "group",
+            items: commitItems,
+            processed: processed,
+            retargeted: retargeted,
+            skippedDisabled: skippedDisabled,
+            skippedSoftDeleted: skippedSoftDeleted,
+            retargetedLightIds: localLightSegmentAwareRetargetDebugStats.lastRetargetedLights.slice(),
+            ms: localLightSegmentAwareRetargetDebugStats.lastMs
+        };
+    }
+
+    function commitSegmentAwareLocalLightTargetsImmediate(item, reason) {
+        if (!localLightSegmentAwareRetargetEnabled) {
+            var fallbackResult = commitLocalLightFinalTargetGroupImmediate(
+                item ? [item] : [],
+                reason || "segmentAwareDisabledSingle",
+                {
+                    scope: "singleFallback",
+                    seedBudgetFromCurrent: true
+                }
+            );
+
+            return {
+                mode: "singleFallback",
+                reason: reason || "segmentAwareDisabledSingle",
+                retargetedLights: fallbackResult.retargetedLightIds || []
+            };
+        }
+
+        if (!item || !item.light || item.softDeleted || item.hardDisposed) {
+            return {
+                mode: "segmentAwareSkipped",
+                reason: reason || "segmentAware",
+                retargetedLights: []
+            };
+        }
+
+        var start = getGalleryPerformanceNow();
+        var movedLightId = getLocalLightBudgetItemId(item);
+        var currentMap = buildLocalLightSegmentToLightMap(reason || "segmentAwareBefore");
+        var oldSegments = getLocalLightCurrentTargetSegmentNames(item);
+        var newSegments = getPotentialTargetSegmentNamesForLocalLight(item, reason || "segmentAwareDiscovery");
+        var affectedSegments = unionLocalLightSegmentNameLists(oldSegments, newSegments);
+        var affectedItems = getLocalLightItemsForSegmentNames(affectedSegments, currentMap);
+
+        if (affectedItems.indexOf(item) === -1) {
+            affectedItems.unshift(item);
+        }
+
+        var relationExpansion = expandAffectedLocalLightItemsBySegmentRelations(
+            affectedItems,
+            affectedSegments,
+            item,
+            reason || "segmentAware"
+        );
+
+        affectedItems = relationExpansion.items.filter(function (affectedItem) {
+            return !!affectedItem && (affectedItem.type === "spot" || affectedItem.type === "point");
+        });
+        affectedSegments = relationExpansion.segments;
+
+        localLightSegmentAwareRetargetDebugStats.runs += 1;
+        localLightSegmentAwareRetargetDebugStats.lastMode = "segmentAwareUnified";
+        localLightSegmentAwareRetargetDebugStats.lastReason = reason || "segmentAware";
+        localLightSegmentAwareRetargetDebugStats.lastMovedLightId = movedLightId;
+        localLightSegmentAwareRetargetDebugStats.lastAffectedSegments = affectedSegments.slice();
+        localLightSegmentAwareRetargetDebugStats.lastAffectedLights = affectedItems.map(function (affectedItem) {
+            return getLocalLightBudgetItemId(affectedItem);
+        });
+
+        var commitResult = commitLocalLightFinalTargetGroupImmediate(
+            affectedItems,
+            reason || "segmentAwareUnifiedCommit",
+            {
+                scope: "segmentAwareUnified",
+                seedBudgetFromCurrent: true
+            }
+        );
+
+        localLightSegmentAwareRetargetDebugStats.lastMs = Math.round((getGalleryPerformanceNow() - start) * 100) / 100;
+
+        return {
+            mode: "segmentAwareUnified",
+            reason: reason || "segmentAware",
+            movedLightId: movedLightId,
+            affectedSegments: affectedSegments.slice(),
+            affectedLights: localLightSegmentAwareRetargetDebugStats.lastAffectedLights.slice(),
+            relationExpandedLights: localLightSegmentAwareRetargetDebugStats.lastRelationExpandedLights.slice(),
+            retargetedLights: localLightSegmentAwareRetargetDebugStats.lastRetargetedLights.slice(),
+            skippedDisabled: commitResult.skippedDisabled,
+            skippedSoftDeleted: commitResult.skippedSoftDeleted,
+            ms: localLightSegmentAwareRetargetDebugStats.lastMs
+        };
+    }
+
+    function resetLocalLightStartupCommittedTargets(reason) {
+        var cleared = 0;
+
+        (localLightItems || []).forEach(function (item) {
+            if (!item || !item.light) {
+                return;
+            }
+
+            markLocalLightTargetItemCacheDirty(item, reason || "startupCleanRebuildReset");
+            item._lastCommittedTargetSegmentNames = [];
+            item._lastIncludedOnlyMeshesSignature = "";
+            item._lastTargetUpdateReason = reason || "startupCleanRebuildReset";
+            item._localLightNeedsFinalRetarget = false;
+
+            if (Array.isArray(item.light.includedOnlyMeshes)) {
+                item.light.includedOnlyMeshes.length = 0;
+            } else {
+                item.light.includedOnlyMeshes = [];
+            }
+
+            if (Array.isArray(item.light.excludedMeshes)) {
+                item.light.excludedMeshes.length = 0;
+            } else {
+                item.light.excludedMeshes = [];
+            }
+
+            // Mirror the final editor path without marking the light as manually edited.
+            // This avoids stale restored light.position/direction values influencing the first startup target scan.
+            if (item.markerMesh && item.light.position) {
+                if (item.markerMesh.computeWorldMatrix) {
+                    try {
+                        item.markerMesh.computeWorldMatrix(true);
+                    } catch (markerMatrixError) {}
+                }
+
+                item.light.position.copyFrom(item.markerMesh.position);
+            }
+
+            if (item.type === "spot" && item.light.direction && item.markerMesh) {
+                item.light.direction.copyFrom(getSpotDirectionFromMarker(item));
+
+                if (isFinite(item.light.range) && item.light.range > 0) {
+                    item.light.shadowMaxZ = item.light.range + 2;
+                    item.helperLength = item.light.range;
+                    item.helperMaxRadius = item.light.range;
+                }
+            }
+
+            cleared += 1;
+        });
+
+        return cleared;
+    }
+
+    function commitStartupCleanLocalLightTargetRebuildImmediate(reason) {
+        if (!localLightLoadTimeRetargetEnabled) {
+            return null;
+        }
+
+        var start = getGalleryPerformanceNow();
+        var skippedDisabled = 0;
+        var skippedSoftDeleted = 0;
+        var processed = 0;
+        var retargeted = [];
+        var rebuildReason = reason || "startupCleanTargetRebuild";
+        var previousStartupClean = localLightStartupCleanTargetRebuildActive;
+        var previousWallBudgetPass = localLightWallSegmentBudgetPassActive;
+        var previousSculptureBudgetPass = localLightSculptureBudgetPassActive;
+
+        localLightStartupCleanTargetRebuildDebugStats.runs += 1;
+        localLightStartupCleanTargetRebuildDebugStats.lastReason = rebuildReason;
+        localLightStartupCleanTargetRebuildDebugStats.processed = 0;
+        localLightStartupCleanTargetRebuildDebugStats.skippedDisabled = 0;
+        localLightStartupCleanTargetRebuildDebugStats.skippedSoftDeleted = 0;
+        localLightStartupCleanTargetRebuildDebugStats.retargetedLights = [];
+        localLightStartupCleanTargetRebuildDebugStats.segmentMapSize = 0;
+        localLightStartupCleanTargetRebuildDebugStats.cacheBypassCount = 0;
+
+        try {
+            localLightStartupCleanTargetRebuildActive = true;
+            localLightWallSegmentBudgetPassActive = true;
+            localLightSculptureBudgetPassActive = true;
+
+            // Build from a clean slate. Do not let early-load includedOnlyMeshes or committed segment names
+            // seed the startup budget maps. This pass is the first trusted source of segment assignments.
+            clearLocalLightTargetMeshCacheForAll(rebuildReason);
+            localLightTargetCacheVersion += 1;
+            localLightWallSegmentBudgetMap = {};
+            localLightFloorSegmentBudgetMap = {};
+            localLightCeilingSegmentBudgetMap = {};
+            localLightSculptureBudgetMap = {};
+            localLightSegmentToLightMap = {};
+            localLightStartupCleanTargetRebuildDebugStats.clearedLights = resetLocalLightStartupCommittedTargets(rebuildReason);
+
+            localLightSegmentBudgetDebugStats.disabledSkipped = 0;
+            localLightSegmentBudgetDebugStats.budgetBlocked = 0;
+            localLightSegmentBudgetDebugStats.priorityBypasses = 0;
+
+            var startupCommitResult = commitLocalLightFinalTargetGroupImmediate(
+                getLocalLightTargetRebuildItems(),
+                rebuildReason,
+                {
+                    scope: "startupUnifiedClean",
+                    startupClean: true,
+                    seedBudgetFromCurrent: false,
+                    persist: false,
+                    updateUi: false
+                }
+            );
+
+            processed = startupCommitResult.processed;
+            skippedDisabled = startupCommitResult.skippedDisabled;
+            skippedSoftDeleted = startupCommitResult.skippedSoftDeleted;
+            retargeted = startupCommitResult.retargeted;
+        } finally {
+            localLightWallSegmentBudgetPassActive = previousWallBudgetPass;
+            localLightSculptureBudgetPassActive = previousSculptureBudgetPass;
+            localLightStartupCleanTargetRebuildActive = previousStartupClean;
+        }
+
+        updateLocalLightsUi();
+
+        localLightSegmentAwareRetargetDebugStats.loadFullRuns += 1;
+        localLightSegmentAwareRetargetDebugStats.lastMode = "startupClean";
+        localLightSegmentAwareRetargetDebugStats.lastReason = rebuildReason;
+        localLightSegmentAwareRetargetDebugStats.loadFullProcessed = processed;
+        localLightSegmentAwareRetargetDebugStats.loadFullSkippedDisabled = skippedDisabled;
+        localLightSegmentAwareRetargetDebugStats.loadFullSkippedSoftDeleted = skippedSoftDeleted;
+        localLightSegmentAwareRetargetDebugStats.lastRetargetedLights = retargeted.map(function (retargetedItem) {
+            return getLocalLightBudgetItemId(retargetedItem);
+        });
+
+        localLightStartupCleanTargetRebuildDebugStats.processed = processed;
+        localLightStartupCleanTargetRebuildDebugStats.skippedDisabled = skippedDisabled;
+        localLightStartupCleanTargetRebuildDebugStats.skippedSoftDeleted = skippedSoftDeleted;
+        localLightStartupCleanTargetRebuildDebugStats.retargetedLights = localLightSegmentAwareRetargetDebugStats.lastRetargetedLights.slice();
+        localLightStartupCleanTargetRebuildDebugStats.segmentMapSize = Object.keys(localLightSegmentToLightMap || {}).length;
+        localLightStartupCleanTargetRebuildDebugStats.lastMs = Math.round((getGalleryPerformanceNow() - start) * 100) / 100;
+
+        localLightSegmentAwareRetargetDebugStats.lastLoadMs = localLightStartupCleanTargetRebuildDebugStats.lastMs;
+        localLightTargetDebugStats.lastRefreshMode = "startupClean";
+        localLightTargetDebugStats.lastReason = rebuildReason;
+
+        return getSegmentAwareRetargetDebug();
+    }
+
+    function getStartupCleanLocalLightTargetRebuildDebug() {
+        return {
+            active: !!localLightStartupCleanTargetRebuildActive,
+            runs: localLightStartupCleanTargetRebuildDebugStats.runs,
+            lastReason: localLightStartupCleanTargetRebuildDebugStats.lastReason,
+            processed: localLightStartupCleanTargetRebuildDebugStats.processed,
+            skippedDisabled: localLightStartupCleanTargetRebuildDebugStats.skippedDisabled,
+            skippedSoftDeleted: localLightStartupCleanTargetRebuildDebugStats.skippedSoftDeleted,
+            clearedLights: localLightStartupCleanTargetRebuildDebugStats.clearedLights,
+            retargetedLights: localLightStartupCleanTargetRebuildDebugStats.retargetedLights.slice(),
+            segmentMapSize: localLightStartupCleanTargetRebuildDebugStats.segmentMapSize,
+            cacheBypassCount: localLightStartupCleanTargetRebuildDebugStats.cacheBypassCount,
+            lastMs: localLightStartupCleanTargetRebuildDebugStats.lastMs
+        };
+    }
+
+    function commitLoadTimeLocalLightRetargetImmediate(reason) {
+        return commitStartupCleanLocalLightTargetRebuildImmediate(reason || "loadTimeStartupCleanTargetRebuild");
+    }
+
+    function scheduleLoadTimeLocalLightRetarget(reason, delayMs) {
+        if (!localLightLoadTimeRetargetEnabled) {
+            return null;
+        }
+
+        localLightLoadTimeRetargetReason = reason || "loadTimeRetargetScheduled";
+        localLightSegmentAwareRetargetDebugStats.loadFullScheduled += 1;
+
+        if (localLightLoadTimeRetargetTimer) {
+            clearTimeout(localLightLoadTimeRetargetTimer);
+            localLightLoadTimeRetargetTimer = null;
+            localLightSegmentAwareRetargetDebugStats.loadFullCanceled += 1;
+        }
+
+        var delay = Math.max(0, Number(delayMs != null ? delayMs : localLightLoadTimeRetargetDelayMs) || 0);
+
+        localLightLoadTimeRetargetTimer = setTimeout(function () {
+            var run = function () {
+                localLightLoadTimeRetargetTimer = null;
+                commitLoadTimeLocalLightRetargetImmediate(localLightLoadTimeRetargetReason || reason || "loadTimeRetargetScheduled");
+            };
+
+            if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(function () {
+                    if (typeof requestAnimationFrame === "function") {
+                        requestAnimationFrame(run);
+                    } else {
+                        run();
+                    }
+                });
+            } else {
+                run();
+            }
+        }, delay);
+
+        return localLightLoadTimeRetargetTimer;
+    }
+
+    function getSegmentAwareRetargetDebug() {
+        return {
+            enabled: !!localLightSegmentAwareRetargetEnabled,
+            loadTimeEnabled: !!localLightLoadTimeRetargetEnabled,
+            segmentAwareDelayMs: localLightSegmentAwareRetargetDelayMs,
+            loadTimeDelayMs: localLightLoadTimeRetargetDelayMs,
+            pendingLoadTimeRetarget: !!localLightLoadTimeRetargetTimer,
+            runs: localLightSegmentAwareRetargetDebugStats.runs,
+            scheduled: localLightSegmentAwareRetargetDebugStats.scheduled,
+            canceled: localLightSegmentAwareRetargetDebugStats.canceled,
+            loadFullRuns: localLightSegmentAwareRetargetDebugStats.loadFullRuns,
+            loadFullScheduled: localLightSegmentAwareRetargetDebugStats.loadFullScheduled,
+            loadFullCanceled: localLightSegmentAwareRetargetDebugStats.loadFullCanceled,
+            loadFullProcessed: localLightSegmentAwareRetargetDebugStats.loadFullProcessed,
+            loadFullSkippedDisabled: localLightSegmentAwareRetargetDebugStats.loadFullSkippedDisabled,
+            loadFullSkippedSoftDeleted: localLightSegmentAwareRetargetDebugStats.loadFullSkippedSoftDeleted,
+            lastMode: localLightSegmentAwareRetargetDebugStats.lastMode,
+            lastReason: localLightSegmentAwareRetargetDebugStats.lastReason,
+            lastMovedLightId: localLightSegmentAwareRetargetDebugStats.lastMovedLightId,
+            affectedSegments: localLightSegmentAwareRetargetDebugStats.lastAffectedSegments.slice(),
+            affectedLights: localLightSegmentAwareRetargetDebugStats.lastAffectedLights.slice(),
+            relationExpandedLights: localLightSegmentAwareRetargetDebugStats.lastRelationExpandedLights.slice(),
+            potentialCheckedLights: localLightSegmentAwareRetargetDebugStats.lastPotentialCheckedLights,
+            potentialMatchedLights: localLightSegmentAwareRetargetDebugStats.lastPotentialMatchedLights,
+            retargetedLights: localLightSegmentAwareRetargetDebugStats.lastRetargetedLights.slice(),
+            skippedDisabled: localLightSegmentAwareRetargetDebugStats.lastSkippedDisabled,
+            skippedSoftDeleted: localLightSegmentAwareRetargetDebugStats.lastSkippedSoftDeleted,
+            commitScope: localLightSegmentAwareRetargetDebugStats.lastCommitScope,
+            segmentMapSize: localLightSegmentAwareRetargetDebugStats.lastSegmentMapSize,
+            lastMs: localLightSegmentAwareRetargetDebugStats.lastMs,
+            lastLoadMs: localLightSegmentAwareRetargetDebugStats.lastLoadMs,
+            startupClean: getStartupCleanLocalLightTargetRebuildDebug()
+        };
+    }
 
     function refreshAllCommonLocalLightTargetsImmediate() {
         markLocalLightCameraCullingDirty();
@@ -5021,12 +7114,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         localLightWallSegmentBudgetPassActive = true;
         localLightSculptureBudgetPassActive = true;
 
-        localLightItems.forEach(function (item) {
-            if (!item || item.softDeleted) {
+        localLightSegmentBudgetDebugStats.disabledSkipped = 0;
+        localLightSegmentBudgetDebugStats.budgetBlocked = 0;
+        localLightSegmentBudgetDebugStats.priorityBypasses = 0;
+
+        getLocalLightTargetRebuildItems().forEach(function (item) {
+            if (!isLocalLightEligibleForSegmentBudget(item)) {
+                setLocalLightIncludedMeshesIfChanged(item, [], "fullRebuildDisabledBudgetSkip");
                 return;
             }
 
-            applyCommonLocalLightTargets(item, "fullRebuild");
+            markLocalLightTargetItemCacheDirty(item, "fullRebuildBudgetPass");
+            applyCommonLocalLightTargets(item, "fullRebuildPriority");
         });
 
         localLightWallSegmentBudgetPassActive = false;
@@ -5154,6 +7253,90 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+
+    function cancelLocalLightAtomicTargetCommit(item) {
+        if (!item || !item._localLightAtomicTargetCommitTimer) {
+            return;
+        }
+
+        clearTimeout(item._localLightAtomicTargetCommitTimer);
+        item._localLightAtomicTargetCommitTimer = null;
+        localLightTargetDebugStats.atomicTargetCommitCanceled += 1;
+    }
+
+    function scheduleLocalLightAtomicTargetCommit(item, reason, delayMs) {
+        if (!item || item.softDeleted || !item.light) {
+            return;
+        }
+
+        cancelLocalLightAtomicTargetCommit(item);
+
+        var delay = Math.max(0, Number(delayMs != null ? delayMs : localLightGizmoFinalRetargetDelayMs) || 0);
+        item._localLightAtomicTargetCommitReason = reason || "atomicCommit";
+
+        item._localLightAtomicTargetCommitTimer = setTimeout(function () {
+            item._localLightAtomicTargetCommitTimer = null;
+
+            if (!item || item.softDeleted || !item.light) {
+                return;
+            }
+
+            localLightTargetDebugStats.atomicTargetCommits += 1;
+            item._localLightNeedsFinalRetarget = false;
+
+            // C60B3: one moved light can affect only a local group of lamps sharing old/new segments.
+            // Retarget that group instead of all Local Lights, avoiding the C60B2 FPS spike.
+            commitSegmentAwareLocalLightTargetsImmediate(
+                item,
+                item._localLightAtomicTargetCommitReason || reason || "atomicCommitSegmentAware"
+            );
+
+            updateLocalLightVisualState(item);
+        }, delay);
+    }
+
+    function cancelDeferredLocalLightFinalRetarget(item) {
+        if (!item || !item._localLightFinalRetargetTimer) {
+            return;
+        }
+
+        clearTimeout(item._localLightFinalRetargetTimer);
+        item._localLightFinalRetargetTimer = null;
+        localLightTargetDebugStats.gizmoFinalRetargetCanceled += 1;
+    }
+
+    function scheduleDeferredLocalLightFinalRetarget(item, reason, delayMs) {
+        if (!item || item.softDeleted || !item.light) {
+            return;
+        }
+
+        cancelDeferredLocalLightFinalRetarget(item);
+
+        var delay = Math.max(0, Number(delayMs != null ? delayMs : localLightGizmoFinalRetargetDelayMs) || 0);
+        localLightTargetDebugStats.gizmoFinalRetargetScheduled += 1;
+        item._localLightFinalRetargetReason = reason || "dragEnd";
+
+        item._localLightFinalRetargetTimer = setTimeout(function () {
+            item._localLightFinalRetargetTimer = null;
+
+            if (!item || item.softDeleted || !item.light) {
+                return;
+            }
+
+            localLightDynamicWallRetargetLastTime = Date.now();
+            localLightDynamicWallRetargetCount += 1;
+            localLightTargetDebugStats.gizmoFinalRetargetExecuted += 1;
+            item._localLightNeedsFinalRetarget = false;
+
+            // C60B3: deferred after drag, but segment-aware instead of global.
+            // This fixes neighbouring stale lights without forcing a full-scene rebuild.
+            commitSegmentAwareLocalLightTargetsImmediate(
+                item,
+                item._localLightFinalRetargetReason || reason || "dragEndSegmentAware"
+            );
+        }, delay);
+    }
+
     function requestDynamicWallSegmentRetargetForLocalLight(item, force, reason) {
         if (!localLightDynamicWallRetargetEnabled) {
             return;
@@ -5171,28 +7354,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var now = Date.now();
         var isFinal = !!force || reason === "dragEnd" || reason === "final";
 
         localLightDynamicWallRetargetLastReason = reason || "unknown";
 
         if (!isFinal) {
-            // STAGE 12C47:
+            // STAGE 12C54:
             // Podczas ciągłego ruszania gizmo NIE przepinamy includedOnlyMeshes i nie skanujemy segmentów.
-            // Światło przesuwa się live na dotychczasowych targetach; pełny retarget robimy dopiero na dragEnd.
-            // To usuwa dropy i wizualne przeładowywanie segmentów podczas ustawiania lampy.
+            // Helper jest live, ale segmenty nie są przepinane. Jeżeli był zaplanowany finalny retarget,
+            // anulujemy go, bo użytkownik dalej ustawia lampę.
+            cancelDeferredLocalLightFinalRetarget(item);
             item._localLightNeedsFinalRetarget = true;
             localLightTargetDebugStats.gizmoDragPreviewSkippedTargets += 1;
             return;
         }
 
-        localLightDynamicWallRetargetLastTime = now;
-        localLightDynamicWallRetargetCount += 1;
-
-        // Final update after gizmo release is accurate for the moved light,
-        // without rebuilding every Local Light unless a caller explicitly requests all.
-        item._localLightNeedsFinalRetarget = false;
-        refreshCommonLocalLightTargetsForItemImmediate(item, reason || "final", false);
+        // Final update after gizmo release is accurate for the moved light.
+        // C56: one atomic commit only; no progressive/chunked includedOnlyMeshes and no scanning while dragging.
+        scheduleLocalLightAtomicTargetCommit(item, reason || "final", localLightGizmoFinalRetargetDelayMs);
     }
 
     function updateDisplaySpotLight(ownerMesh) {
@@ -6774,6 +8953,46 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             : -2.2;
     }
 
+    // STAGE 12C54 - EDIT FLY MODE / VIEWER WALK HEIGHT SAFETY
+    // Edit Mode may temporarily move camera vertically to reach lights above the ceiling.
+    // Viewer Mode must always return to the original walking height captured on scene start.
+    function restoreCameraToDefaultViewerWalkHeight(reason) {
+        if (!camera || !camera.position) {
+            return;
+        }
+
+        try {
+            clearViewerWASDVisualOffsets();
+        } catch (clearWalkOffsetError) {}
+
+        var walkY = getGalleryDefaultWalkCameraY();
+
+        if (isFinite(Number(walkY))) {
+            camera.position.y = Number(walkY);
+        }
+
+        if (camera.rotation && isFinite(Number(camera.rotation.z))) {
+            camera.rotation.z = 0;
+        }
+
+        try {
+            if (typeof clearGalleryFocusPreviewRuntime === "function") {
+                clearGalleryFocusPreviewRuntime();
+            }
+        } catch (clearFocusPreviewError) {}
+
+        try {
+            if (typeof stopViewerSafeFocusRuntimeAnimation === "function") {
+                stopViewerSafeFocusRuntimeAnimation();
+            }
+            if (scene && scene.stopAnimation) {
+                scene.stopAnimation(camera);
+            }
+        } catch (stopWalkHeightAnimationError) {}
+
+        return reason || "viewerWalkHeight";
+    }
+
     function getGalleryFloorYAtPosition(position, fallbackY) {
         var safeFallback = isFinite(Number(fallbackY)) ? Number(fallbackY) : (position && isFinite(position.y) ? position.y - getGalleryViewerEyeHeight() : -3);
 
@@ -7161,6 +9380,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         object.metadata = object.metadata || {};
         object.metadata.galleryObjectBoundsDirty = true;
+
+        if (typeof markGalleryObjectsDirty === "function") {
+            markGalleryObjectsDirty("objectBoundsDirty");
+        }
     }
 
     function markAllGalleryObjectBoundsDirty() {
@@ -8376,7 +10599,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         w: false,
         a: false,
         s: false,
-        d: false
+        d: false,
+        space: false
     };
 
 
@@ -8720,6 +10944,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     loadingScreen.innerHTML = `
         <div id="loadingContent">
             <div id="loaderSpinner"></div>
+            <div id="galleryLoaderTextBlock">
+                <div id="galleryLoaderTitle">Loading gallery</div>
+                <div id="galleryLoaderStatus">Preparing gallery assets...</div>
+                <div id="galleryLoaderHint">Walls, floor and ceiling are required before visitors can enter.</div>
+            </div>
+            <button id="galleryAssetRetryButton" type="button">Retry loading</button>
         </div>
     `;
 
@@ -8749,7 +10979,65 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 34px;
+            gap: 22px;
+            min-width: min(420px, calc(100vw - 42px));
+            padding: 26px;
+            border-radius: 28px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(18, 18, 18, 0.62);
+            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54);
+            backdrop-filter: blur(22px) saturate(1.28);
+            -webkit-backdrop-filter: blur(22px) saturate(1.28);
+            text-align: center;
+        }
+
+        #galleryLoaderTextBlock {
+            display: grid;
+            gap: 7px;
+            color: #f7f3ea;
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        #galleryLoaderTitle {
+            font-size: 20px;
+            line-height: 1.1;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+        }
+
+        #galleryLoaderStatus {
+            color: rgba(247, 243, 234, 0.76);
+            font-size: 13px;
+            line-height: 1.42;
+            font-weight: 650;
+        }
+
+        #galleryLoaderHint {
+            color: rgba(247, 243, 234, 0.50);
+            font-size: 12px;
+            line-height: 1.42;
+            max-width: 360px;
+        }
+
+        #galleryAssetRetryButton {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 48px;
+            border: 1px solid rgba(247, 243, 234, 0.72);
+            border-radius: 16px;
+            background: #f7f3ea;
+            color: #121212;
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: 0.01em;
+            cursor: pointer;
+            box-shadow: 0 18px 38px rgba(0, 0, 0, 0.30);
+        }
+
+        #galleryAssetRetryButton:hover {
+            background: #fffaf0;
         }
 
         #loaderSpinner {
@@ -9236,11 +11524,186 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerIntroLookButtons();
     }
 
-    var assetsToLoad = 4;
+    // STAGE 12C62S4 - PRODUCTION ASSET LOADING GUARD
+    // Public viewer must never enter a half-loaded gallery. Walls, floor and ceiling are critical.
+    var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
+    var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
+    var galleryOptionalAssetNames = ["props"];
+    var assetsToLoad = galleryAssetNames.length;
     var assetsLoaded = 0;
     var galleryWebStateLoadedOnce = false;
+    var galleryStartupWatchdogTimer = null;
+    var galleryAssetLoadDebug = {
+        loaded: {},
+        failed: {},
+        duplicate: {},
+        entries: {},
+        missingCritical: [],
+        missingPending: [],
+        optionalFailed: [],
+        criticalReady: false,
+        failureShown: false,
+        watchdogFired: false,
+        retryEnabled: true,
+        retryConfig: {
+            criticalMaxAttempts: 3,
+            optionalMaxAttempts: 2,
+            attemptTimeoutMs: 12000,
+            retryDelaysMs: [0, 700, 1500]
+        },
+        startedAt: Date.now(),
+        lastReason: "initial"
+    };
+
+    function updateGalleryLoaderStatus(statusText, hintText) {
+        try {
+            var statusElement = document.getElementById("galleryLoaderStatus");
+            var hintElement = document.getElementById("galleryLoaderHint");
+
+            if (statusElement && statusText) {
+                statusElement.textContent = statusText;
+            }
+
+            if (hintElement && hintText) {
+                hintElement.textContent = hintText;
+            }
+        } catch (error) {}
+    }
+
+    function getGalleryAssetMeshCount(assetName) {
+        if (assetName === "floor") {
+            return Array.isArray(floorMeshes) ? floorMeshes.filter(function (mesh) {
+                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
+            }).length : 0;
+        }
+
+        if (assetName === "wall") {
+            return Array.isArray(wallMeshes) ? wallMeshes.filter(function (mesh) {
+                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
+            }).length : 0;
+        }
+
+        if (assetName === "ceiling") {
+            return Array.isArray(ceilingMeshes) ? ceilingMeshes.filter(function (mesh) {
+                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
+            }).length : 0;
+        }
+
+        if (assetName === "props") {
+            return Array.isArray(propMeshes) ? propMeshes.filter(function (mesh) {
+                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
+            }).length : 0;
+        }
+
+        return 0;
+    }
+
+    function isGalleryCriticalAssetReady(assetName) {
+        if (galleryCriticalAssetNames.indexOf(assetName) === -1) {
+            return true;
+        }
+
+        if (galleryAssetLoadDebug.failed[assetName]) {
+            return false;
+        }
+
+        if (!galleryAssetLoadDebug.loaded[assetName]) {
+            return false;
+        }
+
+        return getGalleryAssetMeshCount(assetName) > 0;
+    }
+
+    function getGalleryMissingCriticalAssetNames() {
+        return galleryCriticalAssetNames.filter(function (assetName) {
+            return !isGalleryCriticalAssetReady(assetName);
+        });
+    }
+
+    function getGalleryPendingAssetNames() {
+        return galleryAssetNames.filter(function (assetName) {
+            return !galleryAssetLoadDebug.loaded[assetName] && !galleryAssetLoadDebug.failed[assetName];
+        });
+    }
+
+    function refreshGalleryAssetReadinessDebug(reason) {
+        galleryAssetLoadDebug.lastReason = reason || galleryAssetLoadDebug.lastReason || "refresh";
+        galleryAssetLoadDebug.missingCritical = getGalleryMissingCriticalAssetNames();
+        galleryAssetLoadDebug.missingPending = getGalleryPendingAssetNames();
+        galleryAssetLoadDebug.optionalFailed = galleryOptionalAssetNames.filter(function (assetName) {
+            return !!galleryAssetLoadDebug.failed[assetName];
+        });
+        galleryAssetLoadDebug.criticalReady = galleryAssetLoadDebug.missingCritical.length === 0;
+
+        galleryAssetNames.forEach(function (assetName) {
+            var entry = galleryAssetLoadDebug.entries[assetName] || {};
+            entry.meshCount = getGalleryAssetMeshCount(assetName);
+            entry.critical = galleryCriticalAssetNames.indexOf(assetName) !== -1;
+            entry.optional = galleryOptionalAssetNames.indexOf(assetName) !== -1;
+            entry.status = galleryAssetLoadDebug.loaded[assetName]
+                ? "loaded"
+                : galleryAssetLoadDebug.failed[assetName]
+                    ? "failed"
+                    : entry.status || "pending";
+            galleryAssetLoadDebug.entries[assetName] = entry;
+        });
+
+        return galleryAssetLoadDebug;
+    }
+
+    function showGalleryCriticalAssetLoadFailure(reason) {
+        refreshGalleryAssetReadinessDebug(reason || "critical-failed");
+        galleryAssetLoadDebug.failureShown = true;
+
+        if (galleryStartupWatchdogTimer) {
+            clearTimeout(galleryStartupWatchdogTimer);
+            galleryStartupWatchdogTimer = null;
+        }
+
+        console.error("Critical gallery assets failed or are missing. Viewer entry blocked.", galleryAssetLoadDebug);
+
+        if (loadingScreen) {
+            loadingScreen.style.display = "flex";
+        }
+
+        updateGalleryLoaderStatus(
+            "Gallery assets failed to load.",
+            "Missing critical assets: " + (galleryAssetLoadDebug.missingCritical.join(", ") || "unknown") + ". Please retry loading before entering the gallery."
+        );
+
+        var spinner = document.getElementById("loaderSpinner");
+
+        if (spinner) {
+            spinner.style.animation = "none";
+            spinner.style.borderTopColor = "rgba(224, 109, 109, 0.92)";
+        }
+
+        var retryButton = document.getElementById("galleryAssetRetryButton");
+
+        if (retryButton) {
+            retryButton.style.display = "inline-flex";
+            retryButton.onclick = function (event) {
+                if (event && event.preventDefault) {
+                    event.preventDefault();
+                }
+
+                try {
+                    window.location.reload();
+                } catch (reloadError) {
+                    location.reload();
+                }
+            };
+        }
+    }
 
     function finishGalleryStartup() {
+        refreshGalleryAssetReadinessDebug("finishGalleryStartup-preflight");
+
+        if (!galleryAssetLoadDebug.criticalReady) {
+            showGalleryCriticalAssetLoadFailure("finish-preflight-critical-missing");
+            return;
+        }
+
         // Ustawia kierunek patrzenia kamery tak samo dla desktopu i mobile.
         camera.rotation = new BABYLON.Vector3(0, Math.PI / 50, 0);
 
@@ -9250,6 +11713,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (mobileViewerEnabled) {
             setMobileStartCameraPosition();
         }
+
+        // C60B3: after assets + saved state have settled, run one delayed full retarget.
+        // Editing later uses segment-aware retargets, not full global passes.
+        scheduleLoadTimeLocalLightRetarget("finishGalleryStartup", localLightLoadTimeRetargetDelayMs);
 
         setTimeout(function () {
             loadingScreen.style.display = "none";
@@ -9262,22 +11729,403 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, 300);
     }
 
-    function assetLoaded() {
-        assetsLoaded++;
+    function completeGalleryStartupIfReady() {
+        refreshGalleryAssetReadinessDebug("completeGalleryStartupIfReady");
 
-        if (assetsLoaded >= assetsToLoad && !galleryWebStateLoadedOnce) {
-            galleryWebStateLoadedOnce = true;
-
-            loadGalleryStateFromSupabase()
-                .catch(function (error) {
-                    console.warn("Nie udalo sie wczytac stanu galerii:", error);
-                    notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu galerii.");
-                })
-                .finally(function () {
-                    finishGalleryStartup();
-                });
+        if (assetsLoaded < assetsToLoad || galleryWebStateLoadedOnce) {
+            updateGalleryLoaderStatus(
+                "Loading gallery assets " + assetsLoaded + " / " + assetsToLoad + "...",
+                "Required: walls, floor and ceiling. Optional assets may be retried or skipped later."
+            );
+            return;
         }
+
+        if (!galleryAssetLoadDebug.criticalReady) {
+            showGalleryCriticalAssetLoadFailure("critical-assets-not-ready");
+            return;
+        }
+
+        galleryWebStateLoadedOnce = true;
+
+        if (galleryStartupWatchdogTimer) {
+            clearTimeout(galleryStartupWatchdogTimer);
+            galleryStartupWatchdogTimer = null;
+        }
+
+        if (galleryAssetLoadDebug.optionalFailed.length) {
+            console.warn("Optional gallery assets failed. Viewer can continue.", galleryAssetLoadDebug.optionalFailed, galleryAssetLoadDebug);
+        }
+
+        loadGalleryStateFromSupabase()
+            .catch(function (error) {
+                console.warn("Nie udalo sie wczytac stanu galerii:", error);
+                notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu galerii.");
+            })
+            .finally(function () {
+                finishGalleryStartup();
+            });
     }
+
+    function assetLoaded(assetName, failed, details) {
+        assetName = assetName || "asset_" + assetsLoaded;
+
+        if (galleryAssetLoadDebug.loaded[assetName] || galleryAssetLoadDebug.failed[assetName]) {
+            galleryAssetLoadDebug.duplicate[assetName] = true;
+            return;
+        }
+
+        var entry = galleryAssetLoadDebug.entries[assetName] || {};
+        entry.name = assetName;
+        entry.finishedAt = Date.now();
+        entry.elapsedMs = entry.finishedAt - galleryAssetLoadDebug.startedAt;
+        entry.failed = !!failed;
+        entry.details = details || null;
+
+        if (failed) {
+            galleryAssetLoadDebug.failed[assetName] = true;
+            entry.status = "failed";
+        } else {
+            galleryAssetLoadDebug.loaded[assetName] = true;
+            entry.status = "loaded";
+        }
+
+        galleryAssetLoadDebug.entries[assetName] = entry;
+
+        assetsLoaded++;
+        refreshGalleryAssetReadinessDebug("assetLoaded:" + assetName);
+        completeGalleryStartupIfReady();
+    }
+
+    galleryStartupWatchdogTimer = setTimeout(function () {
+        if (galleryWebStateLoadedOnce || galleryAssetLoadDebug.failureShown) {
+            return;
+        }
+
+        galleryAssetLoadDebug.watchdogFired = true;
+        console.warn("Gallery startup watchdog fired. Missing asset callbacks will be marked failed.", galleryAssetLoadDebug);
+
+        getGalleryPendingAssetNames().forEach(function (assetName) {
+            assetLoaded(assetName, true, { reason: "startup-watchdog-timeout" });
+        });
+
+        completeGalleryStartupIfReady();
+    }, 65000);
+
+    globalThis.BerryboyArtGalleryLoading = {
+        getDebug: function () {
+            refreshGalleryAssetReadinessDebug("debug-api");
+            return JSON.parse(JSON.stringify(galleryAssetLoadDebug));
+        },
+        retry: function () {
+            try {
+                window.location.reload();
+            } catch (error) {
+                location.reload();
+            }
+        },
+        getRetryConfig: function () {
+            return {
+                criticalMaxAttempts: galleryCriticalAssetMaxAttempts,
+                optionalMaxAttempts: galleryOptionalAssetMaxAttempts,
+                attemptTimeoutMs: galleryAssetAttemptTimeoutMs,
+                retryDelaysMs: galleryAssetRetryDelaysMs.slice()
+            };
+        }
+    };
+
+
+
+    // STAGE 12C62S5 - ASSET RETRY LOADER / CRITICAL IMPORT RESILIENCE
+    // C62S4 blocked entry into half-loaded scenes, but still used one import attempt.
+    // C62S5 retries only known startup assets before marking them failed.
+    var galleryAssetImportRetryPatchInstalled = false;
+    var galleryOriginalSceneLoaderImportMesh = null;
+    var galleryAssetAttemptTimeoutMs = 12000;
+    var galleryCriticalAssetMaxAttempts = 3;
+    var galleryOptionalAssetMaxAttempts = 2;
+    var galleryAssetRetryDelaysMs = [0, 700, 1500];
+
+    function getGalleryAssetRetryDelayMs(attemptIndex) {
+        var index = Math.max(0, Math.min(galleryAssetRetryDelaysMs.length - 1, attemptIndex - 1));
+        return Number(galleryAssetRetryDelaysMs[index] || 0) || 0;
+    }
+
+    function isGalleryKnownStartupAssetName(assetName) {
+        return galleryAssetNames.indexOf(assetName) !== -1;
+    }
+
+    function isGalleryAssetCritical(assetName) {
+        return galleryCriticalAssetNames.indexOf(assetName) !== -1;
+    }
+
+    function getGalleryAssetMaxAttempts(assetName) {
+        return isGalleryAssetCritical(assetName)
+            ? galleryCriticalAssetMaxAttempts
+            : galleryOptionalAssetMaxAttempts;
+    }
+
+    function inferGalleryStartupAssetName(rootUrl, sceneFilename) {
+        var file = String(sceneFilename || "").toLowerCase();
+        var root = String(rootUrl || "").toLowerCase();
+
+        if (file.indexOf("floor_segment") !== -1 || root.indexOf("/models/floor") !== -1) {
+            return "floor";
+        }
+
+        if (file.indexOf("wall_segments") !== -1 || root.indexOf("/models/wall") !== -1) {
+            return "wall";
+        }
+
+        if (file.indexOf("ceiling") !== -1 || root.indexOf("/models/ceiling") !== -1) {
+            return "ceiling";
+        }
+
+        if (file.indexOf("props") !== -1 || root.indexOf("/models/props") !== -1) {
+            return "props";
+        }
+
+        return null;
+    }
+
+    function updateGalleryAssetRetryEntry(assetName, patch, reason) {
+        if (!assetName) {
+            return null;
+        }
+
+        var entry = galleryAssetLoadDebug.entries[assetName] || {};
+        Object.keys(patch || {}).forEach(function (key) {
+            entry[key] = patch[key];
+        });
+        entry.name = assetName;
+        galleryAssetLoadDebug.entries[assetName] = entry;
+        refreshGalleryAssetReadinessDebug(reason || ("retry-entry:" + assetName));
+
+        return entry;
+    }
+
+    function recordGalleryAssetAttemptError(assetName, attempt, reason, message, exception) {
+        var entry = galleryAssetLoadDebug.entries[assetName] || { name: assetName };
+        entry.errors = Array.isArray(entry.errors) ? entry.errors : [];
+        entry.errors.push({
+            attempt: attempt,
+            reason: reason || "unknown",
+            message: message ? String(message) : "",
+            exceptionName: exception && exception.name ? String(exception.name) : null,
+            exceptionMessage: exception && exception.message ? String(exception.message) : null,
+            at: Date.now()
+        });
+        entry.lastError = entry.errors[entry.errors.length - 1];
+        galleryAssetLoadDebug.entries[assetName] = entry;
+        return entry;
+    }
+
+    function disposeStaleImportedMeshes(meshes) {
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.dispose) {
+                return;
+            }
+
+            try {
+                mesh.dispose(false, true);
+            } catch (disposeError) {}
+        });
+    }
+
+    function updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, status) {
+        var label = assetName || "asset";
+        var text = "Loading " + label + " " + attempt + " / " + maxAttempts + "...";
+        var hint = status || "Retry-safe startup import. Critical assets are walls, floor and ceiling.";
+        updateGalleryLoaderStatus(text, hint);
+    }
+
+    function installGalleryAssetImportRetryPatch() {
+        if (galleryAssetImportRetryPatchInstalled || !BABYLON || !BABYLON.SceneLoader || !BABYLON.SceneLoader.ImportMesh) {
+            return false;
+        }
+
+        galleryOriginalSceneLoaderImportMesh = BABYLON.SceneLoader.ImportMesh;
+        galleryAssetImportRetryPatchInstalled = true;
+
+        BABYLON.SceneLoader.ImportMesh = function (meshesNames, rootUrl, sceneFilename, sceneArg, onSuccess, onProgress, onError, pluginExtension) {
+            var assetName = inferGalleryStartupAssetName(rootUrl, sceneFilename);
+
+            if (!isGalleryKnownStartupAssetName(assetName)) {
+                return galleryOriginalSceneLoaderImportMesh.apply(BABYLON.SceneLoader, arguments);
+            }
+
+            var maxAttempts = getGalleryAssetMaxAttempts(assetName);
+            var attempt = 0;
+            var done = false;
+            var activeToken = 0;
+
+            updateGalleryAssetRetryEntry(assetName, {
+                name: assetName,
+                rootUrl: rootUrl,
+                file: sceneFilename,
+                attempts: 0,
+                maxAttempts: maxAttempts,
+                attemptTimeoutMs: galleryAssetAttemptTimeoutMs,
+                retryEnabled: true,
+                status: "queued",
+                critical: isGalleryAssetCritical(assetName),
+                optional: !isGalleryAssetCritical(assetName)
+            }, "retry-queued:" + assetName);
+
+            function runAttempt() {
+                if (done) {
+                    return null;
+                }
+
+                attempt += 1;
+                var token = ++activeToken;
+                var settled = false;
+                var attemptStartedAt = Date.now();
+
+                updateGalleryAssetRetryEntry(assetName, {
+                    attempts: attempt,
+                    status: "loading",
+                    lastAttemptStartedAt: attemptStartedAt,
+                    lastAttempt: attempt
+                }, "retry-attempt:" + assetName + ":" + attempt);
+
+                updateGalleryRetryLoaderStatus(
+                    assetName,
+                    attempt,
+                    maxAttempts,
+                    "Attempt " + attempt + " of " + maxAttempts + " for " + sceneFilename
+                );
+
+                var timeoutTimer = setTimeout(function () {
+                    failAttempt("timeout", "Timed out after " + galleryAssetAttemptTimeoutMs + " ms", null);
+                }, galleryAssetAttemptTimeoutMs);
+
+                function finishAttempt() {
+                    if (timeoutTimer) {
+                        clearTimeout(timeoutTimer);
+                        timeoutTimer = null;
+                    }
+                }
+
+                function succeedAttempt(meshes) {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+                    finishAttempt();
+
+                    if (done || token !== activeToken) {
+                        disposeStaleImportedMeshes(meshes || []);
+                        return;
+                    }
+
+                    done = true;
+                    updateGalleryAssetRetryEntry(assetName, {
+                        status: "loaded",
+                        loadedAttempt: attempt,
+                        finishedAt: Date.now(),
+                        lastDurationMs: Date.now() - attemptStartedAt
+                    }, "retry-loaded:" + assetName);
+
+                    try {
+                        if (onSuccess) {
+                            onSuccess.apply(this, arguments);
+                        }
+                    } catch (successCallbackError) {
+                        console.error("Gallery asset success callback failed:", assetName, successCallbackError);
+
+                        if (onError) {
+                            try {
+                                onError(sceneArg, "postprocess-error: " + (successCallbackError.message || successCallbackError), successCallbackError);
+                            } catch (onErrorCallbackError) {}
+                        }
+                    }
+                }
+
+                function failAttempt(reason, message, exception) {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+                    finishAttempt();
+
+                    if (done || token !== activeToken) {
+                        return;
+                    }
+
+                    recordGalleryAssetAttemptError(assetName, attempt, reason, message, exception);
+
+                    if (attempt < maxAttempts) {
+                        var retryDelay = getGalleryAssetRetryDelayMs(attempt);
+
+                        updateGalleryAssetRetryEntry(assetName, {
+                            status: "retrying",
+                            nextAttempt: attempt + 1,
+                            retryDelayMs: retryDelay,
+                            lastDurationMs: Date.now() - attemptStartedAt
+                        }, "retry-scheduled:" + assetName + ":" + attempt);
+
+                        updateGalleryRetryLoaderStatus(
+                            assetName,
+                            attempt,
+                            maxAttempts,
+                            "Attempt failed (" + reason + "). Retrying in " + retryDelay + " ms..."
+                        );
+
+                        setTimeout(runAttempt, retryDelay);
+                        return;
+                    }
+
+                    done = true;
+                    updateGalleryAssetRetryEntry(assetName, {
+                        status: "failed",
+                        failedAttempt: attempt,
+                        finishedAt: Date.now(),
+                        lastDurationMs: Date.now() - attemptStartedAt,
+                        finalFailureReason: reason || "unknown"
+                    }, "retry-final-failed:" + assetName);
+
+                    if (onError) {
+                        onError(sceneArg, message || reason || "Gallery asset import failed", exception || null);
+                    }
+                }
+
+                try {
+                    return galleryOriginalSceneLoaderImportMesh.call(
+                        BABYLON.SceneLoader,
+                        meshesNames,
+                        rootUrl,
+                        sceneFilename,
+                        sceneArg,
+                        succeedAttempt,
+                        onProgress,
+                        function (failedScene, message, exception) {
+                            failAttempt("import-error", message || "Import error", exception || null);
+                        },
+                        pluginExtension
+                    );
+                } catch (importThrowError) {
+                    failAttempt("throw", importThrowError.message || String(importThrowError), importThrowError);
+                    return null;
+                }
+            }
+
+            return runAttempt();
+        };
+
+        scene.onDisposeObservable.add(function () {
+            if (galleryAssetImportRetryPatchInstalled && galleryOriginalSceneLoaderImportMesh) {
+                try {
+                    BABYLON.SceneLoader.ImportMesh = galleryOriginalSceneLoaderImportMesh;
+                } catch (restoreImportMeshError) {}
+            }
+        });
+
+        return true;
+    }
+
+    installGalleryAssetImportRetryPatch();
 
     // TRYB EDYCJI / OGLADANIA
     var oldButton = document.getElementById("editModeButton");
@@ -9292,7 +12140,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // false = logowanie edytora jest wylaczone, panel edytora dziala bez strony WEB/loginu.
     // true  = wraca normalna blokada logowania przez globalThis.galleryEditorAuthenticated.
     // Nie usuwamy systemu logowania, tylko omijamy go podczas pracy w samym silniku Babylon.
-    var galleryEditorLoginEnabled = true;
+    var galleryEditorLoginEnabled = false;
     var editorAuthenticated = !galleryEditorLoginEnabled || !!globalThis.galleryEditorAuthenticated;
 
     // ARTWORK UPLOAD / SUPABASE STORAGE
@@ -11382,6 +14230,637 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 width: 100%;
             }
         }
+
+        /* STAGE 12C62S2 - DARK UI THEME FULL PANEL PASS
+           Pure UI skin pass. No Local Lights target logic, no Hard Cut, no shader overlay. */
+        #galleryEditorPanel {
+            --gallery-editor-border-soft: rgba(255, 255, 255, 0.12);
+            --berryboy-ui-bg: rgba(12, 12, 13, 0.82);
+            --berryboy-ui-bg-strong: rgba(8, 8, 9, 0.92);
+            --berryboy-ui-card: rgba(255, 255, 255, 0.065);
+            --berryboy-ui-card-hover: rgba(255, 255, 255, 0.105);
+            --berryboy-ui-card-active: rgba(255, 255, 255, 0.145);
+            --berryboy-ui-border: rgba(255, 255, 255, 0.135);
+            --berryboy-ui-border-strong: rgba(255, 255, 255, 0.24);
+            --berryboy-ui-text: #f4efe4;
+            --berryboy-ui-text-soft: rgba(244, 239, 228, 0.76);
+            --berryboy-ui-text-muted: rgba(244, 239, 228, 0.58);
+            --berryboy-ui-accent: #d6aa32;
+            --berryboy-ui-accent-soft: rgba(214, 170, 50, 0.26);
+            --berryboy-ui-green: #79c16f;
+            --berryboy-ui-danger: #e06d6d;
+            background:
+                radial-gradient(circle at 16% 5%, rgba(255, 255, 255, 0.105), transparent 34%),
+                radial-gradient(circle at 80% 96%, rgba(214, 170, 50, 0.10), transparent 42%),
+                linear-gradient(145deg, rgba(18, 18, 20, 0.92), rgba(6, 6, 7, 0.86)),
+                rgba(9, 9, 10, 0.88) !important;
+            color: var(--berryboy-ui-text) !important;
+            border-color: rgba(255, 255, 255, 0.16) !important;
+            box-shadow:
+                0 30px 74px rgba(0, 0, 0, 0.50),
+                inset 0 1px 0 rgba(255, 255, 255, 0.14),
+                inset 0 -1px 0 rgba(255, 255, 255, 0.035),
+                inset 0 0 44px rgba(255, 255, 255, 0.045) !important;
+            backdrop-filter: blur(34px) saturate(1.22) brightness(0.82) !important;
+            -webkit-backdrop-filter: blur(34px) saturate(1.22) brightness(0.82) !important;
+        }
+
+        #galleryEditorPanel::before {
+            background:
+                radial-gradient(circle at 14% 8%, rgba(255, 255, 255, 0.13), transparent 34%),
+                radial-gradient(circle at 88% 92%, rgba(214, 170, 50, 0.12), transparent 42%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012) 48%, rgba(255, 255, 255, 0.035)) !important;
+            opacity: 1 !important;
+        }
+
+        #galleryEditorPanel,
+        #galleryEditorPanel .gallery-editor-scroll,
+        #galleryEditorPanel .gallery-lighting-scroll,
+        #galleryEditorPanel .gallery-lighting-content-stack {
+            scrollbar-color: rgba(214, 170, 50, 0.58) rgba(255, 255, 255, 0.06);
+        }
+
+        #galleryEditorPanel .gallery-editor-header,
+        #galleryEditorPanel .gallery-lighting-header,
+        #galleryEditorPanel .gallery-editor-section,
+        #galleryEditorPanel .gallery-lighting-section,
+        #galleryEditorPanel .gallery-local-transform-grid,
+        #galleryEditorPanel .gallery-editor-footer,
+        #galleryEditorPanel .gallery-lighting-mode-tabs {
+            border-color: rgba(255, 255, 255, 0.105) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-mode-label,
+        #galleryEditorPanel .gallery-lighting-mode-label,
+        #galleryEditorPanel .gallery-editor-accent-text {
+            color: var(--berryboy-ui-green) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-section-title,
+        #galleryEditorPanel .gallery-lighting-section-title,
+        #galleryEditorPanel .gallery-local-subtle-heading,
+        #galleryEditorPanel .gallery-artwork-transform-label,
+        #galleryEditorPanel .gallery-editor-field-label,
+        #galleryEditorPanel .gallery-lighting-label,
+        #galleryEditorPanel .gallery-lighting-checkbox-row,
+        #galleryEditorPanel .gallery-local-selection-lines,
+        #galleryEditorPanel .gallery-local-selection-lines strong,
+        #galleryEditorPanel .gallery-local-status-line,
+        #galleryEditorPanel .gallery-artwork-image-status strong,
+        #galleryEditorPanel .gallery-artwork-info-title,
+        #galleryEditorPanel .gallery-artwork-info-author-name,
+        #galleryEditorPanel .gallery-artwork-info-details-card strong,
+        #galleryEditorPanel .gallery-artwork-info-empty,
+        #galleryEditorPanel .gallery-artwork-info-editor-title,
+        #galleryEditorPanel .gallery-artwork-info-editor-label,
+        #galleryEditorPanel .gallery-local-helper-legend strong,
+        #galleryEditorPanel .gallery-local-collapsible-header,
+        #galleryEditorPanel .gallery-lighting-preset-name,
+        #galleryEditorPanel .gallery-local-group-name {
+            color: var(--berryboy-ui-text) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-status-line,
+        #galleryEditorPanel .gallery-editor-color-status,
+        #galleryEditorPanel .gallery-editor-help-content,
+        #galleryEditorPanel .gallery-editor-help-title,
+        #galleryEditorPanel .gallery-editor-help-line,
+        #galleryEditorPanel .gallery-lighting-value,
+        #galleryEditorPanel .gallery-lighting-note,
+        #galleryEditorPanel .gallery-lighting-preset-status,
+        #galleryEditorPanel .gallery-local-helper-note,
+        #galleryEditorPanel .gallery-local-stage-note,
+        #galleryEditorPanel .gallery-local-empty-note,
+        #galleryEditorPanel .gallery-local-mixed-note,
+        #galleryEditorPanel .gallery-local-helper-legend,
+        #galleryEditorPanel .gallery-visual-hint,
+        #galleryEditorPanel .gallery-artwork-image-status,
+        #galleryEditorPanel .gallery-artwork-image-note,
+        #galleryEditorPanel .gallery-artwork-info-description,
+        #galleryEditorPanel .gallery-artwork-info-author-tools-note,
+        #galleryEditorPanel .gallery-artwork-info-author-found,
+        #galleryEditorPanel .gallery-artwork-info-author-photo-placeholder,
+        #galleryEditorPanel .gallery-artwork-info-text,
+        #galleryEditorPanel .gallery-local-group-count {
+            color: var(--berryboy-ui-text-soft) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-menu-button,
+        #galleryEditorPanel .gallery-lighting-menu-button,
+        #galleryEditorPanel .gallery-editor-align-button,
+        #galleryEditorPanel .gallery-editor-help-toggle,
+        #galleryEditorPanel .gallery-lighting-dropdown,
+        #galleryEditorPanel .gallery-lighting-dropdown-button,
+        #galleryEditorPanel .gallery-lighting-quick-button,
+        #galleryEditorPanel .gallery-lighting-reset-button,
+        #galleryEditorPanel .gallery-lighting-preset-row,
+        #galleryEditorPanel .gallery-lighting-preset-button,
+        #galleryEditorPanel .gallery-lighting-note,
+        #galleryEditorPanel .gallery-local-helper-legend,
+        #galleryEditorPanel .gallery-local-mixed-note,
+        #galleryEditorPanel .gallery-local-stage-note,
+        #galleryEditorPanel .gallery-local-empty-note,
+        #galleryEditorPanel .gallery-local-collapsible-icon,
+        #galleryEditorPanel .gallery-lighting-mode-tabs,
+        #galleryEditorPanel .gallery-lighting-tab-button.is-active,
+        #galleryEditorPanel .gallery-visual-preset-button,
+        #galleryEditorPanel .gallery-visual-action-button,
+        #galleryEditorPanel .gallery-local-tool-button,
+        #galleryEditorPanel .gallery-local-group-tile,
+        #galleryEditorPanel .gallery-local-targets-grid .gallery-lighting-checkbox-row,
+        #galleryEditorPanel .gallery-local-transform-grid .gallery-lighting-checkbox-row,
+        #galleryEditorPanel .gallery-artwork-transform-value,
+        #galleryEditorPanel .gallery-editor-text-input,
+        #galleryEditorPanel .gallery-editor-action-button,
+        #galleryEditorPanel .gallery-artwork-info-author-found,
+        #galleryEditorPanel .gallery-artwork-info-textarea {
+            border-color: var(--berryboy-ui-border) !important;
+            background: var(--berryboy-ui-card) !important;
+            color: var(--berryboy-ui-text) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-align-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-editor-help-toggle:hover,
+        #galleryEditorPanel .gallery-lighting-dropdown-button:hover,
+        #galleryEditorPanel .gallery-lighting-quick-button:hover,
+        #galleryEditorPanel .gallery-lighting-reset-button:hover,
+        #galleryEditorPanel .gallery-lighting-preset-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-visual-preset-button:hover,
+        #galleryEditorPanel .gallery-visual-action-button:hover,
+        #galleryEditorPanel .gallery-local-tool-button:hover,
+        #galleryEditorPanel .gallery-editor-action-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-local-targets-grid .gallery-lighting-checkbox-row:hover,
+        #galleryEditorPanel .gallery-local-transform-grid .gallery-lighting-checkbox-row:hover {
+            background: var(--berryboy-ui-card-hover) !important;
+            border-color: var(--berryboy-ui-border-strong) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-menu-button,
+        #galleryEditorPanel .gallery-lighting-menu-button,
+        #galleryEditorPanel .gallery-local-collapsible-icon {
+            color: var(--berryboy-ui-text) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range,
+        #galleryEditorPanel .gallery-lighting-range::-webkit-slider-runnable-track,
+        #galleryEditorPanel .gallery-lighting-range::-moz-range-track,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-webkit-slider-runnable-track,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-moz-range-track {
+            background: rgba(255, 255, 255, 0.13) !important;
+            border-color: rgba(255, 255, 255, 0.12) !important;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.32) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range::-webkit-slider-thumb,
+        #galleryEditorPanel .gallery-lighting-range::-moz-range-thumb {
+            border-color: rgba(0, 0, 0, 0.72) !important;
+            background: var(--berryboy-ui-accent) !important;
+            box-shadow: 0 2px 7px rgba(0, 0, 0, 0.36), 0 0 0 2px rgba(214, 170, 50, 0.14) !important;
+        }
+
+        #galleryEditorPanel .gallery-artwork-transform-slider::-webkit-slider-thumb,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-moz-range-thumb {
+            border-color: rgba(0, 0, 0, 0.72) !important;
+            background: #f2dfab !important;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.42) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-color {
+            border-color: rgba(255, 255, 255, 0.22) !important;
+            background: rgba(0, 0, 0, 0.30) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        #galleryEditorPanel input[type="checkbox"] {
+            accent-color: var(--berryboy-ui-accent) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-text-input:focus,
+        #galleryEditorPanel .gallery-artwork-info-textarea:focus {
+            border-color: rgba(214, 170, 50, 0.52) !important;
+            background: rgba(255, 255, 255, 0.095) !important;
+            box-shadow: 0 0 0 3px rgba(214, 170, 50, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-text-input::placeholder,
+        #galleryEditorPanel .gallery-artwork-info-textarea::placeholder {
+            color: rgba(244, 239, 228, 0.38) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-value.is-mixed,
+        #galleryEditorPanel .gallery-local-mixed-dot,
+        #galleryEditorPanel .gallery-local-group-count {
+            background: rgba(255, 255, 255, 0.10) !important;
+            border-color: rgba(255, 255, 255, 0.13) !important;
+            color: var(--berryboy-ui-text-soft) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-primary,
+        #galleryEditorPanel .gallery-editor-action-button.is-primary,
+        #galleryEditorPanel .gallery-local-group-tile.is-active {
+            color: #dff6d8 !important;
+            border-color: rgba(121, 193, 111, 0.34) !important;
+            background: linear-gradient(145deg, rgba(79, 143, 78, 0.26), rgba(255, 255, 255, 0.055)) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 8px 20px rgba(42, 90, 42, 0.12) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-active {
+            color: #10100d !important;
+            border-color: rgba(214, 170, 50, 0.58) !important;
+            background: linear-gradient(180deg, rgba(235, 196, 76, 0.96), rgba(179, 131, 26, 0.96)) !important;
+            box-shadow: 0 10px 24px rgba(214, 170, 50, 0.18) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-danger,
+        #galleryEditorPanel .gallery-editor-action-button.is-danger {
+            color: #ffd6d6 !important;
+            border-color: rgba(224, 109, 109, 0.32) !important;
+            background: rgba(224, 109, 109, 0.075) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-group-tile.is-solo {
+            color: #ffe9c8 !important;
+            border-color: rgba(220, 142, 42, 0.48) !important;
+            background: linear-gradient(145deg, rgba(220, 142, 42, 0.22), rgba(255, 255, 255, 0.055)) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-tab-button {
+            color: var(--berryboy-ui-text-muted) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-tab-button.is-active,
+        #galleryEditorPanel .gallery-visual-preset-button.is-active {
+            color: var(--berryboy-ui-text) !important;
+            border-color: rgba(214, 170, 50, 0.36) !important;
+            background: rgba(214, 170, 50, 0.16) !important;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-panel-mode-button,
+        #galleryEditorPanel .gallery-editor-panel-lighting-button,
+        #galleryEditorPanel .gallery-editor-floating-mode-button,
+        #galleryEditorPanel .gallery-lighting-back-button {
+            color: #f7f3ea !important;
+            border-color: rgba(255, 255, 255, 0.16) !important;
+            background: linear-gradient(180deg, rgba(34, 34, 35, 0.98), rgba(10, 10, 11, 0.98)) !important;
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-panel-mode-button:hover,
+        #galleryEditorPanel .gallery-editor-panel-lighting-button:hover,
+        #galleryEditorPanel .gallery-editor-floating-mode-button:hover,
+        #galleryEditorPanel .gallery-lighting-back-button:hover {
+            background: linear-gradient(180deg, rgba(48, 48, 49, 0.98), rgba(14, 14, 15, 0.98)) !important;
+            border-color: rgba(214, 170, 50, 0.36) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-swatch {
+            border-color: rgba(255, 255, 255, 0.24) !important;
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.26) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-swatch.is-selected {
+            border-color: rgba(214, 170, 50, 0.94) !important;
+            box-shadow: 0 0 0 3px rgba(214, 170, 50, 0.28), inset 0 0 0 1px rgba(0, 0, 0, 0.34) !important;
+        }
+
+        #galleryEditorPanel .gallery-artwork-info-popup {
+            color: var(--berryboy-ui-text) !important;
+            border-color: rgba(255, 255, 255, 0.16) !important;
+            background:
+                radial-gradient(circle at 20% 4%, rgba(255, 255, 255, 0.10), transparent 34%),
+                linear-gradient(145deg, rgba(18, 18, 20, 0.92), rgba(7, 7, 8, 0.88)),
+                rgba(9, 9, 10, 0.90) !important;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+            backdrop-filter: blur(30px) saturate(1.18) brightness(0.82) !important;
+            -webkit-backdrop-filter: blur(30px) saturate(1.18) brightness(0.82) !important;
+        }
+
+        #galleryEditorPanel .gallery-artwork-info-author-card,
+        #galleryEditorPanel .gallery-artwork-info-details-card,
+        #galleryEditorPanel .gallery-artwork-info-editor-card,
+        #galleryEditorPanel .gallery-artwork-info-photo-frame {
+            border-color: var(--berryboy-ui-border) !important;
+            background: var(--berryboy-ui-card) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+        }
+
+        #galleryEditorPanel .gallery-artwork-info-footer,
+        #galleryEditorPanel .gallery-artwork-info-author-tools {
+            border-color: rgba(255, 255, 255, 0.10) !important;
+        }
+
+        #mobileJoystickBase {
+            border-color: rgba(255, 255, 255, 0.18) !important;
+            background: rgba(6, 6, 7, 0.56) !important;
+            box-shadow: 0 0 28px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+            backdrop-filter: blur(10px) saturate(1.15) !important;
+            -webkit-backdrop-filter: blur(10px) saturate(1.15) !important;
+        }
+
+        #mobileJoystickKnob {
+            background: rgba(214, 170, 50, 0.86) !important;
+            box-shadow: 0 0 18px rgba(214, 170, 50, 0.22), 0 4px 14px rgba(0, 0, 0, 0.30) !important;
+        }
+
+
+        /* STAGE 12C62S3 - FROSTED GLASS UI + SLIDER VISIBILITY FIX
+           Visual-only pass. Matches viewer intro popup: dark frosted glass, no heavy gradients.
+           No Local Lights target logic, no Hard Cut, no shader overlay. */
+        #galleryEditorPanel {
+            --berryboy-ui-bg: rgba(18, 18, 18, 0.58);
+            --berryboy-ui-bg-strong: rgba(18, 18, 18, 0.72);
+            --berryboy-ui-card: rgba(255, 255, 255, 0.075);
+            --berryboy-ui-card-hover: rgba(255, 255, 255, 0.115);
+            --berryboy-ui-card-active: rgba(247, 243, 234, 0.16);
+            --berryboy-ui-border: rgba(255, 255, 255, 0.14);
+            --berryboy-ui-border-strong: rgba(255, 255, 255, 0.24);
+            --berryboy-ui-text: #f7f3ea;
+            --berryboy-ui-text-soft: rgba(247, 243, 234, 0.76);
+            --berryboy-ui-text-muted: rgba(247, 243, 234, 0.58);
+            --berryboy-ui-accent: #f7f3ea;
+            --berryboy-ui-accent-dark: #121212;
+            --berryboy-ui-green: #79c16f;
+            --berryboy-ui-danger: #e06d6d;
+            background: rgba(18, 18, 18, 0.58) !important;
+            color: #f7f3ea !important;
+            border: 1px solid rgba(255, 255, 255, 0.20) !important;
+            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54) !important;
+            backdrop-filter: blur(22px) saturate(1.32) !important;
+            -webkit-backdrop-filter: blur(22px) saturate(1.32) !important;
+        }
+
+        #galleryEditorPanel::before {
+            background: transparent !important;
+            opacity: 0 !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-section,
+        #galleryEditorPanel .gallery-lighting-section,
+        #galleryEditorPanel .gallery-editor-header,
+        #galleryEditorPanel .gallery-lighting-header,
+        #galleryEditorPanel .gallery-editor-footer,
+        #galleryEditorPanel .gallery-lighting-mode-tabs,
+        #galleryEditorPanel .gallery-local-transform-grid,
+        #galleryEditorPanel .gallery-lighting-content-stack,
+        #galleryEditorPanel .gallery-local-collapsible-body,
+        #galleryEditorPanel .gallery-artwork-info-footer,
+        #galleryEditorPanel .gallery-artwork-info-author-tools {
+            border-color: rgba(255, 255, 255, 0.12) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-menu-button,
+        #galleryEditorPanel .gallery-lighting-menu-button,
+        #galleryEditorPanel .gallery-editor-align-button,
+        #galleryEditorPanel .gallery-editor-help-toggle,
+        #galleryEditorPanel .gallery-lighting-dropdown,
+        #galleryEditorPanel .gallery-lighting-dropdown-button,
+        #galleryEditorPanel .gallery-lighting-quick-button,
+        #galleryEditorPanel .gallery-lighting-reset-button,
+        #galleryEditorPanel .gallery-lighting-preset-row,
+        #galleryEditorPanel .gallery-lighting-preset-button,
+        #galleryEditorPanel .gallery-lighting-note,
+        #galleryEditorPanel .gallery-local-helper-legend,
+        #galleryEditorPanel .gallery-local-mixed-note,
+        #galleryEditorPanel .gallery-local-stage-note,
+        #galleryEditorPanel .gallery-local-empty-note,
+        #galleryEditorPanel .gallery-lighting-mode-tabs,
+        #galleryEditorPanel .gallery-lighting-tab-button.is-active,
+        #galleryEditorPanel .gallery-visual-preset-button,
+        #galleryEditorPanel .gallery-visual-action-button,
+        #galleryEditorPanel .gallery-local-tool-button,
+        #galleryEditorPanel .gallery-local-group-tile,
+        #galleryEditorPanel .gallery-local-targets-grid .gallery-lighting-checkbox-row,
+        #galleryEditorPanel .gallery-local-transform-grid .gallery-lighting-checkbox-row,
+        #galleryEditorPanel .gallery-artwork-transform-value,
+        #galleryEditorPanel .gallery-editor-text-input,
+        #galleryEditorPanel .gallery-editor-action-button,
+        #galleryEditorPanel .gallery-artwork-info-author-card,
+        #galleryEditorPanel .gallery-artwork-info-details-card,
+        #galleryEditorPanel .gallery-artwork-info-editor-card,
+        #galleryEditorPanel .gallery-artwork-info-photo-frame,
+        #galleryEditorPanel .gallery-artwork-info-author-found,
+        #galleryEditorPanel .gallery-artwork-info-textarea {
+            background: rgba(255, 255, 255, 0.075) !important;
+            border-color: rgba(255, 255, 255, 0.14) !important;
+            color: #f7f3ea !important;
+            box-shadow: none !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-align-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-editor-help-toggle:hover,
+        #galleryEditorPanel .gallery-lighting-dropdown-button:hover,
+        #galleryEditorPanel .gallery-lighting-quick-button:hover,
+        #galleryEditorPanel .gallery-lighting-reset-button:hover,
+        #galleryEditorPanel .gallery-lighting-preset-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-visual-preset-button:hover,
+        #galleryEditorPanel .gallery-visual-action-button:hover,
+        #galleryEditorPanel .gallery-local-tool-button:hover,
+        #galleryEditorPanel .gallery-editor-action-button:hover:not(:disabled),
+        #galleryEditorPanel .gallery-local-targets-grid .gallery-lighting-checkbox-row:hover,
+        #galleryEditorPanel .gallery-local-transform-grid .gallery-lighting-checkbox-row:hover {
+            background: rgba(255, 255, 255, 0.12) !important;
+            border-color: rgba(255, 255, 255, 0.24) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-primary,
+        #galleryEditorPanel .gallery-editor-action-button.is-primary,
+        #galleryEditorPanel .gallery-local-group-tile.is-active,
+        #galleryEditorPanel .gallery-lighting-tab-button.is-active,
+        #galleryEditorPanel .gallery-visual-preset-button.is-active {
+            color: #f7f3ea !important;
+            border-color: rgba(247, 243, 234, 0.42) !important;
+            background: rgba(247, 243, 234, 0.16) !important;
+            box-shadow: 0 0 0 2px rgba(247, 243, 234, 0.06) inset !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-active,
+        #galleryEditorPanel .gallery-editor-panel-mode-button,
+        #galleryEditorPanel .gallery-editor-panel-lighting-button,
+        #galleryEditorPanel .gallery-editor-floating-mode-button,
+        #galleryEditorPanel .gallery-lighting-back-button {
+            color: #121212 !important;
+            border-color: rgba(247, 243, 234, 0.74) !important;
+            background: #f7f3ea !important;
+            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28) !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-panel-mode-button:hover,
+        #galleryEditorPanel .gallery-editor-panel-lighting-button:hover,
+        #galleryEditorPanel .gallery-editor-floating-mode-button:hover,
+        #galleryEditorPanel .gallery-lighting-back-button:hover {
+            background: #fffaf0 !important;
+            border-color: rgba(255, 255, 255, 0.86) !important;
+            box-shadow: 0 20px 46px rgba(0, 0, 0, 0.34) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-tool-button.is-danger,
+        #galleryEditorPanel .gallery-editor-action-button.is-danger {
+            color: #ffd6d6 !important;
+            border-color: rgba(224, 109, 109, 0.36) !important;
+            background: rgba(224, 109, 109, 0.10) !important;
+        }
+
+        #galleryEditorPanel .gallery-local-group-tile.is-solo {
+            color: #ffe9c8 !important;
+            border-color: rgba(220, 142, 42, 0.40) !important;
+            background: rgba(220, 142, 42, 0.14) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range,
+        #galleryEditorPanel .gallery-artwork-transform-slider,
+        #galleryEditorPanel input[type="range"] {
+            -webkit-appearance: none !important;
+            appearance: none !important;
+            height: 22px !important;
+            background: transparent !important;
+            outline: none !important;
+            opacity: 1 !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range::-webkit-slider-runnable-track,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-webkit-slider-runnable-track,
+        #galleryEditorPanel input[type="range"]::-webkit-slider-runnable-track {
+            height: 7px !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
+            background: rgba(247, 243, 234, 0.22) !important;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.44) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range::-moz-range-track,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-moz-range-track,
+        #galleryEditorPanel input[type="range"]::-moz-range-track {
+            height: 7px !important;
+            border-radius: 999px !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
+            background: rgba(247, 243, 234, 0.22) !important;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.44) !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range::-webkit-slider-thumb,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-webkit-slider-thumb,
+        #galleryEditorPanel input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none !important;
+            appearance: none !important;
+            width: 18px !important;
+            height: 18px !important;
+            margin-top: -6.5px !important;
+            border-radius: 999px !important;
+            border: 2px solid rgba(18, 18, 18, 0.78) !important;
+            background: #f7f3ea !important;
+            box-shadow:
+                0 3px 12px rgba(0, 0, 0, 0.46),
+                0 0 0 3px rgba(247, 243, 234, 0.12) !important;
+            cursor: pointer !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range::-moz-range-thumb,
+        #galleryEditorPanel .gallery-artwork-transform-slider::-moz-range-thumb,
+        #galleryEditorPanel input[type="range"]::-moz-range-thumb {
+            width: 18px !important;
+            height: 18px !important;
+            border-radius: 999px !important;
+            border: 2px solid rgba(18, 18, 18, 0.78) !important;
+            background: #f7f3ea !important;
+            box-shadow:
+                0 3px 12px rgba(0, 0, 0, 0.46),
+                0 0 0 3px rgba(247, 243, 234, 0.12) !important;
+            cursor: pointer !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-range:focus::-webkit-slider-thumb,
+        #galleryEditorPanel .gallery-artwork-transform-slider:focus::-webkit-slider-thumb,
+        #galleryEditorPanel input[type="range"]:focus::-webkit-slider-thumb {
+            box-shadow:
+                0 3px 12px rgba(0, 0, 0, 0.46),
+                0 0 0 5px rgba(247, 243, 234, 0.18) !important;
+        }
+
+        #galleryEditorPanel input[type="checkbox"] {
+            accent-color: #f7f3ea !important;
+            filter: none !important;
+        }
+
+        #galleryEditorPanel .gallery-lighting-color,
+        #galleryEditorPanel input[type="color"] {
+            border-color: rgba(255, 255, 255, 0.24) !important;
+            background: rgba(255, 255, 255, 0.08) !important;
+            box-shadow: none !important;
+        }
+
+        #galleryEditorPanel .gallery-editor-text-input:focus,
+        #galleryEditorPanel .gallery-artwork-info-textarea:focus {
+            border-color: rgba(247, 243, 234, 0.54) !important;
+            background: rgba(255, 255, 255, 0.105) !important;
+            box-shadow: 0 0 0 3px rgba(247, 243, 234, 0.08) !important;
+        }
+
+        #galleryEditorPanel .gallery-artwork-info-popup {
+            background: rgba(18, 18, 18, 0.58) !important;
+            border: 1px solid rgba(255, 255, 255, 0.20) !important;
+            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54) !important;
+            backdrop-filter: blur(22px) saturate(1.32) !important;
+            -webkit-backdrop-filter: blur(22px) saturate(1.32) !important;
+        }
+
+        /* STAGE 12C62S4 - ARTWORK / SCULPTURE POPUP FROSTED GLASS UI
+           Late global override. The popup is rendered outside #galleryEditorPanel, so panel-scoped CSS was not enough. */
+        .gallery-artwork-info-popup {
+            background: rgba(18, 18, 18, 0.58) !important;
+            border: 1px solid rgba(255, 255, 255, 0.20) !important;
+            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54) !important;
+            backdrop-filter: blur(22px) saturate(1.32) !important;
+            -webkit-backdrop-filter: blur(22px) saturate(1.32) !important;
+            color: #f7f3ea !important;
+        }
+
+        .gallery-artwork-info-popup .gallery-artwork-info-author-card,
+        .gallery-artwork-info-popup .gallery-artwork-info-details-card,
+        .gallery-artwork-info-popup .gallery-artwork-info-editor-card,
+        .gallery-artwork-info-popup .gallery-artwork-info-photo-frame,
+        .gallery-artwork-info-popup .gallery-artwork-info-editor-photo-preview {
+            background: rgba(255, 255, 255, 0.075) !important;
+            border-color: rgba(255, 255, 255, 0.14) !important;
+            box-shadow: none !important;
+        }
+
+        .gallery-artwork-info-popup .gallery-artwork-info-title,
+        .gallery-artwork-info-popup .gallery-artwork-info-author-name,
+        .gallery-artwork-info-popup .gallery-artwork-info-details-card strong,
+        .gallery-artwork-info-popup .gallery-artwork-info-editor-title,
+        .gallery-artwork-info-popup .gallery-artwork-info-editor-label {
+            color: #f7f3ea !important;
+        }
+
+        .gallery-artwork-info-popup .gallery-artwork-info-kicker,
+        .gallery-artwork-info-popup .gallery-artwork-info-description,
+        .gallery-artwork-info-popup .gallery-artwork-info-empty,
+        .gallery-artwork-info-popup .gallery-artwork-info-author-photo-placeholder,
+        .gallery-artwork-info-popup .gallery-artwork-info-editor-photo-placeholder,
+        .gallery-artwork-info-popup .gallery-artwork-info-author-tools-note,
+        .gallery-artwork-info-popup .gallery-artwork-info-author-found {
+            color: rgba(247, 243, 234, 0.76) !important;
+        }
+
+        .gallery-artwork-info-popup .gallery-artwork-info-textarea,
+        .gallery-artwork-info-popup input,
+        .gallery-artwork-info-popup textarea {
+            background: rgba(255, 255, 255, 0.075) !important;
+            border-color: rgba(255, 255, 255, 0.14) !important;
+            color: #f7f3ea !important;
+            box-shadow: none !important;
+        }
+
+        .gallery-artwork-info-popup .gallery-artwork-info-textarea:focus,
+        .gallery-artwork-info-popup input:focus,
+        .gallery-artwork-info-popup textarea:focus {
+            border-color: rgba(247, 243, 234, 0.54) !important;
+            background: rgba(255, 255, 255, 0.105) !important;
+            outline: none !important;
+        }
+
     `;
 
     document.head.appendChild(editorStyle);
@@ -13583,18 +17062,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var focusCameraActions = document.createElement("div");
     focusCameraActions.className = "gallery-artwork-image-actions";
 
-    var focusCameraTestButton = document.createElement("button");
-    focusCameraTestButton.type = "button";
-    focusCameraTestButton.className = "gallery-editor-action-button is-primary";
-    focusCameraTestButton.innerText = "LIVE PREVIEW";
-
     var focusCameraResetButton = document.createElement("button");
     focusCameraResetButton.type = "button";
     focusCameraResetButton.className = "gallery-editor-action-button";
     focusCameraResetButton.innerText = "RESET";
 
-    // STAGE 12C37: slider edits preview live, so the old TEST FOCUS button is no longer shown.
-    focusCameraTestButton.style.display = "none";
+    // STAGE 12C61A: old hidden LIVE PREVIEW button removed. Sliders preview live.
     focusCameraActions.appendChild(focusCameraResetButton);
 
     var focusCameraNote = document.createElement("p");
@@ -13665,7 +17138,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         focusCameraSectionData.section.classList.toggle("is-hidden", !isVisible);
 
         focusCameraManualInput.disabled = !isVisible;
-        focusCameraTestButton.disabled = !isVisible;
         focusCameraResetButton.disabled = !isVisible;
 
         if (!isVisible) {
@@ -13811,19 +17283,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateFocusCameraUi();
         scheduleFocusCameraLivePreview();
         notifyGalleryStatus("Focus camera offset reset. Save state to keep the change.");
-    };
-
-    focusCameraTestButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        var target = getFocusCameraUiTarget();
-
-        if (!target || !target.object) {
-            return;
-        }
-
-        applyFocusCameraUiValues(false, true);
     };
 
     artworkImageUploadButton.onclick = function (event) {
@@ -14231,13 +17690,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var localLightGlowColor = new BABYLON.Color3(1, 1, 1);
 
+
+    localLightSegmentDiagnosticsOutlineLayer = new BABYLON.HighlightLayer(
+        "LocalLightSegmentDiagnosticsOutlineLayer",
+        scene
+    );
+    localLightSegmentDiagnosticsOutlineLayer.outerGlow = true;
+    localLightSegmentDiagnosticsOutlineLayer.innerGlow = false;
+    localLightSegmentDiagnosticsOutlineLayer.blurHorizontalSize = 0.75;
+    localLightSegmentDiagnosticsOutlineLayer.blurVerticalSize = 0.75;
+
     // STAGE 12C2 - MODEL / SCULPTURE OBJECT SELECTION GLOW
     // Rzeźby i sloty modeli nie używają już płaskiego rectangular plane jak obrazy.
     // Highlight idzie po sylwetce/krawędziach całego zaznaczonego obiektu.
-    // STAGE 12C29:
-    // Rzezby nie korzystaja juz z osobnego HighlightLayer/renderOutline/overlay.
+    // STAGE 12C29 / 12C61A:
+    // Rzezby nie korzystaja juz z osobnego HighlightLayer.
     // Zostaje jeden selection visual: EdgesRenderer w kolorze zgodnym z artwork glow.
-    var model3dSelectionHighlightLayer = null;
     var model3dSelectionGlowColor = new BABYLON.Color3(1, 1, 1);
 
     var localLightUiRefs = {
@@ -15024,6 +18492,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             clearLocalLightSelection();
             applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshAllCommonLocalLightTargets();
+            scheduleLoadTimeLocalLightRetarget("restoreLocalLightState", localLightLoadTimeRetargetDelayMs);
             refreshAllLocalSpotShadows();
             updateLocalLightsUi();
         } finally {
@@ -15061,6 +18530,87 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         clearSavedState: function () {
             localStorage.removeItem(localLightStateStorageKey);
+        },
+        getBudgetDebug: function () {
+            return getLocalLightBudgetDebug();
+        },
+        setBudgetOptions: function (options) {
+            return setLocalLightBudgetOptions(options);
+        },
+        getTargetCacheDebug: function () {
+            return getLocalLightTargetCacheDebug();
+        },
+        getProductionCleanupDebug: function () {
+            return {
+                stage: "12C62S",
+                noHardCutProductionPath: true,
+                blendMapping: {
+                    exponentSoft: localSpotBlendExponentSoft,
+                    exponentSharp: localSpotBlendExponentSharp,
+                    uiRule: "Blend 0 = sharp, Blend 1 = soft"
+                },
+                targetCache: getLocalLightTargetCacheDebug(),
+                budgets: getLocalLightBudgetDebug(),
+                assetLoading: Object.assign({
+                    assetsLoaded: assetsLoaded,
+                    assetsToLoad: assetsToLoad,
+                    finished: !!galleryWebStateLoadedOnce
+                }, galleryAssetLoadDebug),
+                staticBoundsCache: {
+                    enabled: !!galleryStaticWorldBoundsCache,
+                    lastClearReason: localLightTargetDebugStats.lastStaticBoundsClearReason || null
+                },
+                segmentDiagnostics: getLocalLightSegmentDiagnosticsSettings()
+            };
+        },
+        clearTargetCache: function () {
+            markLocalLightTargetCacheDirty("manualDebugClear");
+            return getLocalLightTargetCacheDebug();
+        },
+        getSegmentAwareRetargetDebug: function () {
+            return getSegmentAwareRetargetDebug();
+        },
+        getStartupCleanTargetRebuildDebug: function () {
+            return getStartupCleanLocalLightTargetRebuildDebug();
+        },
+        commitStartupCleanTargetRebuild: function (reason) {
+            return commitStartupCleanLocalLightTargetRebuildImmediate(reason || "debugStartupCleanTargetRebuild");
+        },
+        commitLoadTimeRetarget: function (reason) {
+            return commitLoadTimeLocalLightRetargetImmediate(reason || "debugLoadTimeRetarget");
+        },
+        commitUnifiedFinalTargets: function (items, reason) {
+            return commitLocalLightFinalTargetGroupImmediate(
+                Array.isArray(items) ? items : getAllActiveLocalLightRetargetItems(),
+                reason || "debugUnifiedFinalTargets",
+                {
+                    scope: "debugUnifiedFinalTargets",
+                    seedBudgetFromCurrent: false
+                }
+            );
+        },
+        scheduleLoadTimeRetarget: function (reason, delayMs) {
+            return scheduleLoadTimeLocalLightRetarget(reason || "debugScheduleLoadTimeRetarget", delayMs);
+        },
+        setSegmentDiagnostics: function (options) {
+            return setLocalLightSegmentDiagnostics(options || {});
+        },
+        getSegmentDiagnosticsSettings: function () {
+            return getLocalLightSegmentDiagnosticsSettings();
+        },
+        getSelectedLocalLightTargetDiagnostics: function () {
+            return getSelectedLocalLightTargetDiagnostics();
+        },
+        dumpSelectedLocalLightRejectedSegments: function () {
+            return dumpSelectedLocalLightRejectedSegments();
+        },
+        enableSelectedLocalLightTargetOutline: function (enabled) {
+            localLightSegmentDiagnosticsOutlineEnabled = enabled !== false;
+            return refreshSelectedLocalLightTargetOutline();
+        },
+        clearSelectedLocalLightTargetOutline: function () {
+            clearLocalLightSegmentDiagnosticOutline();
+            return getLocalLightSegmentDiagnosticsSettings();
         }
     };
 
@@ -15193,7 +18743,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (key === "enabled") {
                 item.userEnabled = !!value;
                 markLocalLightCameraCullingDirty();
+                markLocalLightTargetItemCacheDirty(item, item.userEnabled ? "enabledTargetRefresh" : "disabledTargetClear");
                 applyLocalLightRuntimeEnabled(item);
+
+                if (item.userEnabled) {
+                    updateLocalLightAfterParameterChange(item, !!forceShadowRefresh, {
+                        reason: "enabledTargetRefresh"
+                    });
+                } else {
+                    setLocalLightIncludedMeshesIfChanged(item, [], "disabledTargetClear");
+                }
             } else if (key === "color") {
                 var color = hexToColor3(value);
                 item.light.diffuse = color;
@@ -15241,6 +18800,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             if (needsGeometryUpdate) {
+                markLocalLightTargetItemCacheDirty(item, "parameterGeometryChanged");
                 updateLocalLightAfterParameterChange(item, !!forceShadowRefresh);
             } else {
                 updateLocalLightVisualState(item);
@@ -15675,6 +19235,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item.manualTransformOverride = true;
 
         item.light.position.copyFrom(item.markerMesh.position);
+        markLocalLightTargetItemCacheDirty(item, "transformChanged");
+        localLightSegmentBudgetDebugStats.targetCacheClearedForTransform += 1;
 
         if (item.type === "spot") {
             item.light.direction.copyFrom(getSpotDirectionFromMarker(item));
@@ -15700,18 +19262,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         scheduleLocalLightHelperUpdateDuringDrag(item, !!forceShadowRefresh);
 
-        requestDynamicWallSegmentRetargetForLocalLight(
-            item,
-            !!forceShadowRefresh,
-            forceShadowRefresh ? "dragEnd" : "drag"
-        );
-
-        if (item.type === "spot" && forceShadowRefresh) {
-            requestLocalSpotShadowRefresh(item, true);
-        }
-
         if (forceShadowRefresh) {
-            schedulePersistLocalLightState(false);
+            scheduleLocalLightAtomicTargetCommit(item, "dragEndAtomic", localLightGizmoFinalRetargetDelayMs);
+        } else {
+            // STAGE 12C56:
+            // During continuous gizmo drag the light itself updates live, but target scanning / includedOnlyMeshes
+            // and shadows are completely skipped. Any pending final commit is cancelled because the user is still moving.
+            cancelLocalLightAtomicTargetCommit(item);
+            item._localLightNeedsFinalRetarget = true;
+            if (localLightTargetDebugStats) {
+                localLightTargetDebugStats.gizmoDragPreviewSkippedTargets += 1;
+            }
         }
     }
 
@@ -15985,6 +19546,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Delete z UI robi więc soft-delete: światło zostaje technicznie w scenie,
     // ale ma intensity 0, nie jest widoczne w UI, nie jest targetowane i nie zapisuje się.
     var localLightSoftDeletedItems = [];
+    var localLightSoftDeletePoolLimit = 12;
+    var localLightSoftDeleteTrimPending = false;
+    var localLightSoftDeleteDebugStats = {
+        poolLimit: localLightSoftDeletePoolLimit,
+        trimRequests: 0,
+        hardDisposedByTrim: 0,
+        lastTrimmedCount: 0,
+        lastTrimReason: null,
+        lastTrimTime: null
+    };
     var localLightQuarantineDummyMesh = null;
 
     function getLocalLightQuarantineDummyMesh() {
@@ -16068,6 +19639,69 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+    function trimLocalLightSoftDeletePool(reason) {
+        var trimmedCount = 0;
+
+        localLightSoftDeleteTrimPending = false;
+        localLightSoftDeleteDebugStats.lastTrimReason = reason || "poolLimit";
+        localLightSoftDeleteDebugStats.lastTrimTime = Date.now();
+
+        while (localLightSoftDeletedItems.length > localLightSoftDeletePoolLimit) {
+            var item = localLightSoftDeletedItems.shift();
+
+            if (!item || item.hardDisposed || !item.softDeleted) {
+                continue;
+            }
+
+            disposeLocalLightItem(item);
+            item.hardDisposed = true;
+            trimmedCount += 1;
+        }
+
+        localLightSoftDeletedItems = localLightSoftDeletedItems.filter(function (item) {
+            return !!(item && !item.hardDisposed);
+        });
+
+        localLightSoftDeleteDebugStats.lastTrimmedCount = trimmedCount;
+        localLightSoftDeleteDebugStats.hardDisposedByTrim += trimmedCount;
+        localLightSoftDeleteDebugStats.poolLimit = localLightSoftDeletePoolLimit;
+
+        if (trimmedCount > 0) {
+            updateLocalLightsUi();
+        }
+
+        return trimmedCount;
+    }
+
+    function scheduleLocalLightSoftDeletePoolTrim(reason) {
+        localLightSoftDeleteDebugStats.trimRequests += 1;
+        localLightSoftDeleteDebugStats.poolLimit = localLightSoftDeletePoolLimit;
+
+        if (localLightSoftDeletedItems.length <= localLightSoftDeletePoolLimit) {
+            return 0;
+        }
+
+        if (localLightSoftDeleteTrimPending) {
+            return 0;
+        }
+
+        localLightSoftDeleteTrimPending = true;
+
+        var runTrim = function () {
+            trimLocalLightSoftDeletePool(reason || "scheduled");
+        };
+
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(function () {
+                setTimeout(runTrim, 220);
+            });
+        } else {
+            setTimeout(runTrim, 240);
+        }
+
+        return localLightSoftDeletedItems.length - localLightSoftDeletePoolLimit;
+    }
+
     function softDeleteLocalLightItem(item) {
         if (!item || item.softDeleted) {
             return false;
@@ -16146,6 +19780,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (localLightSoftDeletedItems.indexOf(item) === -1) {
             localLightSoftDeletedItems.push(item);
         }
+
+        scheduleLocalLightSoftDeletePoolTrim("softDelete");
 
         return true;
     }
@@ -16255,7 +19891,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         applyInitialLocalLightSpawnTargets(item);
         disableLocalPointLightShadow(item);
-        updateLocalLightHelper(item);
+        runWithFastLocalLightHelperPreview(item, function () {
+            updateLocalLightHelper(item);
+        });
         applyLocalLightRuntimeEnabled(item);
         scheduleDeferredLocalLightSpawnSetup(item, "reuseDeferred");
         updateLocalLightsUi();
@@ -16414,6 +20052,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         selectedLocalLights = [];
+        clearLocalLightSegmentDiagnosticOutline();
         updateLocalLightsUi();
         schedulePersistLocalLightState(true);
     }
@@ -16435,6 +20074,73 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return 4;
     }
 
+
+    function shouldUseFastLocalLightHelperPreview(item) {
+        return !!(item && item._localLightHelperFastPreview);
+    }
+
+    function runWithFastLocalLightHelperPreview(item, callback) {
+        if (!item || typeof callback !== "function") {
+            return;
+        }
+
+        var previousFastPreview = !!item._localLightHelperFastPreview;
+        item._localLightHelperFastPreview = true;
+
+        try {
+            callback();
+        } finally {
+            item._localLightHelperFastPreview = previousFastPreview;
+        }
+    }
+
+    function isLocalLightHelperMeshAlive(mesh) {
+        return !!(mesh && (!mesh.isDisposed || !mesh.isDisposed()));
+    }
+
+    function isLocalLightHelperMissingOrDisposed(item) {
+        if (!item) {
+            return true;
+        }
+
+        if (item.type === "spot") {
+            return !(
+                item.helperMeshes &&
+                item.helperMeshes.length >= 2 &&
+                isLocalLightHelperMeshAlive(item.helperMeshes[0]) &&
+                isLocalLightHelperMeshAlive(item.helperMeshes[1])
+            );
+        }
+
+        if (item.type === "point") {
+            return !(
+                item.helperMeshes &&
+                item.helperMeshes.length >= 1 &&
+                isLocalLightHelperMeshAlive(item.helperMeshes[0])
+            );
+        }
+
+        return true;
+    }
+
+    function ensureLocalLightHelperReady(item, reason) {
+        if (!item || item.softDeleted) {
+            return false;
+        }
+
+        if (!isLocalLightHelperMissingOrDisposed(item)) {
+            return false;
+        }
+
+        // Rebuild old/restored helpers with a geometric fast helper so selection never triggers raycast spikes.
+        runWithFastLocalLightHelperPreview(item, function () {
+            updateLocalLightHelper(item);
+        });
+
+        localLightTargetDebugStats.helperRecovered += 1;
+        localLightTargetDebugStats.lastReason = reason || "helperRecovered";
+        return true;
+    }
 
     function isMeshValidForLocalLightHelperHit(mesh, item) {
         if (!mesh || !mesh.isEnabled() || !mesh.isVisible) {
@@ -16475,6 +20181,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         rayDirection.normalize();
+
+        if (shouldUseFastLocalLightHelperPreview(item)) {
+            if (localLightTargetDebugStats) {
+                localLightTargetDebugStats.fastHelperRaycastSkipped += 1;
+            }
+            return origin.add(rayDirection.scale(maxDistance));
+        }
 
         var ray = new BABYLON.Ray(
             origin,
@@ -16614,10 +20327,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var halfAngle = angle * 0.5;
 
         var exponent = isFinite(light.exponent) ? light.exponent : 1;
+        var helperBlend01 = getSpotBlendFromExponent(exponent);
 
         // Inner boundary = umowny core swiatla.
-        // Pas pomiedzy inner i outer pokazuje Blend / soft edge.
-        var innerFactor = 0.42 + Math.min(Math.max(exponent / 8, 0), 1) * 0.42;
+        // C62N1: high Blend means wider visible soft-edge band, especially useful
+        // for narrow Spot angles. Earlier helper mapping made high Blend look too tight.
+        var innerFactor = 0.84 - helperBlend01 * 0.42;
+        innerFactor = Math.max(0.34, Math.min(0.86, innerFactor));
         var innerHalfAngle = halfAngle * innerFactor;
 
         var helperUp = Math.abs(BABYLON.Vector3.Dot(direction, BABYLON.Axis.Y)) > 0.92
@@ -16848,7 +20564,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (finalUpdate) {
             localLightGizmoPreviewHelperPending = false;
             localLightGizmoPreviewHelperItem = null;
-            updateLocalLightHelperMeasured(item, "gizmoHelperFinal");
+            item._localLightHelperFastPreview = false;
+            updateLocalLightHelperMeasured(item, "gizmoHelperFinalProjected");
             updateLocalLightVisualState(item);
             return;
         }
@@ -16880,7 +20597,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             localLightTargetDebugStats.helperPreviewUpdated += 1;
-            updateLocalLightHelperMeasured(helperItem, "gizmoHelperPreview");
+            runWithFastLocalLightHelperPreview(helperItem, function () {
+                updateLocalLightHelperMeasured(helperItem, "gizmoHelperPreviewFast");
+            });
             updateLocalLightVisualState(helperItem);
         };
 
@@ -16941,14 +20660,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } else if (item.helperMesh) {
             item.helperMesh.isVisible = shouldShowSelection;
         }
+
+        if (localLightSegmentDiagnosticsOutlineAutoRefresh) {
+            refreshSelectedLocalLightTargetOutline();
+        }
     }
 
     function updateLocalLightVisuals() {
         localLightItems.forEach(function (item) {
-            if (!item.helperMesh && (!item.helperMeshes || item.helperMeshes.length === 0)) {
-                updateLocalLightHelper(item);
-            }
-
+            ensureLocalLightHelperReady(item, "visuals");
             updateLocalLightVisualState(item);
         });
     }
@@ -17237,46 +20957,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             localLightDeferredSpawnQueue.length = 0;
             localLightDeferredSpawnPending = false;
 
-            // Accurate targets first, but only after the spawn frame. This avoids the visible FPS drop
-            // at the exact moment the marker/light is created.
-            measureGalleryPerformanceMetric("localLightSpawnTargetMs", function () {
-                queue.forEach(function (queuedItem) {
-                    if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
-                        return;
-                    }
+            // STAGE 12C56:
+            // Spawn must stay lightweight. We do NOT run a full target scan after creation.
+            // The new lamp keeps its minimal safe target set until the user finishes positioning it,
+            // then dragEnd performs exactly one atomic target commit.
+            queue.forEach(function (queuedItem) {
+                if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
+                    return;
+                }
 
-                    refreshCommonLocalLightTargetsForItemImmediate(
-                        queuedItem,
-                        reason || "registerDeferredTargets",
-                        false
-                    );
+                queuedItem._localLightNeedsFinalRetarget = true;
+                if (queuedItem.type !== "spot") {
+                    disableLocalPointLightShadow(queuedItem);
+                }
 
-                    if (queuedItem.type !== "spot") {
-                        disableLocalPointLightShadow(queuedItem);
-                    }
-                });
+                localLightTargetDebugStats.spawnFullTargetScanSkipped += 1;
             });
 
-            // Material support and shadows are intentionally separated from targeting. Doing all three
-            // in one frame was the remaining create Point/Spot drop.
             setTimeout(function () {
                 scheduleCommonLightingMaterialSupport(reason || "localLightSpawnDeferredMaterial");
             }, localLightSpawnMaterialDelayMs);
-
-            setTimeout(function () {
-                queue.forEach(function (queuedItem) {
-                    if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
-                        return;
-                    }
-
-                    if (queuedItem.type === "spot") {
-                        ensureCommonLightShadowLogic(queuedItem);
-                        requestLocalSpotShadowRefresh(queuedItem, true);
-                    } else {
-                        disableLocalPointLightShadow(queuedItem);
-                    }
-                });
-            }, localLightSpawnShadowDelayMs);
         }, localLightSpawnTargetDelayMs);
     }
 
@@ -17338,7 +21038,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         applyInitialLocalLightSpawnTargets(item);
         disableLocalPointLightShadow(item);
-        updateLocalLightHelper(item);
+        runWithFastLocalLightHelperPreview(item, function () {
+            updateLocalLightHelper(item);
+        });
         applyLocalLightRuntimeEnabled(item);
         scheduleDeferredLocalLightSpawnSetup(item, "registerDeferred");
 
@@ -17363,6 +21065,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         item.selected = !!isSelected;
+
+        if (item.selected) {
+            ensureLocalLightHelperReady(item, "selectLocalLight");
+        }
 
         if (item.selected) {
             if (!selectedLocalLights.includes(item)) {
@@ -18328,7 +22034,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var localSpotLegend = document.createElement("div");
     localSpotLegend.className = "gallery-local-helper-legend";
-    localSpotLegend.innerHTML = "<strong>Cone helper:</strong> yellow footprint = Angle, blue dashed/inner band = Blend soft edge. Helper stops on walls, floor, ceiling or props.";
+    localSpotLegend.innerHTML = "<strong>Cone helper:</strong> yellow footprint = Angle, blue dashed/inner band = Blend soft edge. C62N1 boosts Blend softness for narrow angles. Helper stops on walls, floor, ceiling or props.";
     localSpotSection.appendChild(localSpotLegend);
 
     localLightUiRefs.typeSections.spot = localSpotSection;
@@ -18804,7 +22510,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         lightingDropdown.classList.toggle("is-open");
     };
 
-    document.addEventListener("pointerdown", function () {
+    registerGalleryDomEvent("lightingDropdownOutsidePointerDown", document, "pointerdown", function () {
         closeLightingDropdown();
     });
 
@@ -18812,6 +22518,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         event.preventDefault();
         event.stopPropagation();
         closeLightingDropdown();
+
+        // C60B3: leaving Local Lights commits only dirty/selected local groups.
+        // No C60B2-style full global retarget here.
+        var backCommitItems = [];
+        (localLightItems || []).forEach(function (item) {
+            if (!item || !item.light || item.softDeleted || item.hardDisposed) {
+                return;
+            }
+
+            if (item._localLightNeedsFinalRetarget || (Array.isArray(selectedLocalLights) && selectedLocalLights.indexOf(item) !== -1)) {
+                backCommitItems.push(item);
+            }
+        });
+
+        backCommitItems.forEach(function (item) {
+            commitSegmentAwareLocalLightTargetsImmediate(item, "backToEditSegmentAware");
+        });
+
         setEditorPanelMode("edit");
     };
 
@@ -18975,6 +22699,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         rotate180: false
     };
 
+    // STAGE 12C60B - WALL PAINT TEXTURE CACHE
+    // Same URL + same orientation reuses one BABYLON.Texture instead of creating a new one per click.
+    var wallPaintTextureCache = {};
+    var wallPaintTextureCacheStats = {
+        hits: 0,
+        misses: 0,
+        created: 0,
+        clears: 0,
+        lastKey: null,
+        lastColorName: null
+    };
+
     function applyWallPaintTextureTransform(texture) {
         if (!texture) {
             return texture;
@@ -19006,10 +22742,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return texture;
     }
 
+    function getWallPaintTextureCacheKey(url) {
+        return [
+            String(url || ""),
+            wallPaintTextureOrientation.invertY ? "iy1" : "iy0",
+            wallPaintTextureOrientation.flipU ? "fu1" : "fu0",
+            wallPaintTextureOrientation.flipV ? "fv1" : "fv0",
+            wallPaintTextureOrientation.rotate180 ? "r1" : "r0"
+        ].join("|");
+    }
+
     function createWallPaintTexture(url, colorName) {
         if (!url) {
             return null;
         }
+
+        var cacheKey = getWallPaintTextureCacheKey(url);
+        wallPaintTextureCacheStats.lastKey = cacheKey;
+        wallPaintTextureCacheStats.lastColorName = colorName || "";
+
+        if (wallPaintTextureCache[cacheKey] && !(wallPaintTextureCache[cacheKey].isDisposed && wallPaintTextureCache[cacheKey].isDisposed())) {
+            wallPaintTextureCacheStats.hits += 1;
+            return wallPaintTextureCache[cacheKey];
+        }
+
+        wallPaintTextureCacheStats.misses += 1;
 
         var texture = new BABYLON.Texture(
             url,
@@ -19022,8 +22779,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         texture.metadata = texture.metadata || {};
         texture.metadata.wallPaintColorName = colorName || "";
         texture.metadata.wallPaintTextureUrl = url;
+        texture.metadata.wallPaintTextureCacheKey = cacheKey;
 
-        return applyWallPaintTextureTransform(texture);
+        wallPaintTextureCache[cacheKey] = applyWallPaintTextureTransform(texture);
+        wallPaintTextureCacheStats.created += 1;
+
+        return wallPaintTextureCache[cacheKey];
+    }
+
+    function clearWallPaintTextureCache(reason) {
+        wallPaintTextureCache = {};
+        wallPaintTextureCacheStats.clears += 1;
+        wallPaintTextureCacheStats.lastClearReason = reason || "manual";
+        markGallerySurfaceDirty(reason || "wallTextureCacheCleared");
+    }
+
+    function getWallPaintTextureCacheDebug() {
+        return {
+            keys: Object.keys(wallPaintTextureCache),
+            count: Object.keys(wallPaintTextureCache).length,
+            hits: wallPaintTextureCacheStats.hits,
+            misses: wallPaintTextureCacheStats.misses,
+            created: wallPaintTextureCacheStats.created,
+            clears: wallPaintTextureCacheStats.clears,
+            lastKey: wallPaintTextureCacheStats.lastKey,
+            lastColorName: wallPaintTextureCacheStats.lastColorName,
+            lastClearReason: wallPaintTextureCacheStats.lastClearReason || null,
+            orientation: Object.assign({}, wallPaintTextureOrientation)
+        };
     }
 
     function getWallPaintTextureForColorData(colorData) {
@@ -19110,6 +22893,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         rebuildWallColorSelectorTextures();
+        markGallerySurfaceDirty("wallPaintTextureOrientation");
 
         return {
             orientation: Object.assign({}, wallPaintTextureOrientation),
@@ -19121,6 +22905,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             orientation: Object.assign({}, wallPaintTextureOrientation),
             wallColorTextureBaseUrl: wallColorTextureBaseUrl,
+            textureCache: getWallPaintTextureCacheDebug(),
             paintedSegments: wallMeshes.filter(function (wallMesh) {
                 return !!(
                     wallMesh &&
@@ -19328,7 +23113,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         //
         // STAGE 12C8:
         // Tekstura base color dostaje poprawną orientację GLTF/invertY=false.
-        // Tworzymy ją per malowany materiał, żeby transform UV nie rozjechał się między segmentami.
+        // STAGE 12C60B:
+        // Tekstura jest cache'owana po URL + orientacji, żeby malowanie segmentów nie tworzyło
+        // wielu BABYLON.Texture dla tego samego koloru.
         var wallPaintTexture = getWallPaintTextureForColorData(colorData);
 
         if (!wallPaintTexture) {
@@ -19394,7 +23181,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         wallMesh.metadata.wallSegmentPaintMode = "baseColorOnly";
 
         configureMeshMaterialForMainShadows(wallMesh);
-        refreshCommonLightingMaterialSupport();
+        scheduleCommonLightingMaterialSupport("wallPaintSegment");
+        markGallerySurfaceDirty("wallSegmentPainted");
         updateEditHelpStatus();
 
         return true;
@@ -19885,6 +23673,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateAlignmentPanel();
         } else {
             resetViewerWASDMovementRuntime(true);
+            restoreCameraToDefaultViewerWalkHeight("exitEditMode");
             setEditorUiVisible(false);
             clearEditSelection();
 
@@ -19918,6 +23707,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             editMode = false;
             configureCameraPointerButtons();
             resetViewerWASDMovementRuntime(true);
+            restoreCameraToDefaultViewerWalkHeight("editorAuthLost");
             setEditorUiVisible(false);
             clearEditSelection();
 
@@ -21744,6 +25534,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         editMoveKeys.a = false;
         editMoveKeys.s = false;
         editMoveKeys.d = false;
+        editMoveKeys.space = false;
 
         artworkAlignPanel.style.display = "none";
 
@@ -21794,6 +25585,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         editMoveKeys.a = false;
         editMoveKeys.s = false;
         editMoveKeys.d = false;
+        editMoveKeys.space = false;
     }
 
     function isGalleryTextEditingElement(target) {
@@ -21842,6 +25634,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var key = event.key.toLowerCase();
+        var isSpaceKey = key === " " || key === "spacebar" || event.code === "Space";
 
         if (key === "w" || key === "a" || key === "s" || key === "d") {
             if (editMode) {
@@ -21851,6 +25644,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 viewerMoveKeys[key] = true;
                 event.preventDefault();
             }
+        }
+
+        if (isSpaceKey && editMode) {
+            editMoveKeys.space = true;
+            event.preventDefault();
         }
 
         if (key === "shift" && !editMode) {
@@ -21866,6 +25664,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var key = event.key.toLowerCase();
+        var isSpaceKey = key === " " || key === "spacebar" || event.code === "Space";
 
         if (key === "w" || key === "a" || key === "s" || key === "d") {
             if (editMode) {
@@ -21873,6 +25672,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             } else {
                 viewerMoveKeys[key] = false;
             }
+        }
+
+        if (isSpaceKey) {
+            editMoveKeys.space = false;
         }
 
         if (key === "shift") {
@@ -21903,12 +25706,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             right.normalize();
         }
 
-        if (editMoveKeys.w) {
-            moveDirection.addInPlace(forward);
-        }
+        // STAGE 12C54 - EDIT FLY MODE
+        // Space + W/S moves camera vertically in Edit Mode so lights above ceilings can be reached.
+        // Without Space, W/S keeps the normal floor-parallel edit movement.
+        if (editMoveKeys.space) {
+            if (editMoveKeys.w) {
+                moveDirection.y += 1;
+            }
 
-        if (editMoveKeys.s) {
-            moveDirection.subtractInPlace(forward);
+            if (editMoveKeys.s) {
+                moveDirection.y -= 1;
+            }
+        } else {
+            if (editMoveKeys.w) {
+                moveDirection.addInPlace(forward);
+            }
+
+            if (editMoveKeys.s) {
+                moveDirection.subtractInPlace(forward);
+            }
         }
 
         if (editMoveKeys.d) {
@@ -24791,6 +28607,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         function (meshes) {
 
             floorMeshes = meshes.filter(mesh => mesh.name !== "__root__");
+            markGalleryGeometryDirty("floorImported");
 
             floorMeshes.forEach(mesh => {
                 mesh.isPickable = true;
@@ -24814,7 +28631,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
-            assetLoaded();
+            assetLoaded("floor");
+        },
+        null,
+        function (scene, message, exception) {
+            console.error("Floor GLTF load failed:", {
+                file: "Floor_segment.gltf",
+                message: message,
+                exception: exception
+            });
+
+            assetLoaded("floor", true);
         }
     );
 
@@ -24831,6 +28658,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         function (meshes) {
 
             wallMeshes = meshes.filter(mesh => mesh.name !== "__root__");
+            markGalleryGeometryDirty("wallImported");
 
             wallMeshes.forEach(mesh => {
                 mesh.isPickable = true;
@@ -24860,7 +28688,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
-            assetLoaded();
+            assetLoaded("wall");
         },
         null,
         function (scene, message, exception) {
@@ -24871,7 +28699,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 exception: exception
             });
 
-            assetLoaded();
+            assetLoaded("wall", true);
         }
     );
 
@@ -24897,11 +28725,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 });
             });
 
+            markGalleryObjectsDirty("propsImported");
             refreshViewerCollisionMeshes();
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
-            assetLoaded();
+            assetLoaded("props");
+        },
+        null,
+        function (scene, message, exception) {
+            console.error("Props GLTF load failed:", {
+                file: "Props.gltf",
+                message: message,
+                exception: exception
+            });
+
+            assetLoaded("props", true);
         }
     );
 
@@ -24928,11 +28767,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 });
             });
 
+            markGalleryGeometryDirty("ceilingImported");
             freezeStaticGalleryMeshes(ceilingMeshes, "ceiling");
             refreshAllCommonLocalLightTargets();
             refreshAllLocalSpotShadows();
 
-            assetLoaded();
+            assetLoaded("ceiling");
+        },
+        null,
+        function (scene, message, exception) {
+            console.error("Ceiling GLTF load failed:", {
+                file: "Ceiling.gltf",
+                message: message,
+                exception: exception
+            });
+
+            assetLoaded("ceiling", true);
         }
     );
 
@@ -25461,13 +29311,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return;
             }
 
-            // STAGE 12C29 cleanup: usuwamy WSZYSTKIE stare efekty, ale nie dokladamy nowych.
-            if (model3dSelectionHighlightLayer && model3dSelectionHighlightLayer.removeMesh) {
-                try {
-                    model3dSelectionHighlightLayer.removeMesh(mesh);
-                } catch (highlightRemoveError) {}
-            }
-
+            // STAGE 12C61A cleanup: legacy HighlightLayer path removed; EdgesRenderer is the only active selection visual.
             if (mesh.renderOutline !== undefined) {
                 mesh.renderOutline = false;
             }
@@ -25873,6 +29717,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         forgetDeletedModel3dSlotName(pedestal.name);
         artSpheres.push(pedestal);
+        markGalleryObjectsDirty("sculptureSlotAdded");
         ensureModel3dSlotUnifiedStructure(pedestal, index);
 
         createPedestalLight(pedestal, index);
@@ -25944,6 +29789,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         artworks.push(artwork);
+        markGalleryObjectsDirty("artworkAdded");
 
         // Auto artwork lights disabled in Stage 8M.
         refreshAllCommonLocalLightTargets();
@@ -26098,6 +29944,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         artworks.push(artwork);
+        markGalleryObjectsDirty("artworkAdded");
         updateArtworkCreateCounterFromName(artwork.name);
         refreshAllCommonLocalLightTargets();
 
@@ -26628,6 +30475,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             console.warn("Artwork mesh dispose warning:", error);
         }
 
+        markGalleryObjectsDirty("artworkDeleted");
         refreshAllCommonLocalLightTargets();
         updateEditHelpStatus();
         updateAlignmentPanel();
@@ -28349,6 +32197,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
         refreshAllCommonLocalLightTargets();
+        scheduleLoadTimeLocalLightRetarget("applyGalleryState", localLightLoadTimeRetargetDelayMs);
         refreshAllLocalSpotShadows();
         updateLocalLightsUi();
     }
@@ -28913,6 +32762,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getWallPaintTextureOrientationDebug: function () {
             return getWallPaintTextureOrientationDebug();
         },
+        getWallPaintTextureCacheDebug: function () {
+            return getWallPaintTextureCacheDebug();
+        },
+        clearWallPaintTextureCache: function () {
+            clearWallPaintTextureCache("manualDebugClear");
+            return getWallPaintTextureCacheDebug();
+        },
         setWallPaintTextureOrientation: function (options) {
             return setWallPaintTextureOrientation(options);
         },
@@ -29018,37 +32874,41 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 );
             }
 
-            if (settings.radius !== undefined) {
-                localLightWallSegmentTargetRadius = Math.max(
-                    0.1,
-                    Number(settings.radius) || localLightWallSegmentTargetRadius
-                );
-            }
 
-            if (settings.softExtraRadius !== undefined) {
-                localLightWallSegmentSoftEdgeExtraRadius = Math.max(
-                    0,
-                    Number(settings.softExtraRadius) || localLightWallSegmentSoftEdgeExtraRadius
-                );
-            }
-
+            markLocalLightTargetCacheDirty("segmentSearchSettings");
             refreshAllCommonLocalLightTargets();
 
             return {
                 maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
                 maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-                radius: localLightWallSegmentTargetRadius,
-                softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
-                effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
+                shapeResolver: {
+                    mode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
+                    spot: "singleSceneRayNearestHelperHit",
+                    point: "rangeSphereVisibleSamples",
+                    legacySpotOcclusionGuardRemoved: true,
+                    legacySpotEdgeThresholdsRemoved: true,
+                    broadObjectCategoryTargetsForSpot: "owner-only; no broad add",
+                    maxSpotRays: localLightShapeResolverMaxSpotRays,
+                    pointSamplesPerSurface: localLightShapeResolverPointSamplesPerSurface,
+                    helperRayFirstHitDebugKey: "_spotHelperRayFirstHitTargetDebug"
+                }
             };
         },
         getLocalLightSegmentSearchSettings: function () {
             return {
                 maxLightsPerSegment: localLightWallSegmentMaxLightsPerSegment,
                 maxSegmentsPerLight: getLocalLightCurrentMaxSegmentsPerLight(),
-                radius: localLightWallSegmentTargetRadius,
-                softExtraRadius: localLightWallSegmentSoftEdgeExtraRadius,
-                effectiveSoftRadius: localLightWallSegmentTargetRadius + localLightWallSegmentSoftEdgeExtraRadius
+                shapeResolver: {
+                    mode: "C62S Range/Angle/Blend production helper-ray first-hit target resolver",
+                    spot: "singleSceneRayNearestHelperHit",
+                    point: "rangeSphereVisibleSamples",
+                    legacySpotOcclusionGuardRemoved: true,
+                    legacySpotEdgeThresholdsRemoved: true,
+                    broadObjectCategoryTargetsForSpot: "owner-only; no broad add",
+                    maxSpotRays: localLightShapeResolverMaxSpotRays,
+                    pointSamplesPerSurface: localLightShapeResolverPointSamplesPerSurface,
+                    helperRayFirstHitDebugKey: "_spotHelperRayFirstHitTargetDebug"
+                }
             };
         },
         getLocalLightCameraCullingDebug: function () {
@@ -29056,6 +32916,79 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         setLocalLightCameraCulling: function (options) {
             return setLocalLightCameraCullingDebugOptions(options);
+        },
+        getLocalLightBudgetDebug: function () {
+            return getLocalLightBudgetDebug();
+        },
+        getLocalLightTargetCacheDebug: function () {
+            return getLocalLightTargetCacheDebug();
+        },
+        getSegmentAwareRetargetDebug: function () {
+            return getSegmentAwareRetargetDebug();
+        },
+        getStartupCleanTargetRebuildDebug: function () {
+            return getStartupCleanLocalLightTargetRebuildDebug();
+        },
+        commitStartupCleanLocalLightTargetRebuild: function (reason) {
+            return commitStartupCleanLocalLightTargetRebuildImmediate(reason || "apiStartupCleanTargetRebuild");
+        },
+        commitLoadTimeLocalLightRetarget: function (reason) {
+            return commitLoadTimeLocalLightRetargetImmediate(reason || "apiLoadTimeRetarget");
+        },
+        commitUnifiedLocalLightFinalTargets: function (reason) {
+            return commitLocalLightFinalTargetGroupImmediate(
+                getAllActiveLocalLightRetargetItems(),
+                reason || "apiUnifiedFinalTargets",
+                {
+                    scope: "apiUnifiedFinalTargets",
+                    seedBudgetFromCurrent: false
+                }
+            );
+        },
+        scheduleLoadTimeLocalLightRetarget: function (reason, delayMs) {
+            return scheduleLoadTimeLocalLightRetarget(reason || "apiScheduleLoadTimeRetarget", delayMs);
+        },
+        commitSegmentAwareLocalLightTargets: function (lightIdOrName, reason) {
+            var item = getLocalLightItemById(lightIdOrName);
+
+            if (!item) {
+                item = (localLightItems || []).filter(function (candidate) {
+                    return !!(candidate && (candidate.name === lightIdOrName || (candidate.light && candidate.light.name === lightIdOrName)));
+                })[0] || null;
+            }
+
+            if (!item && Array.isArray(selectedLocalLights) && selectedLocalLights.length) {
+                item = selectedLocalLights[0];
+            }
+
+            return commitSegmentAwareLocalLightTargetsImmediate(item, reason || "apiSegmentAwareRetarget");
+        },
+        clearLocalLightTargetCache: function () {
+            markLocalLightTargetCacheDirty("manualDebugClear");
+            return getLocalLightTargetCacheDebug();
+        },
+        setLocalLightSegmentDiagnostics: function (options) {
+            return setLocalLightSegmentDiagnostics(options || {});
+        },
+        getLocalLightSegmentDiagnosticsSettings: function () {
+            return getLocalLightSegmentDiagnosticsSettings();
+        },
+        getSelectedLocalLightTargetDebug: function () {
+            return getSelectedLocalLightTargetDiagnostics();
+        },
+        dumpSelectedLocalLightRejectedSegments: function () {
+            return dumpSelectedLocalLightRejectedSegments();
+        },
+        enableSelectedLocalLightTargetOutline: function (enabled) {
+            localLightSegmentDiagnosticsOutlineEnabled = enabled !== false;
+            return refreshSelectedLocalLightTargetOutline();
+        },
+        clearSelectedLocalLightTargetOutline: function () {
+            clearLocalLightSegmentDiagnosticOutline();
+            return getLocalLightSegmentDiagnosticsSettings();
+        },
+        setLocalLightBudgetOptions: function (options) {
+            return setLocalLightBudgetOptions(options);
         },
         getVisualSettings: function () {
             return readVisualSettingsFromScene();
