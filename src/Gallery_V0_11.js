@@ -12140,7 +12140,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // false = logowanie edytora jest wylaczone, panel edytora dziala bez strony WEB/loginu.
     // true  = wraca normalna blokada logowania przez globalThis.galleryEditorAuthenticated.
     // Nie usuwamy systemu logowania, tylko omijamy go podczas pracy w samym silniku Babylon.
-    var galleryEditorLoginEnabled = false;
+    var galleryEditorLoginEnabled = true;
     var editorAuthenticated = !galleryEditorLoginEnabled || !!globalThis.galleryEditorAuthenticated;
 
     // ARTWORK UPLOAD / SUPABASE STORAGE
