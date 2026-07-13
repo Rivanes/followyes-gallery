@@ -1,45 +1,42 @@
-# Berryboy Art Gallery V0.11 — Stage 12C63
+# Berryboy Art Gallery V0.11 — Stage 12C63A
 
-## Full Fast Start Architecture
+## Balanced Ready Gate
 
-Stage 12C63 przebudowuje start galerii z modelu „załaduj wszystko i dopiero pokaż” na progresywne uruchamianie.
+Stage 12C63A poprawia zbyt agresywne wpuszczanie użytkownika z wersji 12C63.
+Galeria nadal startuje progresywnie, ale użytkownik nie może rozpocząć chodzenia, kiedy widoczne elementy sceny dopiero się pojawiają.
 
-### Co blokuje pierwsze wejście
+### Co blokuje wejście
 
-Tylko krytyczny shell galerii:
+Przed ukryciem loadera muszą zostać przygotowane:
 
-- `Models/Floor_segment.glb`
-- `Models/Wall_segments.glb`
-- `Models/Ceiling.glb`
+- podłoga, ściany i sufit,
+- stan galerii z Supabase,
+- `Props.glb` albo jego rzeczywisty błąd importu,
+- wszystkie preview obrazów przypisanych w zapisanym stanie,
+- wszystkie modele rzeźb przypisane do slotów,
+- środowiskowa mapa oświetlenia,
+- faktycznie używane tekstury kolorów ścian,
+- bezpośredni restore targetów Local Lights,
+- finalne lokalne cienie.
 
-`Props.glb`, obrazy, pełne tekstury, modele rzeźb, cienie lokalne i ciężki retarget lamp są wykonywane po pierwszym renderze.
+Po wejściu w tle mogą zostać wykonane wyłącznie jakościowe podmiany preview na pełne tekstury. Nie powinny już pojawiać się brakujące Props, obrazy ani rzeźby podczas chodzenia.
 
-### Najważniejsze zmiany
+### Bezpieczeństwo startu
 
-- Props nie jest częścią licznika blokującego viewer.
-- Usunięto sztuczne opóźnienia startowe 1500 ms + 500 ms + 650 ms.
-- Loader nie uznaje wolnego requestu za błąd po 30 sekundach i nie uruchamia duplikatu tego samego GLB.
-- Krytyczne GLB mają retry wyłącznie po prawdziwym błędzie importu.
-- Normalne telefony pobierają floor/wall/ceiling równolegle; sekwencyjny import zostaje tylko dla urządzeń z małą pamięcią.
-- Stan Supabase jest pobierany równolegle z geometrią.
-- Obrazy są odtwarzane progresywnie: lekki wariant `preview`, następnie pełna wersja w kolejce tła.
-- Obrazy najbliżej kamery mają pierwszeństwo.
-- Modele rzeźb są odraczane i ładowane pojedynczo.
-- Powtarzające się modele 3D korzystają z cache `AssetContainer` i nie muszą być ponownie pobierane oraz parsowane dla każdego slotu.
-- Tekstury palety ścian nie są pobierane w publicznym viewerze, dopóki kolor nie jest rzeczywiście używany albo edytor się nie zaloguje.
-- Publiczny bootstrap jest oddzielony od modułu logowania/edycji. `gallery-editor-bootstrap.js` ładuje się dopiero po żądaniu logowania lub dla istniejącej sesji edytora.
-- Produkcja używa zminifikowanego `Gallery_V0_11.min.js`; pełny czytelny kod pozostaje w `Gallery_V0_11.js`.
+- Desktop: awaryjny limit bramki gotowości wynosi 30 sekund.
+- Mobile: awaryjny limit wynosi 45 sekund.
+- Limit nie anuluje ani nie duplikuje requestów. Zapobiega wyłącznie nieskończonemu czarnemu ekranowi przy uszkodzonym zewnętrznym zasobie.
+- W normalnym uruchomieniu loader znika natychmiast po spełnieniu wszystkich warunków, bez czekania do końca limitu.
 
-### Startup Light Restore
+### Zachowane optymalizacje z 12C63
 
-Każda lampa zapisuje teraz:
-
-- `targetMeshNames`
-- `targetSegmentNames`
-
-Po ponownym uruchomieniu `includedOnlyMeshes` jest odtwarzane bez pełnego skanowania helper-ray. Starszy stan bez tych pól nadal działa, ale wykona jeden fallback retarget w tle.
-
-**Po pierwszym uruchomieniu Stage 12C63 zaloguj się jako edytor i zapisz stan galerii jeden raz.** Następne uruchomienia będą mogły używać bezpośredniego restore targetów lamp.
+- brak sztucznego retry po 30 sekundach,
+- równoległe ładowanie krytycznej geometrii,
+- cache `AssetContainer` dla powtarzających się modeli,
+- zapis i restore `targetMeshNames`,
+- oddzielny bootstrap publicznego viewera i edytora,
+- preview obrazów przed pełnymi teksturami,
+- zminifikowany produkcyjny silnik.
 
 ### Debug
 
@@ -52,17 +49,14 @@ BerryboyArtGalleryFastStart.getDebug()
 
 Najważniejsze pola:
 
-- `viewerReadyAt`
-- `deferredArtworkLoads`
-- `deferredModelLoads`
-- `directLightTargetRestores`
-- `fallbackLightRetargets`
-- `backgroundFinalizationRuns`
+- `entryGateActive`
+- `entryGateReady`
+- `entryGateTimedOut`
+- `entryGateElapsedMs`
+- `entryGateLastSnapshot`
+- `visibleTextures.pending`
+- `artworkTextures.pendingCount`
 
-### Uruchomienie lokalne
+### Ważne
 
-```bash
-python3 -m http.server 8000
-```
-
-Następnie otwórz `http://localhost:8000`.
+Po wdrożeniu sprawdź konsolę po pierwszym wejściu. Gdy `entryGateTimedOut` ma wartość `false`, użytkownik został wpuszczony po pełnym przygotowaniu widocznej sceny.
