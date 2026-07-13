@@ -5,9 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Berryboy Art Gallery V0_11</title>
 
+  <link rel="preconnect" href="https://bazbszvhoxmuekxahokc.supabase.co" crossorigin>
+  <link rel="preconnect" href="https://cdn.babylonjs.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="//bazbszvhoxmuekxahokc.supabase.co">
+  <link rel="dns-prefetch" href="//cdn.babylonjs.com">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 
   <style>
     :root {
@@ -1010,7 +1016,7 @@
 
     <footer id="siteFooter">
       <span>Berryboy Art Gallery</span>
-      <span>Gallery_V0_11 · Stage 12C62S6A</span>
+      <span>Gallery_V0_11 · Stage 12C63</span>
     </footer>
   </div>
 
@@ -1113,274 +1119,6 @@
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
-  <script type="module">
-    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-    import { createScene } from "./src/Gallery_V0_11.js?v=stage12c62s6a_startup_order_20260708";
-
-    const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
-    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
-
-    const supabase = createClient(
-      SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY
-    );
-
-    window.gallerySupabase = supabase;
-
-    const canvas = document.getElementById("renderCanvas");
-    const startupError = document.getElementById("startupError");
-    const galleryToast = document.getElementById("galleryToast");
-
-    const loginButton = document.getElementById("loginButton");
-    const logoutButton = document.getElementById("logoutButton");
-    const saveStateButton = document.getElementById("saveStateButton");
-    const exploreBelowButton = document.getElementById("exploreBelowButton");
-    const authStatus = document.getElementById("authStatus");
-
-    const authModalBackdrop = document.getElementById("authModalBackdrop");
-    const authModal = document.getElementById("authModal");
-    const authEmail = document.getElementById("authEmail");
-    const authPassword = document.getElementById("authPassword");
-    const authError = document.getElementById("authError");
-    const cancelLoginButton = document.getElementById("cancelLoginButton");
-    const submitLoginButton = document.getElementById("submitLoginButton");
-    const authModalTitle = document.getElementById("authModalTitle");
-    const authEmailLabel = document.getElementById("authEmailLabel");
-    const authPasswordLabel = document.getElementById("authPasswordLabel");
-
-    let currentSession = null;
-    let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
-    const uiText = {
-      pl: {
-        publicGallery: "Galeria publiczna",
-        editorLoggedIn: "Edytor zalogowany: ",
-        editorAccount: "konto edytora",
-        login: "Zaloguj",
-        logout: "Wyloguj",
-        save: "Zapisz stan",
-        saving: "Zapisywanie...",
-        editorLogin: "Logowanie edytora",
-        email: "Login / e-mail",
-        password: "Hasło",
-        cancel: "Anuluj",
-        loginFailed: "Nie udało się zalogować. Sprawdź login i hasło.",
-        loggedIn: "Zalogowano edytora.",
-        loggedOut: "Wylogowano.",
-        galleryLoading: "Galeria jeszcze się ładuje.",
-        startupError: "Nie udało się uruchomić galerii.",
-        exploreBelow: "O projekcie"
-      },
-      en: {
-        publicGallery: "Public gallery",
-        editorLoggedIn: "Editor logged in: ",
-        editorAccount: "editor account",
-        login: "Log in",
-        logout: "Log out",
-        save: "Save state",
-        saving: "Saving...",
-        editorLogin: "Editor login",
-        email: "Login / e-mail",
-        password: "Password",
-        cancel: "Cancel",
-        loginFailed: "Login failed. Check your login and password.",
-        loggedIn: "Editor logged in.",
-        loggedOut: "Logged out.",
-        galleryLoading: "The gallery is still loading.",
-        startupError: "The gallery could not be started.",
-        exploreBelow: "About project"
-      }
-    };
-
-    function t(key) {
-      return uiText[currentLang][key] || uiText.en[key] || uiText.pl[key] || key;
-    }
-
-    function applyLanguage(lang) {
-      currentLang = lang === "en" ? "en" : "pl";
-      localStorage.setItem("berryboy_art_gallery_lang", currentLang);
-      document.documentElement.setAttribute("lang", currentLang);
-      document.documentElement.setAttribute("data-page-lang", currentLang);
-
-      document.querySelectorAll("[data-set-lang]").forEach(function (button) {
-        button.classList.toggle("active", button.getAttribute("data-set-lang") === currentLang);
-      });
-
-      loginButton.textContent = t("login");
-      logoutButton.textContent = t("logout");
-      saveStateButton.textContent = t("save");
-      exploreBelowButton.textContent = t("exploreBelow");
-      authModalTitle.textContent = t("editorLogin");
-      authEmailLabel.textContent = t("email");
-      authPasswordLabel.textContent = t("password");
-      cancelLoginButton.textContent = t("cancel");
-      submitLoginButton.textContent = t("login");
-
-      updateAuthUi();
-    }
-
-    document.querySelectorAll("[data-set-lang]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        applyLanguage(button.getAttribute("data-set-lang"));
-      });
-    });
-
-    function showToast(message) {
-      if (!message) {
-        return;
-      }
-
-      galleryToast.textContent = message;
-      galleryToast.style.display = "block";
-
-      window.clearTimeout(showToast.timeoutId);
-      showToast.timeoutId = window.setTimeout(function () {
-        galleryToast.style.display = "none";
-      }, 3600);
-    }
-
-    function showAuthError(message) {
-      authError.textContent = message;
-      authError.style.display = message ? "block" : "none";
-    }
-
-    function openAuthModal() {
-      showAuthError("");
-      authPassword.value = "";
-      authModalBackdrop.style.display = "flex";
-      setTimeout(function () {
-        authEmail.focus();
-      }, 0);
-    }
-
-    function closeAuthModal() {
-      authModalBackdrop.style.display = "none";
-      showAuthError("");
-    }
-
-    function updateAuthUi() {
-      const isLoggedIn = !!currentSession;
-
-      window.galleryEditorAuthenticated = isLoggedIn;
-
-      loginButton.classList.toggle("hidden", isLoggedIn);
-      logoutButton.classList.toggle("hidden", !isLoggedIn);
-      saveStateButton.classList.toggle("hidden", !isLoggedIn);
-
-      authStatus.textContent = isLoggedIn
-        ? t("editorLoggedIn") + (currentSession.user.email || t("editorAccount"))
-        : t("publicGallery");
-
-      if (window.GalleryApp) {
-        window.GalleryApp.setEditorAuthenticated(isLoggedIn);
-      }
-    }
-
-    window.addEventListener("gallery-status", function (event) {
-      showToast(event.detail && event.detail.message);
-    });
-
-    window.addEventListener("gallery-ready", function () {
-      updateAuthUi();
-    });
-
-    loginButton.addEventListener("click", function () {
-      openAuthModal();
-    });
-
-    cancelLoginButton.addEventListener("click", function () {
-      closeAuthModal();
-    });
-
-    authModalBackdrop.addEventListener("click", function (event) {
-      if (event.target === authModalBackdrop) {
-        closeAuthModal();
-      }
-    });
-
-    authModal.addEventListener("submit", async function (event) {
-      event.preventDefault();
-      showAuthError("");
-
-      const email = authEmail.value.trim();
-      const password = authPassword.value;
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
-      if (error) {
-        showAuthError(t("loginFailed"));
-        return;
-      }
-
-      currentSession = data.session;
-      closeAuthModal();
-      updateAuthUi();
-      showToast(t("loggedIn"));
-    });
-
-    logoutButton.addEventListener("click", async function () {
-      await supabase.auth.signOut();
-      currentSession = null;
-      updateAuthUi();
-      showToast(t("loggedOut"));
-    });
-
-    saveStateButton.addEventListener("click", async function () {
-      if (!window.GalleryApp) {
-        showToast(t("galleryLoading"));
-        return;
-      }
-
-      saveStateButton.disabled = true;
-      saveStateButton.textContent = t("saving");
-
-      try {
-        await window.GalleryApp.saveStateToSupabase();
-      } finally {
-        saveStateButton.disabled = false;
-        saveStateButton.textContent = t("save");
-      }
-    });
-
-    applyLanguage(currentLang);
-
-    const sessionResult = await supabase.auth.getSession();
-    currentSession = sessionResult.data.session || null;
-    window.galleryEditorAuthenticated = !!currentSession;
-
-    const engine = new BABYLON.Engine(canvas, true, {
-      preserveDrawingBuffer: true,
-      stencil: true,
-      antialias: true
-    });
-
-    try {
-      const scene = createScene(engine, canvas);
-
-      updateAuthUi();
-
-      engine.runRenderLoop(function () {
-        scene.render();
-      });
-
-      window.addEventListener("resize", function () {
-        engine.resize();
-      });
-
-      supabase.auth.onAuthStateChange(function (_event, session) {
-        currentSession = session;
-        updateAuthUi();
-      });
-    } catch (error) {
-      console.error(error);
-
-      startupError.style.display = "block";
-      startupError.textContent =
-        t("startupError") + "\n\n" +
-        (error && error.stack ? error.stack : String(error));
-    }
-  </script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c63_full_fast_start_20260712"></script>
 </body>
 </html>

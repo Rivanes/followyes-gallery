@@ -51,6 +51,9 @@
   - Stage 12C62S5A: Asset Timeout + Startup Finalization Safety — wszystkie assety startowe floor/wall/ceiling/props mają 3 próby × 30s; loading screen czeka jeszcze na storage artworków/state settle, a finalne przypisanie świateł wykonuje się na końcu startu.
   - Stage 12C62S6: Mobile Startup Survival Mode — na telefonach uruchamia mobile-safe startup: obniża render scale, wyłącza ciężkie postprocessy na starcie, ładuje krytyczne modele sekwencyjnie, propsy odracza po wejściu do sceny, zmniejsza budżet lokalnych cieni i ogranicza jednorazowe obciążenie GPU/RAM.
   - Stage 12C62S6A: Startup Order Rebuild — startup zaczyna preload stanu/storage z Supabase od razu, modele ładują się równolegle/sekwencyjnie na mobile, props nie odpala się po kliknięciu Explore, finalne przypisanie świateł idzie na końcu, a popup pojawia się dopiero po settle. Mobile jakość podniesiona względem C62S6.
+  - Stage 12C62S6B: Model3D Storage Delete / Reference Safe Cleanup — Delete Selected i REMOVE MODEL usuwaja GLB ze Storage tylko wtedy, gdy zaden inny slot nie uzywa tego samego modelPath.
+  - Stage 12C62S6C: Ceiling + Props GLB Loader Path Fix — loader startowy uzywa Ceiling.glb i Props.glb z raw.githubusercontent.com, bez zmian w Local Lights, retry, mobile startup i Storage delete.
+  - Stage 12C62S6D: Supabase Static Models Root — modele startowe Floor/Wall/Props/Ceiling ladowane jako GLB z publicznego bucketu berryboy-art-gallery-assets/Models/, bez GitHub raw.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -10804,6 +10807,258 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
+
+    function getModel3dStorageDeleteState(modelState) {
+        modelState = normalizeModel3dState(modelState);
+
+        if (!modelState) {
+            return null;
+        }
+
+        var bucketName = modelState.storageBucket || galleryArtworkStorageBucket;
+        var modelPath = modelState.modelPath || modelState.path || "";
+
+        if (!modelPath && (modelState.modelUrl || modelState.publicUrl || modelState.url)) {
+            modelPath = getArtworkStoragePathFromPublicUrl(
+                modelState.modelUrl || modelState.publicUrl || modelState.url,
+                bucketName
+            );
+        }
+
+        if (!modelPath) {
+            return null;
+        }
+
+        return {
+            modelPath: modelPath,
+            storageBucket: bucketName
+        };
+    }
+
+    function areModel3dStorageDeleteStatesEqual(a, b) {
+        if (!a || !b) {
+            return false;
+        }
+
+        return String(a.storageBucket || "") === String(b.storageBucket || "") &&
+            String(a.modelPath || "") === String(b.modelPath || "");
+    }
+
+    function isModel3dStoragePathUsedByOtherSlot(modelState, excludedSlot) {
+        var targetDeleteState = getModel3dStorageDeleteState(modelState);
+
+        if (!targetDeleteState) {
+            return false;
+        }
+
+        for (var i = 0; i < artSpheres.length; i++) {
+            var slot = artSpheres[i];
+
+            if (!slot || slot === excludedSlot || (slot.isDisposed && slot.isDisposed())) {
+                continue;
+            }
+
+            var otherState = getModel3dState(slot);
+            var otherDeleteState = getModel3dStorageDeleteState(otherState);
+
+            if (areModel3dStorageDeleteStatesEqual(targetDeleteState, otherDeleteState)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function clearModel3dClipboardIfStoragePathMatches(deleteState) {
+        if (!galleryModel3dClipboardState || !deleteState) {
+            return false;
+        }
+
+        var clipboardDeleteState = getModel3dStorageDeleteState(galleryModel3dClipboardState);
+
+        if (!areModel3dStorageDeleteStatesEqual(deleteState, clipboardDeleteState)) {
+            return false;
+        }
+
+        galleryModel3dClipboardState = null;
+        updateModel3dSlotUi();
+        return true;
+    }
+
+    async function deleteModel3dFileFromSupabaseIfUnused(modelState, excludedSlot, contextLabel) {
+        var deleteState = getModel3dStorageDeleteState(modelState);
+
+        if (!deleteState || !deleteState.modelPath) {
+            galleryModel3dStorageDeleteLastDebug = {
+                status: "skipped",
+                reason: "no-storage-path",
+                context: contextLabel || "model3d-delete"
+            };
+            return {
+                ok: true,
+                removed: false,
+                skipped: true,
+                reason: "no-storage-path"
+            };
+        }
+
+        if (isModel3dStoragePathUsedByOtherSlot(modelState, excludedSlot)) {
+            galleryModel3dStorageDeleteLastDebug = {
+                status: "skipped",
+                reason: "still-used-by-other-slot",
+                bucket: deleteState.storageBucket,
+                path: deleteState.modelPath,
+                context: contextLabel || "model3d-delete"
+            };
+            notifyGalleryStatus("Model usuniety ze slotu. Plik GLB zostal zachowany, bo jest uzywany przez inny slot.");
+            return {
+                ok: true,
+                removed: false,
+                skipped: true,
+                reason: "still-used-by-other-slot"
+            };
+        }
+
+        var client = window.gallerySupabase;
+
+        if (!client || !client.storage) {
+            galleryModel3dStorageDeleteLastDebug = {
+                status: "failed",
+                reason: "storage-not-configured",
+                bucket: deleteState.storageBucket,
+                path: deleteState.modelPath,
+                context: contextLabel || "model3d-delete"
+            };
+            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany. Nie usuwam modelu ze sceny, zeby nie zostawic pliku w Storage.");
+            return {
+                ok: false,
+                removed: false,
+                skipped: false,
+                reason: "storage-not-configured"
+            };
+        }
+
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            galleryModel3dStorageDeleteLastDebug = {
+                status: "failed",
+                reason: "editor-not-authenticated",
+                bucket: deleteState.storageBucket,
+                path: deleteState.modelPath,
+                context: contextLabel || "model3d-delete"
+            };
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby usunac model 3D ze Storage.");
+            return {
+                ok: false,
+                removed: false,
+                skipped: false,
+                reason: "editor-not-authenticated"
+            };
+        }
+
+        var removeResponse = await client
+            .storage
+            .from(deleteState.storageBucket)
+            .remove([deleteState.modelPath]);
+
+        if (removeResponse.error) {
+            console.warn("Model3D Storage delete error:", {
+                bucket: deleteState.storageBucket,
+                path: deleteState.modelPath,
+                modelState: modelState,
+                error: removeResponse.error
+            });
+
+            galleryModel3dStorageDeleteLastDebug = {
+                status: "failed",
+                reason: "storage-remove-error",
+                bucket: deleteState.storageBucket,
+                path: deleteState.modelPath,
+                message: removeResponse.error.message || String(removeResponse.error),
+                context: contextLabel || "model3d-delete"
+            };
+            notifyGalleryStatus("Nie udalo sie usunac modelu GLB ze Storage. Slot zostaje, zeby nie zostawic osieroconego pliku.");
+            return {
+                ok: false,
+                removed: false,
+                skipped: false,
+                reason: "storage-remove-error"
+            };
+        }
+
+        clearModel3dClipboardIfStoragePathMatches(deleteState);
+
+        galleryModel3dStorageDeleteLastDebug = {
+            status: "removed",
+            bucket: deleteState.storageBucket,
+            path: deleteState.modelPath,
+            data: removeResponse.data || null,
+            context: contextLabel || "model3d-delete"
+        };
+
+        console.info("Model3D Storage file removed:", {
+            bucket: deleteState.storageBucket,
+            path: deleteState.modelPath,
+            data: removeResponse.data || null
+        });
+
+        return {
+            ok: true,
+            removed: true,
+            skipped: false,
+            reason: "removed"
+        };
+    }
+
+    async function removeModel3dFromSlotWithStorageDelete(slot) {
+        if (!slot) {
+            return false;
+        }
+
+        var modelState = getModel3dState(slot);
+        var storageDeleteResult = await deleteModel3dFileFromSupabaseIfUnused(
+            modelState,
+            slot,
+            "remove-model-from-slot"
+        );
+
+        if (!storageDeleteResult.ok) {
+            return false;
+        }
+
+        var removedFromSlot = removeModel3dFromSlot(slot);
+
+        if (removedFromSlot && storageDeleteResult.removed) {
+            notifyGalleryStatus("Model usuniety ze slotu i ze Storage.");
+        }
+
+        return removedFromSlot;
+    }
+
+    async function deleteModel3dSlotWithStorageCleanup(slot, options) {
+        if (!slot) {
+            return false;
+        }
+
+        var modelState = getModel3dState(slot);
+        var storageDeleteResult = await deleteModel3dFileFromSupabaseIfUnused(
+            modelState,
+            slot,
+            "delete-model-slot"
+        );
+
+        if (!storageDeleteResult.ok) {
+            return false;
+        }
+
+        var deleted = deleteModel3dSlotRuntime(slot, options || {});
+
+        if (deleted && storageDeleteResult.removed) {
+            notifyGalleryStatus("Deleted sculpture/model slot and removed GLB from Storage. Save state to keep the change.");
+        }
+
+        return deleted;
+    }
+
     async function removeArtworkImageWithStorageDelete(artwork) {
         if (!artwork) {
             return false;
@@ -13031,6 +13286,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryModel3dClipboardState = null;
     var galleryModel3dCreateCounter = 0;
     var galleryModel3dLastDebug = null;
+    var galleryModel3dStorageDeleteLastDebug = null;
 
     // STAGE 12C - SCULPTURE ADD/DELETE UNIFIED ARTWORK FLOW
     // Statyczne sloty ArtSphere_* muszą mieć listę usuniętych nazw, tak jak artworki.
@@ -25997,8 +26253,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        removeModel3dFromSlot(selectedSphere);
-        saveGalleryStateToSupabase();
+        removeModel3dFromSlotWithStorageDelete(selectedSphere)
+            .then(function (ok) {
+                if (ok) {
+                    return saveGalleryStateToSupabase();
+                }
+
+                return false;
+            })
+            .catch(function (error) {
+                console.warn("Remove 3D model with storage cleanup error:", error);
+                notifyGalleryStatus("Nie udalo sie usunac modelu 3D.");
+            });
     };
 
     model3dDuplicateButton.onclick = function (event) {
@@ -29470,10 +29736,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
     }
 
+    // STAGE 12C62S6D - SUPABASE STATIC MODEL ASSETS
+    var gallerySupabaseModelsRootUrl = "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/";
+
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Floor/",
-        "Floor_segment.gltf",
+        gallerySupabaseModelsRootUrl,
+        "Floor_segment.glb",
         scene,
         function (meshes) {
 
@@ -29506,8 +29775,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         null,
         function (scene, message, exception) {
-            console.error("Floor GLTF load failed:", {
-                file: "Floor_segment.gltf",
+            console.error("Floor GLB load failed:", {
+                file: "Floor_segment.glb",
                 message: message,
                 exception: exception
             });
@@ -29516,15 +29785,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     );
 
-    // STAGE 11H - WALL GLTF ASSET PATH UPDATE
-    // Ściany są teraz ładowane z folderu Models/Wall jako GLTF + BIN + tekstury.
-    // Dzięki temu GitHub raw sam dociąga pliki powiązane z Wall_segments.gltf.
-    var wallModelRootUrl = "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Wall/";
+    // STAGE 12C62S6D - SUPABASE STATIC MODELS ROOT
+    // Modele startowe sa teraz w publicznym buckecie Supabase, plasko w folderze Models/.
+    // GLB trzyma geometrie i zaleznosci w jednym pliku, wiec nie uzywamy juz folderow Floor/Wall/props/Ceiling z GitHub raw.
+    var wallModelRootUrl = gallerySupabaseModelsRootUrl;
 
     BABYLON.SceneLoader.ImportMesh(
         "",
         wallModelRootUrl,
-        "Wall_segments.gltf",
+        "Wall_segments.glb",
         scene,
         function (meshes) {
 
@@ -29549,9 +29818,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
 
             freezeStaticGalleryMeshes(wallMeshes, "wall");
-            console.log("Wall GLTF loaded", {
+            console.log("Wall GLB loaded", {
                 rootUrl: wallModelRootUrl,
-                file: "Wall_segments.gltf",
+                file: "Wall_segments.glb",
                 meshes: wallMeshes
             });
             refreshViewerCollisionMeshes();
@@ -29563,9 +29832,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         null,
         function (scene, message, exception) {
-            console.error("Wall GLTF load failed:", {
+            console.error("Wall GLB load failed:", {
                 rootUrl: wallModelRootUrl,
-                file: "Wall_segments.gltf",
+                file: "Wall_segments.glb",
                 message: message,
                 exception: exception
             });
@@ -29574,10 +29843,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     );
 
+    // STAGE 12C62S6D - PROPS GLB SUPABASE PATH
+    // Props are loaded from the shared Supabase Models root.
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/props/",
-        "Props.gltf",
+        gallerySupabaseModelsRootUrl,
+        "Props.glb",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
@@ -29605,8 +29876,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         null,
         function (scene, message, exception) {
-            console.error("Props GLTF load failed:", {
-                file: "Props.gltf",
+            console.error("Props GLB load failed:", {
+                file: "Props.glb",
                 message: message,
                 exception: exception
             });
@@ -29615,10 +29886,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     );
 
+    // STAGE 12C62S6D - CEILING GLB SUPABASE PATH
+    // Ceiling is loaded from the shared Supabase Models root.
     BABYLON.SceneLoader.ImportMesh(
         "",
-        "https://raw.githubusercontent.com/followyes/berryboy-art-gallery-assets/main/Models/Ceiling/",
-        "Ceiling.gltf",
+        gallerySupabaseModelsRootUrl,
+        "Ceiling.glb",
         scene,
         function (meshes) {
             meshes.forEach(mesh => {
@@ -29647,8 +29920,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         null,
         function (scene, message, exception) {
-            console.error("Ceiling GLTF load failed:", {
-                file: "Ceiling.gltf",
+            console.error("Ceiling GLB load failed:", {
+                file: "Ceiling.glb",
                 message: message,
                 exception: exception
             });
@@ -29958,7 +30231,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         refreshSculptureOutlines();
         updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
-        notifyGalleryStatus("Model usuniety ze slotu. Plik w Storage nie zostal usuniety, bo moze byc uzywany przez kopie.");
+        notifyGalleryStatus("Model usuniety ze slotu.");
         return true;
     }
 
@@ -30495,7 +30768,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (hasModelSlotSelection) {
-            deletedSomething = deleteModel3dSlotRuntime(activeModel3dSlot) || deletedSomething;
+            deletedSomething = await deleteModel3dSlotWithStorageCleanup(activeModel3dSlot) || deletedSomething;
         }
 
         updateArtworkManagementUi();
@@ -30521,6 +30794,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
                 placeholderVisible: !!(getModel3dSlotPlaceholderMesh(slot) && getModel3dSlotPlaceholderMesh(slot).isVisible !== false && getModel3dSlotPlaceholderMesh(slot).visibility !== 0),
                 clipboardHasModel: !!galleryModel3dClipboardState,
+                lastStorageDelete: galleryModel3dStorageDeleteLastDebug ? Object.assign({}, galleryModel3dStorageDeleteLastDebug) : null,
                 deletedModel3dSlotNames: deletedModel3dSlotNames.slice()
             };
         });
@@ -33374,7 +33648,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? artSpheres[slotNameOrIndex]
                 : getSphereByName(slotNameOrIndex);
 
-            return deleteModel3dSlotRuntime(slot);
+            return deleteModel3dSlotWithStorageCleanup(slot);
         },
         uploadModel3dToSlot: function (slotNameOrIndex, file) {
             var slot = typeof slotNameOrIndex === "number"
@@ -33395,7 +33669,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? artSpheres[slotNameOrIndex]
                 : getSphereByName(slotNameOrIndex);
 
-            return removeModel3dFromSlot(slot);
+            return removeModel3dFromSlotWithStorageDelete(slot);
         },
         duplicateSelectedModel3dSlot: duplicateSelectedModel3dSlot,
         copySelectedModel3dToClipboard: copySelectedModel3dToClipboard,

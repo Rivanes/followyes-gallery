@@ -1,27 +1,68 @@
-# Berryboy Art Gallery — Stage 12C62S6A
+# Berryboy Art Gallery V0.11 — Stage 12C63
 
-Full project package.
+## Full Fast Start Architecture
 
-Stage 12C62S6A — Startup Order Rebuild / Storage First / Models In Parallel / Final Lights / Popup Last.
+Stage 12C63 przebudowuje start galerii z modelu „załaduj wszystko i dopiero pokaż” na progresywne uruchamianie.
 
-## Startup order
+### Co blokuje pierwsze wejście
 
-1. Supabase state/storage preload starts immediately.
-2. Startup models load at the same time. On mobile they are queued to avoid RAM/GPU spikes.
-3. Props are no longer released after the Explore click; they load or fail before the intro popup.
-4. Saved state is applied after models are ready.
-5. Artwork storage textures get a settle window.
-6. Local Lights final target assignment runs at the end.
-7. Viewer intro popup is shown only after the gallery is settled.
+Tylko krytyczny shell galerii:
 
-## Login split
+- `Models/Floor_segment.glb`
+- `Models/Wall_segments.glb`
+- `Models/Ceiling.glb`
 
-- `src/Gallery_V0_11.js` — production, login enabled.
-- `src/Gallery_V0_10.js` — production mirror, login enabled.
-- `Gallery_V0_11_STAGE12C62S6A_STARTUP_ORDER_STORAGE_MODELS_LIGHTS_POPUP_LOGIN_DISABLED.txt` — test TXT, login disabled.
+`Props.glb`, obrazy, pełne tekstury, modele rzeźb, cienie lokalne i ciężki retarget lamp są wykonywane po pierwszym renderze.
 
-## Debug
+### Najważniejsze zmiany
 
-- `BerryboyArtGalleryLoading.getDebug()`
-- `BerryboyArtGalleryLoading.getRetryConfig()`
-- `BerryboyArtGalleryMobile.getDebug()`
+- Props nie jest częścią licznika blokującego viewer.
+- Usunięto sztuczne opóźnienia startowe 1500 ms + 500 ms + 650 ms.
+- Loader nie uznaje wolnego requestu za błąd po 30 sekundach i nie uruchamia duplikatu tego samego GLB.
+- Krytyczne GLB mają retry wyłącznie po prawdziwym błędzie importu.
+- Normalne telefony pobierają floor/wall/ceiling równolegle; sekwencyjny import zostaje tylko dla urządzeń z małą pamięcią.
+- Stan Supabase jest pobierany równolegle z geometrią.
+- Obrazy są odtwarzane progresywnie: lekki wariant `preview`, następnie pełna wersja w kolejce tła.
+- Obrazy najbliżej kamery mają pierwszeństwo.
+- Modele rzeźb są odraczane i ładowane pojedynczo.
+- Powtarzające się modele 3D korzystają z cache `AssetContainer` i nie muszą być ponownie pobierane oraz parsowane dla każdego slotu.
+- Tekstury palety ścian nie są pobierane w publicznym viewerze, dopóki kolor nie jest rzeczywiście używany albo edytor się nie zaloguje.
+- Publiczny bootstrap jest oddzielony od modułu logowania/edycji. `gallery-editor-bootstrap.js` ładuje się dopiero po żądaniu logowania lub dla istniejącej sesji edytora.
+- Produkcja używa zminifikowanego `Gallery_V0_11.min.js`; pełny czytelny kod pozostaje w `Gallery_V0_11.js`.
+
+### Startup Light Restore
+
+Każda lampa zapisuje teraz:
+
+- `targetMeshNames`
+- `targetSegmentNames`
+
+Po ponownym uruchomieniu `includedOnlyMeshes` jest odtwarzane bez pełnego skanowania helper-ray. Starszy stan bez tych pól nadal działa, ale wykona jeden fallback retarget w tle.
+
+**Po pierwszym uruchomieniu Stage 12C63 zaloguj się jako edytor i zapisz stan galerii jeden raz.** Następne uruchomienia będą mogły używać bezpośredniego restore targetów lamp.
+
+### Debug
+
+W konsoli:
+
+```js
+BerryboyArtGalleryLoading.getDebug()
+BerryboyArtGalleryFastStart.getDebug()
+```
+
+Najważniejsze pola:
+
+- `viewerReadyAt`
+- `deferredArtworkLoads`
+- `deferredModelLoads`
+- `directLightTargetRestores`
+- `fallbackLightRetargets`
+- `backgroundFinalizationRuns`
+
+### Uruchomienie lokalne
+
+```bash
+python3 -m http.server 8000
+```
+
+Następnie otwórz `http://localhost:8000`.
