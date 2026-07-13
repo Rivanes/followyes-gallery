@@ -55,7 +55,8 @@
   - Stage 12C62S6C: Ceiling + Props GLB Loader Path Fix — loader startowy uzywa Ceiling.glb i Props.glb z raw.githubusercontent.com, bez zmian w Local Lights, retry, mobile startup i Storage delete.
   - Stage 12C62S6D: Supabase Static Models Root — modele startowe Floor/Wall/Props/Ceiling ladowane jako GLB z publicznego bucketu berryboy-art-gallery-assets/Models/, bez GitHub raw.
   - Stage 12C63: Full Fast Start Architecture — viewer startuje po krytycznym shellu floor/wall/ceiling; Props, artwork previews, pełne tekstury, modele rzeźb i ciężki retarget lamp przechodzą do kolejki tła. Retry nie duplikuje requestów po sztucznym timeoutcie, a Local Lights zapisują i odtwarzają gotowe targetMeshNames.
-  - Stage 12C63A: Balanced Ready Gate — loader trzyma użytkownika do gotowości Props, preview obrazów, modeli rzeźb, środowiska, użytych tekstur ścian i finalnego restore świateł; po wejściu zostają tylko niewidoczne jakościowe upgrade pełnych tekstur.
+  - Stage 12C63B: Image-First Startup Queue — loader trzyma użytkownika do gotowości Props, preview obrazów, modeli rzeźb, środowiska, użytych tekstur ścian i finalnego restore świateł; po wejściu zostają tylko niewidoczne jakościowe upgrade pełnych tekstur.
+  - Stage 12C63B: Image-First Startup Queue — obrazy dostają priorytet nad Props i rzeźbami. Preview obrazów zaczynają prefetch zaraz po preloadzie state z Supabase, wczytują się równolegle z shell geometry, a entry gate blokuje głównie na gotowość obrazów i świateł. Props i rzeźby wracają do tła po wejściu.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -82,7 +83,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var scene = new BABYLON.Scene(engine);
 
-    // STAGE 12C63A - VISIBLE STARTUP TEXTURE TRACKER
+    // STAGE 12C63B - VISIBLE STARTUP TEXTURE TRACKER
     // Environment and wall-paint textures can visibly change the scene after entry, so the balanced gate tracks them too.
     var galleryStartupVisibleTextureDebug = {
         started: 0,
@@ -147,7 +148,7 @@ export const createScene = function (engineArg, canvasArg) {
         var hardwareScalingLevel = enabled ? (lowMemory ? 1.8 : 1.45) : 1;
 
         return {
-            stage: "12C63A",
+            stage: "12C63B",
             enabled: enabled,
             isMobileAgent: !!isMobileAgent,
             narrowTouch: !!narrowTouch,
@@ -12126,7 +12127,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerIntroLookButtons();
     }
 
-    // STAGE 12C63A - BALANCED READY GATE
+    // STAGE 12C63B - IMAGE-FIRST READY GATE
     // Only the structural shell blocks viewer entry. Optional content is hydrated after first paint.
     var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
     var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
@@ -12144,7 +12145,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryArtworkStartupTextureSettleDelayMs = 0;
     var galleryFinalLightAssignmentHideDelayMs = 0;
     var galleryStartupFinalizeDebug = {
-        stage: "12C63A",
+        stage: "12C63B",
         startupOrder: "critical-shell_then-state_then-balanced-visible-content_gate_then-viewer",
         postStateStorageSettleDelayMs: galleryPostStateStorageSettleDelayMs,
         artworkTextureMaxWaitMs: galleryArtworkStartupTextureMaxWaitMs,
@@ -12181,7 +12182,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryStartupArtworkTextureWaiters = [];
 
     var galleryFastStartRuntime = {
-        stage: "12C63A",
+        stage: "12C63B",
         viewerReady: false,
         viewerReadyAt: null,
         stateApplyActive: false,
@@ -12198,7 +12199,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         fallbackLightRetargets: 0,
         firstPaintBudgetMs: 0,
         preEntryHydrationActive: false,
-        entryGateMode: "balanced-ready",
+        entryGateMode: "image-first-ready",
         entryGateActive: false,
         entryGateReady: false,
         entryGateTimedOut: false,
@@ -12210,6 +12211,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         entryGateResult: null,
         entryGateFinalizationActive: false,
         deferredFinalizationReason: null,
+        startupArtworkPrefetchStarted: false,
+        startupArtworkPrefetchCompleted: false,
+        startupArtworkPrefetchQueue: [],
+        startupArtworkPrefetchPending: {},
+        startupArtworkPrefetchActiveCount: 0,
+        startupArtworkPrefetchLoaded: 0,
+        startupArtworkPrefetchFailed: 0,
+        preEntryArtworkConcurrency: isGalleryMobileStartupSurvivalEnabled() ? 3 : 6,
         startedAt: Date.now()
     };
 
@@ -12269,6 +12278,155 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         return true;
+    }
+
+    function getGalleryFastStartPreviewTextureConcurrency() {
+        return Math.max(1, Number(galleryFastStartRuntime.preEntryArtworkConcurrency) || (isGalleryMobileStartupSurvivalEnabled() ? 3 : 6));
+    }
+
+    function getGalleryFastStartPreviewPrefetchUrl(imageState) {
+        if (!imageState) {
+            return "";
+        }
+
+        if (imageState.imageUrlPreview) {
+            return imageState.imageUrlPreview;
+        }
+
+        if (isArtworkMobileTextureDevice() && imageState.imageUrlMobile) {
+            return imageState.imageUrlMobile;
+        }
+
+        if (!isArtworkMobileTextureDevice() && imageState.imageUrlWeb) {
+            return imageState.imageUrlWeb;
+        }
+
+        return getArtworkImageUrlFromState(imageState);
+    }
+
+    function collectGalleryStartupArtworkImageStatesFromState(state) {
+        var editorState = state && state.editor ? state.editor : state;
+
+        if (!editorState || !Array.isArray(editorState.artworks)) {
+            return [];
+        }
+
+        return editorState.artworks.map(function (artworkState, index) {
+            if (!artworkState) {
+                return null;
+            }
+
+            var imageState = artworkState.image || artworkState.artworkImage || null;
+
+            if (!imageState && (artworkState.imageUrl || artworkState.imagePath)) {
+                imageState = {
+                    imageUrl: artworkState.imageUrl || "",
+                    imagePath: artworkState.imagePath || "",
+                    fitMode: artworkState.fitMode || galleryArtworkDefaultFitMode
+                };
+            }
+
+            if (!imageState) {
+                return null;
+            }
+
+            return {
+                key: artworkState.name || String(index),
+                imageState: cloneGalleryFastStartState(imageState)
+            };
+        }).filter(function (entry) {
+            return !!entry;
+        });
+    }
+
+    function beginGalleryStartupArtworkPreviewPrefetch(state, reason) {
+        if (galleryFastStartRuntime.startupArtworkPrefetchStarted || !state) {
+            return false;
+        }
+
+        galleryFastStartRuntime.startupArtworkPrefetchStarted = true;
+
+        var entries = collectGalleryStartupArtworkImageStatesFromState(state);
+        var seen = {};
+
+        entries.forEach(function (entry) {
+            var url = getGalleryFastStartPreviewPrefetchUrl(entry.imageState);
+
+            if (!url || seen[url]) {
+                return;
+            }
+
+            seen[url] = true;
+            galleryFastStartRuntime.startupArtworkPrefetchQueue.push({
+                key: entry.key,
+                url: url,
+                queuedAt: Date.now(),
+                reason: reason || "state-preload"
+            });
+        });
+
+        function pump() {
+            var concurrency = getGalleryFastStartPreviewTextureConcurrency();
+
+            while (galleryFastStartRuntime.startupArtworkPrefetchActiveCount < concurrency && galleryFastStartRuntime.startupArtworkPrefetchQueue.length > 0) {
+                var queued = galleryFastStartRuntime.startupArtworkPrefetchQueue.shift();
+                var url = queued.url;
+
+                if (!url || galleryFastStartRuntime.startupArtworkPrefetchPending[url]) {
+                    continue;
+                }
+
+                galleryFastStartRuntime.startupArtworkPrefetchActiveCount += 1;
+                galleryFastStartRuntime.startupArtworkPrefetchPending[url] = {
+                    key: queued.key,
+                    startedAt: Date.now()
+                };
+
+                (function (prefetchUrl) {
+                    var done = false;
+                    var img = new Image();
+
+                    function finish(ok) {
+                        if (done) {
+                            return;
+                        }
+
+                        done = true;
+
+                        if (galleryFastStartRuntime.startupArtworkPrefetchPending[prefetchUrl]) {
+                            delete galleryFastStartRuntime.startupArtworkPrefetchPending[prefetchUrl];
+                        }
+
+                        galleryFastStartRuntime.startupArtworkPrefetchActiveCount = Math.max(0, galleryFastStartRuntime.startupArtworkPrefetchActiveCount - 1);
+
+                        if (ok) {
+                            galleryFastStartRuntime.startupArtworkPrefetchLoaded += 1;
+                        } else {
+                            galleryFastStartRuntime.startupArtworkPrefetchFailed += 1;
+                        }
+
+                        if (galleryFastStartRuntime.startupArtworkPrefetchQueue.length === 0 && galleryFastStartRuntime.startupArtworkPrefetchActiveCount === 0) {
+                            galleryFastStartRuntime.startupArtworkPrefetchCompleted = true;
+                        }
+
+                        setTimeout(pump, 0);
+                    }
+
+                    img.decoding = "async";
+                    img.loading = "eager";
+                    img.onload = function () { finish(true); };
+                    img.onerror = function () { finish(false); };
+                    img.src = prefetchUrl;
+                })(url);
+            }
+
+            if (galleryFastStartRuntime.startupArtworkPrefetchQueue.length === 0 && galleryFastStartRuntime.startupArtworkPrefetchActiveCount === 0) {
+                galleryFastStartRuntime.startupArtworkPrefetchCompleted = true;
+            }
+        }
+
+        pump();
+        return entries.length > 0;
     }
 
     function runGalleryFastStartIdleTask(callback, timeoutMs) {
@@ -12335,45 +12493,69 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return getGalleryFastStartDistanceToCamera(a.slot) - getGalleryFastStartDistanceToCamera(b.slot);
         });
 
-        function next() {
-            var artworkEntry = galleryFastStartRuntime.deferredArtworkLoads.shift();
+        var preEntryOnlyArtworks = !!galleryFastStartRuntime.preEntryHydrationActive && !galleryFastStartRuntime.viewerReady;
 
-            if (artworkEntry) {
+        function pumpArtworkPreviews() {
+            var launchLimit = getGalleryFastStartPreviewTextureConcurrency();
+            var pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+            var launched = 0;
+
+            while (galleryFastStartRuntime.deferredArtworkLoads.length > 0 && pendingTextures < launchLimit) {
+                var artworkEntry = galleryFastStartRuntime.deferredArtworkLoads.shift();
+
+                if (!artworkEntry) {
+                    break;
+                }
+
                 var previewState = cloneGalleryFastStartState(artworkEntry.imageState);
                 previewState._galleryFastStartForceImmediate = true;
                 previewState._galleryFastStartPreferPreview = true;
 
                 try {
-                    applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C63 preview hydration");
+                    applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C63B preview hydration");
                 } catch (error) {
-                    console.warn("12C63 deferred artwork preview warning:", error);
+                    console.warn("12C63B deferred artwork preview warning:", error);
                 }
 
-                runGalleryFastStartIdleTask(next, 500);
+                launched += 1;
+                pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+            }
+
+            if (galleryFastStartRuntime.deferredArtworkLoads.length > 0) {
+                setTimeout(pumpArtworkPreviews, launched > 0 ? 40 : 110);
                 return;
             }
 
-            var modelEntry = galleryFastStartRuntime.deferredModelLoads.shift();
-
-            if (modelEntry) {
-                var immediateModelState = cloneGalleryFastStartState(modelEntry.modelState);
-                immediateModelState._galleryFastStartForceImmediate = true;
-
-                Promise.resolve(applyModel3dStateToSlot(modelEntry.slot, immediateModelState))
-                    .finally(function () {
-                        runGalleryFastStartIdleTask(next, 900);
-                    });
+            if (preEntryOnlyArtworks) {
+                galleryFastStartRuntime.backgroundDrainActive = false;
                 return;
             }
 
-            galleryFastStartRuntime.backgroundDrainActive = false;
-
-            if (!galleryFastStartRuntime.preEntryHydrationActive) {
-                scheduleGalleryFastStartBackgroundFinalization(reason || "background-content-drained", 400);
-            }
+            pumpModels();
         }
 
-        runGalleryFastStartIdleTask(next, 350);
+        function pumpModels() {
+            var modelEntry = galleryFastStartRuntime.deferredModelLoads.shift();
+
+            if (!modelEntry) {
+                galleryFastStartRuntime.backgroundDrainActive = false;
+
+                if (!galleryFastStartRuntime.preEntryHydrationActive) {
+                    scheduleGalleryFastStartBackgroundFinalization(reason || "background-content-drained", 400);
+                }
+                return;
+            }
+
+            var immediateModelState = cloneGalleryFastStartState(modelEntry.modelState);
+            immediateModelState._galleryFastStartForceImmediate = true;
+
+            Promise.resolve(applyModel3dStateToSlot(modelEntry.slot, immediateModelState))
+                .finally(function () {
+                    setTimeout(pumpModels, 180);
+                });
+        }
+
+        runGalleryFastStartIdleTask(pumpArtworkPreviews, 220);
     }
 
     function drainGalleryFastStartFullArtworkQueue(reason) {
@@ -12616,7 +12798,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function waitForGalleryStartupPostStateSettle(reason) {
         galleryStartupFinalizeDebug.stateLoadFinishedAt = Date.now();
         galleryStartupFinalizeDebug.artworkTextureWait = {
-            reason: reason || "12C63A-balanced-ready-gate",
+            reason: reason || "12C63B-image-first-gate",
             status: "waiting-for-visible-content",
             elapsedMs: 0,
             pendingCount: Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length
@@ -12624,7 +12806,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         updateGalleryLoaderStatus(
             "Preparing gallery content...",
-            "Artwork previews, sculptures, props and saved lighting are being prepared before entry."
+            "Artwork previews and saved lighting are prioritized before entry. Props and sculptures can finish in the background."
         );
 
         return Promise.resolve(galleryStartupFinalizeDebug.artworkTextureWait);
@@ -12727,6 +12909,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 galleryStartupFinalizeDebug.statePreloadMs = galleryStartupFinalizeDebug.statePreloadFinishedAt - galleryStartupFinalizeDebug.statePreloadStartedAt;
                 galleryStartupFinalizeDebug.statePreloadStatus = galleryStartupStatePreloadResult.status || "done";
 
+                if (galleryStartupStatePreloadResult && galleryStartupStatePreloadResult.state) {
+                    beginGalleryStartupArtworkPreviewPrefetch(galleryStartupStatePreloadResult.state, reason || "state-preload-ready");
+                }
+
                 return galleryStartupStatePreloadResult;
             })
             .catch(function (error) {
@@ -12760,7 +12946,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         updateGalleryLoaderStatus(
             "Applying saved gallery state...",
-            "Models are ready. Now artwork storage and saved local lights are restored before final lighting."
+            "Models are ready. Artwork previews and saved local lights are restored first; sculptures and props can finish later."
         );
 
         galleryFastStartRuntime.stateApplyActive = true;
@@ -13077,14 +13263,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function runGalleryFastStartFinalizationNow(reason) {
         galleryFastStartRuntime.backgroundFinalizationRuns += 1;
         galleryStartupFinalizeDebug.finalLightStartedAt = Date.now();
-        galleryStartupFinalizeDebug.finalLightReason = reason || "12C63A-balanced-ready-finalization";
+        galleryStartupFinalizeDebug.finalLightReason = reason || "12C63B-image-first-finalization";
 
         try {
             refreshCommonLightingMaterialSupport();
             refreshArtworkLightExclusions();
             refreshPedestalLightIncludedMeshes();
 
-            var unresolvedItems = hydrateSavedLocalLightTargetsForAll(reason || "12C63A-balanced-ready-finalization");
+            var unresolvedItems = hydrateSavedLocalLightTargetsForAll(reason || "12C63B-image-first-finalization");
             var needsFallback = (localLightItems || []).some(function (item) {
                 return !!(
                     item &&
@@ -13097,7 +13283,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (needsFallback) {
                 galleryFastStartRuntime.fallbackLightRetargets += 1;
                 refreshAllCommonLocalLightTargets(true);
-                commitLoadTimeLocalLightRetargetImmediate(reason || "12C63A-entry-gate-fallback-retarget");
+                commitLoadTimeLocalLightRetargetImmediate(reason || "12C63B-entry-gate-fallback-retarget");
 
                 (localLightItems || []).forEach(function (item) {
                     if (!item || !item.light) {
@@ -13135,7 +13321,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryStartupFinalizeDebug.finalLightFinishedAt = Date.now();
             galleryStartupFinalizeDebug.finalLightMs = galleryStartupFinalizeDebug.finalLightFinishedAt - galleryStartupFinalizeDebug.finalLightStartedAt;
             galleryStartupFinalizeDebug.finalLightError = error && error.message ? error.message : String(error || "unknown");
-            console.warn("12C63A light finalization warning:", error);
+            console.warn("12C63B light finalization warning:", error);
 
             return {
                 ok: false,
@@ -13163,11 +13349,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             modelQueue: modelQueue,
             queueBusy: queueBusy,
             stateApplied: !!galleryFastStartRuntime.stateApplied,
+            startupArtworkPrefetchCompleted: !!galleryFastStartRuntime.startupArtworkPrefetchCompleted,
+            startupArtworkPrefetchQueue: galleryFastStartRuntime.startupArtworkPrefetchQueue.length,
+            startupArtworkPrefetchActiveCount: galleryFastStartRuntime.startupArtworkPrefetchActiveCount,
             ready: !!(
                 galleryFastStartRuntime.stateApplied &&
-                (propsLoaded || propsFailed) &&
                 artworkQueue === 0 &&
-                modelQueue === 0 &&
                 !queueBusy &&
                 pendingTextures === 0 &&
                 pendingVisibleTextures === 0
@@ -13184,11 +13371,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         updateGalleryLoaderStatus(
             "Preparing gallery before entry...",
-            "Loading artwork previews, sculptures, props and saved lighting. Full-resolution texture upgrades stay in the background."
+            "Loading artwork previews and saved lighting first. Props, sculptures and full-resolution upgrades stay in the background."
         );
 
-        releaseGalleryMobileDeferredOptionalAssetImports(reason || "12C63A-entry-gate");
-        drainGalleryFastStartBackgroundQueue(reason || "12C63A-entry-gate");
+        drainGalleryFastStartBackgroundQueue(reason || "12C63B-entry-gate");
 
         return new Promise(function (resolve) {
             var finished = false;
@@ -13213,7 +13399,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 galleryFastStartRuntime.entryGateLastSnapshot = snapshot || getGalleryBalancedEntrySnapshot();
 
                 galleryFastStartRuntime.entryGateFinalizationActive = true;
-                var lightResult = runGalleryFastStartFinalizationNow(reason || "12C63A-entry-gate-ready");
+                var lightResult = runGalleryFastStartFinalizationNow(reason || "12C63B-entry-gate-ready");
                 galleryFastStartRuntime.entryGateFinalizationActive = false;
 
                 galleryFastStartRuntime.entryGateReady = status === "ready";
@@ -13250,12 +13436,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     !galleryFastStartRuntime.backgroundDrainActive &&
                     (galleryFastStartRuntime.deferredArtworkLoads.length > 0 || galleryFastStartRuntime.deferredModelLoads.length > 0)
                 ) {
-                    drainGalleryFastStartBackgroundQueue(reason || "12C63A-entry-gate-resume");
+                    drainGalleryFastStartBackgroundQueue(reason || "12C63B-entry-gate-resume");
                 }
 
                 updateGalleryLoaderStatus(
                     "Preparing gallery before entry...",
-                    "Artworks: " + snapshot.artworkQueue + " queued / " + snapshot.pendingTextures + " loading · Models: " + snapshot.modelQueue + " · Scene textures: " + snapshot.pendingVisibleTextures + " · Props: " + (snapshot.propsSettled ? "ready" : "loading")
+                    "Artworks: " + snapshot.artworkQueue + " queued / " + snapshot.pendingTextures + " loading · Prefetch: " + snapshot.startupArtworkPrefetchActiveCount + " active · Scene textures: " + snapshot.pendingVisibleTextures + " · Models later: " + snapshot.modelQueue
                 );
 
                 if (snapshot.ready) {
@@ -13264,7 +13450,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 }
 
                 if (elapsedMs >= maxWaitMs) {
-                    console.warn("12C63A balanced entry gate reached safety timeout.", snapshot);
+                    console.warn("12C63B image-first entry gate reached safety timeout.", snapshot);
                     finish("timeout", snapshot);
                     return;
                 }
@@ -13281,7 +13467,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.preEntryHydrationActive &&
             !galleryFastStartRuntime.entryGateFinalizationActive
         ) {
-            galleryFastStartRuntime.deferredFinalizationReason = reason || "12C63A-pre-entry-hydration";
+            galleryFastStartRuntime.deferredFinalizationReason = reason || "12C63B-pre-entry-hydration";
             return;
         }
 
@@ -13294,7 +13480,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         setTimeout(function () {
             runGalleryFastStartIdleTask(function () {
                 galleryFastStartRuntime.backgroundFinalizationScheduled = false;
-                runGalleryFastStartFinalizationNow(reason || "12C63A-background-finalization");
+                runGalleryFastStartFinalizationNow(reason || "12C63B-background-finalization");
             }, 1600);
         }, Math.max(0, Number(delayMs) || 0));
     }
@@ -13332,10 +13518,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setMobileStartCameraPosition();
         }
 
-        // Stage 12C63A: viewer entry waits for the balanced readiness gate; only full-resolution artwork upgrades remain deferred.
+        // Stage 12C63B: viewer entry waits for the image-first readiness gate; only full-resolution artwork upgrades remain deferred.
         galleryFastStartRuntime.viewerReady = true;
         galleryFastStartRuntime.viewerReadyAt = Date.now();
-        galleryStartupFinalizeDebug.finalLightMode = galleryFastStartRuntime.entryGateReady ? "balanced-ready-gate" : "balanced-ready-timeout";
+        galleryStartupFinalizeDebug.finalLightMode = galleryFastStartRuntime.entryGateReady ? "image-first-ready-gate" : "image-first-ready-timeout";
 
         loadingScreen.style.display = "none";
 
@@ -13406,7 +13592,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return waitForGalleryStartupPostStateSettle("preloaded-state-applied");
             })
             .then(function () {
-                return waitForGalleryBalancedEntryReadiness("12C63A-balanced-entry");
+                return waitForGalleryBalancedEntryReadiness("12C63B-image-first-entry");
             })
             .then(function () {
                 finishGalleryStartup();

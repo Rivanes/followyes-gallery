@@ -1,12 +1,12 @@
 {
-  "name": "berryboy-art-gallery-stage12c63a",
-  "version": "0.11.63-a",
+  "name": "berryboy-art-gallery-stage12c63b",
+  "version": "0.11.63-b",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C63A Balanced Ready Gate",
+  "description": "Berryboy Art Gallery — Stage 12C63B Image-First Startup Queue",
   "scripts": {
     "start": "python3 -m http.server 8000",
     "check": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && npm run verify",
-    "verify": "node tools/verify-stage12c63a.mjs"
+    "verify": "node tools/verify-stage12c63b.mjs"
   },
   "type": "module"
 }
