@@ -1,10 +1,10 @@
 /*
-  Berryboy Art Gallery — Stage 12C64S Single Startup Gate / Batched Finalization
+  Berryboy Art Gallery — Stage 12C65A Mobile Cleanup / Boot Recovery
   Public bootstrap. Editor/auth actions are dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c64s_single_startup_gate_batched_finalization_20260716";
+import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65a_mobile_cleanup_boot_recovery_20260716";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -158,7 +158,7 @@ function getEditorContext() {
 
 async function loadEditorModule() {
   if (!editorModulePromise) {
-    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c64s").then(function (module) {
+    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c65a").then(function (module) {
       module.initializeEditorRuntime(getEditorContext());
       return module;
     });
@@ -191,7 +191,57 @@ window.addEventListener("gallery-status", function (event) {
 window.addEventListener("gallery-ready", updateAuthUi);
 applyLanguage(currentLang);
 
+const bootGuard = window.BerryboyBootGuard || {
+  setPhase: function () {},
+  ready: function () {},
+  fail: function () {}
+};
+
+function failGalleryBoot(code, message, error) {
+  console.error("Gallery boot failure:", code, error || "");
+  bootGuard.fail(code, message, error);
+}
+
+function installCanvasContextRecovery(canvas, getEngine) {
+  canvas.addEventListener("webglcontextcreationerror", function (event) {
+    failGalleryBoot(
+      "webgl-context-creation",
+      "This browser could not create the WebGL graphics context. Reload it or open the page in the full browser.",
+      event && event.statusMessage ? event.statusMessage : event
+    );
+  });
+
+  canvas.addEventListener("webglcontextlost", function (event) {
+    event.preventDefault();
+    const engine = typeof getEngine === "function" ? getEngine() : null;
+    if (engine && engine.stopRenderLoop) engine.stopRenderLoop();
+    failGalleryBoot(
+      "webgl-context-lost",
+      "The phone released the 3D graphics context. Reload the gallery to restore it.",
+      event
+    );
+  });
+
+  canvas.addEventListener("webglcontextrestored", function () {
+    failGalleryBoot(
+      "webgl-context-restored-reload",
+      "The graphics context was restored. Reload the gallery to rebuild the scene safely."
+    );
+  });
+}
+
+let activeEngine = null;
+installCanvasContextRecovery(canvas, function () {
+  return activeEngine;
+});
+
 try {
+  bootGuard.setPhase("dependencies", "Checking the 3D engine…");
+  if (!window.BABYLON || !BABYLON.Engine) {
+    throw new Error("BABYLON.Engine is unavailable.");
+  }
+
+  bootGuard.setPhase("session", "Connecting to the gallery…");
   const sessionResult = await supabase.auth.getSession();
   setSession(sessionResult.data.session || null);
 
@@ -199,18 +249,29 @@ try {
     await loadEditorModule();
   }
 
+  bootGuard.setPhase("engine", "Creating the graphics engine…");
   const engine = new BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: false,
     stencil: true,
     antialias: true,
-    powerPreference: "high-performance"
+    powerPreference: "high-performance",
+    failIfMajorPerformanceCaveat: false
   });
+  activeEngine = engine;
 
+  bootGuard.setPhase("scene", "Building the gallery scene…");
   const scene = createScene(engine, canvas);
   updateAuthUi();
 
+  let firstFrameDelivered = false;
   engine.runRenderLoop(function () {
     scene.render();
+    if (!firstFrameDelivered) {
+      firstFrameDelivered = true;
+      window.requestAnimationFrame(function () {
+        bootGuard.ready();
+      });
+    }
   });
 
   window.addEventListener("resize", function () {
@@ -228,10 +289,11 @@ try {
   });
 
   window.BerryboyViewerRuntime = {
-    stage: "12C64S",
+    stage: "12C65A",
     engine,
     scene,
     supabase,
+    deviceProfile: window.BerryboyArtGalleryDeviceProfile || null,
     getSession: function () {
       return currentSession;
     },
@@ -239,6 +301,7 @@ try {
   };
 } catch (error) {
   console.error(error);
+  failGalleryBoot("bootstrap-exception", t("startupError"), error);
 
   if (startupError) {
     startupError.style.display = "block";

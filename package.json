@@ -1,12 +1,12 @@
 {
-  "name": "berryboy-art-gallery-stage12c64s",
-  "version": "0.11.64-s",
+  "name": "berryboy-art-gallery-stage12c65a",
+  "version": "0.11.65-a",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C64S Single Startup Gate / Batched Finalization",
+  "description": "Berryboy Art Gallery \u2014 Stage 12C65A Mobile Cleanup / Boot Recovery",
   "scripts": {
     "start": "python3 -m http.server 8000",
     "check": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && npm run verify",
-    "verify": "node tools/verify-stage12c64s.mjs"
+    "verify": "node tools/verify-stage12c65a.mjs"
   },
   "type": "module"
 }

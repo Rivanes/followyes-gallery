@@ -65,6 +65,7 @@
   - Stage 12C64M: Inspect Collision Broad Phase / Exact Runtime Guard — lokalny snapshot przeszkód należy wyłącznie do jednego przejazdu Inspect; tani broad phase AABB ogranicza kandydatów przed dokładnymi raycastami, bez zmiany Custom Focus, safe-frame, tourOrder, popupu, animacji i częstotliwości runtime guard.
   - Stage 12C64Q: Inspect Owns Camera Transition / Clean WASD Handoff — jawny stan WALK → TRANSITION → INSPECT daje kamerze jednego właściciela; ruch WASD/Edit, bobbing, kontrolki Babylon i zwykły wall resolver są wstrzymane wyłącznie podczas przejazdu, start pozostaje rzeczywistym transformem, a koniec dokładnym Custom Focus bez recovery, dockingu i teleportu.
   - Stage 12C64S: Single Startup Gate / Batched Finalization — stary Balanced Entry Gate i blokujący Image prefetch zostały usunięte. Po zastosowaniu stanu działa jedna bramka Interaction Ready: preview artworków, Props i modele rzeźb są ładowane raz, globalne kolizje/materiały/Local Lights finalizują się jednym batchem, a sterowanie odblokowuje się po stabilnych klatkach.
+  - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -91,7 +92,7 @@ export const createScene = function (engineArg, canvasArg) {
 
     var scene = new BABYLON.Scene(engine);
 
-    // STAGE 12C64S - VISIBLE STARTUP TEXTURE TRACKER
+    // STAGE 12C65A - VISIBLE STARTUP TEXTURE TRACKER
     // Environment and wall-paint textures are part of the single Interaction Ready gate.
     var galleryStartupVisibleTextureDebug = {
         started: 0,
@@ -140,38 +141,58 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    // STAGE 12C62S6 - MOBILE STARTUP SURVIVAL MODE
-    // Phones can kill the tab when GLTF imports, textures, post-process and light/shadow rebuilds
-    // spike in the same startup window. This mode reduces GPU/RAM pressure and stages the startup.
-    function detectGalleryMobileStartupSurvivalMode() {
+    // STAGE 12C65A — SINGLE MOBILE DEVICE PROFILE / LEGACY SURVIVAL REMOVAL
+    // One profile owns mobile asset choice, viewer controls and conservative startup budgets.
+    // Adaptive quality is intentionally deferred to Stage 12C65B; this baseline only removes
+    // the old overlapping survival queues and the fixed 1.45 / 1.8 render downgrade.
+    function detectGalleryDeviceProfile() {
         var nav = typeof navigator !== "undefined" ? navigator : null;
         var ua = nav && nav.userAgent ? String(nav.userAgent) : "";
-        var isMobileAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(ua);
         var width = typeof window !== "undefined" && window.innerWidth ? Number(window.innerWidth) : 9999;
+        var height = typeof window !== "undefined" && window.innerHeight ? Number(window.innerHeight) : 9999;
         var touchPoints = nav && nav.maxTouchPoints ? Number(nav.maxTouchPoints) : 0;
         var deviceMemory = nav && nav.deviceMemory !== undefined ? Number(nav.deviceMemory) : null;
+        var hardwareConcurrency = nav && nav.hardwareConcurrency ? Number(nav.hardwareConcurrency) : null;
+        var coarsePointer = false;
+
+        try {
+            coarsePointer = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+        } catch (matchMediaError) {}
+
+        var isIOS = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && touchPoints > 1);
+        var isAndroid = /Android/i.test(ua);
+        var mobileAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(ua);
+        var embeddedBrowser = /FBAN|FBAV|FB_IAB|Instagram|Messenger|Line\//i.test(ua);
+        var narrowTouch = width <= 1024 && (coarsePointer || touchPoints > 0);
+        var mobile = !!(mobileAgent || narrowTouch || isIOS || isAndroid);
         var lowMemory = deviceMemory !== null && isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4;
-        var narrowTouch = width <= 900 && touchPoints > 0;
-        var enabled = !!(isMobileAgent || narrowTouch || lowMemory);
-        var hardwareScalingLevel = enabled ? (lowMemory ? 1.8 : 1.45) : 1;
+        var lowCpu = hardwareConcurrency !== null && isFinite(hardwareConcurrency) && hardwareConcurrency > 0 && hardwareConcurrency <= 4;
 
         return {
-            stage: "12C64S",
-            enabled: enabled,
-            isMobileAgent: !!isMobileAgent,
+            stage: "12C65A",
+            mobile: mobile,
+            mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
-            lowMemory: !!lowMemory,
-            deviceMemory: deviceMemory,
+            coarsePointer: !!coarsePointer,
+            touchPoints: touchPoints,
             viewportWidth: width,
-            maxTouchPoints: touchPoints,
-            hardwareScalingLevel: hardwareScalingLevel,
-            sequentialCriticalAssetImports: !!lowMemory,
-            deferOptionalAssetsUntilViewerStart: true,
-            disableHeavyPostProcessOnStartup: enabled,
-            localSpotShadowMapSize: enabled ? 256 : 512,
-            localMaxActiveSpotShadows: enabled ? 1 : 2,
-            artworkTextureSamplingMode: "TRILINEAR",
-            deferredOptionalAssetReleaseDelayMs: enabled ? 900 : 250,
+            viewportHeight: height,
+            deviceMemory: deviceMemory,
+            hardwareConcurrency: hardwareConcurrency,
+            lowMemory: !!lowMemory,
+            lowCpu: !!lowCpu,
+            isIOS: !!isIOS,
+            isAndroid: !!isAndroid,
+            embeddedBrowser: !!embeddedBrowser,
+            useMobileAssets: mobile,
+            useMobileViewerControls: !!(mobile && (coarsePointer || touchPoints > 0)),
+            modelLoadConcurrency: mobile ? 1 : 2,
+            previewTextureConcurrency: mobile ? 3 : 6,
+            interactionGateTimeoutMs: mobile ? 90000 : 60000,
+            initialHardwareScalingLevel: mobile ? (lowMemory ? 1.30 : 1.15) : 1,
+            localSpotShadowMapSize: mobile ? 256 : 512,
+            localMaxActiveSpotShadows: mobile ? 1 : 2,
+            createdAt: Date.now(),
             appliedAt: null,
             engineHardwareScalingBefore: null,
             engineHardwareScalingAfter: null,
@@ -179,34 +200,31 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    var galleryMobileStartupSurvival = detectGalleryMobileStartupSurvivalMode();
-    var galleryMobileSequentialStartupImportQueue = [];
-    var galleryMobileSequentialStartupImportActive = false;
-    var galleryMobileDeferredOptionalAssetImports = [];
-    var galleryMobileDeferredOptionalAssetsReleased = false;
+    var galleryDeviceProfile = globalThis.BerryboyArtGalleryDeviceProfile || detectGalleryDeviceProfile();
+    globalThis.BerryboyArtGalleryDeviceProfile = galleryDeviceProfile;
 
-    function applyGalleryMobileStartupSurvivalMode(reason) {
-        if (!galleryMobileStartupSurvival || !galleryMobileStartupSurvival.enabled) {
-            return galleryMobileStartupSurvival;
-        }
+    function isGalleryDeviceProfileMobile() {
+        return !!(galleryDeviceProfile && galleryDeviceProfile.mobile);
+    }
 
-        galleryMobileStartupSurvival.appliedAt = Date.now();
-        galleryMobileStartupSurvival.lastApplyReason = reason || "startup";
+    function applyGalleryDeviceProfileBaseline(reason) {
+        galleryDeviceProfile.appliedAt = Date.now();
+        galleryDeviceProfile.lastApplyReason = reason || "startup";
 
         try {
             if (engine && engine.getHardwareScalingLevel) {
-                galleryMobileStartupSurvival.engineHardwareScalingBefore = engine.getHardwareScalingLevel();
+                galleryDeviceProfile.engineHardwareScalingBefore = engine.getHardwareScalingLevel();
             }
 
             if (engine && engine.setHardwareScalingLevel) {
-                engine.setHardwareScalingLevel(galleryMobileStartupSurvival.hardwareScalingLevel);
+                engine.setHardwareScalingLevel(galleryDeviceProfile.initialHardwareScalingLevel || 1);
             }
 
             if (engine && engine.getHardwareScalingLevel) {
-                galleryMobileStartupSurvival.engineHardwareScalingAfter = engine.getHardwareScalingLevel();
+                galleryDeviceProfile.engineHardwareScalingAfter = engine.getHardwareScalingLevel();
             }
         } catch (hardwareScalingError) {
-            galleryMobileStartupSurvival.notes.push("hardware-scaling-error: " + (hardwareScalingError.message || hardwareScalingError));
+            galleryDeviceProfile.notes.push("hardware-scaling-error: " + (hardwareScalingError.message || hardwareScalingError));
         }
 
         try {
@@ -214,138 +232,58 @@ export const createScene = function (engineArg, canvasArg) {
             scene.autoClearDepthAndStencil = true;
         } catch (sceneOptimizeError) {}
 
-        return galleryMobileStartupSurvival;
+        return galleryDeviceProfile;
     }
 
-    function isGalleryMobileStartupSurvivalEnabled() {
-        return !!(galleryMobileStartupSurvival && galleryMobileStartupSurvival.enabled);
-    }
+    // Props remain deferred by the single startup gate, but this queue is no longer mobile-specific.
+    var galleryStartupDeferredOptionalAssetImports = [];
+    var galleryStartupDeferredOptionalAssetsReleased = false;
 
-    function shouldGalleryMobileSequentialStartupImport(assetName) {
-        // STAGE 12C63: only genuinely low-memory devices serialize the critical shell.
-        // Normal phones load floor/wall/ceiling in parallel; Props never blocks first entry.
-        return !!(
-            galleryMobileStartupSurvival &&
-            galleryMobileStartupSurvival.sequentialCriticalAssetImports &&
-            (assetName === "floor" || assetName === "wall" || assetName === "ceiling")
-        );
-    }
-
-    function shouldGalleryMobileDeferOptionalStartupAsset(assetName) {
-        // Historical function name kept for compatibility with the retry wrapper.
-        // Stage 12C63 defers Props on every device, not only mobile.
+    function shouldGalleryDeferOptionalStartupAsset(assetName) {
         return assetName === "props";
     }
 
-    function runNextGalleryMobileSequentialStartupImport() {
-        if (galleryMobileSequentialStartupImportActive) {
-            return;
-        }
-
-        var next = galleryMobileSequentialStartupImportQueue.shift();
-
-        if (!next) {
-            return;
-        }
-
-        galleryMobileSequentialStartupImportActive = true;
-        galleryMobileStartupSurvival.lastSequentialAsset = next.assetName || null;
-
-        try {
-            next.run();
-        } catch (error) {
-            galleryMobileSequentialStartupImportActive = false;
-            galleryMobileStartupSurvival.notes.push("sequential-import-start-error: " + (error.message || error));
-            setTimeout(runNextGalleryMobileSequentialStartupImport, 0);
-        }
-    }
-
-    function queueGalleryMobileSequentialStartupImport(assetName, run) {
-        var entry = {
+    function queueGalleryStartupDeferredOptionalAssetImport(assetName, run) {
+        galleryStartupDeferredOptionalAssetImports.push({
             assetName: assetName,
             run: run,
             queuedAt: Date.now()
-        };
+        });
+    }
 
-        // STAGE 12C62S6A:
-        // Import calls are declared floor/wall/props/ceiling in the old file. On mobile the
-        // queue must still prioritize critical geometry before optional props.
-        if (assetName === "floor" || assetName === "wall" || assetName === "ceiling") {
-            var optionalIndex = galleryMobileSequentialStartupImportQueue.findIndex(function (queuedEntry) {
-                return queuedEntry && queuedEntry.assetName === "props";
-            });
+    function releaseGalleryStartupDeferredOptionalAssetImports(reason) {
+        if (galleryStartupDeferredOptionalAssetsReleased) {
+            return;
+        }
 
-            if (optionalIndex >= 0) {
-                galleryMobileSequentialStartupImportQueue.splice(optionalIndex, 0, entry);
-            } else {
-                galleryMobileSequentialStartupImportQueue.push(entry);
+        galleryStartupDeferredOptionalAssetsReleased = true;
+        galleryDeviceProfile.deferredOptionalReleaseReason = reason || "single-startup-gate";
+        galleryDeviceProfile.deferredOptionalReleasedAt = Date.now();
+
+        var queued = galleryStartupDeferredOptionalAssetImports.slice();
+        galleryStartupDeferredOptionalAssetImports.length = 0;
+
+        queued.forEach(function (entry) {
+            try {
+                entry.run();
+            } catch (error) {
+                galleryDeviceProfile.notes.push("deferred-optional-import-error: " + (error.message || error));
             }
-        } else {
-            galleryMobileSequentialStartupImportQueue.push(entry);
-        }
-
-        galleryMobileStartupSurvival.lastQueuedSequentialAsset = assetName;
-        galleryMobileStartupSurvival.sequentialQueueLength = galleryMobileSequentialStartupImportQueue.length;
-        runNextGalleryMobileSequentialStartupImport();
-    }
-
-    function finishGalleryMobileSequentialStartupImport(assetName) {
-        if (!isGalleryMobileStartupSurvivalEnabled()) {
-            return;
-        }
-
-        galleryMobileSequentialStartupImportActive = false;
-        galleryMobileStartupSurvival.lastFinishedSequentialAsset = assetName || null;
-        galleryMobileStartupSurvival.sequentialQueueLength = galleryMobileSequentialStartupImportQueue.length;
-        setTimeout(runNextGalleryMobileSequentialStartupImport, 180);
-    }
-
-    function queueGalleryMobileDeferredOptionalAssetImport(assetName, run) {
-        galleryMobileDeferredOptionalAssetImports.push({
-            assetName: assetName,
-            run: run,
-            queuedAt: Date.now()
-        });
-        galleryMobileStartupSurvival.deferredOptionalAssets = galleryMobileDeferredOptionalAssetImports.map(function (entry) {
-            return entry.assetName;
         });
     }
 
-    function releaseGalleryMobileDeferredOptionalAssetImports(reason) {
-        if (galleryMobileDeferredOptionalAssetsReleased) {
-            return;
-        }
-
-        galleryMobileDeferredOptionalAssetsReleased = true;
-        galleryMobileStartupSurvival.deferredOptionalReleaseReason = reason || "viewer-start";
-        galleryMobileStartupSurvival.deferredOptionalReleasedAt = Date.now();
-
-        var queued = galleryMobileDeferredOptionalAssetImports.slice();
-        galleryMobileDeferredOptionalAssetImports.length = 0;
-
-        queued.forEach(function (entry, index) {
-            setTimeout(function () {
-                try {
-                    entry.run();
-                } catch (error) {
-                    galleryMobileStartupSurvival.notes.push("deferred-optional-import-error: " + (error.message || error));
-                }
-            }, (galleryMobileStartupSurvival.deferredOptionalAssetReleaseDelayMs || 250) + index * 600);
-        });
-    }
-
-    applyGalleryMobileStartupSurvivalMode("createScene-start");
+    applyGalleryDeviceProfileBaseline("createScene-start");
 
     globalThis.BerryboyArtGalleryMobile = {
         getDebug: function () {
-            return JSON.parse(JSON.stringify(Object.assign({}, galleryMobileStartupSurvival, {
-                sequentialQueueLength: galleryMobileSequentialStartupImportQueue.length,
-                sequentialActive: galleryMobileSequentialStartupImportActive,
-                deferredOptionalQueueLength: galleryMobileDeferredOptionalAssetImports.length,
-                deferredOptionalReleased: galleryMobileDeferredOptionalAssetsReleased
+            return JSON.parse(JSON.stringify(Object.assign({}, galleryDeviceProfile, {
+                deferredOptionalQueueLength: galleryStartupDeferredOptionalAssetImports.length,
+                deferredOptionalReleased: galleryStartupDeferredOptionalAssetsReleased
             })));
         }
     };
+
+    globalThis.BerryboyArtGalleryDevice = globalThis.BerryboyArtGalleryMobile;
 
     // Czysci elementy UI po przeladowaniu sceny.
     function cleanupArtworkInfoPopupDom() {
@@ -1326,7 +1264,7 @@ return visualRenderingPipeline;
             }
         });
 
-        if (typeof isGalleryMobileStartupSurvivalEnabled === "function" && isGalleryMobileStartupSurvivalEnabled()) {
+        if (isGalleryDeviceProfileMobile()) {
             normalized.ssaoEnabled = false;
             normalized.bloomEnabled = false;
             normalized.vignetteEnabled = false;
@@ -1819,8 +1757,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Pierwszy budzet byl zbyt agresywny dla scian/ekspozycji i segmenty zaczely "walczyc" o lampy.
     // Podnosimy bezpieczny budzet powierzchni ekspozycyjnych, ale helpery/propsy zostaja tanie.
     // STAGE 12C62S6: Mobile startup survival lowers local shadow memory before any local Spot creates its shadow map.
-    var localSpotShadowMapSize = isGalleryMobileStartupSurvivalEnabled() ? 256 : 512;
-    var localMaxActiveSpotShadows = isGalleryMobileStartupSurvivalEnabled() ? 1 : 2;
+    var localSpotShadowMapSize = galleryDeviceProfile.localSpotShadowMapSize;
+    var localMaxActiveSpotShadows = galleryDeviceProfile.localMaxActiveSpotShadows;
     // STAGE 12C60A4/A5 HOTFIX:
     // A4 proved that solving floor leakage with stronger darkness is too blunt: it can create
     // a dark contact strip near walls. A5 keeps wall caster priority, but moves the main fix
@@ -1831,7 +1769,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var localSpotShadowWallCasterPriorityEnabled = true;
     var localShadowRefreshThrottleMs = 90;
     var commonLightingMaxSimultaneousLights = 8;
-    var commonLightingMaterialBudgets = isGalleryMobileStartupSurvivalEnabled()
+    var commonLightingMaterialBudgets = isGalleryDeviceProfileMobile()
         ? {
             helper: 1,
             floor: 4,
@@ -7849,22 +7787,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return artwork.metadata.artworkImage || null;
     }
 
-    function isArtworkMobileTextureDevice() {
-        if (typeof window === "undefined") {
-            return false;
-        }
-
-        var userAgent = navigator && navigator.userAgent
-            ? navigator.userAgent
-            : "";
-
-        var mobileByAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
-        var mobileByWidth = window.innerWidth !== undefined && window.innerWidth <= 768;
-        var mobileByTouch = navigator && navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && window.innerWidth <= 1024;
-
-        return !!(mobileByAgent || mobileByWidth || mobileByTouch);
-    }
-
     function getPublicArtworkUrlFromPath(imagePath, storageBucket) {
         if (!imagePath || !window.gallerySupabase || !window.gallerySupabase.storage) {
             return "";
@@ -7922,7 +7844,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return "";
         }
 
-        var isMobile = isArtworkMobileTextureDevice();
+        var isMobile = isGalleryDeviceProfileMobile();
 
         if (imageState._galleryFastStartPreferPreview && imageState.imageUrlPreview) {
             return imageState.imageUrlPreview;
@@ -7954,7 +7876,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getArtworkTextureNoMipmap(imageState) {
         return !!(
             imageState &&
-            isArtworkMobileTextureDevice() &&
+            isGalleryDeviceProfileMobile() &&
             (
                 imageState.imageUrlMobile ||
                 imageState.imagePathMobile
@@ -8507,19 +8429,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getBestAuthorPhotoUrlFromInfo(infoOrAuthor) {
         var data = infoOrAuthor || {};
 
-        if (isArtworkMobileTextureDevice() && data.authorPhotoUrlMobile) {
+        if (isGalleryDeviceProfileMobile() && data.authorPhotoUrlMobile) {
             return data.authorPhotoUrlMobile;
         }
 
-        if (isArtworkMobileTextureDevice() && data.photoUrlMobile) {
+        if (isGalleryDeviceProfileMobile() && data.photoUrlMobile) {
             return data.photoUrlMobile;
         }
 
-        if (!isArtworkMobileTextureDevice() && data.authorPhotoUrlWeb) {
+        if (!isGalleryDeviceProfileMobile() && data.authorPhotoUrlWeb) {
             return data.authorPhotoUrlWeb;
         }
 
-        if (!isArtworkMobileTextureDevice() && data.photoUrlWeb) {
+        if (!isGalleryDeviceProfileMobile() && data.photoUrlWeb) {
             return data.photoUrlWeb;
         }
 
@@ -10549,7 +10471,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         texture.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
         texture.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
 
-        if (isGalleryMobileStartupSurvivalEnabled()) {
+        if (isGalleryDeviceProfileMobile()) {
             try {
                 texture.anisotropicFilteringLevel = 2;
             } catch (mobileTextureFilterError) {}
@@ -11502,9 +11424,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var mobileInitialCameraPosition = camera.position.clone();
     var mobileInitialCameraRotation = camera.rotation.clone();
 
-    var mobileFocusActive = false;
-    var mobilePreviousCameraPosition = null;
-    var mobilePreviousCameraRotation = null;
 
     var mobileFloorBounds = null;
     var mobileFloorRayLength = 12;
@@ -12207,7 +12126,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerIntroInteractionState();
     }
 
-    // STAGE 12C64S - SINGLE STARTUP GATE / BATCHED FINALIZATION
+    // STAGE 12C65A - SINGLE STARTUP GATE / BATCHED FINALIZATION
     // Critical shell and saved state open the intro; one gate then drains previews/models/Props and finalizes global systems once.
     var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
     var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
@@ -12217,11 +12136,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryWebStateLoadedOnce = false;
     var galleryStartupWatchdogTimer = null;
 
-    // Stage 12C64S keeps the critical shell retry-safe and removes duplicate content gates.
+    // Stage 12C65A keeps the critical shell retry-safe and removes duplicate content gates.
     // A long watchdog remains only as a real critical-shell failure guard; it never starts duplicate requests.
     var galleryStartupWatchdogMs = 120000;
     var galleryStartupFinalizeDebug = {
-        stage: "12C64S",
+        stage: "12C65A",
         startupOrder: "critical-shell_then-state_then_single_interaction_gate_then_batched_finalization",
         stateLoadFinishedAt: null,
         artworkTextureWait: null,
@@ -12250,8 +12169,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     var galleryFastStartRuntime = {
-        stage: "12C64S",
-        interactionStage: "12C64S",
+        stage: "12C65A",
+        interactionStage: "12C65A",
         viewerReady: false,
         viewerReadyAt: null,
         stateApplyActive: false,
@@ -12263,7 +12182,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artworkPreviewDrainComplete: false,
         modelDrainComplete: false,
         modelLoadActiveCount: 0,
-        modelLoadConcurrency: isGalleryMobileStartupSurvivalEnabled() ? 1 : 2,
+        modelLoadConcurrency: galleryDeviceProfile.modelLoadConcurrency,
         startupBatchHydrationActive: false,
         startupBatchGlobalRefreshNeeded: false,
         interactionReady: false,
@@ -12273,7 +12192,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         interactionGateFinishedAt: null,
         interactionGateLastSnapshot: null,
         interactionGateTimedOut: false,
-        interactionGateTimeoutMs: isGalleryMobileStartupSurvivalEnabled() ? 90000 : 60000,
+        interactionGateTimeoutMs: galleryDeviceProfile.interactionGateTimeoutMs,
         interactionGateWatchdogTimer: null,
         interactionFinalizationComplete: false,
         interactionFinalizationResult: null,
@@ -12348,7 +12267,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryFastStartPreviewTextureConcurrency() {
-        return isGalleryMobileStartupSurvivalEnabled() ? 3 : 6;
+        return galleryDeviceProfile.previewTextureConcurrency;
     }
 
     function runGalleryFastStartIdleTask(callback, timeoutMs) {
@@ -12440,7 +12359,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
                 Promise.resolve(modelLoadTask)
                     .catch(function (error) {
-                        console.warn("12C64S startup model hydration warning:", error);
+                        console.warn("12C65A startup model hydration warning:", error);
                     })
                     .finally(function () {
                         galleryFastStartRuntime.modelLoadActiveCount = Math.max(0, galleryFastStartRuntime.modelLoadActiveCount - 1);
@@ -12483,9 +12402,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 previewState._galleryFastStartPreferPreview = true;
 
                 try {
-                    applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C64S preview hydration");
+                    applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C65A preview hydration");
                 } catch (error) {
-                    console.warn("12C64S deferred artwork preview warning:", error);
+                    console.warn("12C65A deferred artwork preview warning:", error);
                 }
 
                 pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
@@ -12563,9 +12482,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             try {
-                applyArtworkImageStateSafely(entry.artwork, fullState, "12C64S full artwork hydration");
+                applyArtworkImageStateSafely(entry.artwork, fullState, "12C65A full artwork hydration");
             } catch (error) {
-                console.warn("12C64S full artwork hydration warning:", error);
+                console.warn("12C65A full artwork hydration warning:", error);
             } finally {
                 galleryFastStartRuntime.backgroundDrainActive = false;
                 markGalleryViewerActivity("full-artwork-upgrade-finished");
@@ -12592,10 +12511,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             attemptTimeoutMs: 0,
             retryDelaysMs: [0, 900],
             startupWatchdogMs: galleryStartupWatchdogMs,
-                    mobileSurvivalEnabled: isGalleryMobileStartupSurvivalEnabled(),
+                    mobileDeviceProfile: cloneGalleryFastStartState(galleryDeviceProfile),
             mobileAssetsToLoad: assetsToLoad,
-            mobileSequentialCriticalAssets: isGalleryMobileStartupSurvivalEnabled(),
-            mobileDeferredOptionalAssets: true,
+            sequentialCriticalAssets: false,
+            startupDeferredOptionalAssets: true,
             singleStartupGate: true
         },
         startedAt: Date.now(),
@@ -12684,7 +12603,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function waitForGalleryStartupPostStateSettle(reason) {
         galleryStartupFinalizeDebug.stateLoadFinishedAt = Date.now();
         galleryStartupFinalizeDebug.artworkTextureWait = {
-            reason: reason || "12C64S-single-startup-gate",
+            reason: reason || "12C65A-single-startup-gate",
             status: "waiting-for-visible-content",
             elapsedMs: 0,
             pendingCount: Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length
@@ -13015,7 +12934,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         galleryStartupFinalizeDebug.finalLightStartedAt = Date.now();
-        galleryStartupFinalizeDebug.finalLightReason = reason || "12C64S-single-batch-finalization";
+        galleryStartupFinalizeDebug.finalLightReason = reason || "12C65A-single-batch-finalization";
 
         try {
             refreshViewerCollisionMeshes();
@@ -13023,7 +12942,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshArtworkLightExclusions();
             refreshPedestalLightIncludedMeshes();
 
-            var unresolvedItems = hydrateSavedLocalLightTargetsForAll(reason || "12C64S-single-batch-finalization");
+            var unresolvedItems = hydrateSavedLocalLightTargetsForAll(reason || "12C65A-single-batch-finalization");
             var needsFallback = (localLightItems || []).some(function (item) {
                 return !!(
                     item &&
@@ -13036,7 +12955,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (needsFallback) {
                 galleryFastStartRuntime.fallbackLightRetargets += 1;
                 refreshAllCommonLocalLightTargets(true);
-                commitLoadTimeLocalLightRetargetImmediate(reason || "12C64S-single-batch-fallback-retarget");
+                commitLoadTimeLocalLightRetargetImmediate(reason || "12C65A-single-batch-fallback-retarget");
 
                 (localLightItems || []).forEach(function (item) {
                     if (!item || !item.light) {
@@ -13059,8 +12978,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateLocalLightsUi();
 
             galleryStartupFinalizeDebug.finalLightMode = needsFallback
-                ? "12C64S-single-batch-fallback-retarget"
-                : "12C64S-single-batch-saved-target-restore";
+                ? "12C65A-single-batch-fallback-retarget"
+                : "12C65A-single-batch-saved-target-restore";
             galleryStartupFinalizeDebug.finalLightUnresolvedItems = unresolvedItems;
             galleryStartupFinalizeDebug.finalLightFinishedAt = Date.now();
             galleryStartupFinalizeDebug.finalLightMs = galleryStartupFinalizeDebug.finalLightFinishedAt - galleryStartupFinalizeDebug.finalLightStartedAt;
@@ -13076,7 +12995,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryStartupFinalizeDebug.finalLightFinishedAt = Date.now();
             galleryStartupFinalizeDebug.finalLightMs = galleryStartupFinalizeDebug.finalLightFinishedAt - galleryStartupFinalizeDebug.finalLightStartedAt;
             galleryStartupFinalizeDebug.finalLightError = error && error.message ? error.message : String(error || "unknown");
-            console.warn("12C64S light finalization warning:", error);
+            console.warn("12C65A light finalization warning:", error);
 
             galleryFastStartRuntime.interactionFinalizationResult = {
                 ok: false,
@@ -13203,10 +13122,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionFinalizationComplete = false;
         galleryFastStartRuntime.interactionFinalizationResult = null;
         galleryFastStartRuntime.interactionWarmupComplete = false;
-        setGalleryInteractionReady(false, reason || "12C64S-single-startup-gate");
+        setGalleryInteractionReady(false, reason || "12C65A-single-startup-gate");
 
-        releaseGalleryMobileDeferredOptionalAssetImports("12C64S-single-startup-gate");
-        drainGalleryFastStartBackgroundQueue("12C64S-single-startup-gate");
+        releaseGalleryStartupDeferredOptionalAssetImports("12C65A-single-startup-gate");
+        drainGalleryFastStartBackgroundQueue("12C65A-single-startup-gate");
 
         if (galleryFastStartRuntime.interactionGateWatchdogTimer) {
             clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
@@ -13216,7 +13135,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.interactionGateTimedOut = true;
             var stalled = getGalleryInteractionReadinessSnapshot();
             galleryFastStartRuntime.interactionGateLastSnapshot = stalled;
-            console.warn("12C64S startup gate is still waiting.", {
+            console.warn("12C65A startup gate is still waiting.", {
                 blockers: getGalleryInteractionReadinessBlockers(stalled),
                 snapshot: stalled
             });
@@ -13231,7 +13150,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             if (!galleryFastStartRuntime.backgroundDrainActive &&
                 (galleryFastStartRuntime.deferredArtworkLoads.length > 0 || galleryFastStartRuntime.deferredModelLoads.length > 0)) {
-                drainGalleryFastStartBackgroundQueue("12C64S-single-startup-gate-resume");
+                drainGalleryFastStartBackgroundQueue("12C65A-single-startup-gate-resume");
             }
 
             if (!snapshot.heavyReady) {
@@ -13240,7 +13159,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             if (!galleryFastStartRuntime.interactionFinalizationComplete) {
-                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("12C64S-single-batch-finalization");
+                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("12C65A-single-batch-finalization");
                 galleryFastStartRuntime.interactionFinalizationComplete = true;
             }
 
@@ -13252,8 +13171,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
                     galleryFastStartRuntime.interactionGateWatchdogTimer = null;
                 }
-                setGalleryInteractionReady(true, "12C64S-single-gate-finalized-and-warmed");
-                scheduleGalleryFastStartFullArtworkDrainWhenIdle("12C64S-post-entry-full-textures", 900);
+                setGalleryInteractionReady(true, "12C65A-single-gate-finalized-and-warmed");
+                scheduleGalleryFastStartFullArtworkDrainWhenIdle("12C65A-post-entry-full-textures", 900);
             });
         }
 
@@ -13276,7 +13195,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.viewerReady = true;
         galleryFastStartRuntime.viewerReadyAt = Date.now();
         galleryFastStartRuntime.interactionReady = false;
-        galleryStartupFinalizeDebug.finalLightMode = "12C64S-single-startup-gate";
+        galleryStartupFinalizeDebug.finalLightMode = "12C65A-single-startup-gate";
 
         loadingScreen.style.display = "none";
         if (!editMode) showViewerIntroOverlay();
@@ -13285,12 +13204,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (typeof requestAnimationFrame === "function") {
             requestAnimationFrame(function () {
                 requestAnimationFrame(function () {
-                    beginGalleryInteractionReadinessGate("12C64S-visual-ready");
+                    beginGalleryInteractionReadinessGate("12C65A-visual-ready");
                 });
             });
         } else {
             setTimeout(function () {
-                beginGalleryInteractionReadinessGate("12C64S-visual-ready-fallback");
+                beginGalleryInteractionReadinessGate("12C65A-visual-ready-fallback");
             }, 0);
         }
     }
@@ -13406,7 +13325,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 deferredFullArtworkLoads: galleryFastStartRuntime.deferredFullArtworkLoads.length,
                 deferredModelLoads: galleryFastStartRuntime.deferredModelLoads.length
             })));
-            galleryAssetLoadDebug.mobileSurvival = globalThis.BerryboyArtGalleryMobile ? globalThis.BerryboyArtGalleryMobile.getDebug() : null;
+            galleryAssetLoadDebug.deviceProfile = globalThis.BerryboyArtGalleryDevice ? globalThis.BerryboyArtGalleryDevice.getDebug() : null;
             return JSON.parse(JSON.stringify(galleryAssetLoadDebug));
         },
         retry: function () {
@@ -13423,15 +13342,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 attemptTimeoutMs: galleryAssetAttemptTimeoutMs,
                 retryDelaysMs: galleryAssetRetryDelaysMs.slice(),
                 startupWatchdogMs: galleryStartupWatchdogMs,
-                                                mobileSurvivalEnabled: isGalleryMobileStartupSurvivalEnabled(),
-                mobileAssetsToLoad: assetsToLoad
+                deviceProfile: cloneGalleryFastStartState(galleryDeviceProfile),
+                assetsToLoad: assetsToLoad
             };
         }
     };
 
 
 
-    // STAGE 12C64S - LOCAL STARTUP ASSET RETRY
+    // STAGE 12C65A - LOCAL STARTUP ASSET RETRY
     // Retry logic is scoped to the four startup GLBs. Babylon.SceneLoader.ImportMesh is never monkey-patched.
     var galleryAssetAttemptTimeoutMs = 0;
     var galleryCriticalAssetMaxAttempts = 2;
@@ -13515,8 +13434,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var attempt = 0;
         var done = false;
         var activeToken = 0;
-        var isMobileSequentialStartupAsset = shouldGalleryMobileSequentialStartupImport(assetName);
-        var isMobileDeferredOptionalStartupAsset = shouldGalleryMobileDeferOptionalStartupAsset(assetName);
+        var isDeferredOptionalStartupAsset = shouldGalleryDeferOptionalStartupAsset(assetName);
 
         updateGalleryAssetRetryEntry(assetName, {
             rootUrl: rootUrl,
@@ -13525,11 +13443,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             maxAttempts: maxAttempts,
             attemptTimeoutMs: galleryAssetAttemptTimeoutMs,
             retryEnabled: true,
-            status: isMobileDeferredOptionalStartupAsset ? "mobile-deferred" : "queued",
+            status: isDeferredOptionalStartupAsset ? "startup-deferred" : "queued",
             critical: isGalleryAssetCritical(assetName),
             optional: !isGalleryAssetCritical(assetName),
-            mobileSequential: !!isMobileSequentialStartupAsset,
-            mobileDeferredOptional: !!isMobileDeferredOptionalStartupAsset
+            startupDeferredOptional: !!isDeferredOptionalStartupAsset
         }, "retry-queued:" + assetName);
 
         function runAttempt() {
@@ -13567,8 +13484,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     if (onError) {
                         try { onError(sceneArg, "postprocess-error: " + (successCallbackError.message || successCallbackError), successCallbackError); } catch (ignoreError) {}
                     }
-                } finally {
-                    if (isMobileSequentialStartupAsset) finishGalleryMobileSequentialStartupImport(assetName);
                 }
             }
 
@@ -13595,11 +13510,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     lastDurationMs: Date.now() - attemptStartedAt,
                     finalFailureReason: reason || "unknown"
                 }, "retry-final-failed:" + assetName);
-                try {
-                    if (onError) onError(sceneArg, message || reason || "Gallery asset import failed", exception || null);
-                } finally {
-                    if (isMobileSequentialStartupAsset) finishGalleryMobileSequentialStartupImport(assetName);
-                }
+                if (onError) onError(sceneArg, message || reason || "Gallery asset import failed", exception || null);
             }
 
             try {
@@ -13615,14 +13526,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         }
 
-        if (isMobileDeferredOptionalStartupAsset) {
-            updateGalleryAssetRetryEntry(assetName, { status: "mobile-deferred", deferredAt: Date.now() }, "mobile-deferred:" + assetName);
-            queueGalleryMobileDeferredOptionalAssetImport(assetName, runAttempt);
-            return null;
-        }
-        if (isMobileSequentialStartupAsset) {
-            updateGalleryAssetRetryEntry(assetName, { status: "mobile-queued", queuedAt: Date.now() }, "mobile-queued:" + assetName);
-            queueGalleryMobileSequentialStartupImport(assetName, runAttempt);
+        if (isDeferredOptionalStartupAsset) {
+            updateGalleryAssetRetryEntry(assetName, { status: "startup-deferred", deferredAt: Date.now() }, "startup-deferred:" + assetName);
+            queueGalleryStartupDeferredOptionalAssetImport(assetName, runAttempt);
             return null;
         }
         return runAttempt();
@@ -15425,231 +15331,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             background: rgba(255, 255, 255, 0.36);
         }
 
-        /* Stage 8X1 final mobile popup override.
-           This block is intentionally late to win over earlier mobile rules. */
-        @media (max-width: 768px), (pointer: coarse) {
-            .gallery-artwork-info-popup {
-                left: 50% !important;
-                bottom: 156px !important;
-                width: min(340px, calc(100% - 24px)) !important;
-                max-height: 27vh !important;
-                padding: 10px !important;
-                border-radius: 18px !important;
-                overflow: hidden !important;
-            }
-
-            .gallery-artwork-info-popup.is-visible {
-                transform: translateX(-50%) translateY(-4px) !important;
-            }
-
-            .gallery-artwork-info-popup-inner {
-                display: grid !important;
-                grid-template-columns: 76px minmax(0, 1fr) !important;
-                gap: 8px !important;
-                align-items: stretch !important;
-            }
-
-            .gallery-artwork-info-author-card {
-                width: auto !important;
-                max-width: none !important;
-                padding: 7px !important;
-                gap: 6px !important;
-                border-radius: 14px !important;
-            }
-
-            .gallery-artwork-info-details-card {
-                padding: 9px 10px !important;
-                border-radius: 14px !important;
-                justify-content: flex-start !important;
-                min-width: 0 !important;
-            }
-
-            .gallery-artwork-info-photo-frame {
-                width: 100% !important;
-                max-width: 62px !important;
-                height: 62px !important;
-                aspect-ratio: auto !important;
-                margin: 0 auto !important;
-                border-radius: 12px !important;
-            }
-
-            .gallery-artwork-info-author-photo-placeholder {
-                padding: 4px !important;
-                font-size: 9px !important;
-                line-height: 1.12 !important;
-            }
-
-            .gallery-artwork-info-author-name {
-                min-height: 14px !important;
-                font-size: 10px !important;
-                line-height: 1.15 !important;
-                font-weight: 700 !important;
-            }
-
-            .gallery-artwork-info-title {
-                font-size: 14px !important;
-                line-height: 1.14 !important;
-                margin: 0 !important;
-            }
-
-            .gallery-artwork-info-description {
-                margin-top: 5px !important;
-                font-size: 10px !important;
-                line-height: 1.25 !important;
-                max-height: 36px !important;
-                overflow: hidden !important;
-            }
-
-            .gallery-artwork-info-empty {
-                font-size: 10px !important;
-                line-height: 1.25 !important;
-            }
-        }
-
-        @media (max-width: 420px), (pointer: coarse) {
-            .gallery-artwork-info-popup {
-                bottom: 150px !important;
-                width: min(326px, calc(100% - 18px)) !important;
-                max-height: 26vh !important;
-                padding: 9px !important;
-            }
-
-            .gallery-artwork-info-popup-inner {
-                grid-template-columns: 70px minmax(0, 1fr) !important;
-                gap: 7px !important;
-            }
-
-            .gallery-artwork-info-photo-frame {
-                max-width: 56px !important;
-                height: 56px !important;
-            }
-
-            .gallery-artwork-info-title {
-                font-size: 13px !important;
-            }
-
-            .gallery-artwork-info-description {
-                max-height: 32px !important;
-            }
-        }
-
+        /* STAGE 12C65A: legacy public mobile popup overrides removed.
+           Public Inspect mobile styling is owned only by the final 12C64H block below. */
 
         @media (max-width: 768px) {
-            .gallery-artwork-info-popup {
-                left: 50%;
-                bottom: 18px;
-                width: min(360px, calc(100% - 22px));
-                padding: 12px;
-                border-radius: 20px;
-                max-height: 42vh;
-                overflow: hidden;
-            }
-
-            .gallery-artwork-info-popup.is-visible {
-                transform: translateX(-50%) translateY(-4px);
-            }
-
-            .gallery-artwork-info-popup-inner {
-                grid-template-columns: 92px minmax(0, 1fr);
-                gap: 10px;
-                align-items: stretch;
-            }
-
-            .gallery-artwork-info-author-card,
-            .gallery-artwork-info-details-card {
-                border-radius: 16px;
-            }
-
-            .gallery-artwork-info-author-card {
-                padding: 9px;
-                gap: 8px;
-            }
-
-            .gallery-artwork-info-details-card {
-                padding: 11px 12px;
-            }
-
-            .gallery-artwork-info-photo-frame {
-                border-radius: 13px;
-            }
-
-            .gallery-artwork-info-author-photo-placeholder {
-                padding: 7px;
-                font-size: 11px;
-            }
-
-            .gallery-artwork-info-author-name {
-                min-height: 16px;
-                font-size: 12px;
-                line-height: 1.22;
-            }
-
-            .gallery-artwork-info-title {
-                font-size: 16px;
-                line-height: 1.16;
-            }
-
-            .gallery-artwork-info-description {
-                margin-top: 7px;
-                font-size: 12px;
-                line-height: 1.34;
-                max-height: 58px;
-            }
-
-            .gallery-artwork-info-empty {
-                font-size: 12px;
-            }
-        }
-
-        @media (max-width: 420px) {
-            .gallery-artwork-info-popup {
-                bottom: 12px;
-                width: calc(100% - 16px);
-                padding: 10px;
-                border-radius: 18px;
-                max-height: 40vh;
-            }
-
-            .gallery-artwork-info-popup-inner {
-                grid-template-columns: 78px minmax(0, 1fr);
-                gap: 8px;
-            }
-
-            .gallery-artwork-info-author-card {
-                padding: 8px;
-            }
-
-            .gallery-artwork-info-details-card {
-                padding: 10px;
-            }
-
-            .gallery-artwork-info-title {
-                font-size: 15px;
-            }
-
-            .gallery-artwork-info-description {
-                max-height: 48px;
-                font-size: 11px;
-            }
-
-            .gallery-artwork-info-author-name {
-                font-size: 11px;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .gallery-artwork-info-popup {
-                width: min(420px, calc(100% - 24px));
-                padding: 14px;
-                border-radius: 22px;
-            }
-
-            .gallery-artwork-info-popup-inner,
             .gallery-artwork-info-editor-grid {
                 grid-template-columns: 1fr;
             }
 
-            .gallery-artwork-info-author-card,
             .gallery-artwork-info-editor-card {
                 width: 100%;
             }
@@ -16749,77 +16438,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         }
 
-        body.gallery-edit-inspect-preview #galleryEditorPanel {
-            opacity: 0 !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-        }
 
-        @media (max-width: 768px), (pointer: coarse) {
-            #galleryArtworkInfoPopup.gallery-artwork-info-popup {
-                bottom: 18px !important;
-                width: min(420px, calc(100% - 42px)) !important;
-                max-width: none !important;
-                max-height: min(31vh, 220px) !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
-                min-height: 84px !important;
-                padding: 14px 16px 14px 68px !important;
-                border-radius: 17px !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-avatar {
-                left: -11px !important;
-                top: -15px !important;
-                width: 58px !important;
-                height: 58px !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-author-photo-placeholder {
-                font-size: 16px !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-author-name {
-                margin-bottom: 3px !important;
-                font-size: 10.5px !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-title {
-                font-size: 15.5px !important;
-                line-height: 1.2 !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-description {
-                margin-top: 6px !important;
-                max-height: 58px !important;
-                font-size: 12px !important;
-                line-height: 1.4 !important;
-            }
-
-            #galleryArtworkInfoPopup .gallery-artwork-info-empty {
-                font-size: 12px !important;
-            }
-
-            .gallery-inspect-navigation-button {
-                width: 42px;
-                height: 54px;
-            }
-
-            .gallery-inspect-navigation-button.is-previous {
-                left: 6px;
-            }
-
-            .gallery-inspect-navigation-button.is-next {
-                right: 6px;
-            }
-
-            .gallery-inspect-navigation-icon {
-                width: 16px;
-                height: 16px;
-                border-width: 2px 2px 0 0;
-            }
-        }
 
     `;
 
@@ -26040,7 +25659,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function shouldUseMobileViewerMode() {
-        return getMobileResponsiveWidth() <= mobileViewerBreakpoint;
+        return !!(
+            galleryDeviceProfile.useMobileViewerControls &&
+            getMobileResponsiveWidth() <= mobileViewerBreakpoint
+        );
     }
 
     function refreshMobileViewerMode() {
@@ -26071,7 +25693,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             mobileLookActive = false;
             mobileLookPointerId = null;
-            mobileFocusActive = false;
 
             setMobileViewerUiVisible(false);
             canvas.style.touchAction = "";
@@ -26094,10 +25715,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mobileViewerControls.style.display = isVisible ? "block" : "none";
     }
 
-    function updateMobileBackButton() {
-        // Przyciski mobilne Wroc/Reset zostaly usuniete z UI.
-        // Funkcja zostaje jako bezpieczny no-op dla logiki focusu.
-    }
 
     function resetMobileJoystick() {
         mobileJoystickActive = false;
@@ -26198,32 +25815,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mobileStartCameraApplied = true;
     }
 
-    function getMobileArtworkFocusDistance(artwork) {
-        // Na pionowym ekranie telefon ma waski kadr, dlatego dystans do obrazu
-        // musi byc wiekszy niz na desktopie. Liczymy go z rozmiaru obiektu i FOV kamery.
-        var fallbackDistance = 5.4;
-
-        if (!artwork || !artwork.getBoundingInfo) {
-            return fallbackDistance;
-        }
-
-        artwork.computeWorldMatrix(true);
-
-        var boundingInfo = artwork.getBoundingInfo();
-        var radius = boundingInfo.boundingSphere.radiusWorld || 1.4;
-
-        var renderWidth = scene.getEngine().getRenderWidth();
-        var renderHeight = scene.getEngine().getRenderHeight();
-        var aspect = renderHeight > 0 ? renderWidth / renderHeight : 1;
-
-        var verticalFov = camera.fov || 0.8;
-        var horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
-        var limitingFov = Math.max(0.24, Math.min(verticalFov, horizontalFov));
-
-        var distance = radius / Math.sin(limitingFov / 2) * 1.04;
-
-        return BABYLON.Scalar.Clamp(distance, 4.2, 6.4);
-    }
 
     function updateMobileJoystickFromPointer(event) {
         if (!mobileJoystickBase || !mobileJoystickKnob) {
@@ -26252,11 +25843,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             "translate(calc(-50% + " + dx + "px), calc(-50% + " + dy + "px))";
     }
 
-    function updateMobileJoystickMovement() {
-        // STAGE 12C3:
-        // Ruch joysticka jest obsługiwany w updateViewerWASDMovement().
-        // Y = przód/tył, X = obrót kamery. X nie robi już strafe.
-    }
 
 
     // STAGE 12C1 - VIEWER WASD / MOBILE JOYSTICK GROUNDED WALK
@@ -26968,79 +26554,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    function animateMobileCameraTo(targetPosition, targetRotation, frames) {
-        var easing = new BABYLON.CubicEase();
-        easing.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
 
-        BABYLON.Animation.CreateAndStartAnimation(
-            "mobileCameraMove",
-            camera,
-            "position",
-            60,
-            frames || 60,
-            camera.position.clone(),
-            targetPosition.clone(),
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-            easing
-        );
 
-        BABYLON.Animation.CreateAndStartAnimation(
-            "mobileCameraRotate",
-            camera,
-            "rotation",
-            60,
-            frames || 60,
-            camera.rotation.clone(),
-            targetRotation.clone(),
-            BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
-            easing
-        );
-    }
 
-    function enterMobileFocusState() {
-        if (!isMobileViewerActive()) {
-            return;
-        }
-
-        if (!mobileFocusActive) {
-            mobilePreviousCameraPosition = camera.position.clone();
-            mobilePreviousCameraRotation = camera.rotation.clone();
-        }
-
-        mobileFocusActive = true;
-        updateMobileBackButton();
-    }
-
-    function exitMobileFocusView() {
-        if (!mobileFocusActive || !mobilePreviousCameraPosition || !mobilePreviousCameraRotation) {
-            mobileFocusActive = false;
-            updateMobileBackButton();
-            return;
-        }
-
-        animateMobileCameraTo(
-            mobilePreviousCameraPosition,
-            mobilePreviousCameraRotation,
-            55
-        );
-
-        mobileFocusActive = false;
-        updateMobileBackButton();
-    }
-
-    function resetMobileCameraView() {
-        mobileFocusActive = false;
-        mobilePreviousCameraPosition = null;
-        mobilePreviousCameraRotation = null;
-
-        updateMobileBackButton();
-
-        animateMobileCameraTo(
-            mobileInitialCameraPosition,
-            mobileInitialCameraRotation,
-            65
-        );
-    }
 
     function createMobileViewerUi() {
         var oldMobileControls = document.getElementById("mobileViewerControls");
@@ -27163,7 +26679,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             resetMobileJoystick();
         });
 
-        updateMobileBackButton();
         setMobileViewerUiVisible(isMobileViewerActive());
     }
 
@@ -30720,8 +30235,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function focusCameraOnObject(targetMesh, options) {
         options = options || {};
-        enterMobileFocusState();
-
         var focusFrame = getGalleryObjectFocusFrame(targetMesh);
         var objectPosition = focusFrame.target.clone();
         var viewDirection = focusFrame.viewDirection.clone();
@@ -36507,7 +36020,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     hasImage: !!imageState,
                     needsVariants: artworkImageStateNeedsVariants(imageState),
                     selectedUrl: getArtworkImageUrlFromState(imageState),
-                    mobileDevice: isArtworkMobileTextureDevice(),
+                    mobileDevice: isGalleryDeviceProfileMobile(),
                     imageUrl: imageState ? imageState.imageUrl || "" : "",
                     imageUrlWeb: imageState ? imageState.imageUrlWeb || "" : "",
                     imageUrlMobile: imageState ? imageState.imageUrlMobile || "" : "",
@@ -36637,7 +36150,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     id: author.id,
                     name: author.name,
                     needsVariants: authorPhotoStateNeedsVariants(author),
-                    mobileDevice: isArtworkMobileTextureDevice(),
+                    mobileDevice: isGalleryDeviceProfileMobile(),
                     selectedUrl: getBestAuthorPhotoUrlFromInfo(author),
                     photoUrl: author.photoUrl,
                     photoUrlWeb: author.photoUrlWeb,

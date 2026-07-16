@@ -2,7 +2,7 @@
 <html lang="en" data-page-lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Berryboy Art Gallery V0_11</title>
 
   <link rel="preconnect" href="https://bazbszvhoxmuekxahokc.supabase.co" crossorigin>
@@ -197,9 +197,11 @@
     #gallerySection {
       width: 100%;
       height: calc(100vh - var(--header-height));
-      min-height: 620px;
+      height: calc(100dvh - var(--header-height));
+      min-height: 0;
       position: relative;
-      background: var(--cream);
+      overflow: hidden;
+      background: #080909;
     }
 
     #renderCanvas {
@@ -208,6 +210,136 @@
       display: block;
       touch-action: none;
       outline: none;
+      background: #080909;
+    }
+
+    #galleryBootGuard {
+      position: absolute;
+      inset: 0;
+      z-index: 7900;
+      display: grid;
+      place-items: center;
+      padding:
+        max(22px, env(safe-area-inset-top))
+        max(18px, env(safe-area-inset-right))
+        max(22px, env(safe-area-inset-bottom))
+        max(18px, env(safe-area-inset-left));
+      background:
+        radial-gradient(circle at 50% 38%, rgba(71, 39, 45, 0.22), transparent 44%),
+        #080909;
+      color: #f7f3ea;
+      font-family: var(--font);
+      opacity: 1;
+      visibility: visible;
+      transition: opacity 220ms ease, visibility 220ms ease;
+    }
+
+    #galleryBootGuard.is-hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .galleryBootCard {
+      width: min(440px, 100%);
+      padding: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 22px;
+      background: rgba(15, 17, 18, 0.86);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      text-align: center;
+    }
+
+    .galleryBootSpinner {
+      width: 42px;
+      height: 42px;
+      margin: 0 auto 18px;
+      border: 3px solid rgba(255, 255, 255, 0.16);
+      border-top-color: rgba(255, 255, 255, 0.94);
+      border-radius: 50%;
+      animation: galleryBootSpin 850ms linear infinite;
+    }
+
+    @keyframes galleryBootSpin {
+      to { transform: rotate(360deg); }
+    }
+
+    #galleryBootTitle {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.1;
+      letter-spacing: -0.035em;
+    }
+
+    #galleryBootMessage {
+      margin: 10px 0 0;
+      color: rgba(247, 243, 234, 0.72);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    #galleryBootDetails {
+      display: none;
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      max-height: 120px;
+      overflow: auto;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.055);
+      color: rgba(247, 243, 234, 0.62);
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      text-align: left;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #galleryBootActions {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    #galleryBootGuard.is-error .galleryBootSpinner {
+      display: none;
+    }
+
+    #galleryBootGuard.is-error #galleryBootActions {
+      display: grid;
+    }
+
+    .galleryBootAction {
+      min-height: 44px;
+      padding: 10px 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #f7f3ea;
+      font: 700 13px/1.2 var(--font);
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .galleryBootAction.is-primary {
+      background: #f0eade;
+      color: #111;
+      border-color: #f0eade;
+    }
+
+    @media (max-width: 720px) {
+      .galleryBootCard {
+        padding: 21px 18px;
+        border-radius: 18px;
+      }
+
+      #galleryBootActions {
+        grid-template-columns: 1fr;
+      }
     }
 
     #siteContent {
@@ -720,10 +852,6 @@
         font-size: 12px;
       }
 
-      #gallerySection {
-        min-height: 540px;
-      }
-
       .contentSection {
         padding: 64px 24px;
       }
@@ -825,6 +953,19 @@
 
     <section id="gallerySection" aria-label="Interactive 3D gallery">
       <canvas id="renderCanvas"></canvas>
+
+      <div id="galleryBootGuard" role="status" aria-live="polite">
+        <div class="galleryBootCard">
+          <div class="galleryBootSpinner" aria-hidden="true"></div>
+          <h2 id="galleryBootTitle">Loading gallery</h2>
+          <p id="galleryBootMessage">Preparing the 3D scene…</p>
+          <pre id="galleryBootDetails"></pre>
+          <div id="galleryBootActions">
+            <button id="galleryBootReload" type="button" class="galleryBootAction is-primary">Reload gallery</button>
+            <a id="galleryBootExternal" class="galleryBootAction" href="./" target="_blank" rel="noopener noreferrer">Open in browser</a>
+          </div>
+        </div>
+      </div>
     </section>
 
     <main id="siteContent">
@@ -1016,7 +1157,7 @@
 
     <footer id="siteFooter">
       <span>Berryboy Art Gallery</span>
-      <span>Gallery_V0_11 · Stage 12C64S</span>
+      <span>Gallery_V0_11 · Stage 12C65A</span>
     </footer>
   </div>
 
@@ -1116,9 +1257,96 @@
     })();
   </script>
 
-  <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c64s_single_startup_gate_batched_finalization_20260716"></script>
+  <script>
+    (function () {
+      var guard = document.getElementById("galleryBootGuard");
+      var title = document.getElementById("galleryBootTitle");
+      var message = document.getElementById("galleryBootMessage");
+      var details = document.getElementById("galleryBootDetails");
+      var reload = document.getElementById("galleryBootReload");
+      var external = document.getElementById("galleryBootExternal");
+      var finished = false;
+      var failure = null;
+      var bootStartedAt = Date.now();
+
+      function setText(element, value) {
+        if (element) element.textContent = value || "";
+      }
+
+      function setPhase(phase, text) {
+        if (finished || failure) return;
+        if (guard) guard.dataset.phase = phase || "boot";
+        setText(message, text || "Preparing the 3D scene…");
+      }
+
+      function ready() {
+        if (finished || failure) return;
+        finished = true;
+        window.clearTimeout(api.timeoutId);
+        if (guard) guard.classList.add("is-hidden");
+      }
+
+      function fail(code, friendlyMessage, error) {
+        finished = false;
+        failure = code || "startup-error";
+        window.clearTimeout(api.timeoutId);
+        if (guard) {
+          guard.classList.remove("is-hidden");
+          guard.classList.add("is-error");
+          guard.dataset.failure = failure;
+        }
+        setText(title, "Gallery could not start");
+        setText(message, friendlyMessage || "The 3D scene could not be initialized on this browser.");
+        if (details && error) {
+          details.style.display = "block";
+          details.textContent = error && error.stack ? error.stack : String(error);
+        }
+      }
+
+      var api = {
+        stage: "12C65A",
+        bootStartedAt: bootStartedAt,
+        setPhase: setPhase,
+        ready: ready,
+        fail: fail,
+        timeoutId: window.setTimeout(function () {
+          fail(
+            "boot-timeout",
+            "The gallery is taking too long to initialize. Reload it or open it in the full browser."
+          );
+        }, 45000)
+      };
+
+      if (reload) {
+        reload.addEventListener("click", function () {
+          window.location.reload();
+        });
+      }
+
+      if (external) {
+        external.href = window.location.href;
+      }
+
+      window.addEventListener("error", function (event) {
+        if (!finished) {
+          fail("window-error", "A startup script failed before the gallery was ready.", event.error || event.message);
+        }
+      });
+
+      window.addEventListener("unhandledrejection", function (event) {
+        if (!finished) {
+          fail("unhandled-rejection", "A startup request failed before the gallery was ready.", event.reason);
+        }
+      });
+
+      window.BerryboyBootGuard = api;
+    })();
+  </script>
+
+  <script src="https://cdn.babylonjs.com/babylon.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-cdn', 'The Babylon.js engine could not be downloaded. Check the connection and reload.')"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-loaders-cdn', 'The 3D model loader could not be downloaded. Check the connection and reload.')"></script>
+
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c65a_mobile_cleanup_boot_recovery_20260716" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', 'The gallery startup module could not be loaded. Reload or open the page in the full browser.')"></script>
 </body>
 </html>
