@@ -70,6 +70,7 @@
   - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
   - Stage 12C65C: Mobile Viewport / HUD Rebuild — VisualViewport ustala rzeczywistą wysokość galerii, mobilne UI trafia do jednego warstwowego HUD-u, joystick respektuje safe-area, a orientacja i dynamiczne paski przeglądarki odświeżają canvas bez zmian w Inspect.
   - Stage 12C65D: Mobile Inspect UI / Safe-Frame — mobilny popup otrzymuje jeden finalny układ avatar + treść + nawigacja, strzałki są częścią komponentu, a mierzony safe-frame omija joystick w portrait i wykorzystuje boczne miejsce w niskim landscape.
+  - Stage 12C65E: Mobile Asset Streaming / Memory Budget — przestrzenne strefy galerii sterują kolejkami critical → nearby → deferred, tekstury i modele są zwalniane poza aktywnymi strefami, modele dostają distance LOD, KTX2 ma decoder/fallback, a Local Lights aktywują się dla bieżącej i sąsiednich stref.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -283,7 +284,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65D",
+            stage: "12C65E",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -320,8 +321,71 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
+
     var galleryDeviceProfile = detectGalleryDeviceProfile();
     globalThis.BerryboyArtGalleryDeviceProfile = galleryDeviceProfile;
+
+    // STAGE 12C65E — KTX2 DECODER / FALLBACK CONTRACT
+    // Babylon loads the decoder lazily. Existing JPG/WebP URLs remain authoritative fallbacks;
+    // KTX2 is preferred only when an explicit KTX2 variant exists in gallery_state or inside GLB.
+    var galleryKtx2Runtime = {
+        stage: "12C65E",
+        available: false,
+        configured: false,
+        workerCount: 0,
+        preferredLoads: 0,
+        successfulLoads: 0,
+        fallbackLoads: 0,
+        lastUrl: null,
+        lastError: null,
+        configuredAt: null
+    };
+
+    function configureGalleryKtx2Runtime() {
+        try {
+            var container = BABYLON && BABYLON.KhronosTextureContainer2
+                ? BABYLON.KhronosTextureContainer2
+                : null;
+            if (!container) {
+                galleryKtx2Runtime.available = false;
+                galleryKtx2Runtime.lastError = "KhronosTextureContainer2 unavailable";
+                return galleryKtx2Runtime;
+            }
+
+            var cores = Math.max(1, Number(galleryDeviceProfile.hardwareConcurrency) || 2);
+            var workerCount = galleryDeviceProfile.mobile
+                ? (galleryDeviceProfile.lowCpu ? 1 : Math.min(2, Math.max(1, Math.floor(cores / 2))))
+                : Math.min(4, Math.max(1, Math.floor(cores / 2)));
+
+            container.DefaultNumWorkers = workerCount;
+            galleryKtx2Runtime.available = true;
+            galleryKtx2Runtime.configured = true;
+            galleryKtx2Runtime.workerCount = workerCount;
+            galleryKtx2Runtime.configuredAt = Date.now();
+        } catch (error) {
+            galleryKtx2Runtime.lastError = error && error.message ? error.message : String(error);
+        }
+        return galleryKtx2Runtime;
+    }
+
+    function isGalleryKtx2Url(url) {
+        return /\.ktx2(?:$|[?#])/i.test(String(url || ""));
+    }
+
+    function getGalleryArtworkKtx2VariantUrl(imageState) {
+        if (!imageState || imageState._galleryDisableKtx2 || !galleryKtx2Runtime.available) {
+            return "";
+        }
+        if (imageState._galleryFastStartPreferPreview) {
+            return imageState.imageUrlKtx2Preview || imageState.ktx2PreviewUrl || "";
+        }
+        if (isGalleryDeviceProfileMobile()) {
+            return imageState.imageUrlKtx2Mobile || imageState.ktx2MobileUrl || imageState.imageUrlKtx2 || imageState.ktx2Url || "";
+        }
+        return imageState.imageUrlKtx2Web || imageState.ktx2WebUrl || imageState.imageUrlKtx2 || imageState.ktx2Url || "";
+    }
+
+    configureGalleryKtx2Runtime();
 
     var galleryAdaptiveMobileQualityRuntime = {
         enabled: !!galleryDeviceProfile.mobile,
@@ -469,7 +533,11 @@ export const createScene = function (engineArg, canvasArg) {
                 deferredOptionalReleased: galleryStartupDeferredOptionalAssetsReleased,
                 adaptiveQuality: typeof getGalleryAdaptiveMobileQualityDebug === "function"
                     ? getGalleryAdaptiveMobileQualityDebug()
-                    : null
+                    : null,
+                streaming: typeof getGalleryZoneStreamingDebug === "function"
+                    ? getGalleryZoneStreamingDebug()
+                    : null,
+                ktx2: galleryKtx2Runtime
             })));
         },
         getQuality: function () {
@@ -5803,6 +5871,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        if (galleryZoneStreamingRuntime && galleryZoneStreamingRuntime.started && galleryZoneStreamingRuntime.enabled) {
+            var selectedForEditing = Array.isArray(selectedLocalLights) && selectedLocalLights.indexOf(item) !== -1;
+            var lightZoneId = getGalleryStreamingZoneIdForPosition(getLocalLightPosition(item));
+            item.galleryStreamingZoneId = lightZoneId;
+            item.zoneCulled = !selectedForEditing && !isGalleryStreamingZoneActive(lightZoneId);
+            if (item.zoneCulled) {
+                item.cameraCulled = true;
+                item._cameraCullingDebug = {
+                    inside: false,
+                    reason: "outsideActiveGalleryZone",
+                    zoneId: lightZoneId,
+                    activeZoneIds: galleryZoneStreamingRuntime.activeZoneIds.slice()
+                };
+                galleryZoneStreamingRuntime.lightZoneCullCount += 1;
+                return false;
+            }
+        }
+
         if (!localLightCameraCullingEnabled) {
             item.cameraCulled = false;
             item._cameraCullingDebug = {
@@ -6166,6 +6252,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         scheduleCommonLightingMaterialSupport("mobile-quality-" + profileName);
         refreshAllLocalSpotShadows(true);
 
+        // Stage 12C65E: quality changes also own the streaming memory budget.
+        // The call is guarded because profile functions are declared before the zone runtime is initialized.
+        if (typeof refreshGalleryStreamingBudgetsFromQuality === "function") {
+            refreshGalleryStreamingBudgetsFromQuality(profileName, reason || "quality-profile");
+        }
+
         var currentLevel = engine && engine.getHardwareScalingLevel
             ? Number(engine.getHardwareScalingLevel())
             : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
@@ -6416,7 +6508,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C65D",
+            stage: "12C65E",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
@@ -8406,9 +8498,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return "";
     }
 
+    
     function getArtworkImageUrlFromState(imageState) {
         if (!imageState) {
             return "";
+        }
+
+        if (imageState._galleryDisableKtx2 && imageState._galleryKtx2FallbackUrl) {
+            return imageState._galleryKtx2FallbackUrl;
+        }
+
+        var ktx2Variant = getGalleryArtworkKtx2VariantUrl(imageState);
+        if (ktx2Variant) {
+            galleryKtx2Runtime.preferredLoads += 1;
+            galleryKtx2Runtime.lastUrl = String(ktx2Variant);
+            return ktx2Variant;
         }
 
         var isMobile = isGalleryDeviceProfileMobile();
@@ -10896,25 +11000,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function disposeArtworkImageMaterial(artwork) {
-        if (
-            artwork &&
-            artwork.metadata &&
-            artwork.metadata.imageMaterial
-        ) {
+        if (artwork && artwork.metadata && artwork.metadata.imageMaterial) {
+            var material = artwork.metadata.imageMaterial;
+            var textures = [];
+            [material.diffuseTexture, material.emissiveTexture].forEach(function (texture) {
+                if (texture && textures.indexOf(texture) === -1) textures.push(texture);
+            });
             try {
-                if (artwork.metadata.imageMaterial.diffuseTexture) {
-                    artwork.metadata.imageMaterial.diffuseTexture.dispose();
-                }
-
-                if (artwork.metadata.imageMaterial.emissiveTexture) {
-                    artwork.metadata.imageMaterial.emissiveTexture.dispose();
-                }
-
-                artwork.metadata.imageMaterial.dispose();
+                textures.forEach(function (texture) { texture.dispose(); });
+                material.diffuseTexture = null;
+                material.emissiveTexture = null;
+                material.dispose(false, false);
             } catch (error) {
                 console.warn("Artwork image material dispose warning:", error);
             }
-
             artwork.metadata.imageMaterial = null;
         }
     }
@@ -10934,6 +11033,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return true;
         }
 
+        var fallbackUrlState = Object.assign({}, imageState || {}, { _galleryDisableKtx2: true });
+        var ktx2FallbackUrl = getArtworkImageUrlFromState(fallbackUrlState);
         var imageUrl = getArtworkImageUrlFromState(imageState);
 
         if (!imageUrl) {
@@ -10950,7 +11051,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             },
             imageState || {},
             {
-                imageUrl: imageUrl
+                imageUrl: imageUrl,
+                _galleryKtx2FallbackUrl: ktx2FallbackUrl || ""
             }
         );
 
@@ -10987,6 +11089,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             imageMaterial.forceDepthWrite = true;
         }
 
+        artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+        artwork.metadata.galleryStreaming.currentLoadTier = normalizedState._galleryStreamingTier || getGalleryStreamingTierForObject(artwork);
+        artwork.metadata.galleryStreaming.loading = true;
         var finishStartupArtworkTextureLoad = registerGalleryStartupArtworkTextureLoad(artwork, imageUrl);
 
         var texture = new BABYLON.Texture(
@@ -11009,6 +11114,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     updateArtworkImageUi();
                     updateArtworkTransformUi();
 
+                    artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+                    artwork.metadata.galleryStreaming.textureState = normalizedState._galleryFastStartPreferPreview ? "preview" : "full";
+                    artwork.metadata.galleryStreaming.textureUrl = imageUrl;
+                    artwork.metadata.galleryStreaming.textureLoadedAt = Date.now();
+                    artwork.metadata.galleryStreaming.suspended = false;
+                    artwork.metadata.galleryStreaming.lastActiveAt = Date.now();
+                    if (isGalleryKtx2Url(imageUrl)) {
+                        galleryKtx2Runtime.successfulLoads += 1;
+                    }
+
                     if (normalizedState._galleryFastStartPreferPreview) {
                         scheduleGalleryFastStartFullArtworkUpgrade({
                             key: artwork.name || String(artwork.uniqueId || "artwork"),
@@ -11019,7 +11134,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     }
                 } finally {
                     finishStartupArtworkTextureLoad(false, {
-                        reason: "texture-loaded"
+                        reason: "texture-loaded",
+                        streamingTier: normalizedState._galleryStreamingTier || null,
+                        ktx2: isGalleryKtx2Url(imageUrl)
                     });
                 }
             },
@@ -11028,8 +11145,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     reason: "texture-error",
                     message: message ? String(message) : "",
                     exceptionName: exception && exception.name ? String(exception.name) : null,
-                    exceptionMessage: exception && exception.message ? String(exception.message) : null
+                    exceptionMessage: exception && exception.message ? String(exception.message) : null,
+                    streamingTier: normalizedState._galleryStreamingTier || null,
+                    ktx2: isGalleryKtx2Url(imageUrl)
                 });
+
+                if (isGalleryKtx2Url(imageUrl) && !normalizedState._galleryKtx2FallbackAttempted) {
+                    galleryKtx2Runtime.fallbackLoads += 1;
+                    galleryKtx2Runtime.lastError = exception && exception.message
+                        ? exception.message
+                        : String(message || "KTX2 texture load failed");
+                    var fallbackState = cloneGalleryFastStartState(normalizedState);
+                    fallbackState._galleryDisableKtx2 = true;
+                    fallbackState._galleryKtx2FallbackAttempted = true;
+                    setTimeout(function () {
+                        applyArtworkImageStateSafely(artwork, fallbackState, "12C65E KTX2 fallback");
+                    }, 0);
+                    return;
+                }
+
                 console.warn("Nie udalo sie wczytac obrazu:", message, exception);
                 notifyGalleryStatus("Nie udalo sie wczytac tekstury obrazu.");
             }
@@ -12710,8 +12844,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // A long watchdog remains only as a real critical-shell failure guard; it never starts duplicate requests.
     var galleryStartupWatchdogMs = 120000;
     var galleryStartupFinalizeDebug = {
-        stage: "12C65A",
-        startupOrder: "critical-shell_then-state_then_single_interaction_gate_then_batched_finalization",
+        stage: "12C65E",
+        startupOrder: "critical-shell_then_state_then_current-zone-critical_then_interaction-ready_then_nearby_then_deferred",
         stateLoadFinishedAt: null,
         artworkTextureWait: null,
         finalLightStartedAt: null,
@@ -12739,8 +12873,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     var galleryFastStartRuntime = {
-        stage: "12C65A",
-        interactionStage: "12C65A",
+        stage: "12C65E",
+        interactionStage: "12C65E",
         viewerReady: false,
         viewerReadyAt: null,
         stateApplyActive: false,
@@ -12778,6 +12912,711 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
 
+
+    // STAGE 12C65E — GALLERY ZONES / CRITICAL → NEARBY → DEFERRED
+    // Zones are derived from floor segment bounds and quantized when a gallery contains many tiles.
+    // The current zone is critical, directly adjacent zones are nearby, everything else stays deferred.
+    var galleryZoneStreamingRuntime = {
+        stage: "12C65E",
+        enabled: true,
+        started: false,
+        zonesReady: false,
+        zones: {},
+        zoneIds: [],
+        adjacency: {},
+        currentZoneId: null,
+        previousZoneId: null,
+        activeZoneIds: [],
+        criticalDrainComplete: false,
+        nearbyDrainActive: false,
+        streamPumpActive: false,
+        streamPumpScheduled: false,
+        lastZoneRefreshAt: 0,
+        lastZoneChangeAt: 0,
+        lastReason: "initial",
+        frameCounter: 0,
+        checkEveryFrames: 12,
+        zonePadding: 0.65,
+        adjacencyGap: 2.25,
+        gridCellSize: 12,
+        textureUnloadGraceMs: galleryDeviceProfile.mobile ? 14000 : 45000,
+        modelUnloadGraceMs: galleryDeviceProfile.mobile ? 18000 : 60000,
+        maxResidentArtworkTextures: galleryDeviceProfile.mobile
+            ? (galleryDeviceProfile.currentQualityProfile === "safe" ? 8 : (galleryDeviceProfile.currentQualityProfile === "high" ? 18 : 12))
+            : 48,
+        maxResidentModels: galleryDeviceProfile.mobile
+            ? (galleryDeviceProfile.currentQualityProfile === "safe" ? 3 : (galleryDeviceProfile.currentQualityProfile === "high" ? 7 : 5))
+            : 24,
+        criticalArtworkStarted: 0,
+        criticalArtworkFinished: 0,
+        criticalModelStarted: 0,
+        criticalModelFinished: 0,
+        nearbyArtworkStarted: 0,
+        nearbyModelStarted: 0,
+        deferredArtworkLoadsAvoided: 0,
+        deferredModelLoadsAvoided: 0,
+        textureDisposals: 0,
+        modelDisposals: 0,
+        modelLodConfigured: 0,
+        lowLodModelLoads: 0,
+        highLodModelLoads: 0,
+        propLodConfigured: 0,
+        lightZoneCullCount: 0,
+        lastDebug: null,
+        lastBudgetProfile: galleryDeviceProfile.currentQualityProfile || "balanced",
+        lastBudgetReason: "initial",
+        lastBudgetRefreshAt: Date.now()
+    };
+
+    function getGalleryStreamingBudgetForProfile(profileName) {
+        var name = String(profileName || galleryDeviceProfile.currentQualityProfile || "balanced").toLowerCase();
+        if (!galleryDeviceProfile.mobile) {
+            return { artworkTextures: 48, models: 24, textureGraceMs: 45000, modelGraceMs: 60000 };
+        }
+        if (name === "safe") {
+            return { artworkTextures: 8, models: 3, textureGraceMs: 10000, modelGraceMs: 14000 };
+        }
+        if (name === "high") {
+            return { artworkTextures: 18, models: 7, textureGraceMs: 18000, modelGraceMs: 24000 };
+        }
+        return { artworkTextures: 12, models: 5, textureGraceMs: 14000, modelGraceMs: 18000 };
+    }
+
+    function refreshGalleryStreamingBudgetsFromQuality(profileName, reason) {
+        if (typeof galleryZoneStreamingRuntime === "undefined" || !galleryZoneStreamingRuntime) return null;
+        var budget = getGalleryStreamingBudgetForProfile(profileName);
+        galleryZoneStreamingRuntime.maxResidentArtworkTextures = budget.artworkTextures;
+        galleryZoneStreamingRuntime.maxResidentModels = budget.models;
+        galleryZoneStreamingRuntime.textureUnloadGraceMs = budget.textureGraceMs;
+        galleryZoneStreamingRuntime.modelUnloadGraceMs = budget.modelGraceMs;
+        galleryZoneStreamingRuntime.lastBudgetProfile = profileName || galleryDeviceProfile.currentQualityProfile || "balanced";
+        galleryZoneStreamingRuntime.lastBudgetReason = reason || "quality-profile";
+        galleryZoneStreamingRuntime.lastBudgetRefreshAt = Date.now();
+        if (galleryZoneStreamingRuntime.started) {
+            maintainGalleryStreamingMemoryBudget("quality-budget-" + galleryZoneStreamingRuntime.lastBudgetProfile);
+            scheduleGalleryZoneStreamingPump("quality-budget-" + galleryZoneStreamingRuntime.lastBudgetProfile, 80);
+        }
+        return budget;
+    }
+
+    function getGalleryStreamingObjectPosition(object) {
+        if (!object) return null;
+        try {
+            if (object.getAbsolutePosition) return object.getAbsolutePosition().clone();
+            if (object.position && object.position.clone) return object.position.clone();
+            if (object.position) return new BABYLON.Vector3(Number(object.position.x) || 0, Number(object.position.y) || 0, Number(object.position.z) || 0);
+        } catch (error) {}
+        return null;
+    }
+
+    function getGalleryStreamingBoundsForMesh(mesh) {
+        if (!mesh) return null;
+        try {
+            mesh.computeWorldMatrix(true);
+            var info = mesh.getBoundingInfo ? mesh.getBoundingInfo() : null;
+            var box = info && info.boundingBox ? info.boundingBox : null;
+            if (!box) return null;
+            var min = box.minimumWorld;
+            var max = box.maximumWorld;
+            return {
+                minX: Number(min.x), maxX: Number(max.x),
+                minZ: Number(min.z), maxZ: Number(max.z),
+                minY: Number(min.y), maxY: Number(max.y),
+                centerX: (Number(min.x) + Number(max.x)) * 0.5,
+                centerZ: (Number(min.z) + Number(max.z)) * 0.5
+            };
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function mergeGalleryStreamingBounds(target, next) {
+        if (!target) return Object.assign({}, next);
+        target.minX = Math.min(target.minX, next.minX);
+        target.maxX = Math.max(target.maxX, next.maxX);
+        target.minZ = Math.min(target.minZ, next.minZ);
+        target.maxZ = Math.max(target.maxZ, next.maxZ);
+        target.minY = Math.min(target.minY, next.minY);
+        target.maxY = Math.max(target.maxY, next.maxY);
+        target.centerX = (target.minX + target.maxX) * 0.5;
+        target.centerZ = (target.minZ + target.maxZ) * 0.5;
+        return target;
+    }
+
+    
+    function rebuildGalleryStreamingZones(reason) {
+        var zones = {};
+        var cellSize = Math.max(8, Number(galleryZoneStreamingRuntime.gridCellSize) || 12);
+        var floorEntries = (floorMeshes || []).map(function (mesh) {
+            return { mesh: mesh, bounds: getGalleryStreamingBoundsForMesh(mesh) };
+        }).filter(function (entry) { return !!entry.bounds; });
+        var largestSpan = floorEntries.reduce(function (maxSpan, entry) {
+            return Math.max(maxSpan, entry.bounds.maxX - entry.bounds.minX, entry.bounds.maxZ - entry.bounds.minZ);
+        }, 0);
+        var useGrid = floorEntries.length > 24 || largestSpan > cellSize * 1.6;
+
+        floorEntries.forEach(function (entry, index) {
+            var bounds = entry.bounds;
+            if (useGrid) {
+                var minCellX = Math.floor(bounds.minX / cellSize);
+                var maxCellX = Math.floor((bounds.maxX - 0.0001) / cellSize);
+                var minCellZ = Math.floor(bounds.minZ / cellSize);
+                var maxCellZ = Math.floor((bounds.maxZ - 0.0001) / cellSize);
+                for (var cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+                    for (var cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+                        var gridKey = "grid:" + cellX + ":" + cellZ;
+                        if (!zones[gridKey]) {
+                            zones[gridKey] = {
+                                id: gridKey,
+                                bounds: {
+                                    minX: cellX * cellSize,
+                                    maxX: (cellX + 1) * cellSize,
+                                    minZ: cellZ * cellSize,
+                                    maxZ: (cellZ + 1) * cellSize,
+                                    minY: bounds.minY,
+                                    maxY: bounds.maxY,
+                                    centerX: (cellX + 0.5) * cellSize,
+                                    centerZ: (cellZ + 0.5) * cellSize
+                                },
+                                floorMeshes: [],
+                                center: null
+                            };
+                        }
+                        zones[gridKey].bounds.minY = Math.min(zones[gridKey].bounds.minY, bounds.minY);
+                        zones[gridKey].bounds.maxY = Math.max(zones[gridKey].bounds.maxY, bounds.maxY);
+                        if (zones[gridKey].floorMeshes.indexOf(entry.mesh) === -1) zones[gridKey].floorMeshes.push(entry.mesh);
+                    }
+                }
+            } else {
+                var key = "floor:" + String(entry.mesh.name || index);
+                zones[key] = { id: key, bounds: Object.assign({}, bounds), floorMeshes: [entry.mesh], center: null };
+            }
+        });
+
+        if (!Object.keys(zones).length) {
+            var cameraPosition = camera && camera.position ? camera.position : BABYLON.Vector3.Zero();
+            var fallbackX = Math.floor(cameraPosition.x / cellSize);
+            var fallbackZ = Math.floor(cameraPosition.z / cellSize);
+            var fallbackId = "grid:" + fallbackX + ":" + fallbackZ;
+            zones[fallbackId] = {
+                id: fallbackId,
+                bounds: {
+                    minX: fallbackX * cellSize,
+                    maxX: (fallbackX + 1) * cellSize,
+                    minZ: fallbackZ * cellSize,
+                    maxZ: (fallbackZ + 1) * cellSize,
+                    minY: -1000,
+                    maxY: 1000,
+                    centerX: (fallbackX + 0.5) * cellSize,
+                    centerZ: (fallbackZ + 0.5) * cellSize
+                },
+                floorMeshes: [],
+                center: null
+            };
+        }
+
+        var ids = Object.keys(zones);
+        ids.forEach(function (id) {
+            var zone = zones[id];
+            zone.center = new BABYLON.Vector3(zone.bounds.centerX, 0, zone.bounds.centerZ);
+        });
+
+        var adjacency = {};
+        ids.forEach(function (id) { adjacency[id] = {}; adjacency[id][id] = true; });
+        for (var i = 0; i < ids.length; i += 1) {
+            for (var j = i + 1; j < ids.length; j += 1) {
+                var a = zones[ids[i]].bounds;
+                var b = zones[ids[j]].bounds;
+                var gapX = Math.max(0, Math.max(a.minX - b.maxX, b.minX - a.maxX));
+                var gapZ = Math.max(0, Math.max(a.minZ - b.maxZ, b.minZ - a.maxZ));
+                var edgeDistance = Math.sqrt(gapX * gapX + gapZ * gapZ);
+                if (edgeDistance <= galleryZoneStreamingRuntime.adjacencyGap) {
+                    adjacency[ids[i]][ids[j]] = true;
+                    adjacency[ids[j]][ids[i]] = true;
+                }
+            }
+        }
+
+        galleryZoneStreamingRuntime.zones = zones;
+        galleryZoneStreamingRuntime.zoneIds = ids;
+        galleryZoneStreamingRuntime.adjacency = adjacency;
+        galleryZoneStreamingRuntime.zonesReady = true;
+        galleryZoneStreamingRuntime.lastReason = reason || "zones-rebuilt";
+        return zones;
+    }
+
+    function getGalleryStreamingZoneIdForPosition(position) {
+        if (!position) return galleryZoneStreamingRuntime.currentZoneId;
+        if (!galleryZoneStreamingRuntime.zonesReady) rebuildGalleryStreamingZones("zone-lookup");
+        var padding = Number(galleryZoneStreamingRuntime.zonePadding) || 0;
+        var closestId = null;
+        var closestDistance = Number.POSITIVE_INFINITY;
+        galleryZoneStreamingRuntime.zoneIds.forEach(function (id) {
+            var zone = galleryZoneStreamingRuntime.zones[id];
+            var b = zone.bounds;
+            var inside = position.x >= b.minX - padding && position.x <= b.maxX + padding &&
+                position.z >= b.minZ - padding && position.z <= b.maxZ + padding;
+            var dx = position.x - b.centerX;
+            var dz = position.z - b.centerZ;
+            var distance = dx * dx + dz * dz;
+            if (inside) distance *= 0.02;
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestId = id;
+            }
+        });
+        return closestId;
+    }
+
+    function getGalleryStreamingZoneIdForObject(object) {
+        if (!object) return null;
+        object.metadata = object.metadata || {};
+        var position = getGalleryStreamingObjectPosition(object);
+        var zoneId = getGalleryStreamingZoneIdForPosition(position);
+        object.metadata.galleryStreamingZoneId = zoneId;
+        return zoneId;
+    }
+
+    function getGalleryStreamingActiveZoneIds(currentZoneId) {
+        if (!currentZoneId) return [];
+        var active = [currentZoneId];
+        var neighbors = galleryZoneStreamingRuntime.adjacency[currentZoneId] || {};
+        Object.keys(neighbors).forEach(function (id) {
+            if (neighbors[id] && active.indexOf(id) === -1) active.push(id);
+        });
+        return active;
+    }
+
+    function getGalleryStreamingTierForZone(zoneId) {
+        if (!zoneId || !galleryZoneStreamingRuntime.currentZoneId) return "deferred";
+        if (zoneId === galleryZoneStreamingRuntime.currentZoneId) return "critical";
+        if (galleryZoneStreamingRuntime.activeZoneIds.indexOf(zoneId) !== -1) return "nearby";
+        return "deferred";
+    }
+
+    function getGalleryStreamingTierForObject(object) {
+        return getGalleryStreamingTierForZone(getGalleryStreamingZoneIdForObject(object));
+    }
+
+    function getGalleryStreamingTierRank(tier) {
+        return tier === "critical" ? 0 : (tier === "nearby" ? 1 : 2);
+    }
+
+    function refreshGalleryStreamingEntryClassification(entry, objectKey) {
+        if (!entry) return "deferred";
+        var object = entry[objectKey];
+        entry.zoneId = getGalleryStreamingZoneIdForObject(object);
+        entry.tier = getGalleryStreamingTierForZone(entry.zoneId);
+        entry.distanceToCamera = getGalleryFastStartDistanceToCamera(object);
+        return entry.tier;
+    }
+
+    function sortGalleryStreamingQueue(queue, objectKey) {
+        queue.forEach(function (entry) { refreshGalleryStreamingEntryClassification(entry, objectKey); });
+        queue.sort(function (a, b) {
+            var tierDelta = getGalleryStreamingTierRank(a.tier) - getGalleryStreamingTierRank(b.tier);
+            if (tierDelta) return tierDelta;
+            return Number(a.distanceToCamera || 0) - Number(b.distanceToCamera || 0);
+        });
+    }
+
+    function countGalleryStreamingQueueTier(queue, objectKey, tier) {
+        var count = 0;
+        queue.forEach(function (entry) {
+            if (refreshGalleryStreamingEntryClassification(entry, objectKey) === tier) count += 1;
+        });
+        return count;
+    }
+
+    function takeGalleryStreamingQueueEntry(queue, objectKey, allowedTiers) {
+        sortGalleryStreamingQueue(queue, objectKey);
+        var index = queue.findIndex(function (entry) {
+            return allowedTiers.indexOf(entry.tier) !== -1;
+        });
+        if (index < 0) return null;
+        return queue.splice(index, 1)[0];
+    }
+
+    function isGalleryStreamingZoneActive(zoneId) {
+        return !!zoneId && galleryZoneStreamingRuntime.activeZoneIds.indexOf(zoneId) !== -1;
+    }
+
+    function refreshGalleryCurrentStreamingZone(reason, force) {
+        if (!galleryZoneStreamingRuntime.enabled || !camera || !camera.position) return false;
+        if (!galleryZoneStreamingRuntime.zonesReady) rebuildGalleryStreamingZones(reason || "current-zone");
+        var now = Date.now();
+        if (!force && now - galleryZoneStreamingRuntime.lastZoneRefreshAt < 300) return false;
+        galleryZoneStreamingRuntime.lastZoneRefreshAt = now;
+        var nextZoneId = getGalleryStreamingZoneIdForPosition(camera.position);
+        var changed = nextZoneId && nextZoneId !== galleryZoneStreamingRuntime.currentZoneId;
+        if (changed || force || !galleryZoneStreamingRuntime.currentZoneId) {
+            galleryZoneStreamingRuntime.previousZoneId = galleryZoneStreamingRuntime.currentZoneId;
+            galleryZoneStreamingRuntime.currentZoneId = nextZoneId;
+            galleryZoneStreamingRuntime.activeZoneIds = getGalleryStreamingActiveZoneIds(nextZoneId);
+            galleryZoneStreamingRuntime.lastZoneChangeAt = now;
+            galleryZoneStreamingRuntime.lastReason = reason || "zone-change";
+            sortGalleryStreamingQueue(galleryFastStartRuntime.deferredArtworkLoads, "artwork");
+            sortGalleryStreamingQueue(galleryFastStartRuntime.deferredModelLoads, "slot");
+            markLocalLightCameraCullingDirty();
+            return true;
+        }
+        return false;
+    }
+
+    function getGalleryCriticalPendingTextureCount() {
+        return Object.keys(galleryStartupArtworkTextureDebug.pending || {}).filter(function (key) {
+            var entry = galleryStartupArtworkTextureDebug.pending[key] || {};
+            return entry.streamingTier === "critical";
+        }).length;
+    }
+
+    function isGalleryStreamingProtectedObject(object) {
+        if (!object) return false;
+        if (galleryInspectRuntime && galleryInspectRuntime.target === object) return true;
+        if (selectedSphere && selectedSphere === object) return true;
+        if (Array.isArray(selectedArtworks) && selectedArtworks.indexOf(object) !== -1) return true;
+        return false;
+    }
+
+    function suspendArtworkTextureForStreaming(artwork, reason) {
+        if (!artwork || !artwork.metadata || !artwork.metadata.artworkImage || isGalleryStreamingProtectedObject(artwork)) return false;
+        if (!artwork.metadata.imageMaterial) return false;
+        disposeArtworkImageMaterial(artwork);
+        if (artwork.metadata.imagePlane) artwork.metadata.imagePlane.setEnabled(false);
+        artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+        artwork.metadata.galleryStreaming.textureState = "unloaded";
+        artwork.metadata.galleryStreaming.suspended = true;
+        artwork.metadata.galleryStreaming.suspendedAt = Date.now();
+        artwork.metadata.galleryStreaming.suspendReason = reason || "deferred-zone";
+        galleryZoneStreamingRuntime.textureDisposals += 1;
+        return true;
+    }
+
+    function queueArtworkForGalleryStreaming(artwork, reason) {
+        if (!artwork || !artwork.metadata || !artwork.metadata.artworkImage) return false;
+        var queued = queueGalleryFastStartArtworkLoad(artwork, artwork.metadata.artworkImage);
+        if (queued) {
+            artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+            artwork.metadata.galleryStreaming.queueReason = reason || "zone-active";
+        }
+        return queued;
+    }
+
+    function disposeModel3dRuntimeMaterialsForStreaming(slot) {
+        var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
+        if (!runtime) return;
+        var materials = [];
+        var textures = [];
+        (runtime.meshes || []).forEach(function (mesh) {
+            var material = mesh && mesh.material ? mesh.material : null;
+            if (material && materials.indexOf(material) === -1) materials.push(material);
+        });
+        materials.forEach(function (material) {
+            try {
+                if (material.getActiveTextures) {
+                    material.getActiveTextures().forEach(function (texture) {
+                        if (texture && textures.indexOf(texture) === -1) textures.push(texture);
+                    });
+                }
+            } catch (error) {}
+        });
+        disposeModel3dSlotRuntime(slot);
+        textures.forEach(function (texture) { try { texture.dispose(); } catch (error) {} });
+        materials.forEach(function (material) { try { material.dispose(false, false); } catch (error) {} });
+    }
+
+    function suspendModel3dForStreaming(slot, reason) {
+        if (!slot || !slot.metadata || !slot.metadata.model3d || !slot.metadata.model3dRuntime || isGalleryStreamingProtectedObject(slot)) return false;
+        disposeModel3dRuntimeMaterialsForStreaming(slot);
+        disableSculptureCollisionProxy(slot);
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.modelState = "unloaded";
+        slot.metadata.galleryStreaming.suspended = true;
+        slot.metadata.galleryStreaming.suspendedAt = Date.now();
+        slot.metadata.galleryStreaming.suspendReason = reason || "deferred-zone";
+        applySculptureSlotVisualState(slot);
+        galleryZoneStreamingRuntime.modelDisposals += 1;
+        return true;
+    }
+
+    function queueModelForGalleryStreaming(slot, reason) {
+        if (!slot || !slot.metadata || !slot.metadata.model3d) return false;
+        var queued = queueGalleryFastStartModelLoad(slot, slot.metadata.model3d);
+        if (queued) {
+            slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+            slot.metadata.galleryStreaming.queueReason = reason || "zone-active";
+        }
+        return queued;
+    }
+
+    function getGalleryModelLodCullDistance() {
+        if (!galleryDeviceProfile.mobile) return 90;
+        if (galleryDeviceProfile.currentQualityProfile === "safe") return 28;
+        if (galleryDeviceProfile.currentQualityProfile === "high") return 52;
+        return 38;
+    }
+
+    function configureGalleryModelRuntimeLod(slot) {
+        var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
+        if (!runtime || runtime.lodConfigured) return false;
+        var distance = Math.max(12, Number(slot.metadata.model3d && slot.metadata.model3d.lodCullDistance) || getGalleryModelLodCullDistance());
+        (runtime.meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.addLODLevel || mesh.metadata && mesh.metadata.galleryLodConfigured) return;
+            try {
+                mesh.addLODLevel(distance, null);
+                mesh.metadata = mesh.metadata || {};
+                mesh.metadata.galleryLodConfigured = true;
+                mesh.metadata.galleryLodCullDistance = distance;
+                galleryZoneStreamingRuntime.modelLodConfigured += 1;
+            } catch (error) {}
+        });
+        runtime.lodConfigured = true;
+        runtime.lodCullDistance = distance;
+        return true;
+    }
+
+    function configureGalleryPropStreamingLod(mesh) {
+        if (!mesh || !mesh.addLODLevel || mesh.metadata && mesh.metadata.galleryLodConfigured) return false;
+        try {
+            var distance = galleryDeviceProfile.mobile ? (galleryDeviceProfile.currentQualityProfile === "safe" ? 34 : 48) : 110;
+            mesh.addLODLevel(distance, null);
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.galleryLodConfigured = true;
+            mesh.metadata.galleryLodCullDistance = distance;
+            mesh.metadata.galleryStreamingZoneId = getGalleryStreamingZoneIdForObject(mesh);
+            galleryZoneStreamingRuntime.propLodConfigured += 1;
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function updateGalleryPropZoneActivation() {
+        (propMeshes || []).forEach(function (mesh) {
+            if (!mesh || mesh.name === "__root__") return;
+            configureGalleryPropStreamingLod(mesh);
+            var zoneId = getGalleryStreamingZoneIdForObject(mesh);
+            var active = !galleryDeviceProfile.mobile || isGalleryStreamingZoneActive(zoneId);
+            if (mesh.setEnabled) mesh.setEnabled(active);
+        });
+    }
+
+    function maintainGalleryStreamingMemoryBudget(reason) {
+        if (!galleryDeviceProfile.mobile || !galleryZoneStreamingRuntime.started) return;
+        var now = Date.now();
+        var residentArtwork = [];
+        (artworks || []).forEach(function (artwork) {
+            if (!artwork || !artwork.metadata || !artwork.metadata.artworkImage) return;
+            var tier = getGalleryStreamingTierForObject(artwork);
+            var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+            if (tier !== "deferred") {
+                stream.lastActiveAt = now;
+                if (!artwork.metadata.imageMaterial && !stream.loading) queueArtworkForGalleryStreaming(artwork, "active-zone-refresh");
+            } else if (artwork.metadata.imageMaterial) {
+                residentArtwork.push({ artwork: artwork, lastActiveAt: Number(stream.lastActiveAt) || 0, distance: getGalleryFastStartDistanceToCamera(artwork) });
+            }
+        });
+        residentArtwork.sort(function (a, b) { return b.distance - a.distance || a.lastActiveAt - b.lastActiveAt; });
+        var activeArtworkResidentCount = (artworks || []).filter(function (artwork) {
+            return artwork && artwork.metadata && artwork.metadata.imageMaterial && getGalleryStreamingTierForObject(artwork) !== "deferred";
+        }).length;
+        var allowedDeferredArtwork = Math.max(0, galleryZoneStreamingRuntime.maxResidentArtworkTextures - activeArtworkResidentCount);
+        residentArtwork.forEach(function (entry, index) {
+            var expired = now - entry.lastActiveAt >= galleryZoneStreamingRuntime.textureUnloadGraceMs;
+            var overBudget = index >= allowedDeferredArtwork;
+            if (expired || overBudget) suspendArtworkTextureForStreaming(entry.artwork, overBudget ? "texture-budget" : "deferred-zone-grace");
+        });
+
+        var residentModels = [];
+        (artSpheres || []).forEach(function (slot) {
+            if (!slot || !slot.metadata || !slot.metadata.model3d) return;
+            var tier = getGalleryStreamingTierForObject(slot);
+            var stream = slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+            if (tier !== "deferred") {
+                stream.lastActiveAt = now;
+                var runtime = slot.metadata.model3dRuntime;
+                var needsCriticalUpgrade = tier === "critical" && runtime && runtime.assetVariant === "low";
+                if (needsCriticalUpgrade && !stream.loading && !isGalleryStreamingProtectedObject(slot)) {
+                    suspendModel3dForStreaming(slot, "critical-high-lod-upgrade");
+                    queueModelForGalleryStreaming(slot, "critical-high-lod-upgrade");
+                } else if (!slot.metadata.model3dRuntime && !stream.loading) {
+                    queueModelForGalleryStreaming(slot, "active-zone-refresh");
+                }
+            } else if (slot.metadata.model3dRuntime) {
+                residentModels.push({ slot: slot, lastActiveAt: Number(stream.lastActiveAt) || 0, distance: getGalleryFastStartDistanceToCamera(slot) });
+            }
+        });
+        residentModels.sort(function (a, b) { return b.distance - a.distance || a.lastActiveAt - b.lastActiveAt; });
+        var activeModelResidentCount = (artSpheres || []).filter(function (slot) {
+            return slot && slot.metadata && slot.metadata.model3dRuntime && getGalleryStreamingTierForObject(slot) !== "deferred";
+        }).length;
+        var allowedDeferredModels = Math.max(0, galleryZoneStreamingRuntime.maxResidentModels - activeModelResidentCount);
+        residentModels.forEach(function (entry, index) {
+            var expired = now - entry.lastActiveAt >= galleryZoneStreamingRuntime.modelUnloadGraceMs;
+            var overBudget = index >= allowedDeferredModels;
+            if (expired || overBudget) suspendModel3dForStreaming(entry.slot, overBudget ? "model-budget" : "deferred-zone-grace");
+        });
+        updateGalleryPropZoneActivation();
+        galleryZoneStreamingRuntime.lastReason = reason || "memory-budget";
+    }
+
+    function scheduleGalleryZoneStreamingPump(reason, delayMs) {
+        if (!galleryZoneStreamingRuntime.started || galleryZoneStreamingRuntime.streamPumpScheduled) return;
+        galleryZoneStreamingRuntime.streamPumpScheduled = true;
+        setTimeout(function () {
+            galleryZoneStreamingRuntime.streamPumpScheduled = false;
+            pumpGalleryZoneStreamingQueues(reason || "scheduled-zone-pump");
+        }, Math.max(40, Number(delayMs) || 80));
+    }
+
+    function pumpGalleryZoneStreamingQueues(reason) {
+        if (!galleryZoneStreamingRuntime.started || galleryZoneStreamingRuntime.streamPumpActive) return;
+        refreshGalleryCurrentStreamingZone(reason || "stream-pump", true);
+        galleryZoneStreamingRuntime.streamPumpActive = true;
+        galleryFastStartRuntime.backgroundDrainActive = true;
+
+        var artworkConcurrency = Math.max(1, Math.min(3, Number(galleryDeviceProfile.previewTextureConcurrency) || 2));
+        var modelConcurrency = Math.max(1, Number(galleryFastStartRuntime.modelLoadConcurrency) || 1);
+        var artworkStarted = 0;
+        var pumpFinished = false;
+        var pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+
+        while (artworkStarted < artworkConcurrency && pendingTextures < artworkConcurrency) {
+            var artworkEntry = takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredArtworkLoads, "artwork", ["critical", "nearby"]);
+            if (!artworkEntry) break;
+            var previewState = cloneGalleryFastStartState(artworkEntry.imageState);
+            previewState._galleryFastStartForceImmediate = true;
+            previewState._galleryFastStartPreferPreview = artworkEntry.tier !== "critical";
+            previewState._galleryStreamingTier = artworkEntry.tier;
+            artworkEntry.artwork.metadata.galleryStreaming = artworkEntry.artwork.metadata.galleryStreaming || {};
+            artworkEntry.artwork.metadata.galleryStreaming.loading = true;
+            applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C65E zone artwork " + artworkEntry.tier);
+            artworkEntry.artwork.metadata.galleryStreaming.loading = false;
+            if (artworkEntry.tier === "nearby") galleryZoneStreamingRuntime.nearbyArtworkStarted += 1;
+            artworkStarted += 1;
+            pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+        }
+
+        function finishPump() {
+            if (pumpFinished) return;
+            pumpFinished = true;
+            galleryZoneStreamingRuntime.streamPumpActive = false;
+            galleryFastStartRuntime.backgroundDrainActive = false;
+            maintainGalleryStreamingMemoryBudget(reason || "zone-pump-finished");
+            var activeArtworkCount = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "critical") +
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "nearby");
+            var activeModelCount = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical") +
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "nearby");
+            if (activeArtworkCount || activeModelCount) scheduleGalleryZoneStreamingPump("active-zone-remaining", 180);
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle("12C65E-current-zone-full", 500);
+        }
+
+        function pumpModels() {
+            function startModelEntry(modelEntry) {
+                galleryFastStartRuntime.modelLoadActiveCount += 1;
+                var immediateState = cloneGalleryFastStartState(modelEntry.modelState);
+                immediateState._galleryFastStartForceImmediate = true;
+                immediateState._galleryStreamingTier = modelEntry.tier;
+                modelEntry.slot.metadata.galleryStreaming = modelEntry.slot.metadata.galleryStreaming || {};
+                modelEntry.slot.metadata.galleryStreaming.loading = true;
+                Promise.resolve(applyModel3dStateToSlot(modelEntry.slot, immediateState))
+                    .catch(function (error) { console.warn("12C65E zone model warning:", error); })
+                    .finally(function () {
+                        galleryFastStartRuntime.modelLoadActiveCount = Math.max(0, galleryFastStartRuntime.modelLoadActiveCount - 1);
+                        if (modelEntry.slot && modelEntry.slot.metadata && modelEntry.slot.metadata.galleryStreaming) {
+                            modelEntry.slot.metadata.galleryStreaming.loading = false;
+                        }
+                        pumpModels();
+                    });
+                if (modelEntry.tier === "nearby") galleryZoneStreamingRuntime.nearbyModelStarted += 1;
+            }
+
+            while (galleryFastStartRuntime.modelLoadActiveCount < modelConcurrency) {
+                var modelEntry = takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredModelLoads, "slot", ["critical", "nearby"]);
+                if (!modelEntry) break;
+                startModelEntry(modelEntry);
+            }
+            var remainingActive = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical") +
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "nearby");
+            if (remainingActive === 0 && galleryFastStartRuntime.modelLoadActiveCount === 0) finishPump();
+        }
+
+        function waitForArtworkTextures() {
+            var pending = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+            if (pending > 0) {
+                setTimeout(waitForArtworkTextures, 70);
+                return;
+            }
+            pumpModels();
+            var remainingActive = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical") +
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "nearby");
+            if (remainingActive === 0 && galleryFastStartRuntime.modelLoadActiveCount === 0) finishPump();
+        }
+        waitForArtworkTextures();
+    }
+
+    function startGalleryZoneStreamingRuntime(reason) {
+        if (galleryZoneStreamingRuntime.started) return;
+        galleryZoneStreamingRuntime.started = true;
+        refreshGalleryStreamingBudgetsFromQuality(galleryDeviceProfile.currentQualityProfile, "streaming-start");
+        releaseGalleryStartupDeferredOptionalAssetImports("12C65E-interaction-ready-nearby-stream");
+        rebuildGalleryStreamingZones(reason || "streaming-start");
+        refreshGalleryCurrentStreamingZone(reason || "streaming-start", true);
+        (artworks || []).forEach(function (artwork) { getGalleryStreamingZoneIdForObject(artwork); });
+        (artSpheres || []).forEach(function (slot) { getGalleryStreamingZoneIdForObject(slot); });
+        (propMeshes || []).forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); });
+        maintainGalleryStreamingMemoryBudget("streaming-start");
+        scheduleGalleryZoneStreamingPump("streaming-start", 40);
+    }
+
+    function updateGalleryZoneStreamingRuntime(force) {
+        if (!galleryZoneStreamingRuntime.started) return;
+        galleryZoneStreamingRuntime.frameCounter += 1;
+        if (!force && galleryZoneStreamingRuntime.frameCounter % galleryZoneStreamingRuntime.checkEveryFrames !== 0) return;
+        var changed = refreshGalleryCurrentStreamingZone("camera-zone-update", !!force);
+        if (changed) {
+            maintainGalleryStreamingMemoryBudget("zone-changed");
+            scheduleGalleryZoneStreamingPump("zone-changed", 20);
+        } else if (Date.now() - galleryZoneStreamingRuntime.lastZoneChangeAt > 1200) {
+            maintainGalleryStreamingMemoryBudget("zone-maintenance");
+        }
+    }
+
+    function getGalleryZoneStreamingDebug() {
+        var artworkCritical = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "critical");
+        var artworkNearby = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "nearby");
+        var artworkDeferred = galleryFastStartRuntime.deferredArtworkLoads.length - artworkCritical - artworkNearby;
+        var modelCritical = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical");
+        var modelNearby = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "nearby");
+        var modelDeferred = galleryFastStartRuntime.deferredModelLoads.length - modelCritical - modelNearby;
+        return JSON.parse(JSON.stringify(Object.assign({}, galleryZoneStreamingRuntime, {
+            zones: galleryZoneStreamingRuntime.zoneIds.map(function (id) {
+                var zone = galleryZoneStreamingRuntime.zones[id];
+                return { id: id, bounds: zone.bounds, floorMeshCount: zone.floorMeshes.length, active: galleryZoneStreamingRuntime.activeZoneIds.indexOf(id) !== -1 };
+            }),
+            queueStats: {
+                artworks: { critical: artworkCritical, nearby: artworkNearby, deferred: artworkDeferred },
+                models: { critical: modelCritical, nearby: modelNearby, deferred: modelDeferred }
+            },
+            ktx2: galleryKtx2Runtime
+        })));
+    }
+
+    globalThis.BerryboyArtGalleryStreaming = {
+        getDebug: getGalleryZoneStreamingDebug,
+        refresh: function () {
+            rebuildGalleryStreamingZones("manual-refresh");
+            refreshGalleryCurrentStreamingZone("manual-refresh", true);
+            maintainGalleryStreamingMemoryBudget("manual-refresh");
+            scheduleGalleryZoneStreamingPump("manual-refresh", 0);
+            return getGalleryZoneStreamingDebug();
+        },
+        setEnabled: function (enabled) {
+            galleryZoneStreamingRuntime.enabled = !!enabled;
+            return getGalleryZoneStreamingDebug();
+        }
+    };
+
     function cloneGalleryFastStartState(value) {
         try {
             return JSON.parse(JSON.stringify(value || {}));
@@ -12786,53 +13625,49 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+    
     function queueGalleryFastStartArtworkLoad(artwork, imageState) {
-        if (!artwork || !imageState) {
-            return false;
-        }
-
+        if (!artwork || !imageState) return false;
         var key = artwork.name || String(artwork.uniqueId || galleryFastStartRuntime.deferredArtworkLoads.length);
-        var existingIndex = galleryFastStartRuntime.deferredArtworkLoads.findIndex(function (entry) {
-            return entry && entry.key === key;
-        });
+        var existingIndex = galleryFastStartRuntime.deferredArtworkLoads.findIndex(function (entry) { return entry && entry.key === key; });
+        var zoneId = getGalleryStreamingZoneIdForObject(artwork);
         var entry = {
             key: key,
             artwork: artwork,
             imageState: cloneGalleryFastStartState(imageState),
+            zoneId: zoneId,
+            tier: getGalleryStreamingTierForZone(zoneId),
             queuedAt: Date.now()
         };
-
-        if (existingIndex >= 0) {
-            galleryFastStartRuntime.deferredArtworkLoads[existingIndex] = entry;
-        } else {
-            galleryFastStartRuntime.deferredArtworkLoads.push(entry);
-        }
-
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+        artwork.metadata.galleryStreaming.zoneId = zoneId;
+        artwork.metadata.galleryStreaming.queued = true;
+        if (existingIndex >= 0) galleryFastStartRuntime.deferredArtworkLoads[existingIndex] = entry;
+        else galleryFastStartRuntime.deferredArtworkLoads.push(entry);
         return true;
     }
 
+    
     function queueGalleryFastStartModelLoad(slot, modelState) {
-        if (!slot || !modelState) {
-            return false;
-        }
-
+        if (!slot || !modelState) return false;
         var key = slot.name || String(slot.uniqueId || galleryFastStartRuntime.deferredModelLoads.length);
-        var existingIndex = galleryFastStartRuntime.deferredModelLoads.findIndex(function (entry) {
-            return entry && entry.key === key;
-        });
+        var existingIndex = galleryFastStartRuntime.deferredModelLoads.findIndex(function (entry) { return entry && entry.key === key; });
+        var zoneId = getGalleryStreamingZoneIdForObject(slot);
         var entry = {
             key: key,
             slot: slot,
             modelState: cloneGalleryFastStartState(modelState),
+            zoneId: zoneId,
+            tier: getGalleryStreamingTierForZone(zoneId),
             queuedAt: Date.now()
         };
-
-        if (existingIndex >= 0) {
-            galleryFastStartRuntime.deferredModelLoads[existingIndex] = entry;
-        } else {
-            galleryFastStartRuntime.deferredModelLoads.push(entry);
-        }
-
+        slot.metadata = slot.metadata || {};
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.zoneId = zoneId;
+        slot.metadata.galleryStreaming.queued = true;
+        if (existingIndex >= 0) galleryFastStartRuntime.deferredModelLoads[existingIndex] = entry;
+        else galleryFastStartRuntime.deferredModelLoads.push(entry);
         return true;
     }
 
@@ -12866,7 +13701,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        if (!entry.imageState.imageUrlPreview) {
+        if (!entry.imageState.imageUrlPreview && !entry.imageState.imageUrlKtx2Preview && !entry.imageState.ktx2PreviewUrl) {
             return;
         }
 
@@ -12883,108 +13718,92 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         scheduleGalleryFastStartFullArtworkDrainWhenIdle("preview-textures-ready");
     }
 
+    
+    
     function drainGalleryFastStartBackgroundQueue(reason) {
-        if (!galleryFastStartRuntime.viewerReady || galleryFastStartRuntime.backgroundDrainActive) {
-            return;
-        }
-
+        if (!galleryFastStartRuntime.viewerReady || galleryFastStartRuntime.backgroundDrainActive) return;
+        rebuildGalleryStreamingZones(reason || "critical-startup-drain");
+        refreshGalleryCurrentStreamingZone(reason || "critical-startup-drain", true);
         galleryFastStartRuntime.backgroundDrainActive = true;
         galleryFastStartRuntime.artworkPreviewDrainComplete = false;
         galleryFastStartRuntime.modelDrainComplete = false;
         galleryFastStartRuntime.startupBatchHydrationActive = true;
-        galleryFastStartRuntime.deferredArtworkLoads.sort(function (a, b) {
-            return getGalleryFastStartDistanceToCamera(a.artwork) - getGalleryFastStartDistanceToCamera(b.artwork);
-        });
-        galleryFastStartRuntime.deferredModelLoads.sort(function (a, b) {
-            return getGalleryFastStartDistanceToCamera(a.slot) - getGalleryFastStartDistanceToCamera(b.slot);
-        });
+        galleryZoneStreamingRuntime.criticalDrainComplete = false;
+        var drainFinished = false;
 
-        function finishStartupDrain() {
+        function finishCriticalDrain() {
+            if (drainFinished) return;
+            drainFinished = true;
             galleryFastStartRuntime.artworkPreviewDrainComplete = true;
             galleryFastStartRuntime.modelDrainComplete = true;
             galleryFastStartRuntime.startupBatchHydrationActive = false;
             galleryFastStartRuntime.backgroundDrainActive = false;
+            galleryZoneStreamingRuntime.criticalDrainComplete = true;
+            galleryZoneStreamingRuntime.deferredArtworkLoadsAvoided = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "deferred");
+            galleryZoneStreamingRuntime.deferredModelLoadsAvoided = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "deferred");
         }
 
-        function pumpModels() {
+        function startCriticalModelEntry(modelEntry) {
+            galleryFastStartRuntime.modelLoadActiveCount += 1;
+            galleryZoneStreamingRuntime.criticalModelStarted += 1;
+            var immediateState = cloneGalleryFastStartState(modelEntry.modelState);
+            immediateState._galleryFastStartForceImmediate = true;
+            immediateState._galleryStreamingTier = "critical";
+            Promise.resolve(applyModel3dStateToSlot(modelEntry.slot, immediateState))
+                .catch(function (error) { console.warn("12C65E critical model warning:", error); })
+                .finally(function () {
+                    galleryFastStartRuntime.modelLoadActiveCount = Math.max(0, galleryFastStartRuntime.modelLoadActiveCount - 1);
+                    galleryZoneStreamingRuntime.criticalModelFinished += 1;
+                    pumpCriticalModels();
+                });
+        }
+
+        function pumpCriticalModels() {
             var concurrency = Math.max(1, Number(galleryFastStartRuntime.modelLoadConcurrency) || 1);
-
-            while (
-                galleryFastStartRuntime.modelLoadActiveCount < concurrency &&
-                galleryFastStartRuntime.deferredModelLoads.length > 0
-            ) {
-                var modelEntry = galleryFastStartRuntime.deferredModelLoads.shift();
+            while (galleryFastStartRuntime.modelLoadActiveCount < concurrency) {
+                var modelEntry = takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredModelLoads, "slot", ["critical"]);
                 if (!modelEntry) break;
-
-                galleryFastStartRuntime.modelLoadActiveCount += 1;
-                var immediateModelState = cloneGalleryFastStartState(modelEntry.modelState);
-                immediateModelState._galleryFastStartForceImmediate = true;
-
-                var modelLoadTask = null;
-                try {
-                    modelLoadTask = applyModel3dStateToSlot(modelEntry.slot, immediateModelState);
-                } catch (modelLoadStartError) {
-                    modelLoadTask = Promise.reject(modelLoadStartError);
-                }
-
-                Promise.resolve(modelLoadTask)
-                    .catch(function (error) {
-                        console.warn("12C65A startup model hydration warning:", error);
-                    })
-                    .finally(function () {
-                        galleryFastStartRuntime.modelLoadActiveCount = Math.max(0, galleryFastStartRuntime.modelLoadActiveCount - 1);
-                        pumpModels();
-                    });
+                startCriticalModelEntry(modelEntry);
             }
-
-            if (
-                galleryFastStartRuntime.deferredModelLoads.length === 0 &&
-                galleryFastStartRuntime.modelLoadActiveCount === 0
-            ) {
-                finishStartupDrain();
+            if (countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical") === 0 && galleryFastStartRuntime.modelLoadActiveCount === 0) {
+                finishCriticalDrain();
             }
         }
 
-        function waitForArtworkPreviewsThenModels() {
-            var pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
-            if (galleryFastStartRuntime.deferredArtworkLoads.length > 0 || pendingTextures > 0) {
+        function waitForCriticalArtworkThenModels() {
+            var criticalPendingTextures = getGalleryCriticalPendingTextureCount();
+            var criticalQueue = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "critical");
+            if (criticalQueue > 0 || criticalPendingTextures > 0) {
                 setTimeout(function () {
-                    pumpArtworkPreviews();
-                    waitForArtworkPreviewsThenModels();
-                }, 50);
+                    pumpCriticalArtwork();
+                    waitForCriticalArtworkThenModels();
+                }, 55);
                 return;
             }
-
             galleryFastStartRuntime.artworkPreviewDrainComplete = true;
-            pumpModels();
+            pumpCriticalModels();
         }
 
-        function pumpArtworkPreviews() {
+        function pumpCriticalArtwork() {
             var launchLimit = getGalleryFastStartPreviewTextureConcurrency();
             var pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
-
-            while (galleryFastStartRuntime.deferredArtworkLoads.length > 0 && pendingTextures < launchLimit) {
-                var artworkEntry = galleryFastStartRuntime.deferredArtworkLoads.shift();
+            while (pendingTextures < launchLimit) {
+                var artworkEntry = takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredArtworkLoads, "artwork", ["critical"]);
                 if (!artworkEntry) break;
-
                 var previewState = cloneGalleryFastStartState(artworkEntry.imageState);
                 previewState._galleryFastStartForceImmediate = true;
                 previewState._galleryFastStartPreferPreview = true;
-
-                try {
-                    applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C65A preview hydration");
-                } catch (error) {
-                    console.warn("12C65A deferred artwork preview warning:", error);
-                }
-
+                previewState._galleryStreamingTier = "critical";
+                galleryZoneStreamingRuntime.criticalArtworkStarted += 1;
+                applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "12C65E critical artwork preview");
                 pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
             }
         }
 
         runGalleryFastStartIdleTask(function () {
-            pumpArtworkPreviews();
-            waitForArtworkPreviewsThenModels();
-        }, 220);
+            pumpCriticalArtwork();
+            waitForCriticalArtworkThenModels();
+        }, 120);
     }
 
     function isGalleryViewerBusyForFullArtworkUpgrade() {
@@ -13011,56 +13830,44 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, Math.max(250, Number(delayMs) || 700));
     }
 
+    
     function drainGalleryFastStartFullArtworkQueue(reason) {
         if (!galleryFastStartRuntime.viewerReady || !galleryFastStartRuntime.interactionReady) {
-            if (!galleryFastStartRuntime.fullArtworkViewerWaitTimer) {
-                galleryFastStartRuntime.fullArtworkViewerWaitTimer = setTimeout(function () {
-                    galleryFastStartRuntime.fullArtworkViewerWaitTimer = null;
-                    drainGalleryFastStartFullArtworkQueue(reason || "full-artwork-wait-for-viewer");
-                }, 1000);
-            }
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-viewer", 900);
             return;
         }
-
-        if (galleryFastStartRuntime.backgroundDrainActive) {
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-retry-after-busy", 700);
-            return;
-        }
-
-        if (isGalleryViewerBusyForFullArtworkUpgrade()) {
+        if (galleryFastStartRuntime.backgroundDrainActive || isGalleryViewerBusyForFullArtworkUpgrade()) {
             scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-idle", 700);
             return;
         }
-
-        var entry = galleryFastStartRuntime.deferredFullArtworkLoads.shift();
-
-        if (!entry) {
-            return;
-        }
-
+        refreshGalleryCurrentStreamingZone(reason || "full-artwork-zone", false);
+        var index = galleryFastStartRuntime.deferredFullArtworkLoads.findIndex(function (queuedEntry) {
+            return queuedEntry && getGalleryStreamingTierForObject(queuedEntry.artwork) === "critical";
+        });
+        if (index < 0) return;
+        var entry = galleryFastStartRuntime.deferredFullArtworkLoads.splice(index, 1)[0];
         galleryFastStartRuntime.backgroundDrainActive = true;
         var fullState = cloneGalleryFastStartState(entry.imageState);
         fullState._galleryFastStartForceImmediate = true;
         fullState._galleryFastStartPreferPreview = false;
-
+        fullState._galleryStreamingTier = "critical";
         runGalleryFastStartIdleTask(function () {
-            if (isGalleryViewerBusyForFullArtworkUpgrade()) {
+            if (isGalleryViewerBusyForFullArtworkUpgrade() || getGalleryStreamingTierForObject(entry.artwork) !== "critical") {
                 galleryFastStartRuntime.backgroundDrainActive = false;
-                galleryFastStartRuntime.deferredFullArtworkLoads.unshift(entry);
-                scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-idle-window-cancelled", 700);
+                galleryFastStartRuntime.deferredFullArtworkLoads.push(entry);
+                scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-zone-changed", 700);
                 return;
             }
-
             try {
-                applyArtworkImageStateSafely(entry.artwork, fullState, "12C65A full artwork hydration");
+                applyArtworkImageStateSafely(entry.artwork, fullState, "12C65E current-zone full artwork");
             } catch (error) {
-                console.warn("12C65A full artwork hydration warning:", error);
+                console.warn("12C65E full artwork hydration warning:", error);
             } finally {
                 galleryFastStartRuntime.backgroundDrainActive = false;
                 markGalleryViewerActivity("full-artwork-upgrade-finished");
                 scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-upgrade", 700);
             }
-        }, 1400);
+        }, 1200);
     }
 
     var galleryAssetLoadDebug = {
@@ -13139,6 +13946,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             id: textureId,
             artworkName: artwork && artwork.name ? artwork.name : null,
             url: String(imageUrl || ""),
+            streamingTier: artwork && artwork.metadata && artwork.metadata.galleryStreaming
+                ? (artwork.metadata.galleryStreaming.currentLoadTier || getGalleryStreamingTierForObject(artwork))
+                : "deferred",
             startedAt: Date.now()
         };
 
@@ -13167,13 +13977,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             galleryStartupArtworkTextureDebug.lastFinished = finishedEntry;
+            if (artwork && artwork.metadata && artwork.metadata.galleryStreaming) {
+                artwork.metadata.galleryStreaming.loading = false;
+            }
+            if (!failed && entry.streamingTier === "critical") {
+                galleryZoneStreamingRuntime.criticalArtworkFinished += 1;
+            }
         };
     }
 
     function waitForGalleryStartupPostStateSettle(reason) {
         galleryStartupFinalizeDebug.stateLoadFinishedAt = Date.now();
         galleryStartupFinalizeDebug.artworkTextureWait = {
-            reason: reason || "12C65A-single-startup-gate",
+            reason: reason || "12C65E-current-zone-streaming-gate",
             status: "waiting-for-visible-content",
             elapsedMs: 0,
             pendingCount: Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length
@@ -13181,7 +13997,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         updateGalleryLoaderStatus(
             "Preparing gallery...",
-            "Saved state is ready. The intro opens now while one startup gate finishes previews, models and lighting."
+            "Saved state is ready. The current gallery zone is prepared first; nearby and deferred assets stream after entry."
         );
 
         return Promise.resolve(galleryStartupFinalizeDebug.artworkTextureWait);
@@ -13575,24 +14391,32 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+    
     function getGalleryInteractionReadinessSnapshot() {
         var pendingTextures = Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length;
+        var pendingCriticalTextures = getGalleryCriticalPendingTextureCount();
         var pendingVisibleTextures = Object.keys(galleryStartupVisibleTextureDebug.pending || {}).length;
-        var propsLoaded = !!galleryAssetLoadDebug.loaded.props;
-        var propsFailed = !!galleryAssetLoadDebug.failed.props;
+        var criticalArtworkQueue = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "critical");
+        var criticalModelQueue = countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical");
         var snapshot = {
             stateApplied: !!galleryFastStartRuntime.stateApplied,
-            artworkQueue: galleryFastStartRuntime.deferredArtworkLoads.length,
+            artworkQueue: criticalArtworkQueue,
+            artworkQueueTotal: galleryFastStartRuntime.deferredArtworkLoads.length,
             artworkPreviewDrainComplete: !!galleryFastStartRuntime.artworkPreviewDrainComplete,
-            modelQueue: galleryFastStartRuntime.deferredModelLoads.length,
+            modelQueue: criticalModelQueue,
+            modelQueueTotal: galleryFastStartRuntime.deferredModelLoads.length,
             modelActive: galleryFastStartRuntime.modelLoadActiveCount,
             modelDrainComplete: !!galleryFastStartRuntime.modelDrainComplete,
             queueBusy: !!galleryFastStartRuntime.backgroundDrainActive,
-            pendingTextures: pendingTextures,
+            pendingTextures: pendingCriticalTextures,
+            pendingTexturesTotal: pendingTextures,
             pendingVisibleTextures: pendingVisibleTextures,
-            propsSettled: propsLoaded || propsFailed,
-            propsLoaded: propsLoaded,
-            propsFailed: propsFailed,
+            propsSettled: true,
+            propsLoaded: !!galleryAssetLoadDebug.loaded.props,
+            propsFailed: !!galleryAssetLoadDebug.failed.props,
+            criticalZoneId: galleryZoneStreamingRuntime.currentZoneId,
+            activeZoneIds: galleryZoneStreamingRuntime.activeZoneIds.slice(),
+            criticalDrainComplete: !!galleryZoneStreamingRuntime.criticalDrainComplete,
             finalizationComplete: !!galleryFastStartRuntime.interactionFinalizationComplete,
             warmupComplete: !!galleryFastStartRuntime.interactionWarmupComplete
         };
@@ -13603,10 +14427,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             snapshot.modelQueue === 0 &&
             snapshot.modelActive === 0 &&
             snapshot.modelDrainComplete &&
-            !snapshot.queueBusy &&
             snapshot.pendingTextures === 0 &&
             snapshot.pendingVisibleTextures === 0 &&
-            snapshot.propsSettled
+            snapshot.criticalDrainComplete
         );
         snapshot.ready = !!(snapshot.heavyReady && snapshot.finalizationComplete && snapshot.warmupComplete);
         return snapshot;
@@ -13667,19 +14490,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    
     function getGalleryInteractionReadinessBlockers(snapshot) {
         snapshot = snapshot || getGalleryInteractionReadinessSnapshot();
         var blockers = [];
         if (!snapshot.stateApplied) blockers.push("state");
-        if (snapshot.artworkQueue > 0) blockers.push("artworkQueue:" + snapshot.artworkQueue);
-        if (!snapshot.artworkPreviewDrainComplete) blockers.push("artworkPreviews");
-        if (snapshot.pendingTextures > 0) blockers.push("artworkTextures:" + snapshot.pendingTextures);
-        if (snapshot.modelQueue > 0) blockers.push("modelQueue:" + snapshot.modelQueue);
-        if (snapshot.modelActive > 0) blockers.push("modelActive:" + snapshot.modelActive);
-        if (!snapshot.modelDrainComplete) blockers.push("models");
+        if (snapshot.artworkQueue > 0) blockers.push("criticalArtworkQueue:" + snapshot.artworkQueue);
+        if (!snapshot.artworkPreviewDrainComplete) blockers.push("criticalArtworkPreviews");
+        if (snapshot.pendingTextures > 0) blockers.push("criticalArtworkTextures:" + snapshot.pendingTextures);
+        if (snapshot.modelQueue > 0) blockers.push("criticalModelQueue:" + snapshot.modelQueue);
+        if (snapshot.modelActive > 0) blockers.push("criticalModelActive:" + snapshot.modelActive);
+        if (!snapshot.modelDrainComplete) blockers.push("criticalModels");
         if (snapshot.pendingVisibleTextures > 0) blockers.push("visibleTextures:" + snapshot.pendingVisibleTextures);
-        if (!snapshot.propsSettled) blockers.push("props");
-        if (snapshot.queueBusy) blockers.push("startupDrain");
+        if (!snapshot.criticalDrainComplete) blockers.push("criticalZoneDrain");
         return blockers;
     }
 
@@ -13692,10 +14515,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionFinalizationComplete = false;
         galleryFastStartRuntime.interactionFinalizationResult = null;
         galleryFastStartRuntime.interactionWarmupComplete = false;
-        setGalleryInteractionReady(false, reason || "12C65A-single-startup-gate");
+        setGalleryInteractionReady(false, reason || "12C65E-current-zone-critical-gate");
 
-        releaseGalleryStartupDeferredOptionalAssetImports("12C65A-single-startup-gate");
-        drainGalleryFastStartBackgroundQueue("12C65A-single-startup-gate");
+        // Optional static Props stay deferred until the current-zone critical gate is complete.
+        drainGalleryFastStartBackgroundQueue("12C65E-current-zone-critical");
 
         if (galleryFastStartRuntime.interactionGateWatchdogTimer) {
             clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
@@ -13705,7 +14528,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.interactionGateTimedOut = true;
             var stalled = getGalleryInteractionReadinessSnapshot();
             galleryFastStartRuntime.interactionGateLastSnapshot = stalled;
-            console.warn("12C65A startup gate is still waiting.", {
+            console.warn("12C65E startup gate is still waiting.", {
                 blockers: getGalleryInteractionReadinessBlockers(stalled),
                 snapshot: stalled
             });
@@ -13718,9 +14541,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.interactionGateLastSnapshot = snapshot;
             updateViewerIntroInteractionState();
 
-            if (!galleryFastStartRuntime.backgroundDrainActive &&
-                (galleryFastStartRuntime.deferredArtworkLoads.length > 0 || galleryFastStartRuntime.deferredModelLoads.length > 0)) {
-                drainGalleryFastStartBackgroundQueue("12C65A-single-startup-gate-resume");
+            if (!galleryFastStartRuntime.backgroundDrainActive && (
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredArtworkLoads, "artwork", "critical") > 0 ||
+                countGalleryStreamingQueueTier(galleryFastStartRuntime.deferredModelLoads, "slot", "critical") > 0
+            )) {
+                drainGalleryFastStartBackgroundQueue("12C65E-critical-startup-gate-resume");
             }
 
             if (!snapshot.heavyReady) {
@@ -13729,7 +14554,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             if (!galleryFastStartRuntime.interactionFinalizationComplete) {
-                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("12C65A-single-batch-finalization");
+                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("12C65E-current-zone-batch-finalization");
                 galleryFastStartRuntime.interactionFinalizationComplete = true;
             }
 
@@ -13741,8 +14566,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
                     galleryFastStartRuntime.interactionGateWatchdogTimer = null;
                 }
-                setGalleryInteractionReady(true, "12C65A-single-gate-finalized-and-warmed");
-                scheduleGalleryFastStartFullArtworkDrainWhenIdle("12C65A-post-entry-full-textures", 900);
+                setGalleryInteractionReady(true, "12C65E-current-zone-critical-ready");
+                startGalleryZoneStreamingRuntime("12C65E-interaction-ready");
+                scheduleGalleryFastStartFullArtworkDrainWhenIdle("12C65E-current-zone-full-textures", 600);
             });
         }
 
@@ -13765,7 +14591,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.viewerReady = true;
         galleryFastStartRuntime.viewerReadyAt = Date.now();
         galleryFastStartRuntime.interactionReady = false;
-        galleryStartupFinalizeDebug.finalLightMode = "12C65A-single-startup-gate";
+        galleryStartupFinalizeDebug.finalLightMode = "12C65E-current-zone-streaming-gate";
 
         loadingScreen.style.display = "none";
         if (!editMode) showViewerIntroOverlay();
@@ -13774,12 +14600,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (typeof requestAnimationFrame === "function") {
             requestAnimationFrame(function () {
                 requestAnimationFrame(function () {
-                    beginGalleryInteractionReadinessGate("12C65A-visual-ready");
+                    beginGalleryInteractionReadinessGate("12C65E-visual-ready");
                 });
             });
         } else {
             setTimeout(function () {
-                beginGalleryInteractionReadinessGate("12C65A-visual-ready-fallback");
+                beginGalleryInteractionReadinessGate("12C65E-visual-ready-fallback");
             }, 0);
         }
     }
@@ -13896,6 +14722,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 deferredModelLoads: galleryFastStartRuntime.deferredModelLoads.length
             })));
             galleryAssetLoadDebug.deviceProfile = globalThis.BerryboyArtGalleryDevice ? globalThis.BerryboyArtGalleryDevice.getDebug() : null;
+            galleryAssetLoadDebug.streaming = getGalleryZoneStreamingDebug();
+            galleryAssetLoadDebug.ktx2 = JSON.parse(JSON.stringify(galleryKtx2Runtime));
             return JSON.parse(JSON.stringify(galleryAssetLoadDebug));
         },
         retry: function () {
@@ -27517,6 +28345,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function runGalleryFrameTick() {
         updateViewerWASDMovement();
         updateViewerWallCollisionIfCameraMoved();
+        updateGalleryZoneStreamingRuntime(false);
 
         measureGalleryPerformanceMetric("localLightsMs", function () {
             updateLocalLightsCameraCulling(false);
@@ -31165,6 +31994,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             freezeStaticGalleryMeshes(floorMeshes, "floor");
             updateMobileFloorBounds();
+            rebuildGalleryStreamingZones("floor-imported");
+            refreshGalleryCurrentStreamingZone("floor-imported", true);
             applyVisualReflectionSettings(readVisualSettingsFromScene());
             refreshViewerCollisionMeshes();
             refreshArtworkLightExclusions();
@@ -31265,6 +32096,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
 
             markGalleryObjectsDirty("propsImported");
+            rebuildGalleryStreamingZones("props-imported");
+            propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); });
+            updateGalleryPropZoneActivation();
             if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) {
                 galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
             } else {
@@ -31334,22 +32168,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return slot && slot.metadata ? slot.metadata.model3d || null : null;
     }
 
+    
     function normalizeModel3dState(modelState) {
-        if (!modelState || typeof modelState !== "object") {
-            return null;
-        }
-
+        if (!modelState || typeof modelState !== "object") return null;
         var modelUrl = modelState.modelUrl || modelState.url || modelState.publicUrl || "";
         var modelPath = modelState.modelPath || modelState.path || "";
-
-        if (!modelUrl && modelPath) {
-            modelUrl = getPublicArtworkUrlFromPath(modelPath, modelState.storageBucket || galleryArtworkStorageBucket);
-        }
-
-        if (!modelUrl) {
-            return null;
-        }
-
+        if (!modelUrl && modelPath) modelUrl = getPublicArtworkUrlFromPath(modelPath, modelState.storageBucket || galleryArtworkStorageBucket);
+        if (!modelUrl) return null;
         return {
             modelUrl: modelUrl,
             modelPath: modelPath,
@@ -31361,16 +32186,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             assignedAt: modelState.assignedAt || new Date().toISOString(),
             sourceSlotName: modelState.sourceSlotName || "",
             isDuplicate: !!modelState.isDuplicate,
+            lodCullDistance: Number(modelState.lodCullDistance) || null,
+            lodUrl: modelState.lodUrl || modelState.modelUrlLow || modelState.lowUrl || "",
+            ktx2Ready: modelState.ktx2Ready !== false,
             transform: {
-                position: modelState.transform && modelState.transform.position
-                    ? modelState.transform.position
-                    : { x: 0, y: 0, z: 0 },
-                rotation: modelState.transform && modelState.transform.rotation
-                    ? modelState.transform.rotation
-                    : { x: 0, y: 0, z: 0 },
-                scaling: modelState.transform && modelState.transform.scaling
-                    ? modelState.transform.scaling
-                    : { x: 1, y: 1, z: 1 }
+                position: modelState.transform && modelState.transform.position ? modelState.transform.position : { x: 0, y: 0, z: 0 },
+                rotation: modelState.transform && modelState.transform.rotation ? modelState.transform.rotation : { x: 0, y: 0, z: 0 },
+                scaling: modelState.transform && modelState.transform.scaling ? modelState.transform.scaling : { x: 1, y: 1, z: 1 }
             }
         };
     }
@@ -31576,12 +32398,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    function getGalleryModelStreamingAssetChoice(modelState, streamingTier) {
+        var tier = String(streamingTier || "deferred");
+        var highUrl = modelState && modelState.modelUrl ? String(modelState.modelUrl) : "";
+        var lowUrl = modelState && modelState.lodUrl ? String(modelState.lodUrl) : "";
+        if (tier === "nearby" && lowUrl) {
+            return { url: lowUrl, variant: "low", tier: tier };
+        }
+        return { url: highUrl, variant: "high", tier: tier };
+    }
+
     async function loadModel3dIntoSlot(slot, modelState) {
+        var streamingTier = modelState && modelState._galleryStreamingTier ? modelState._galleryStreamingTier : null;
         modelState = normalizeModel3dState(modelState);
+        if (modelState && streamingTier) modelState._galleryStreamingTier = streamingTier;
 
         if (!slot || !modelState || !modelState.modelUrl) {
             return false;
         }
+
+        var assetChoice = getGalleryModelStreamingAssetChoice(modelState, streamingTier || getGalleryStreamingTierForObject(slot));
+        if (!assetChoice.url) return false;
 
         slot.metadata = slot.metadata || {};
         slot.metadata.model3d = modelState;
@@ -31597,18 +32434,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         slot.metadata.model3dRuntime = {
             root: root,
             meshes: [],
-            loadedAt: new Date().toISOString()
+            loadedAt: new Date().toISOString(),
+            assetVariant: assetChoice.variant,
+            assetUrl: assetChoice.url,
+            requestedTier: assetChoice.tier
         };
 
         try {
             var result = null;
             var cachedInstance = null;
 
-            try {
-                var cachedContainer = await getGalleryCachedModel3dContainer(modelState.modelUrl);
-                cachedInstance = instantiateGalleryCachedModel3d(cachedContainer, slot);
-            } catch (cacheError) {
-                console.warn("Model 3D cache fallback warning:", cacheError);
+            if (!galleryDeviceProfile.mobile) {
+                try {
+                    var cachedContainer = await getGalleryCachedModel3dContainer(assetChoice.url);
+                    cachedInstance = instantiateGalleryCachedModel3d(cachedContainer, slot);
+                } catch (cacheError) {
+                    console.warn("Model 3D cache fallback warning:", cacheError);
+                }
             }
 
             if (cachedInstance && cachedInstance.meshes.length) {
@@ -31627,7 +32469,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 result = await BABYLON.SceneLoader.ImportMeshAsync(
                     "",
                     "",
-                    modelState.modelUrl,
+                    assetChoice.url,
                     scene
                 );
             }
@@ -31646,16 +32488,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
 
             slot.metadata.model3dRuntime.meshes = loadedMeshes;
+            slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+            slot.metadata.galleryStreaming.modelState = "loaded";
+            slot.metadata.galleryStreaming.suspended = false;
+            slot.metadata.galleryStreaming.lastActiveAt = Date.now();
+            slot.metadata.galleryStreaming.currentLoadTier = modelState._galleryStreamingTier || getGalleryStreamingTierForObject(slot);
+            slot.metadata.galleryStreaming.modelAssetVariant = assetChoice.variant;
+            slot.metadata.galleryStreaming.modelAssetUrl = assetChoice.url;
+            if (assetChoice.variant === "low") galleryZoneStreamingRuntime.lowLodModelLoads += 1;
+            else galleryZoneStreamingRuntime.highLodModelLoads += 1;
             setModel3dSlotTransformFromState(slot, modelState);
             applySculptureTransformToSlot(slot);
             applySculptureSlotVisualState(slot);
             snapModel3dSlotRuntimeToFloor(slot);
             refreshSculptureCollisionProxy(slot);
             refreshSculptureOutlines();
+            configureGalleryModelRuntimeLod(slot);
 
             galleryModel3dLastDebug = {
                 slot: slot.name,
                 modelUrl: modelState.modelUrl,
+                loadedUrl: assetChoice.url,
+                assetVariant: assetChoice.variant,
                 meshCount: loadedMeshes.length,
                 loadedAt: new Date().toISOString()
             };
@@ -31675,6 +32529,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             console.warn("3D model load failed:", {
                 slot: slot.name,
                 modelUrl: modelState.modelUrl,
+                loadedUrl: assetChoice.url,
+                assetVariant: assetChoice.variant,
                 error: error
             });
 
@@ -31682,6 +32538,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryModel3dLastDebug = {
                 slot: slot.name,
                 modelUrl: modelState.modelUrl,
+                loadedUrl: assetChoice.url,
+                assetVariant: assetChoice.variant,
                 error: error && error.message ? error.message : String(error)
             };
             notifyGalleryStatus("Nie udalo sie wczytac modelu 3D. Sprawdz URL/GLB i konsolę.");
@@ -31689,25 +32547,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+    
     function applyModel3dStateToSlot(slot, modelState) {
         var forceImmediate = !!(modelState && modelState._galleryFastStartForceImmediate);
+        var streamingTier = modelState && modelState._galleryStreamingTier ? modelState._galleryStreamingTier : null;
         modelState = normalizeModel3dState(modelState);
-
-        if (!slot || !modelState) {
-            return Promise.resolve(false);
-        }
-
-        if (
-            galleryFastStartRuntime.stateApplyActive &&
-            !forceImmediate
-        ) {
+        if (!slot || !modelState) return Promise.resolve(false);
+        if (streamingTier) modelState._galleryStreamingTier = streamingTier;
+        if (galleryFastStartRuntime.stateApplyActive && !forceImmediate) {
             slot.metadata = slot.metadata || {};
             slot.metadata.model3d = modelState;
             queueGalleryFastStartModelLoad(slot, modelState);
             applySculptureSlotVisualState(slot);
             return Promise.resolve(true);
         }
-
         return loadModel3dIntoSlot(slot, modelState);
     }
 
