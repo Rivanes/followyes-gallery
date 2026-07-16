@@ -69,6 +69,7 @@
   - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
   - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
   - Stage 12C65C: Mobile Viewport / HUD Rebuild — VisualViewport ustala rzeczywistą wysokość galerii, mobilne UI trafia do jednego warstwowego HUD-u, joystick respektuje safe-area, a orientacja i dynamiczne paski przeglądarki odświeżają canvas bez zmian w Inspect.
+  - Stage 12C65D: Mobile Inspect UI / Safe-Frame — mobilny popup otrzymuje jeden finalny układ avatar + treść + nawigacja, strzałki są częścią komponentu, a mierzony safe-frame omija joystick w portrait i wykorzystuje boczne miejsce w niskim landscape.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -282,7 +283,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65C",
+            stage: "12C65D",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -6415,7 +6416,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C65C",
+            stage: "12C65D",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
@@ -16866,9 +16867,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         #galleryInspectNavigation {
+            --gallery-inspect-navigation-size: 68px;
+            --gallery-inspect-navigation-gap: 18px;
             position: absolute;
             inset: 0;
-            z-index: 44;
+            z-index: 4;
             pointer-events: none;
             opacity: 0;
             visibility: hidden;
@@ -16882,10 +16885,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         .gallery-inspect-navigation-button {
             position: absolute;
-            top: var(--gallery-inspect-navigation-y, 74%);
-            left: var(--gallery-inspect-navigation-x, 0px);
-            width: 68px;
-            height: 68px;
+            top: 50%;
+            width: var(--gallery-inspect-navigation-size);
+            height: var(--gallery-inspect-navigation-size);
             padding: 0;
             display: grid;
             place-items: center;
@@ -16920,11 +16922,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         .gallery-inspect-navigation-button.is-previous {
-            --gallery-inspect-navigation-x: var(--gallery-inspect-navigation-previous-x, 18px);
+            left: calc(var(--gallery-inspect-avatar-left) - var(--gallery-inspect-navigation-gap) - var(--gallery-inspect-navigation-size));
         }
 
         .gallery-inspect-navigation-button.is-next {
-            --gallery-inspect-navigation-x: var(--gallery-inspect-navigation-next-x, calc(100% - 86px));
+            right: calc(0px - var(--gallery-inspect-navigation-size) - var(--gallery-inspect-navigation-gap));
         }
 
         .gallery-inspect-navigation-icon {
@@ -16943,67 +16945,216 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             transform: rotate(45deg) translate(-1px, 1px);
         }
 
+        .gallery-inspect-navigation-label {
+            display: none;
+        }
+
         body.gallery-edit-inspect-preview #galleryEditorPanel {
             opacity: 0 !important;
             visibility: hidden !important;
             pointer-events: none !important;
         }
 
+        /* STAGE 12C65D — ONE FINAL MOBILE INSPECT COMPONENT.
+           The popup owns avatar, content and navigation. JavaScript only supplies measured
+           safe-frame insets from the real joystick and gallery viewport. */
         @media (max-width: 768px), (pointer: coarse) {
             #galleryArtworkInfoPopup.gallery-artwork-info-popup {
-                --gallery-inspect-avatar-size: 92px;
-                --gallery-inspect-avatar-left: -25px;
-                --gallery-inspect-avatar-top: -15px;
-                bottom: 18px !important;
-                width: min(430px, calc(100% - 54px)) !important;
+                --gallery-inspect-avatar-size: 76px;
+                --gallery-inspect-avatar-left: 0px;
+                --gallery-inspect-avatar-top: 0px;
+                left: max(var(--gallery-mobile-inspect-left, 14px), env(safe-area-inset-left)) !important;
+                right: max(var(--gallery-mobile-inspect-right, 14px), env(safe-area-inset-right)) !important;
+                bottom: max(var(--gallery-mobile-inspect-bottom, 14px), env(safe-area-inset-bottom)) !important;
+                width: auto !important;
                 max-width: none !important;
-                max-height: min(33vh, 230px) !important;
+                max-height: var(--gallery-mobile-inspect-max-height, min(46vh, 360px)) !important;
+                transform: translateY(12px) !important;
+            }
+
+            #galleryArtworkInfoPopup.gallery-artwork-info-popup.is-visible {
+                transform: translateY(0) !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
-                min-height: 94px !important;
-                padding: 15px 17px 15px 82px !important;
-                border-radius: 19px !important;
+                display: grid !important;
+                grid-template-columns: var(--gallery-inspect-avatar-size) minmax(0, 1fr) !important;
+                grid-template-rows: minmax(var(--gallery-inspect-avatar-size), auto) auto !important;
+                align-items: center !important;
+                column-gap: 13px !important;
+                row-gap: 12px !important;
+                min-height: 0 !important;
+                max-height: inherit !important;
+                padding: 14px !important;
+                border-radius: 20px !important;
+                overflow: hidden !important;
+            }
+
+            #galleryArtworkInfoPopup .gallery-artwork-info-avatar {
+                position: relative !important;
+                left: auto !important;
+                top: auto !important;
+                grid-column: 1 !important;
+                grid-row: 1 !important;
+                align-self: start !important;
+                width: var(--gallery-inspect-avatar-size) !important;
+                height: var(--gallery-inspect-avatar-size) !important;
+                border-width: 1.5px !important;
+                box-shadow:
+                    0 11px 26px rgba(0, 0, 0, 0.34),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-author-photo-placeholder {
-                font-size: 22px !important;
+                font-size: 23px !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-content {
-                min-height: 64px !important;
+                grid-column: 2 !important;
+                grid-row: 1 !important;
+                min-height: var(--gallery-inspect-avatar-size) !important;
+                max-height: calc(var(--gallery-mobile-inspect-max-height, 360px) - 88px) !important;
+                justify-content: center !important;
+                overflow: hidden !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-author-name {
                 margin-bottom: 3px !important;
                 font-size: 10.5px !important;
+                line-height: 1.25 !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-title {
-                font-size: 15.5px !important;
-                line-height: 1.2 !important;
+                font-size: 16px !important;
+                line-height: 1.18 !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-description {
                 margin-top: 6px !important;
-                max-height: 62px !important;
+                max-height: min(88px, calc(var(--gallery-mobile-inspect-max-height, 360px) - 150px)) !important;
+                padding-right: 3px !important;
                 font-size: 12px !important;
-                line-height: 1.4 !important;
+                line-height: 1.42 !important;
+                overscroll-behavior: contain !important;
+                -webkit-overflow-scrolling: touch !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-empty {
                 font-size: 12px !important;
             }
 
+            #galleryInspectNavigation {
+                --gallery-inspect-navigation-size: 46px;
+                position: relative !important;
+                inset: auto !important;
+                grid-column: 1 / -1 !important;
+                grid-row: 2 !important;
+                display: grid !important;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+                gap: 9px !important;
+                opacity: 0;
+                visibility: hidden;
+            }
+
+            #galleryInspectNavigation.is-visible {
+                opacity: 1;
+                visibility: visible;
+            }
+
             .gallery-inspect-navigation-button {
-                width: 52px;
-                height: 52px;
+                position: relative !important;
+                top: auto !important;
+                left: auto !important;
+                right: auto !important;
+                width: 100% !important;
+                height: var(--gallery-inspect-navigation-size) !important;
+                min-width: 0 !important;
+                padding: 0 14px !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 9px !important;
+                border-radius: 14px !important;
+                background: rgba(255, 255, 255, 0.075) !important;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+                transform: none !important;
+            }
+
+            .gallery-inspect-navigation-button:hover,
+            .gallery-inspect-navigation-button:focus-visible {
+                transform: none !important;
+            }
+
+            .gallery-inspect-navigation-button.is-hidden,
+            .gallery-inspect-navigation-button:disabled {
+                display: none !important;
             }
 
             .gallery-inspect-navigation-icon {
-                width: 18px;
-                height: 18px;
-                border-width: 3px 3px 0 0;
+                width: 13px !important;
+                height: 13px !important;
+                flex: 0 0 auto !important;
+                border-width: 2.5px 2.5px 0 0 !important;
+            }
+
+            .gallery-inspect-navigation-label {
+                display: block !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+                color: rgba(247, 243, 234, 0.86) !important;
+                font-size: 11px !important;
+                line-height: 1 !important;
+                font-weight: 730 !important;
+                letter-spacing: 0.015em !important;
+                text-overflow: ellipsis !important;
+                white-space: nowrap !important;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] {
+                --gallery-inspect-avatar-size: 62px;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-popup-inner {
+                grid-template-columns: var(--gallery-inspect-avatar-size) minmax(0, 1fr) !important;
+                column-gap: 11px !important;
+                row-gap: 9px !important;
+                padding: 11px !important;
+                border-radius: 17px !important;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-content {
+                min-height: var(--gallery-inspect-avatar-size) !important;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-description {
+                max-height: 52px !important;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] #galleryInspectNavigation {
+                --gallery-inspect-navigation-size: 40px;
+                gap: 7px !important;
+            }
+
+            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-inspect-navigation-button {
+                padding: 0 10px !important;
+                border-radius: 12px !important;
+            }
+        }
+
+        @media (max-width: 380px) and (pointer: coarse) {
+            #galleryArtworkInfoPopup.gallery-artwork-info-popup {
+                --gallery-inspect-avatar-size: 66px;
+            }
+
+            #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
+                column-gap: 11px !important;
+                row-gap: 10px !important;
+                padding: 12px !important;
+                border-radius: 18px !important;
+            }
+
+            .gallery-inspect-navigation-label {
+                font-size: 10.5px !important;
             }
         }
 
@@ -24978,19 +25129,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         + '    <div class="gallery-artwork-info-empty">No artwork information added yet.</div>'
         + '  </div>'
         + '</div>';
-    appendGalleryUiElement(artworkInfoPopup, "inspect");
-
     var galleryInspectNavigation = document.createElement("div");
     galleryInspectNavigation.id = "galleryInspectNavigation";
     galleryInspectNavigation.setAttribute("aria-hidden", "true");
     galleryInspectNavigation.innerHTML = ''
         + '<button type="button" class="gallery-inspect-navigation-button is-previous is-hidden" aria-label="Previous artwork">'
         + '  <span class="gallery-inspect-navigation-icon" aria-hidden="true"></span>'
+        + '  <span class="gallery-inspect-navigation-label">Previous</span>'
         + '</button>'
         + '<button type="button" class="gallery-inspect-navigation-button is-next is-hidden" aria-label="Next artwork">'
+        + '  <span class="gallery-inspect-navigation-label">Next</span>'
         + '  <span class="gallery-inspect-navigation-icon" aria-hidden="true"></span>'
         + '</button>';
-    appendGalleryUiElement(galleryInspectNavigation, "inspect");
+
+    var artworkInfoPopupInner = artworkInfoPopup.querySelector(".gallery-artwork-info-popup-inner");
+    if (artworkInfoPopupInner) {
+        artworkInfoPopupInner.appendChild(galleryInspectNavigation);
+    }
+    appendGalleryUiElement(artworkInfoPopup, "inspect");
 
     var galleryInspectNavigationRefs = {
         previous: galleryInspectNavigation.querySelector(".gallery-inspect-navigation-button.is-previous"),
@@ -34376,54 +34532,145 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    var galleryMobileInspectSafeFrameRuntime = {
+        signature: "",
+        mode: "desktop",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        maxHeight: 0,
+        joystickVisible: false,
+        lastReason: "initial"
+    };
+
+    function isGalleryInspectLayoutElementVisible(element) {
+        if (!element || !element.getBoundingClientRect) {
+            return false;
+        }
+
+        var rect = element.getBoundingClientRect();
+        if (!rect || rect.width <= 1 || rect.height <= 1) {
+            return false;
+        }
+
+        try {
+            var style = window.getComputedStyle(element);
+            return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0.01;
+        } catch (error) {
+            return true;
+        }
+    }
+
+    function updateGalleryMobileInspectSafeFrame(reason) {
+        if (!artworkInfoPopup) {
+            return galleryMobileInspectSafeFrameRuntime;
+        }
+
+        var mobile = getArtworkInfoPopupMobileMode();
+        if (!mobile) {
+            artworkInfoPopup.removeAttribute("data-mobile-safe-frame-mode");
+            [
+                "--gallery-mobile-inspect-left",
+                "--gallery-mobile-inspect-right",
+                "--gallery-mobile-inspect-bottom",
+                "--gallery-mobile-inspect-max-height"
+            ].forEach(function (name) {
+                artworkInfoPopup.style.removeProperty(name);
+            });
+            galleryMobileInspectSafeFrameRuntime.mode = "desktop";
+            galleryMobileInspectSafeFrameRuntime.signature = "desktop";
+            galleryMobileInspectSafeFrameRuntime.lastReason = reason || "desktop";
+            return galleryMobileInspectSafeFrameRuntime;
+        }
+
+        var root = getGalleryUiRoot();
+        var rootRect = null;
+        var joystick = document.getElementById("mobileJoystickBase");
+        var joystickRect = null;
+
+        try {
+            rootRect = root && root.getBoundingClientRect ? root.getBoundingClientRect() : null;
+            joystickRect = isGalleryInspectLayoutElementVisible(joystick)
+                ? joystick.getBoundingClientRect()
+                : null;
+        } catch (error) {}
+
+        if (!rootRect || rootRect.width <= 1 || rootRect.height <= 1) {
+            return galleryMobileInspectSafeFrameRuntime;
+        }
+
+        var edge = rootRect.width <= 380 ? 10 : 14;
+        var gap = rootRect.width <= 380 ? 10 : 14;
+        var left = edge;
+        var right = edge;
+        var bottom = edge;
+        var mode = "bottom";
+        var joystickVisible = !!(
+            joystickRect &&
+            joystickRect.right > rootRect.left &&
+            joystickRect.left < rootRect.right &&
+            joystickRect.bottom > rootRect.top &&
+            joystickRect.top < rootRect.bottom
+        );
+
+        if (joystickVisible) {
+            var joystickRight = Math.max(0, joystickRect.right - rootRect.left);
+            var joystickTopReserve = Math.max(0, rootRect.bottom - joystickRect.top);
+            var landscape = rootRect.width > rootRect.height;
+            var sideLeft = joystickRight + gap;
+            var sideAvailable = rootRect.width - sideLeft - edge;
+
+            if (landscape && rootRect.height <= 600 && sideAvailable >= 300) {
+                mode = "side";
+                left = sideLeft;
+                bottom = edge;
+            } else {
+                mode = "above-joystick";
+                bottom = joystickTopReserve + gap;
+            }
+        }
+
+        var topGap = rootRect.height <= 430 ? 8 : 14;
+        var maxHeight = Math.max(148, rootRect.height - bottom - topGap);
+        var signature = [
+            mode,
+            Math.round(left),
+            Math.round(right),
+            Math.round(bottom),
+            Math.round(maxHeight),
+            joystickVisible ? 1 : 0
+        ].join(":");
+
+        galleryMobileInspectSafeFrameRuntime.mode = mode;
+        galleryMobileInspectSafeFrameRuntime.bottom = bottom;
+        galleryMobileInspectSafeFrameRuntime.left = left;
+        galleryMobileInspectSafeFrameRuntime.right = right;
+        galleryMobileInspectSafeFrameRuntime.maxHeight = maxHeight;
+        galleryMobileInspectSafeFrameRuntime.joystickVisible = joystickVisible;
+        galleryMobileInspectSafeFrameRuntime.lastReason = reason || "refresh";
+
+        if (signature === galleryMobileInspectSafeFrameRuntime.signature) {
+            return galleryMobileInspectSafeFrameRuntime;
+        }
+
+        galleryMobileInspectSafeFrameRuntime.signature = signature;
+        artworkInfoPopup.setAttribute("data-mobile-safe-frame-mode", mode);
+        artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-left", left.toFixed(1) + "px");
+        artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-right", right.toFixed(1) + "px");
+        artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-bottom", bottom.toFixed(1) + "px");
+        artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-max-height", maxHeight.toFixed(1) + "px");
+
+        return galleryMobileInspectSafeFrameRuntime;
+    }
+
     function updateGalleryInspectNavigationPosition() {
         if (!galleryInspectNavigation || !artworkInfoPopup) {
             return;
         }
 
-        var root = getGalleryUiRoot();
-        var rootRect = null;
-        var uiRects = getGalleryInspectUiRects();
-        var popupRect = uiRects.popup;
-        var popupVisualRect = uiRects.popupVisual || popupRect;
-
-        try {
-            rootRect = root && root.getBoundingClientRect ? root.getBoundingClientRect() : null;
-        } catch (error) {}
-
-        if (!rootRect || !popupRect || !popupVisualRect || popupRect.height <= 1) {
-            return;
-        }
-
-        var mobile = getArtworkInfoPopupMobileMode();
-        var buttonSize = mobile ? 52 : 68;
-        var gap = mobile ? 10 : 18;
-        var edge = mobile ? 8 : 18;
-        var relativeCenterY = popupRect.top - rootRect.top + popupRect.height * 0.5;
-        var clampedCenterY = BABYLON.Scalar.Clamp(
-            relativeCenterY,
-            buttonSize * 0.5 + edge,
-            Math.max(buttonSize * 0.5 + edge, rootRect.height - buttonSize * 0.5 - edge)
-        );
-        var previousX = popupVisualRect.left - rootRect.left - gap - buttonSize;
-        var nextX = popupVisualRect.right - rootRect.left + gap;
-        var maxX = Math.max(edge, rootRect.width - buttonSize - edge);
-
-        previousX = BABYLON.Scalar.Clamp(previousX, edge, maxX);
-        nextX = BABYLON.Scalar.Clamp(nextX, edge, maxX);
-
-        galleryInspectNavigation.style.setProperty(
-            "--gallery-inspect-navigation-y",
-            clampedCenterY.toFixed(1) + "px"
-        );
-        galleryInspectNavigation.style.setProperty(
-            "--gallery-inspect-navigation-previous-x",
-            previousX.toFixed(1) + "px"
-        );
-        galleryInspectNavigation.style.setProperty(
-            "--gallery-inspect-navigation-next-x",
-            nextX.toFixed(1) + "px"
-        );
+        // Stage 12C65D: arrows are physically inside the popup component.
+        // Their desktop and mobile placement is CSS-owned; JS only measures the mobile safe-frame.
+        updateGalleryMobileInspectSafeFrame("navigation-position");
     }
 
     function setGalleryInspectNavigationButtonState(button, target, direction) {
@@ -34502,6 +34749,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryBottomInspectPopupMetrics() {
+        updateGalleryMobileInspectSafeFrame("composition-metrics");
         var engine = scene && scene.getEngine ? scene.getEngine() : null;
         var canvasRect = null;
 
@@ -34542,19 +34790,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var measuredSafeBottom = isFinite(Number(popupTopInCanvas))
             ? Number(popupTopInCanvas) - objectGap
             : fallbackSafeBottom;
+        var mobileSafeFrameMode = artworkInfoPopup && artworkInfoPopup.getAttribute
+            ? String(artworkInfoPopup.getAttribute("data-mobile-safe-frame-mode") || "")
+            : "";
+        var sideDockedMobilePopup = mobile && mobileSafeFrameMode === "side";
         var safeTop = BABYLON.Scalar.Clamp(topMargin, 0, Math.max(0, renderHeight - 120));
-        var safeBottom = BABYLON.Scalar.Clamp(
-            measuredSafeBottom,
-            safeTop + Math.max(120, renderHeight * 0.26),
-            renderHeight - bottomGap
-        );
+        var safeBottom = sideDockedMobilePopup
+            ? BABYLON.Scalar.Clamp(renderHeight - bottomGap, safeTop + 120, renderHeight)
+            : BABYLON.Scalar.Clamp(
+                measuredSafeBottom,
+                safeTop + Math.max(120, renderHeight * 0.26),
+                renderHeight - bottomGap
+            );
         var safeLeft = BABYLON.Scalar.Clamp(sideMargin, 0, Math.max(0, renderWidth * 0.24));
-        var safeRight = BABYLON.Scalar.Clamp(renderWidth - sideMargin, safeLeft + 120, renderWidth);
+        var measuredSafeRight = sideDockedMobilePopup && popupVisualRect && canvasRect
+            ? Number(popupVisualRect.left) - Number(canvasRect.left) - objectGap
+            : renderWidth - sideMargin;
+        var safeRight = BABYLON.Scalar.Clamp(measuredSafeRight, safeLeft + 120, renderWidth);
         var availableHeight = Math.max(120, safeBottom - safeTop);
         var availableWidth = Math.max(120, safeRight - safeLeft);
 
         return {
             mobile: mobile,
+            mobileSafeFrameMode: mobileSafeFrameMode,
+            sideDockedMobilePopup: sideDockedMobilePopup,
             renderWidth: renderWidth,
             renderHeight: renderHeight,
             popupHeight: popupHeight,
@@ -35225,6 +35484,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }, true);
 
+    registerGalleryDomEvent("galleryInspectMobileSafeFrameViewportChange", window, "gallery-mobile-viewport-change", function () {
+        updateGalleryMobileInspectSafeFrame("visual-viewport-change");
+    });
+
+    registerGalleryDomEvent("galleryInspectMobileSafeFrameOrientationChange", window, "orientationchange", function () {
+        setTimeout(function () {
+            updateGalleryMobileInspectSafeFrame("orientation-change");
+        }, 60);
+    });
+
     if (scene && scene.getEngine && scene.getEngine().onResizeObservable) {
         registerGalleryEngineResizeObserver("galleryInspectBottomCompositionResize", function () {
             if (!galleryInspectRuntime.active || !galleryInspectRuntime.target) {
@@ -35309,7 +35578,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     wall: galleryInspectRuntime.navigationWall,
                     updatedAt: galleryInspectRuntime.navigationUpdatedAt
                 },
-                lastComposition: galleryInspectRuntime.lastComposition
+                lastComposition: galleryInspectRuntime.lastComposition,
+                mobileSafeFrame: Object.assign({}, galleryMobileInspectSafeFrameRuntime)
             };
         }
     };

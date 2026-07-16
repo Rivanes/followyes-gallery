@@ -1,12 +1,12 @@
 {
-  "name": "berryboy-art-gallery-stage12c65c",
-  "version": "0.11.65-c",
+  "name": "berryboy-art-gallery-stage12c65d",
+  "version": "0.11.65-d",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C65C Mobile Viewport / HUD Rebuild",
+  "description": "Berryboy Art Gallery — Stage 12C65D Mobile Inspect UI / Safe-Frame",
   "scripts": {
     "start": "python3 -m http.server 8000",
     "check": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && npm run verify",
-    "verify": "node tools/verify-stage12c65c.mjs"
+    "verify": "node tools/verify-stage12c65d.mjs"
   },
   "type": "module"
 }

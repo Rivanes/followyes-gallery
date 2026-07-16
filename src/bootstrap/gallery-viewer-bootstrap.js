@@ -1,10 +1,10 @@
 /*
-  Berryboy Art Gallery — Stage 12C65C Mobile Viewport / HUD Rebuild
+  Berryboy Art Gallery — Stage 12C65D Mobile Inspect UI / Safe-Frame
   Public bootstrap. Editor/auth actions are dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65c_mobile_viewport_hud_rebuild_20260716";
+import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65d_mobile_inspect_safe_frame_20260716";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -179,7 +179,7 @@ function getEditorContext() {
 
 async function loadEditorModule() {
   if (!editorModulePromise) {
-    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c65c").then(function (module) {
+    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c65d").then(function (module) {
       module.initializeEditorRuntime(getEditorContext());
       return module;
     });
@@ -377,7 +377,7 @@ try {
   });
 
   window.BerryboyViewerRuntime = {
-    stage: "12C65C",
+    stage: "12C65D",
     engine,
     scene,
     supabase,
