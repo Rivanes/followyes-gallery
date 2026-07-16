@@ -33799,7 +33799,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (artworkInfoPopupRefs.photoPlaceholder) {
             artworkInfoPopupRefs.photoPlaceholder.innerText = authorInitials;
-            artworkInfoPopupRefs.photoPlaceholder.style.display = "flex";
+            artworkInfoPopupRefs.photoPlaceholder.style.setProperty("display", "flex", "important");
         }
 
         if (artworkInfoPopupRefs.photo) {
@@ -33817,7 +33817,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     photo.classList.add("is-visible");
 
                     if (artworkInfoPopupRefs.photoPlaceholder) {
-                        artworkInfoPopupRefs.photoPlaceholder.style.display = "none";
+                        artworkInfoPopupRefs.photoPlaceholder.style.setProperty("display", "none", "important");
                     }
                 };
                 photo.onerror = function () {
@@ -33828,7 +33828,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     photo.classList.remove("is-visible");
 
                     if (artworkInfoPopupRefs.photoPlaceholder) {
-                        artworkInfoPopupRefs.photoPlaceholder.style.display = "flex";
+                        artworkInfoPopupRefs.photoPlaceholder.style.setProperty("display", "flex", "important");
                     }
                 };
                 photo.src = popupAuthorPhotoUrl;
