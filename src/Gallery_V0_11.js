@@ -66,6 +66,7 @@
   - Stage 12C64Q: Inspect Owns Camera Transition / Clean WASD Handoff — jawny stan WALK → TRANSITION → INSPECT daje kamerze jednego właściciela; ruch WASD/Edit, bobbing, kontrolki Babylon i zwykły wall resolver są wstrzymane wyłącznie podczas przejazdu, start pozostaje rzeczywistym transformem, a koniec dokładnym Custom Focus bez recovery, dockingu i teleportu.
   - Stage 12C64S: Single Startup Gate / Batched Finalization — stary Balanced Entry Gate i blokujący Image prefetch zostały usunięte. Po zastosowaniu stanu działa jedna bramka Interaction Ready: preview artworków, Props i modele rzeźb są ładowane raz, globalne kolizje/materiały/Local Lights finalizują się jednym batchem, a sterowanie odblokowuje się po stabilnych klatkach.
   - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
+  - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -141,10 +142,114 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    // STAGE 12C65A — SINGLE MOBILE DEVICE PROFILE / LEGACY SURVIVAL REMOVAL
-    // One profile owns mobile asset choice, viewer controls and conservative startup budgets.
-    // Adaptive quality is intentionally deferred to Stage 12C65B; this baseline only removes
-    // the old overlapping survival queues and the fixed 1.45 / 1.8 render downgrade.
+    // STAGE 12C65B — ADAPTIVE MOBILE QUALITY / ONE DEVICE PROFILE
+    // One profile owns mobile asset choice, controls, render resolution, light budgets and shadow budgets.
+    // Desktop stays on its existing production values. Mobile can use HIGH / BALANCED / SAFE and an AUTO
+    // controller with hysteresis; resolution changes are applied only while the viewer is idle.
+    var galleryMobileQualityProfileDefinitions = {
+        high: {
+            name: "high",
+            label: "High",
+            initialHardwareScalingLevel: 0.88,
+            minHardwareScalingLevel: 0.82,
+            maxHardwareScalingLevel: 1.08,
+            mainShadowMapSize: 1024,
+            mainShadowFilteringQuality: "high",
+            localSpotShadowMapSize: 512,
+            localMaxActiveSpotShadows: 2,
+            materialBudgets: {
+                helper: 1,
+                floor: 5,
+                ceiling: 6,
+                wall: 9,
+                prop: 3,
+                sculpture: 6,
+                artwork: 9,
+                high: 9,
+                default: 5
+            },
+            downshiftFps: 42,
+            upshiftFps: 56
+        },
+        balanced: {
+            name: "balanced",
+            label: "Balanced",
+            initialHardwareScalingLevel: 1.00,
+            minHardwareScalingLevel: 0.94,
+            maxHardwareScalingLevel: 1.22,
+            mainShadowMapSize: 512,
+            mainShadowFilteringQuality: "medium",
+            localSpotShadowMapSize: 512,
+            localMaxActiveSpotShadows: 1,
+            materialBudgets: {
+                helper: 1,
+                floor: 4,
+                ceiling: 5,
+                wall: 7,
+                prop: 3,
+                sculpture: 5,
+                artwork: 7,
+                high: 7,
+                default: 4
+            },
+            downshiftFps: 36,
+            upshiftFps: 53
+        },
+        safe: {
+            name: "safe",
+            label: "Safe",
+            initialHardwareScalingLevel: 1.18,
+            minHardwareScalingLevel: 1.08,
+            maxHardwareScalingLevel: 1.38,
+            mainShadowMapSize: 512,
+            mainShadowFilteringQuality: "low",
+            localSpotShadowMapSize: 256,
+            localMaxActiveSpotShadows: 1,
+            materialBudgets: {
+                helper: 1,
+                floor: 3,
+                ceiling: 4,
+                wall: 5,
+                prop: 2,
+                sculpture: 4,
+                artwork: 5,
+                high: 5,
+                default: 3
+            },
+            downshiftFps: 30,
+            upshiftFps: 48
+        }
+    };
+
+    function getStoredGalleryMobileQualityMode() {
+        var value = "auto";
+        try {
+            value = String(localStorage.getItem("berryboy_mobile_quality_mode") || "auto").toLowerCase();
+        } catch (storageError) {}
+        return ["auto", "high", "balanced", "safe"].indexOf(value) !== -1 ? value : "auto";
+    }
+
+    function getGalleryMobileQualityProfileDefinition(name) {
+        return galleryMobileQualityProfileDefinitions[name] || galleryMobileQualityProfileDefinitions.balanced;
+    }
+
+    function chooseGalleryInitialMobileQualityProfile(deviceInfo, mode) {
+        if (mode && mode !== "auto" && galleryMobileQualityProfileDefinitions[mode]) {
+            return mode;
+        }
+        if (deviceInfo.embeddedBrowser || deviceInfo.lowMemory || deviceInfo.lowCpu) {
+            return "safe";
+        }
+        if (
+            deviceInfo.isIOS ||
+            (deviceInfo.hardwareConcurrency !== null && deviceInfo.hardwareConcurrency >= 6) ||
+            (deviceInfo.deviceMemory !== null && deviceInfo.deviceMemory >= 6)
+        ) {
+            return "high";
+        }
+        return "balanced";
+    }
+
     function detectGalleryDeviceProfile() {
         var nav = typeof navigator !== "undefined" ? navigator : null;
         var ua = nav && nav.userAgent ? String(nav.userAgent) : "";
@@ -167,9 +272,19 @@ export const createScene = function (engineArg, canvasArg) {
         var mobile = !!(mobileAgent || narrowTouch || isIOS || isAndroid);
         var lowMemory = deviceMemory !== null && isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4;
         var lowCpu = hardwareConcurrency !== null && isFinite(hardwareConcurrency) && hardwareConcurrency > 0 && hardwareConcurrency <= 4;
+        var qualityMode = getStoredGalleryMobileQualityMode();
+        var initialQualityProfile = chooseGalleryInitialMobileQualityProfile({
+            embeddedBrowser: embeddedBrowser,
+            lowMemory: lowMemory,
+            lowCpu: lowCpu,
+            isIOS: isIOS,
+            hardwareConcurrency: hardwareConcurrency,
+            deviceMemory: deviceMemory
+        }, qualityMode);
+        var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65A",
+            stage: "12C65B",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -177,6 +292,7 @@ export const createScene = function (engineArg, canvasArg) {
             touchPoints: touchPoints,
             viewportWidth: width,
             viewportHeight: height,
+            devicePixelRatio: typeof window !== "undefined" ? Number(window.devicePixelRatio || 1) : 1,
             deviceMemory: deviceMemory,
             hardwareConcurrency: hardwareConcurrency,
             lowMemory: !!lowMemory,
@@ -189,9 +305,14 @@ export const createScene = function (engineArg, canvasArg) {
             modelLoadConcurrency: mobile ? 1 : 2,
             previewTextureConcurrency: mobile ? 3 : 6,
             interactionGateTimeoutMs: mobile ? 90000 : 60000,
-            initialHardwareScalingLevel: mobile ? (lowMemory ? 1.30 : 1.15) : 1,
-            localSpotShadowMapSize: mobile ? 256 : 512,
-            localMaxActiveSpotShadows: mobile ? 1 : 2,
+            qualityMode: qualityMode,
+            initialQualityProfile: mobile ? initialQualityProfile : "desktop",
+            currentQualityProfile: mobile ? initialQualityProfile : "desktop",
+            initialHardwareScalingLevel: mobile ? qualityDefinition.initialHardwareScalingLevel : 1,
+            mainShadowMapSize: mobile ? qualityDefinition.mainShadowMapSize : 2048,
+            mainShadowFilteringQuality: mobile ? qualityDefinition.mainShadowFilteringQuality : "high",
+            localSpotShadowMapSize: mobile ? qualityDefinition.localSpotShadowMapSize : 512,
+            localMaxActiveSpotShadows: mobile ? qualityDefinition.localMaxActiveSpotShadows : 2,
             createdAt: Date.now(),
             appliedAt: null,
             engineHardwareScalingBefore: null,
@@ -200,11 +321,71 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    var galleryDeviceProfile = globalThis.BerryboyArtGalleryDeviceProfile || detectGalleryDeviceProfile();
+    var galleryDeviceProfile = detectGalleryDeviceProfile();
     globalThis.BerryboyArtGalleryDeviceProfile = galleryDeviceProfile;
+
+    var galleryAdaptiveMobileQualityRuntime = {
+        enabled: !!galleryDeviceProfile.mobile,
+        started: false,
+        startReason: null,
+        startedAt: 0,
+        warmupUntil: 0,
+        currentProfileName: galleryDeviceProfile.currentQualityProfile,
+        currentHardwareScalingLevel: galleryDeviceProfile.initialHardwareScalingLevel,
+        lastAppliedProfileName: galleryDeviceProfile.currentQualityProfile,
+        lastApplyReason: "startup",
+        lastChangeAt: 0,
+        cooldownUntil: 0,
+        sampleStartedAt: 0,
+        sampleElapsedMs: 0,
+        sampleFrameCount: 0,
+        sampleSlowFrames: 0,
+        sampleWorstFrameMs: 0,
+        lastAverageFps: null,
+        lastSlowFrameRatio: null,
+        lowWindows: 0,
+        highWindows: 0,
+        pendingDirection: null,
+        changeCount: 0,
+        history: []
+    };
 
     function isGalleryDeviceProfileMobile() {
         return !!(galleryDeviceProfile && galleryDeviceProfile.mobile);
+    }
+
+    function applyGalleryHardwareScalingLevel(level, reason) {
+        if (!engine || !engine.setHardwareScalingLevel || !isGalleryDeviceProfileMobile()) {
+            return false;
+        }
+        var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
+        var nextLevel = Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, Number(level) || profile.initialHardwareScalingLevel));
+        nextLevel = Math.round(nextLevel * 100) / 100;
+        var currentLevel = engine.getHardwareScalingLevel ? Number(engine.getHardwareScalingLevel()) : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
+        if (isFinite(currentLevel) && Math.abs(currentLevel - nextLevel) < 0.015) {
+            return false;
+        }
+        try {
+            engine.setHardwareScalingLevel(nextLevel);
+            if (engine.resize) engine.resize();
+            galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel = nextLevel;
+            galleryDeviceProfile.engineHardwareScalingAfter = nextLevel;
+            galleryAdaptiveMobileQualityRuntime.lastApplyReason = reason || "adaptive-resolution";
+            galleryAdaptiveMobileQualityRuntime.lastChangeAt = Date.now();
+            galleryAdaptiveMobileQualityRuntime.cooldownUntil = Date.now() + 4500;
+            galleryAdaptiveMobileQualityRuntime.changeCount += 1;
+            galleryAdaptiveMobileQualityRuntime.history.push({
+                type: "resolution",
+                level: nextLevel,
+                reason: reason || "adaptive-resolution",
+                at: Date.now()
+            });
+            if (galleryAdaptiveMobileQualityRuntime.history.length > 24) galleryAdaptiveMobileQualityRuntime.history.shift();
+            return true;
+        } catch (hardwareScalingError) {
+            galleryDeviceProfile.notes.push("adaptive-hardware-scaling-error: " + (hardwareScalingError.message || hardwareScalingError));
+            return false;
+        }
     }
 
     function applyGalleryDeviceProfileBaseline(reason) {
@@ -222,6 +403,7 @@ export const createScene = function (engineArg, canvasArg) {
 
             if (engine && engine.getHardwareScalingLevel) {
                 galleryDeviceProfile.engineHardwareScalingAfter = engine.getHardwareScalingLevel();
+                galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel = galleryDeviceProfile.engineHardwareScalingAfter;
             }
         } catch (hardwareScalingError) {
             galleryDeviceProfile.notes.push("hardware-scaling-error: " + (hardwareScalingError.message || hardwareScalingError));
@@ -230,6 +412,9 @@ export const createScene = function (engineArg, canvasArg) {
         try {
             scene.skipFrustumClipping = false;
             scene.autoClearDepthAndStencil = true;
+            if (typeof document !== "undefined" && document.documentElement) {
+                document.documentElement.setAttribute("data-gallery-mobile-quality", galleryDeviceProfile.currentQualityProfile || "desktop");
+            }
         } catch (sceneOptimizeError) {}
 
         return galleryDeviceProfile;
@@ -278,8 +463,21 @@ export const createScene = function (engineArg, canvasArg) {
         getDebug: function () {
             return JSON.parse(JSON.stringify(Object.assign({}, galleryDeviceProfile, {
                 deferredOptionalQueueLength: galleryStartupDeferredOptionalAssetImports.length,
-                deferredOptionalReleased: galleryStartupDeferredOptionalAssetsReleased
+                deferredOptionalReleased: galleryStartupDeferredOptionalAssetsReleased,
+                adaptiveQuality: typeof getGalleryAdaptiveMobileQualityDebug === "function"
+                    ? getGalleryAdaptiveMobileQualityDebug()
+                    : null
             })));
+        },
+        getQuality: function () {
+            return typeof getGalleryAdaptiveMobileQualityDebug === "function"
+                ? getGalleryAdaptiveMobileQualityDebug()
+                : null;
+        },
+        setQualityMode: function (mode) {
+            return typeof setGalleryMobileQualityMode === "function"
+                ? setGalleryMobileQualityMode(mode)
+                : false;
         }
     };
 
@@ -1726,7 +1924,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     mainDirectionalLight.shadowMinZ = 0.5;
     mainDirectionalLight.shadowMaxZ = 45;
 
-    var mainShadowGenerator = new BABYLON.ShadowGenerator(2048, mainDirectionalLight);
+    var mainShadowGenerator = new BABYLON.ShadowGenerator(
+        isGalleryDeviceProfileMobile() ? galleryDeviceProfile.mainShadowMapSize : 2048,
+        mainDirectionalLight
+    );
 
     // blurKernel w tym przypadku nie dawal stabilnego i widocznego efektu.
     // Do miekkosci uzywamy Contact Hardening / PCSS, ktore lepiej nadaje sie
@@ -1735,7 +1936,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     mainShadowGenerator.useKernelBlur = false;
     mainShadowGenerator.usePercentageCloserFiltering = false;
     mainShadowGenerator.useContactHardeningShadow = true;
-    mainShadowGenerator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
+    mainShadowGenerator.filteringQuality = isGalleryDeviceProfileMobile()
+        ? (galleryDeviceProfile.mainShadowFilteringQuality === "low"
+            ? BABYLON.ShadowGenerator.QUALITY_LOW
+            : (galleryDeviceProfile.mainShadowFilteringQuality === "medium"
+                ? BABYLON.ShadowGenerator.QUALITY_MEDIUM
+                : BABYLON.ShadowGenerator.QUALITY_HIGH))
+        : BABYLON.ShadowGenerator.QUALITY_HIGH;
 
     mainShadowGenerator.darkness = 0.34;
     mainShadowGenerator.bias = 0.00005;
@@ -1770,17 +1977,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var localShadowRefreshThrottleMs = 90;
     var commonLightingMaxSimultaneousLights = 8;
     var commonLightingMaterialBudgets = isGalleryDeviceProfileMobile()
-        ? {
-            helper: 1,
-            floor: 4,
-            ceiling: 5,
-            wall: 8,
-            prop: 3,
-            sculpture: 5,
-            artwork: 8,
-            high: 8,
-            default: 4
-        }
+        ? Object.assign({}, getGalleryMobileQualityProfileDefinition(galleryDeviceProfile.currentQualityProfile).materialBudgets)
         : {
             helper: 1,
             floor: 6,
@@ -1792,6 +1989,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             high: 12,
             default: 6
         };
+    if (isGalleryDeviceProfileMobile()) {
+        commonLightingMaxSimultaneousLights = commonLightingMaterialBudgets.default || commonLightingMaxSimultaneousLights;
+    }
     var commonLightingMaterialSupportPassId = 0;
     var commonLightingBudgetDebugStats = {
         materialConfiguredCount: 0,
@@ -1830,7 +2030,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         // 0.001 = prawie twardy cien, 0.085 = wyraznie miekki cien.
         mainShadowGenerator.useContactHardeningShadow = true;
         mainShadowGenerator.contactHardeningLightSizeUVRatio = 0.001 + (softness / 100) * 0.084;
-        mainShadowGenerator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
+        mainShadowGenerator.filteringQuality = isGalleryDeviceProfileMobile()
+            ? getGalleryShadowFilteringQuality(galleryAdaptiveMobileQualityRuntime.currentProfileName)
+            : BABYLON.ShadowGenerator.QUALITY_HIGH;
 
         if (mainShadowGenerator.getShadowMap()) {
             mainShadowGenerator.getShadowMap().refreshRate = BABYLON.RenderTargetTexture.REFRESHRATE_RENDER_ONEVERYFRAME;
@@ -5880,6 +6082,277 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         return getLocalLightBudgetDebug();
     }
+
+
+    // STAGE 12C65B — PROFILE BUDGET APPLICATION + DYNAMIC RESOLUTION
+    function resizeGalleryShadowMapSafely(shadowGenerator, size, reason) {
+        if (!shadowGenerator || !shadowGenerator.getShadowMap) return false;
+        var shadowMap = shadowGenerator.getShadowMap();
+        if (!shadowMap || !shadowMap.resize) return false;
+        try {
+            var currentSize = shadowMap.getSize ? shadowMap.getSize() : null;
+            var currentWidth = currentSize && currentSize.width !== undefined ? Number(currentSize.width) : null;
+            if (currentWidth !== null && currentWidth === size) return false;
+            shadowMap.resize(size);
+            if (shadowMap.resetRefreshCounter) shadowMap.resetRefreshCounter();
+            return true;
+        } catch (resizeError) {
+            galleryDeviceProfile.notes.push("shadow-map-resize-error(" + (reason || "quality") + "): " + (resizeError.message || resizeError));
+            return false;
+        }
+    }
+
+    function getGalleryShadowFilteringQuality(profileName) {
+        var profile = getGalleryMobileQualityProfileDefinition(profileName);
+        if (profile.mainShadowFilteringQuality === "low") return BABYLON.ShadowGenerator.QUALITY_LOW;
+        if (profile.mainShadowFilteringQuality === "medium") return BABYLON.ShadowGenerator.QUALITY_MEDIUM;
+        return BABYLON.ShadowGenerator.QUALITY_HIGH;
+    }
+
+    function applyGalleryMobileQualityProfile(profileName, reason, options) {
+        options = options || {};
+        if (!isGalleryDeviceProfileMobile()) return false;
+        if (!galleryMobileQualityProfileDefinitions[profileName]) profileName = "balanced";
+
+        var profile = getGalleryMobileQualityProfileDefinition(profileName);
+        var previousProfileName = galleryAdaptiveMobileQualityRuntime.currentProfileName;
+        galleryAdaptiveMobileQualityRuntime.currentProfileName = profileName;
+        galleryAdaptiveMobileQualityRuntime.lastAppliedProfileName = profileName;
+        galleryAdaptiveMobileQualityRuntime.lastApplyReason = reason || "quality-profile";
+        galleryDeviceProfile.currentQualityProfile = profileName;
+        galleryDeviceProfile.mainShadowMapSize = profile.mainShadowMapSize;
+        galleryDeviceProfile.mainShadowFilteringQuality = profile.mainShadowFilteringQuality;
+        galleryDeviceProfile.localSpotShadowMapSize = profile.localSpotShadowMapSize;
+        galleryDeviceProfile.localMaxActiveSpotShadows = profile.localMaxActiveSpotShadows;
+
+        localSpotShadowMapSize = profile.localSpotShadowMapSize;
+        localMaxActiveSpotShadows = profile.localMaxActiveSpotShadows;
+        localSpotShadowBudgetDebugStats.shadowMapSize = localSpotShadowMapSize;
+        localSpotShadowBudgetDebugStats.maxActiveSpotShadows = localMaxActiveSpotShadows;
+
+        commonLightingMaterialBudgets = Object.assign({}, profile.materialBudgets);
+        commonLightingMaxSimultaneousLights = commonLightingMaterialBudgets.default || commonLightingMaxSimultaneousLights;
+
+        if (mainShadowGenerator) {
+            mainShadowGenerator.filteringQuality = getGalleryShadowFilteringQuality(profileName);
+            resizeGalleryShadowMapSafely(mainShadowGenerator, profile.mainShadowMapSize, "main-" + profileName);
+        }
+
+        localLightItems.forEach(function (item) {
+            if (item && item.localShadowGenerator) {
+                resizeGalleryShadowMapSafely(item.localShadowGenerator, profile.localSpotShadowMapSize, "local-" + profileName);
+                configureShadowGeneratorForLocalSpot(item.localShadowGenerator);
+            }
+        });
+
+        scheduleCommonLightingMaterialSupport("mobile-quality-" + profileName);
+        refreshAllLocalSpotShadows(true);
+
+        var currentLevel = engine && engine.getHardwareScalingLevel
+            ? Number(engine.getHardwareScalingLevel())
+            : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
+        var targetLevel = options.resetResolution
+            ? profile.initialHardwareScalingLevel
+            : Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, currentLevel || profile.initialHardwareScalingLevel));
+        applyGalleryHardwareScalingLevel(targetLevel, reason || "quality-profile");
+
+        galleryAdaptiveMobileQualityRuntime.lowWindows = 0;
+        galleryAdaptiveMobileQualityRuntime.highWindows = 0;
+        galleryAdaptiveMobileQualityRuntime.pendingDirection = null;
+        galleryAdaptiveMobileQualityRuntime.lastChangeAt = Date.now();
+        galleryAdaptiveMobileQualityRuntime.cooldownUntil = Date.now() + 5000;
+        galleryAdaptiveMobileQualityRuntime.history.push({
+            type: "profile",
+            from: previousProfileName,
+            to: profileName,
+            reason: reason || "quality-profile",
+            at: Date.now()
+        });
+        if (galleryAdaptiveMobileQualityRuntime.history.length > 24) galleryAdaptiveMobileQualityRuntime.history.shift();
+
+        try {
+            if (document && document.documentElement) {
+                document.documentElement.setAttribute("data-gallery-mobile-quality", profileName);
+            }
+            window.dispatchEvent(new CustomEvent("gallery-mobile-quality-change", {
+                detail: getGalleryAdaptiveMobileQualityDebug()
+            }));
+        } catch (eventError) {}
+
+        return true;
+    }
+
+    function getGalleryNextQualityProfile(direction) {
+        var order = ["safe", "balanced", "high"];
+        var index = order.indexOf(galleryAdaptiveMobileQualityRuntime.currentProfileName);
+        if (index < 0) index = 1;
+        if (direction === "up") return order[Math.min(order.length - 1, index + 1)];
+        return order[Math.max(0, index - 1)];
+    }
+
+    function isGalleryAdaptiveQualityChangeSafeNow() {
+        if (isGalleryInspectCameraTransitionActive && isGalleryInspectCameraTransitionActive()) return false;
+        if (typeof document !== "undefined" && document.hidden) return false;
+        if (galleryFastStartRuntime && galleryFastStartRuntime.lastViewerActivityAt) {
+            if (Date.now() - galleryFastStartRuntime.lastViewerActivityAt < 650) return false;
+        }
+        return true;
+    }
+
+    function applyGalleryAdaptiveQualityDirection(direction, reason) {
+        if (!isGalleryDeviceProfileMobile()) return false;
+        var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
+        var currentLevel = engine && engine.getHardwareScalingLevel
+            ? Number(engine.getHardwareScalingLevel())
+            : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
+        var nextLevel = currentLevel;
+
+        if (direction === "down") {
+            nextLevel = Math.min(profile.maxHardwareScalingLevel, currentLevel + 0.08);
+            if (nextLevel <= currentLevel + 0.015 && galleryDeviceProfile.qualityMode === "auto") {
+                var lowerProfile = getGalleryNextQualityProfile("down");
+                if (lowerProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
+                    return applyGalleryMobileQualityProfile(lowerProfile, reason || "auto-profile-down", { resetResolution: true });
+                }
+            }
+        } else {
+            nextLevel = Math.max(profile.minHardwareScalingLevel, currentLevel - 0.06);
+            if (nextLevel >= currentLevel - 0.015 && galleryDeviceProfile.qualityMode === "auto") {
+                var higherProfile = getGalleryNextQualityProfile("up");
+                if (higherProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
+                    return applyGalleryMobileQualityProfile(higherProfile, reason || "auto-profile-up", { resetResolution: true });
+                }
+            }
+        }
+
+        return applyGalleryHardwareScalingLevel(nextLevel, reason || ("adaptive-" + direction));
+    }
+
+    function resetGalleryAdaptiveQualitySample(now) {
+        galleryAdaptiveMobileQualityRuntime.sampleStartedAt = now || performance.now();
+        galleryAdaptiveMobileQualityRuntime.sampleElapsedMs = 0;
+        galleryAdaptiveMobileQualityRuntime.sampleFrameCount = 0;
+        galleryAdaptiveMobileQualityRuntime.sampleSlowFrames = 0;
+        galleryAdaptiveMobileQualityRuntime.sampleWorstFrameMs = 0;
+    }
+
+    function startGalleryAdaptiveMobileQuality(reason) {
+        if (!isGalleryDeviceProfileMobile() || galleryAdaptiveMobileQualityRuntime.started) return false;
+        galleryAdaptiveMobileQualityRuntime.started = true;
+        galleryAdaptiveMobileQualityRuntime.startReason = reason || "interaction-ready";
+        galleryAdaptiveMobileQualityRuntime.startedAt = Date.now();
+        galleryAdaptiveMobileQualityRuntime.warmupUntil = Date.now() + 3000;
+        resetGalleryAdaptiveQualitySample(performance.now());
+        return true;
+    }
+
+    function updateGalleryAdaptiveMobileQuality() {
+        if (!galleryAdaptiveMobileQualityRuntime.enabled || !galleryAdaptiveMobileQualityRuntime.started) return;
+        if (!galleryFastStartRuntime || !galleryFastStartRuntime.interactionReady) return;
+        if (Date.now() < galleryAdaptiveMobileQualityRuntime.warmupUntil) return;
+        if (typeof document !== "undefined" && document.hidden) {
+            resetGalleryAdaptiveQualitySample(performance.now());
+            return;
+        }
+        if (isGalleryInspectCameraTransitionActive && isGalleryInspectCameraTransitionActive()) {
+            resetGalleryAdaptiveQualitySample(performance.now());
+            return;
+        }
+
+        var frameMs = engine && engine.getDeltaTime ? Number(engine.getDeltaTime()) : 16.67;
+        if (!isFinite(frameMs) || frameMs <= 0 || frameMs > 250) return;
+        galleryAdaptiveMobileQualityRuntime.sampleElapsedMs += frameMs;
+        galleryAdaptiveMobileQualityRuntime.sampleFrameCount += 1;
+        if (frameMs > 24) galleryAdaptiveMobileQualityRuntime.sampleSlowFrames += 1;
+        galleryAdaptiveMobileQualityRuntime.sampleWorstFrameMs = Math.max(galleryAdaptiveMobileQualityRuntime.sampleWorstFrameMs, frameMs);
+
+        if (galleryAdaptiveMobileQualityRuntime.sampleElapsedMs < 1800) return;
+
+        var averageFrameMs = galleryAdaptiveMobileQualityRuntime.sampleElapsedMs / Math.max(1, galleryAdaptiveMobileQualityRuntime.sampleFrameCount);
+        var averageFps = 1000 / Math.max(1, averageFrameMs);
+        var slowRatio = galleryAdaptiveMobileQualityRuntime.sampleSlowFrames / Math.max(1, galleryAdaptiveMobileQualityRuntime.sampleFrameCount);
+        galleryAdaptiveMobileQualityRuntime.lastAverageFps = Math.round(averageFps * 10) / 10;
+        galleryAdaptiveMobileQualityRuntime.lastSlowFrameRatio = Math.round(slowRatio * 1000) / 1000;
+        var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
+
+        if (averageFps < profile.downshiftFps || slowRatio > 0.24) {
+            galleryAdaptiveMobileQualityRuntime.lowWindows += 1;
+            galleryAdaptiveMobileQualityRuntime.highWindows = 0;
+        } else if (averageFps > profile.upshiftFps && slowRatio < 0.07) {
+            galleryAdaptiveMobileQualityRuntime.highWindows += 1;
+            galleryAdaptiveMobileQualityRuntime.lowWindows = 0;
+        } else {
+            galleryAdaptiveMobileQualityRuntime.lowWindows = Math.max(0, galleryAdaptiveMobileQualityRuntime.lowWindows - 1);
+            galleryAdaptiveMobileQualityRuntime.highWindows = Math.max(0, galleryAdaptiveMobileQualityRuntime.highWindows - 1);
+        }
+
+        if (galleryAdaptiveMobileQualityRuntime.lowWindows >= 2) {
+            galleryAdaptiveMobileQualityRuntime.pendingDirection = "down";
+        } else if (galleryAdaptiveMobileQualityRuntime.highWindows >= 4) {
+            galleryAdaptiveMobileQualityRuntime.pendingDirection = "up";
+        }
+
+        if (
+            galleryAdaptiveMobileQualityRuntime.pendingDirection &&
+            Date.now() >= galleryAdaptiveMobileQualityRuntime.cooldownUntil &&
+            isGalleryAdaptiveQualityChangeSafeNow()
+        ) {
+            var direction = galleryAdaptiveMobileQualityRuntime.pendingDirection;
+            galleryAdaptiveMobileQualityRuntime.pendingDirection = null;
+            galleryAdaptiveMobileQualityRuntime.lowWindows = 0;
+            galleryAdaptiveMobileQualityRuntime.highWindows = 0;
+            applyGalleryAdaptiveQualityDirection(direction, "auto-fps-" + direction);
+        }
+
+        resetGalleryAdaptiveQualitySample(performance.now());
+    }
+
+    function setGalleryMobileQualityMode(mode) {
+        mode = String(mode || "auto").toLowerCase();
+        if (["auto", "high", "balanced", "safe"].indexOf(mode) === -1) return false;
+        galleryDeviceProfile.qualityMode = mode;
+        try { localStorage.setItem("berryboy_mobile_quality_mode", mode); } catch (storageError) {}
+        var nextProfile = mode === "auto"
+            ? chooseGalleryInitialMobileQualityProfile(galleryDeviceProfile, "auto")
+            : mode;
+        applyGalleryMobileQualityProfile(nextProfile, "manual-mode-" + mode, { resetResolution: true });
+        return getGalleryAdaptiveMobileQualityDebug();
+    }
+
+    function getGalleryAdaptiveMobileQualityDebug() {
+        var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
+        return {
+            stage: "12C65B",
+            mobile: isGalleryDeviceProfileMobile(),
+            mode: galleryDeviceProfile.qualityMode,
+            profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
+            profileDefinition: Object.assign({}, profile, { materialBudgets: Object.assign({}, profile.materialBudgets) }),
+            hardwareScalingLevel: engine && engine.getHardwareScalingLevel ? engine.getHardwareScalingLevel() : null,
+            renderWidth: engine && engine.getRenderWidth ? engine.getRenderWidth() : null,
+            renderHeight: engine && engine.getRenderHeight ? engine.getRenderHeight() : null,
+            averageFps: galleryAdaptiveMobileQualityRuntime.lastAverageFps,
+            slowFrameRatio: galleryAdaptiveMobileQualityRuntime.lastSlowFrameRatio,
+            pendingDirection: galleryAdaptiveMobileQualityRuntime.pendingDirection,
+            currentMainShadowMapSize: mainShadowGenerator && mainShadowGenerator.getShadowMap && mainShadowGenerator.getShadowMap() && mainShadowGenerator.getShadowMap().getSize
+                ? mainShadowGenerator.getShadowMap().getSize().width
+                : null,
+            localSpotShadowMapSize: localSpotShadowMapSize,
+            localMaxActiveSpotShadows: localMaxActiveSpotShadows,
+            materialBudgets: Object.assign({}, commonLightingMaterialBudgets),
+            runtime: JSON.parse(JSON.stringify(galleryAdaptiveMobileQualityRuntime))
+        };
+    }
+
+    registerGalleryBeforeRenderObserver("adaptiveMobileQuality", updateGalleryAdaptiveMobileQuality);
+
+    globalThis.BerryboyArtGalleryMobileQuality = {
+        getDebug: getGalleryAdaptiveMobileQualityDebug,
+        setMode: setGalleryMobileQualityMode,
+        applyProfile: function (profileName) {
+            return applyGalleryMobileQualityProfile(profileName, "api-profile", { resetResolution: true });
+        },
+        start: startGalleryAdaptiveMobileQuality
+    };
 
     function getLocalLightCameraCullingDebug() {
         updateLocalLightsCameraCulling(true);
@@ -11986,6 +12459,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.interactionGateWatchdogTimer = null;
         }
         updateViewerIntroInteractionState();
+        if (ready) {
+            startGalleryAdaptiveMobileQuality(reason || "interaction-ready");
+        }
     }
 
     function hideViewerIntroOverlay() {
@@ -35966,6 +36442,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryEditorLoginEnabled = !!isEnabled;
             setEditorAuthenticated(globalThis.galleryEditorAuthenticated);
         },
+        getMobileQuality: getGalleryAdaptiveMobileQualityDebug,
+        setMobileQualityMode: setGalleryMobileQualityMode,
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
         getState: serializeGalleryState,

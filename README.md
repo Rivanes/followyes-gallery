@@ -1,48 +1,41 @@
-# Berryboy Art Gallery — Stage 12C65A
+# Berryboy Art Gallery — Stage 12C65B
 
-## Mobile Cleanup / Boot Recovery
+## Adaptive Mobile Quality
 
-Stage 12C65A is built from Stage 12C64S. Inspect, Custom Focus, popup, arrows, `tourOrder` and the single startup gate remain protected.
+Built directly from Stage 12C65A. The mobile cleanup, Boot Guard, single startup gate, Inspect pipeline, popup and `tourOrder` remain intact.
 
-### Removed
+### Profiles
 
-- Stage 12C62S6 Mobile Startup Survival Mode,
-- mobile sequential critical-import queue and its artificial delay,
-- separate artwork mobile-texture detector,
-- legacy Mobile Focus state and camera animations,
-- dead mobile focus/back/reset helpers,
-- old Stage 8X1 public popup overrides,
-- the second conflicting final mobile popup block,
-- duplicated Edit Inspect preview CSS,
-- forced `min-height: 540px` mobile canvas rule.
+- **High** — sharper internal render (`0.88` baseline), 1024 main shadow map, two active local Spot shadows and higher material light budgets.
+- **Balanced** — native-like internal render (`1.00` baseline), 512 main/local shadow maps and moderate material budgets.
+- **Safe** — conservative render (`1.18` baseline), reduced shadow/light budgets for embedded browsers and weaker devices.
 
-### One device profile
+`AUTO` chooses the initial profile from the single Stage 12C65A device profile and can move between profiles only after sustained performance evidence.
 
-A single `BerryboyArtGalleryDeviceProfile` now controls:
+### Dynamic resolution
 
-- mobile asset selection,
-- mobile viewer controls,
-- model and preview concurrency,
-- interaction gate timeout,
-- initial render-scale baseline,
-- mobile Local Light shadow budgets.
+- starts only after `Interaction Ready`,
+- waits through a 3-second warm-up,
+- samples stable 1.8-second windows,
+- needs two slow windows to lower quality,
+- needs four fast windows to raise quality,
+- applies changes only after the viewer has been idle for at least 650 ms,
+- pauses measurement during Inspect transitions and hidden-tab periods,
+- uses a 4.5–5 second cooldown to prevent oscillation.
 
-The previous fixed `1.45 / 1.8` mobile render downgrade is gone. Stage 12C65B will add measured adaptive quality.
+### Runtime APIs
 
-### Boot recovery
+```js
+GalleryApp.getMobileQuality();
+GalleryApp.setMobileQualityMode("auto");
+GalleryApp.setMobileQualityMode("high");
+GalleryApp.setMobileQualityMode("balanced");
+GalleryApp.setMobileQualityMode("safe");
+```
 
-A static HTML Boot Guard is visible before Babylon, Supabase or the gallery module starts. It handles:
+The selected mode is stored as `berryboy_mobile_quality_mode`. A future mobile HUD can listen for `gallery-mobile-quality-change`.
 
-- Babylon CDN failure,
-- module load failure,
-- boot timeout,
-- WebGL context creation error,
-- WebGL context loss and restore,
-- startup exceptions and rejected promises.
-
-Instead of a blank white page, the visitor receives a reload action and an `Open in browser` action.
-
-### Login variants
+### Login contract
 
 - `src/Gallery_V0_11.js`: login enabled.
-- root `Gallery_V0_11_STAGE12C65A_MOBILE_CLEANUP_BOOT_RECOVERY_LOGIN_DISABLED.txt`: login disabled.
+- root `Gallery_V0_11_STAGE12C65B_ADAPTIVE_MOBILE_QUALITY_LOGIN_DISABLED.txt`: login disabled.
