@@ -18,6 +18,14 @@
   <style>
     :root {
       --header-height: 64px;
+      --mobile-header-height: 54px;
+      --gallery-active-header-height: var(--header-height);
+      --gallery-visual-viewport-height: 100dvh;
+      --gallery-visual-viewport-width: 100vw;
+      --gallery-visual-viewport-offset-top: 0px;
+      --gallery-visual-viewport-bottom-offset: 0px;
+      --gallery-section-height: calc(100dvh - var(--gallery-active-header-height));
+      --gallery-hud-bottom-offset: 0px;
       --cream: #F0EADE;
       --black: #0d0d0d;
       --text: #101010;
@@ -40,7 +48,7 @@
       font-family: var(--font);
       font-weight: 300;
       scroll-behavior: smooth;
-      scroll-padding-top: var(--header-height);
+      scroll-padding-top: var(--gallery-active-header-height);
     }
 
     * {
@@ -85,7 +93,7 @@
       min-height: 100%;
       display: flex;
       flex-direction: column;
-      padding-top: var(--header-height);
+      padding-top: var(--gallery-active-header-height);
     }
 
     #siteHeader {
@@ -93,8 +101,8 @@
       top: 0;
       left: 0;
       right: 0;
-      height: var(--header-height);
-      min-height: var(--header-height);
+      height: var(--gallery-active-header-height);
+      min-height: var(--gallery-active-header-height);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -123,6 +131,45 @@
       background: var(--cream);
       transform: skew(-14deg);
       display: inline-block;
+      flex: 0 0 auto;
+    }
+
+    #brandLabel {
+      display: inline-flex;
+      align-items: baseline;
+    }
+
+    #mobileHeaderMenuButton {
+      display: none;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 4px;
+      touch-action: manipulation;
+    }
+
+    .mobileHeaderMenuLine {
+      width: 17px;
+      height: 1.5px;
+      border-radius: 999px;
+      background: currentColor;
+      transition: transform 160ms ease, opacity 160ms ease;
+    }
+
+    #mobileHeaderMenuButton[aria-expanded="true"] .mobileHeaderMenuLine:first-child {
+      transform: translateY(2.75px) rotate(45deg);
+    }
+
+    #mobileHeaderMenuButton[aria-expanded="true"] .mobileHeaderMenuLine:last-child {
+      transform: translateY(-2.75px) rotate(-45deg);
     }
 
     #headerRight {
@@ -194,14 +241,18 @@
       border-color: var(--cream);
     }
 
+    #mobileQualityControl {
+      display: none;
+    }
+
     #gallerySection {
       width: 100%;
-      height: calc(100vh - var(--header-height));
-      height: calc(100dvh - var(--header-height));
+      height: var(--gallery-section-height);
       min-height: 0;
       position: relative;
       overflow: hidden;
       background: #080909;
+      isolation: isolate;
     }
 
     #renderCanvas {
@@ -213,8 +264,30 @@
       background: #080909;
     }
 
+    #galleryMobileHud {
+      position: absolute;
+      inset: 0;
+      z-index: 7000;
+      overflow: hidden;
+      pointer-events: none;
+      font-family: var(--font);
+      contain: layout paint;
+    }
+
+    .galleryMobileHudLayer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    #galleryMobileTopLayer { z-index: 10; }
+    #galleryMobileControlsLayer { z-index: 20; }
+    #galleryMobileInspectLayer { z-index: 30; }
+    #galleryMobileSystemLayer { z-index: 50; }
+
     #galleryBootGuard {
       position: absolute;
+      pointer-events: auto;
       inset: 0;
       z-index: 7900;
       display: grid;
@@ -834,9 +907,60 @@
       }
     }
 
-    @media (max-width: 720px) {
+    @media (max-width: 768px), (max-height: 600px) and (pointer: coarse) {
+      :root {
+        --gallery-active-header-height: calc(var(--mobile-header-height) + env(safe-area-inset-top));
+      }
+
       #siteHeader {
-        padding: 0 12px;
+        gap: 12px;
+        padding-top: env(safe-area-inset-top);
+        padding-left: max(14px, env(safe-area-inset-left));
+        padding-right: max(14px, env(safe-area-inset-right));
+      }
+
+      #brand {
+        gap: 9px;
+        min-width: 0;
+        font-size: 15px;
+      }
+
+      #brandMark {
+        width: 9px;
+        height: 24px;
+      }
+
+      #brandLongLabel {
+        display: none;
+      }
+
+      #mobileHeaderMenuButton {
+        display: inline-flex;
+        flex: 0 0 auto;
+      }
+
+      #headerRight {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: max(12px, env(safe-area-inset-right));
+        width: min(310px, calc(100vw - max(24px, env(safe-area-inset-left)) - max(24px, env(safe-area-inset-right))));
+        max-height: calc(var(--gallery-visual-viewport-height) - var(--gallery-active-header-height) - 22px);
+        display: none;
+        align-items: stretch;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        overflow-y: auto;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 18px;
+        background: rgba(15, 17, 18, 0.94);
+        box-shadow: 0 22px 56px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(22px) saturate(1.1);
+        -webkit-backdrop-filter: blur(22px) saturate(1.1);
+      }
+
+      #headerRight.is-open {
+        display: flex;
       }
 
       #authStatus {
@@ -844,12 +968,53 @@
       }
 
       #languageSwitch {
-        display: none;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin: 0;
       }
 
-      .headerButton {
-        padding: 8px 10px;
+      .headerButton,
+      .langButton {
+        width: 100%;
+        min-height: 42px;
+        padding: 9px 12px;
+        border-radius: 12px;
         font-size: 12px;
+      }
+
+      #mobileQualityControl {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(118px, 1.25fr);
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        padding: 8px 10px 8px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      #mobileQualityLabel {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      #mobileQualitySelect {
+        width: 100%;
+        min-width: 0;
+        height: 34px;
+        padding: 0 30px 0 10px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 9px;
+        background: #151817;
+        color: #fff;
+        font: 700 12px/1 var(--font);
+      }
+
+      body.gallery-mobile-menu-open {
+        overscroll-behavior-y: contain;
       }
 
       .contentSection {
@@ -933,8 +1098,13 @@
     <header id="siteHeader">
       <a id="brand" href="#top" aria-label="Berryboy Art Gallery, back to top">
         <span id="brandMark"></span>
-        <span>Berryboy Art Gallery</span>
+        <span id="brandLabel"><span>Berryboy</span><span id="brandLongLabel"> Art Gallery</span></span>
       </a>
+
+      <button id="mobileHeaderMenuButton" type="button" aria-expanded="false" aria-controls="headerRight" aria-label="Open gallery menu">
+        <span class="mobileHeaderMenuLine"></span>
+        <span class="mobileHeaderMenuLine"></span>
+      </button>
 
       <div id="headerRight">
         <a id="exploreBelowButton" class="headerButton" href="#project-info">About project</a>
@@ -943,6 +1113,16 @@
           <button type="button" class="langButton active" data-set-lang="en">EN</button>
           <button type="button" class="langButton" data-set-lang="pl">PL</button>
         </div>
+
+        <label id="mobileQualityControl" for="mobileQualitySelect">
+          <span id="mobileQualityLabel">Quality</span>
+          <select id="mobileQualitySelect" aria-label="Mobile rendering quality">
+            <option id="mobileQualityOptionAuto" value="auto">Auto</option>
+            <option id="mobileQualityOptionHigh" value="high">High</option>
+            <option id="mobileQualityOptionBalanced" value="balanced">Balanced</option>
+            <option id="mobileQualityOptionSafe" value="safe">Safe</option>
+          </select>
+        </label>
 
         <span id="authStatus">Public gallery</span>
         <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
@@ -954,15 +1134,22 @@
     <section id="gallerySection" aria-label="Interactive 3D gallery">
       <canvas id="renderCanvas"></canvas>
 
-      <div id="galleryBootGuard" role="status" aria-live="polite">
-        <div class="galleryBootCard">
-          <div class="galleryBootSpinner" aria-hidden="true"></div>
-          <h2 id="galleryBootTitle">Loading gallery</h2>
-          <p id="galleryBootMessage">Preparing the 3D scene…</p>
-          <pre id="galleryBootDetails"></pre>
-          <div id="galleryBootActions">
-            <button id="galleryBootReload" type="button" class="galleryBootAction is-primary">Reload gallery</button>
-            <a id="galleryBootExternal" class="galleryBootAction" href="./" target="_blank" rel="noopener noreferrer">Open in browser</a>
+      <div id="galleryMobileHud">
+        <div id="galleryMobileTopLayer" class="galleryMobileHudLayer"></div>
+        <div id="galleryMobileControlsLayer" class="galleryMobileHudLayer"></div>
+        <div id="galleryMobileInspectLayer" class="galleryMobileHudLayer"></div>
+        <div id="galleryMobileSystemLayer" class="galleryMobileHudLayer">
+          <div id="galleryBootGuard" role="status" aria-live="polite">
+            <div class="galleryBootCard">
+              <div class="galleryBootSpinner" aria-hidden="true"></div>
+              <h2 id="galleryBootTitle">Loading gallery</h2>
+              <p id="galleryBootMessage">Preparing the 3D scene…</p>
+              <pre id="galleryBootDetails"></pre>
+              <div id="galleryBootActions">
+                <button id="galleryBootReload" type="button" class="galleryBootAction is-primary">Reload gallery</button>
+                <a id="galleryBootExternal" class="galleryBootAction" href="./" target="_blank" rel="noopener noreferrer">Open in browser</a>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1157,7 +1344,7 @@
 
     <footer id="siteFooter">
       <span>Berryboy Art Gallery</span>
-      <span>Gallery_V0_11 · Stage 12C65B1</span>
+      <span>Gallery_V0_11 · Stage 12C65C</span>
     </footer>
   </div>
 
@@ -1202,6 +1389,47 @@
               behavior: "smooth"
             });
           });
+        }
+
+        var mobileHeaderMenuButton = document.getElementById("mobileHeaderMenuButton");
+        var headerRight = document.getElementById("headerRight");
+
+        function setMobileHeaderMenuOpen(open) {
+          if (!mobileHeaderMenuButton || !headerRight) return;
+          var nextOpen = !!open;
+          mobileHeaderMenuButton.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+          mobileHeaderMenuButton.setAttribute("aria-label", nextOpen ? "Close gallery menu" : "Open gallery menu");
+          headerRight.classList.toggle("is-open", nextOpen);
+          if (document.body) document.body.classList.toggle("gallery-mobile-menu-open", nextOpen);
+        }
+
+        if (mobileHeaderMenuButton && headerRight) {
+          mobileHeaderMenuButton.addEventListener("click", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            setMobileHeaderMenuOpen(mobileHeaderMenuButton.getAttribute("aria-expanded") !== "true");
+          });
+
+          headerRight.addEventListener("click", function (event) {
+            var target = event.target;
+            if (target && (target.closest("a") || target.closest("button:not(.langButton)"))) {
+              setMobileHeaderMenuOpen(false);
+            }
+          });
+
+          document.addEventListener("pointerdown", function (event) {
+            if (mobileHeaderMenuButton.getAttribute("aria-expanded") !== "true") return;
+            if (headerRight.contains(event.target) || mobileHeaderMenuButton.contains(event.target)) return;
+            setMobileHeaderMenuOpen(false);
+          });
+
+          document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") setMobileHeaderMenuOpen(false);
+          });
+
+          window.addEventListener("orientationchange", function () {
+            setMobileHeaderMenuOpen(false);
+          }, { passive: true });
         }
 
         var roadmapSection = document.getElementById("roadmap");
@@ -1260,6 +1488,102 @@
 
   <script>
     (function () {
+      var root = document.documentElement;
+      var section = document.getElementById("gallerySection");
+      var header = document.getElementById("siteHeader");
+      var scheduledFrame = 0;
+      var lastSignature = "";
+
+      function isMobileLayout() {
+        return window.matchMedia("(max-width: 768px), (max-height: 600px) and (pointer: coarse)").matches;
+      }
+
+      function readViewport() {
+        var visualViewport = window.visualViewport || null;
+        var width = visualViewport && visualViewport.width ? visualViewport.width : window.innerWidth;
+        var height = visualViewport && visualViewport.height ? visualViewport.height : window.innerHeight;
+        var offsetTop = visualViewport && Number.isFinite(visualViewport.offsetTop) ? visualViewport.offsetTop : 0;
+        var layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
+        var bottomOffset = Math.max(0, layoutHeight - height - offsetTop);
+        var headerHeight = header ? header.getBoundingClientRect().height : (isMobileLayout() ? 54 : 64);
+        var sectionHeight = Math.max(1, height - headerHeight);
+        var orientation = width > height ? "landscape" : "portrait";
+
+        return {
+          width: Math.max(1, width),
+          height: Math.max(1, height),
+          offsetTop: Math.max(0, offsetTop),
+          bottomOffset: Math.max(0, bottomOffset),
+          headerHeight: Math.max(0, headerHeight),
+          sectionHeight: sectionHeight,
+          orientation: orientation,
+          source: visualViewport ? "visual-viewport" : "window-fallback",
+          mobile: isMobileLayout()
+        };
+      }
+
+      function applyViewport() {
+        scheduledFrame = 0;
+        var state = readViewport();
+        var signature = [
+          Math.round(state.width),
+          Math.round(state.height),
+          Math.round(state.offsetTop),
+          Math.round(state.bottomOffset),
+          Math.round(state.headerHeight),
+          state.orientation,
+          state.mobile
+        ].join(":");
+
+        root.style.setProperty("--gallery-visual-viewport-width", state.width.toFixed(2) + "px");
+        root.style.setProperty("--gallery-visual-viewport-height", state.height.toFixed(2) + "px");
+        root.style.setProperty("--gallery-visual-viewport-offset-top", state.offsetTop.toFixed(2) + "px");
+        root.style.setProperty("--gallery-visual-viewport-bottom-offset", state.bottomOffset.toFixed(2) + "px");
+        root.style.setProperty("--gallery-active-header-height", state.headerHeight.toFixed(2) + "px");
+        root.style.setProperty("--gallery-section-height", state.sectionHeight.toFixed(2) + "px");
+        root.style.setProperty("--gallery-hud-bottom-offset", "0px");
+        root.setAttribute("data-gallery-viewport-source", state.source);
+        root.setAttribute("data-gallery-orientation", state.orientation);
+        if (document.body) document.body.classList.toggle("gallery-mobile-layout", state.mobile);
+
+        if (signature === lastSignature) return;
+        lastSignature = signature;
+
+        window.dispatchEvent(new CustomEvent("gallery-mobile-viewport-change", {
+          detail: state
+        }));
+      }
+
+      function scheduleViewportUpdate() {
+        if (scheduledFrame) return;
+        scheduledFrame = window.requestAnimationFrame(applyViewport);
+      }
+
+      window.addEventListener("resize", scheduleViewportUpdate, { passive: true });
+      window.addEventListener("orientationchange", scheduleViewportUpdate, { passive: true });
+      window.addEventListener("pageshow", scheduleViewportUpdate, { passive: true });
+
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", scheduleViewportUpdate, { passive: true });
+        window.visualViewport.addEventListener("scroll", scheduleViewportUpdate, { passive: true });
+      }
+
+      if (window.ResizeObserver && header) {
+        new ResizeObserver(scheduleViewportUpdate).observe(header);
+      }
+
+      window.BerryboyMobileViewport = {
+        refresh: scheduleViewportUpdate,
+        read: readViewport
+      };
+
+      applyViewport();
+    })();
+  </script>
+
+
+  <script>
+    (function () {
       var guard = document.getElementById("galleryBootGuard");
       var title = document.getElementById("galleryBootTitle");
       var message = document.getElementById("galleryBootMessage");
@@ -1305,7 +1629,7 @@
       }
 
       var api = {
-        stage: "12C65B1",
+        stage: "12C65C",
         bootStartedAt: bootStartedAt,
         setPhase: setPhase,
         ready: ready,
@@ -1347,6 +1671,6 @@
   <script src="https://cdn.babylonjs.com/babylon.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-cdn', 'The Babylon.js engine could not be downloaded. Check the connection and reload.')"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-loaders-cdn', 'The 3D model loader could not be downloaded. Check the connection and reload.')"></script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c65b1_adaptive_quality_stabilization_20260716" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', 'The gallery startup module could not be loaded. Reload or open the page in the full browser.')"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c65c_mobile_viewport_hud_rebuild_20260716" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', 'The gallery startup module could not be loaded. Reload or open the page in the full browser.')"></script>
 </body>
 </html>

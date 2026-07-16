@@ -68,6 +68,7 @@
   - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
   - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
   - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
+  - Stage 12C65C: Mobile Viewport / HUD Rebuild — VisualViewport ustala rzeczywistą wysokość galerii, mobilne UI trafia do jednego warstwowego HUD-u, joystick respektuje safe-area, a orientacja i dynamiczne paski przeglądarki odświeżają canvas bez zmian w Inspect.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -281,7 +282,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65B1",
+            stage: "12C65C",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -2927,12 +2928,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryUiRoot;
     }
 
-    function appendGalleryUiElement(element) {
+    function getGalleryHudLayer(layerName) {
+        var layerIds = {
+            top: "galleryMobileTopLayer",
+            controls: "galleryMobileControlsLayer",
+            inspect: "galleryMobileInspectLayer",
+            system: "galleryMobileSystemLayer"
+        };
+        var layerId = layerIds[layerName] || layerIds.controls;
+        return document.getElementById(layerId);
+    }
+
+    function getGalleryUiElementParent(layerName) {
+        return getGalleryHudLayer(layerName) || prepareGalleryUiRoot();
+    }
+
+    function appendGalleryUiElement(element, layerName) {
         if (!element) {
             return;
         }
 
-        prepareGalleryUiRoot().appendChild(element);
+        getGalleryUiElementParent(layerName).appendChild(element);
     }
 
     var floorMeshes = [];
@@ -5411,7 +5427,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryPerformanceDebugPanel.style.display = "none";
 
         if (typeof appendGalleryUiElement === "function") {
-            appendGalleryUiElement(galleryPerformanceDebugPanel);
+            appendGalleryUiElement(galleryPerformanceDebugPanel, "system");
         } else {
             document.body.appendChild(galleryPerformanceDebugPanel);
         }
@@ -6399,7 +6415,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C65B1",
+            stage: "12C65C",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
@@ -14203,7 +14219,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             right: var(--gallery-editor-screen-gap);
             bottom: var(--gallery-editor-bottom-gap);
             width: min(420px, calc(100vw - 32px));
-            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
+            max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
             z-index: 1000;
             display: none;
             flex-direction: column;
@@ -14250,7 +14266,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         .gallery-editor-scroll {
-            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
+            max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
             overflow-y: auto;
             padding: 22px 28px 22px;
             scrollbar-width: thin;
@@ -14547,7 +14563,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         .gallery-lighting-scroll {
-            max-height: calc(100vh - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
+            max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - var(--gallery-editor-top-gap) - var(--gallery-editor-bottom-gap));
             overflow: hidden;
             padding: 22px 28px 22px;
             scrollbar-width: thin;
@@ -15901,12 +15917,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 right: 18px;
                 bottom: 58px;
                 width: auto;
-                max-height: calc(100vh - 116px);
+                max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - 116px);
                 border-radius: 24px;
             }
 
             .gallery-editor-scroll {
-                max-height: calc(100vh - 116px);
+                max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - 116px);
                 padding: 20px 20px 20px;
             }
 
@@ -15945,7 +15961,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             .gallery-lighting-scroll {
-                max-height: calc(100vh - 116px);
+                max-height: calc(var(--gallery-visual-viewport-height, 100dvh) - 116px);
                 padding: 20px 20px 20px;
             }
 
@@ -24938,7 +24954,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     updateLightingPresetRows();
     setEditorPanelMode("edit");
 
-    appendGalleryUiElement(editHelpPanel);
+    appendGalleryUiElement(editHelpPanel, "controls");
 
     cleanupArtworkInfoPopupDom();
 
@@ -24962,7 +24978,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         + '    <div class="gallery-artwork-info-empty">No artwork information added yet.</div>'
         + '  </div>'
         + '</div>';
-    appendGalleryUiElement(artworkInfoPopup);
+    appendGalleryUiElement(artworkInfoPopup, "inspect");
 
     var galleryInspectNavigation = document.createElement("div");
     galleryInspectNavigation.id = "galleryInspectNavigation";
@@ -24974,7 +24990,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         + '<button type="button" class="gallery-inspect-navigation-button is-next is-hidden" aria-label="Next artwork">'
         + '  <span class="gallery-inspect-navigation-icon" aria-hidden="true"></span>'
         + '</button>';
-    appendGalleryUiElement(galleryInspectNavigation);
+    appendGalleryUiElement(galleryInspectNavigation, "inspect");
 
     var galleryInspectNavigationRefs = {
         previous: galleryInspectNavigation.querySelector(".gallery-inspect-navigation-button.is-previous"),
@@ -25021,8 +25037,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             lightingQuickButton.style.display = "none";
 
-            if (editButton.parentElement !== prepareGalleryUiRoot()) {
-                appendGalleryUiElement(editButton);
+            if (editButton.parentElement !== getGalleryUiElementParent("controls")) {
+                appendGalleryUiElement(editButton, "controls");
             }
 
             editButton.className = "gallery-editor-floating-mode-button";
@@ -26180,6 +26196,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             values.push(window.innerWidth);
         }
 
+        if (typeof window !== "undefined" && window.visualViewport && window.visualViewport.width) {
+            values.push(window.visualViewport.width);
+        }
+
         if (document.documentElement && document.documentElement.clientWidth) {
             values.push(document.documentElement.clientWidth);
         }
@@ -26211,15 +26231,38 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return Math.min.apply(null, values);
     }
 
+    function getMobileViewportShortSide() {
+        var width = window.visualViewport && window.visualViewport.width
+            ? window.visualViewport.width
+            : window.innerWidth;
+        var height = window.visualViewport && window.visualViewport.height
+            ? window.visualViewport.height
+            : window.innerHeight;
+
+        return Math.min(width || 9999, height || 9999);
+    }
+
     function shouldUseMobileViewerMode() {
         return !!(
             galleryDeviceProfile.useMobileViewerControls &&
-            getMobileResponsiveWidth() <= mobileViewerBreakpoint
+            (
+                getMobileResponsiveWidth() <= mobileViewerBreakpoint ||
+                getMobileViewportShortSide() <= 600
+            )
         );
     }
 
     function refreshMobileViewerMode() {
         var shouldEnable = shouldUseMobileViewerMode();
+        var mobileHud = document.getElementById("galleryMobileHud");
+
+        if (document.body) {
+            document.body.classList.toggle("gallery-mobile-viewer-enabled", shouldEnable);
+        }
+
+        if (mobileHud) {
+            mobileHud.setAttribute("data-mobile-viewer", shouldEnable ? "enabled" : "disabled");
+        }
 
         if (shouldEnable === mobileViewerEnabled) {
             setMobileViewerUiVisible(isMobileViewerActive());
@@ -27131,11 +27174,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             #mobileViewerControls {
                 position: absolute;
                 inset: 0;
-                /* Header strony ma z-index 8000, więc mobile UI galerii musi zostać niżej. */
-                z-index: 7000;
+                z-index: 1;
                 pointer-events: none;
                 display: none;
-                font-family: Arial, sans-serif;
+                font-family: var(--font, Arial, sans-serif);
                 user-select: none;
                 -webkit-user-select: none;
                 touch-action: none;
@@ -27143,8 +27185,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             #mobileJoystickBase {
                 position: absolute;
-                left: 22px;
-                bottom: 28px;
+                left: calc(env(safe-area-inset-left) + 18px);
+                bottom: calc(var(--gallery-hud-bottom-offset, 0px) + env(safe-area-inset-bottom) + 18px);
                 width: 108px;
                 height: 108px;
                 border-radius: 999px;
@@ -27152,6 +27194,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 background: rgba(0, 0, 0, 0.28);
                 box-shadow: 0 0 26px rgba(0, 0, 0, 0.22);
                 backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
                 pointer-events: auto;
                 touch-action: none;
             }
@@ -27167,6 +27210,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 box-shadow: 0 0 20px rgba(255, 255, 255, 0.18);
                 transform: translate(-50%, -50%);
                 pointer-events: none;
+            }
+
+            @media (orientation: landscape) and (max-height: 520px) {
+                #mobileJoystickBase {
+                    left: calc(env(safe-area-inset-left) + 14px);
+                    bottom: calc(var(--gallery-hud-bottom-offset, 0px) + env(safe-area-inset-bottom) + 12px);
+                    width: 94px;
+                    height: 94px;
+                }
+
+                #mobileJoystickKnob {
+                    width: 36px;
+                    height: 36px;
+                }
             }
         `;
 
@@ -27187,7 +27244,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         mobileViewerControls.appendChild(mobileJoystickBase);
 
-        appendGalleryUiElement(mobileViewerControls);
+        appendGalleryUiElement(mobileViewerControls, "controls");
 
         mobileJoystickBase.addEventListener("pointerdown", function (event) {
             if (!isMobileViewerActive()) {
@@ -27266,6 +27323,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         createMobileViewerUi();
 
         registerGalleryDomEvent("mobileViewerWindowResize", window, "resize", function () {
+            scheduleRefreshMobileViewerMode();
+        });
+
+        registerGalleryDomEvent("mobileViewerViewportChange", window, "gallery-mobile-viewport-change", function () {
+            scheduleRefreshMobileViewerMode();
+        });
+
+        registerGalleryDomEvent("mobileViewerOrientationChange", window, "orientationchange", function () {
+            resetMobileJoystick();
             scheduleRefreshMobileViewerMode();
         });
 
@@ -34109,7 +34175,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function ensureGalleryTourOrderOverlay() {
         if(galleryExhibitTourRuntime.badgeOverlay&&galleryExhibitTourRuntime.badgeOverlay.isConnected)return galleryExhibitTourRuntime.badgeOverlay;
-        var overlay=document.createElement('div');overlay.id='galleryTourOrderOverlay';(canvas.parentElement||document.body).appendChild(overlay);galleryExhibitTourRuntime.badgeOverlay=overlay;return overlay;
+        var overlay=document.createElement('div');overlay.id='galleryTourOrderOverlay';appendGalleryUiElement(overlay, "controls");galleryExhibitTourRuntime.badgeOverlay=overlay;return overlay;
     }
 
     function refreshGalleryExhibitTourOrderBadges() {

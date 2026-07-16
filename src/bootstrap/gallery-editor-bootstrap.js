@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C65B1
+  Berryboy Art Gallery — Stage 12C65C
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 

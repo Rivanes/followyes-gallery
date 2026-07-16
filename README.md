@@ -1,65 +1,59 @@
-# Berryboy Art Gallery — Stage 12C65B1
+# Berryboy Art Gallery — Stage 12C65C
 
-## Adaptive Quality Stabilization / Correct Downshift
+## Mobile Viewport / HUD Rebuild
 
-Built directly from Stage 12C65B. This is a narrow stabilization stage: no viewport, HUD, Inspect, popup or asset-streaming rebuild is included.
+Built directly from Stage 12C65B1. This stage replaces the mobile viewport and overlay architecture without changing the final Inspect design or its camera behavior.
 
-### Corrected AUTO startup
+### VisualViewport-owned gallery height
 
-- Regular mobile devices start in **Balanced** at `hardwareScalingLevel = 1.00`.
-- Embedded browsers and devices identified as low-memory or low-CPU start in **Safe** at `1.18`.
-- iOS, a high core count or reported `deviceMemory` no longer grants **High** automatically.
-- **High** is reached only after sustained fast FPS windows, or by an explicit manual selection.
+- `window.visualViewport.height` drives the real visible gallery height.
+- The controller also exposes width, `offsetTop`, bottom offset, orientation and source as CSS variables/data attributes.
+- `100dvh` remains only as a fallback.
+- Legacy `100vh` and the forced mobile minimum height are absent.
+- Resize, VisualViewport resize/scroll, orientation change, page restore and header resize all schedule one requestAnimationFrame update.
+- Babylon receives the same viewport event and resizes the engine after the CSS size is committed.
 
-### Profile resolution ranges
+### One layered gallery HUD
 
-- **High** — `0.96` baseline, range `0.94–1.08`.
-- **Balanced** — `1.00` baseline, range `1.00–1.22`.
-- **Safe** — `1.18` baseline, range `1.08–1.38`.
+`#galleryMobileHud` contains four fixed layers:
 
-The old automatic High startup at `0.88` has been removed. High can still improve clarity after measured performance evidence, but no profile starts with aggressive supersampling.
+1. `galleryMobileTopLayer`
+2. `galleryMobileControlsLayer`
+3. `galleryMobileInspectLayer`
+4. `galleryMobileSystemLayer`
 
-### Monotonic profile transitions
+Routing:
 
-AUTO profile transitions preserve the direction of the quality change:
+- joystick, edit panel, floating edit button and tour badges → controls,
+- artwork popup and Inspect arrows → inspect,
+- Boot Guard and performance diagnostics → system.
 
-- downshift: the hardware scaling level can stay unchanged or increase, never decrease,
-- upshift: the hardware scaling level can stay unchanged or decrease, never increase.
+The protected Inspect functions and the final Stage 12C64H visual CSS remain unchanged.
 
-Examples:
+### Safe-area joystick and orientation
 
-- `High 1.08 → Balanced 1.08`, not `1.00`,
-- `Balanced 1.22 → Safe 1.22`, not `1.18`.
+- Joystick left/bottom offsets use `env(safe-area-inset-left)` and `env(safe-area-inset-bottom)`.
+- Landscape phones retain mobile viewer controls through short-side detection.
+- Very short landscape viewports use a smaller joystick.
+- Orientation change resets active joystick input before refreshing the mobile mode.
 
-Shadow and light budgets still change immediately with the selected profile.
+### Lightweight mobile header
 
-### Asset-aware measurement
+- Mobile header height is 54 px plus the top safe area.
+- The long brand label collapses to “Berryboy”.
+- Existing About, language, login/logout and save actions move into one frosted dropdown instead of being compressed into a row.
+- The menu includes the Stage 12C65B1 quality selector: Auto / High / Balanced / Safe.
 
-FPS sampling and quality changes pause while any of the following is active:
+### Intentionally unchanged
 
-- background asset drain,
-- startup batch hydration,
-- active model loading,
-- pending artwork texture uploads,
-- pending environment or wall texture uploads,
-- Inspect camera transition,
-- hidden browser tab.
-
-This prevents temporary loading spikes from being interpreted as the permanent performance of the device.
-
-### Runtime APIs
-
-```js
-GalleryApp.getMobileQuality();
-GalleryApp.setMobileQualityMode("auto");
-GalleryApp.setMobileQualityMode("high");
-GalleryApp.setMobileQualityMode("balanced");
-GalleryApp.setMobileQualityMode("safe");
-```
-
-The selected mode remains stored as `berryboy_mobile_quality_mode`. The visible quality selector is intentionally left for the rebuilt mobile menu in Stage 12C65C.
+- Adaptive quality thresholds and monotonic downshift from 12C65B1,
+- Boot Guard failure logic,
+- Single Startup Gate,
+- Inspect camera transitions and final popup appearance,
+- exhibit tour order,
+- asset streaming / LOD / KTX2 planned for 12C65E.
 
 ### Login contract
 
 - `src/Gallery_V0_11.js`: login enabled.
-- root `Gallery_V0_11_STAGE12C65B1_ADAPTIVE_QUALITY_STABILIZATION_CORRECT_DOWNSHIFT_LOGIN_DISABLED.txt`: login disabled.
+- root `Gallery_V0_11_STAGE12C65C_MOBILE_VIEWPORT_HUD_REBUILD_LOGIN_DISABLED.txt`: login disabled.
