@@ -1,10 +1,10 @@
 /*
-  Berryboy Art Gallery — Stage 12C64R Smooth Inspect Playback / Interaction Readiness Gate
+  Berryboy Art Gallery — Stage 12C64S Single Startup Gate / Batched Finalization
   Public bootstrap. Editor/auth actions are dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c64r_smooth_inspect_interaction_ready_20260715";
+import { createScene } from "../Gallery_V0_11.min.js?v=stage12c64s_single_startup_gate_batched_finalization_20260716";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -158,7 +158,7 @@ function getEditorContext() {
 
 async function loadEditorModule() {
   if (!editorModulePromise) {
-    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c64r").then(function (module) {
+    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c64s").then(function (module) {
       module.initializeEditorRuntime(getEditorContext());
       return module;
     });
@@ -228,7 +228,7 @@ try {
   });
 
   window.BerryboyViewerRuntime = {
-    stage: "12C64R",
+    stage: "12C64S",
     engine,
     scene,
     supabase,
