@@ -67,6 +67,7 @@
   - Stage 12C64S: Single Startup Gate / Batched Finalization — stary Balanced Entry Gate i blokujący Image prefetch zostały usunięte. Po zastosowaniu stanu działa jedna bramka Interaction Ready: preview artworków, Props i modele rzeźb są ładowane raz, globalne kolizje/materiały/Local Lights finalizują się jednym batchem, a sterowanie odblokowuje się po stabilnych klatkach.
   - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
   - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
+  - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -142,7 +143,7 @@ export const createScene = function (engineArg, canvasArg) {
         };
     }
 
-    // STAGE 12C65B — ADAPTIVE MOBILE QUALITY / ONE DEVICE PROFILE
+    // STAGE 12C65B1 — ADAPTIVE QUALITY STABILIZATION / CORRECT DOWNSHIFT
     // One profile owns mobile asset choice, controls, render resolution, light budgets and shadow budgets.
     // Desktop stays on its existing production values. Mobile can use HIGH / BALANCED / SAFE and an AUTO
     // controller with hysteresis; resolution changes are applied only while the viewer is idle.
@@ -150,8 +151,8 @@ export const createScene = function (engineArg, canvasArg) {
         high: {
             name: "high",
             label: "High",
-            initialHardwareScalingLevel: 0.88,
-            minHardwareScalingLevel: 0.82,
+            initialHardwareScalingLevel: 0.96,
+            minHardwareScalingLevel: 0.94,
             maxHardwareScalingLevel: 1.08,
             mainShadowMapSize: 1024,
             mainShadowFilteringQuality: "high",
@@ -175,7 +176,7 @@ export const createScene = function (engineArg, canvasArg) {
             name: "balanced",
             label: "Balanced",
             initialHardwareScalingLevel: 1.00,
-            minHardwareScalingLevel: 0.94,
+            minHardwareScalingLevel: 1.00,
             maxHardwareScalingLevel: 1.22,
             mainShadowMapSize: 512,
             mainShadowFilteringQuality: "medium",
@@ -240,13 +241,9 @@ export const createScene = function (engineArg, canvasArg) {
         if (deviceInfo.embeddedBrowser || deviceInfo.lowMemory || deviceInfo.lowCpu) {
             return "safe";
         }
-        if (
-            deviceInfo.isIOS ||
-            (deviceInfo.hardwareConcurrency !== null && deviceInfo.hardwareConcurrency >= 6) ||
-            (deviceInfo.deviceMemory !== null && deviceInfo.deviceMemory >= 6)
-        ) {
-            return "high";
-        }
+
+        // AUTO never grants High from User Agent, iOS status, core count or deviceMemory alone.
+        // Every regular phone starts at native-like Balanced and earns High only after sustained FPS evidence.
         return "balanced";
     }
 
@@ -284,7 +281,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65B",
+            stage: "12C65B1",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -346,6 +343,10 @@ export const createScene = function (engineArg, canvasArg) {
         lowWindows: 0,
         highWindows: 0,
         pendingDirection: null,
+        measurementPauseCount: 0,
+        lastMeasurementPauseReason: null,
+        lastMeasurementPauseAt: 0,
+        lastAssetWorkState: null,
         changeCount: 0,
         history: []
     };
@@ -6084,7 +6085,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
-    // STAGE 12C65B — PROFILE BUDGET APPLICATION + DYNAMIC RESOLUTION
+    // STAGE 12C65B1 — STABLE PROFILE TRANSITIONS + ASSET-AWARE DYNAMIC RESOLUTION
     function resizeGalleryShadowMapSafely(shadowGenerator, size, reason) {
         if (!shadowGenerator || !shadowGenerator.getShadowMap) return false;
         var shadowMap = shadowGenerator.getShadowMap();
@@ -6151,9 +6152,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var currentLevel = engine && engine.getHardwareScalingLevel
             ? Number(engine.getHardwareScalingLevel())
             : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
-        var targetLevel = options.resetResolution
-            ? profile.initialHardwareScalingLevel
-            : Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, currentLevel || profile.initialHardwareScalingLevel));
+        var requestedLevel = Number(options.targetHardwareScalingLevel);
+        var hasRequestedLevel = isFinite(requestedLevel) && requestedLevel > 0;
+        var targetLevel = hasRequestedLevel
+            ? requestedLevel
+            : (options.resetResolution
+                ? profile.initialHardwareScalingLevel
+                : Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, currentLevel || profile.initialHardwareScalingLevel)));
         applyGalleryHardwareScalingLevel(targetLevel, reason || "quality-profile");
 
         galleryAdaptiveMobileQualityRuntime.lowWindows = 0;
@@ -6190,9 +6195,70 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return order[Math.max(0, index - 1)];
     }
 
+    function getGalleryProfileTransitionHardwareScalingLevel(profileName, direction, currentLevel) {
+        var profile = getGalleryMobileQualityProfileDefinition(profileName);
+        var safeCurrentLevel = Number(currentLevel);
+        if (!isFinite(safeCurrentLevel) || safeCurrentLevel <= 0) {
+            safeCurrentLevel = profile.initialHardwareScalingLevel;
+        }
+
+        var targetLevel = profile.initialHardwareScalingLevel;
+        if (direction === "down") {
+            // A quality downshift must never sharpen the image. Higher scaling level means fewer rendered pixels.
+            targetLevel = Math.max(safeCurrentLevel, profile.initialHardwareScalingLevel);
+        } else if (direction === "up") {
+            // A quality upshift must never reduce resolution. Lower scaling level means more rendered pixels.
+            targetLevel = Math.min(safeCurrentLevel, profile.initialHardwareScalingLevel);
+        }
+
+        return Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, targetLevel));
+    }
+
+    function getGalleryAdaptiveQualityAssetWorkState() {
+        var pendingArtworkTextures = 0;
+        var pendingVisibleTextures = 0;
+
+        try {
+            pendingArtworkTextures = galleryStartupArtworkTextureDebug && galleryStartupArtworkTextureDebug.pending
+                ? Object.keys(galleryStartupArtworkTextureDebug.pending).length
+                : 0;
+        } catch (artworkTextureStateError) {}
+
+        try {
+            pendingVisibleTextures = galleryStartupVisibleTextureDebug && galleryStartupVisibleTextureDebug.pending
+                ? Object.keys(galleryStartupVisibleTextureDebug.pending).length
+                : 0;
+        } catch (visibleTextureStateError) {}
+
+        var state = {
+            backgroundDrainActive: !!(galleryFastStartRuntime && galleryFastStartRuntime.backgroundDrainActive),
+            startupBatchHydrationActive: !!(galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive),
+            modelLoadActiveCount: galleryFastStartRuntime ? Math.max(0, Number(galleryFastStartRuntime.modelLoadActiveCount) || 0) : 0,
+            pendingArtworkTextures: pendingArtworkTextures,
+            pendingVisibleTextures: pendingVisibleTextures
+        };
+        state.busy = !!(
+            state.backgroundDrainActive ||
+            state.startupBatchHydrationActive ||
+            state.modelLoadActiveCount > 0 ||
+            state.pendingArtworkTextures > 0 ||
+            state.pendingVisibleTextures > 0
+        );
+        return state;
+    }
+
+    function pauseGalleryAdaptiveQualityMeasurement(reason, assetWorkState) {
+        galleryAdaptiveMobileQualityRuntime.measurementPauseCount += 1;
+        galleryAdaptiveMobileQualityRuntime.lastMeasurementPauseReason = reason || "measurement-paused";
+        galleryAdaptiveMobileQualityRuntime.lastMeasurementPauseAt = Date.now();
+        galleryAdaptiveMobileQualityRuntime.lastAssetWorkState = assetWorkState || null;
+        resetGalleryAdaptiveQualitySample(performance.now());
+    }
+
     function isGalleryAdaptiveQualityChangeSafeNow() {
         if (isGalleryInspectCameraTransitionActive && isGalleryInspectCameraTransitionActive()) return false;
         if (typeof document !== "undefined" && document.hidden) return false;
+        if (getGalleryAdaptiveQualityAssetWorkState().busy) return false;
         if (galleryFastStartRuntime && galleryFastStartRuntime.lastViewerActivityAt) {
             if (Date.now() - galleryFastStartRuntime.lastViewerActivityAt < 650) return false;
         }
@@ -6212,7 +6278,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (nextLevel <= currentLevel + 0.015 && galleryDeviceProfile.qualityMode === "auto") {
                 var lowerProfile = getGalleryNextQualityProfile("down");
                 if (lowerProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
-                    return applyGalleryMobileQualityProfile(lowerProfile, reason || "auto-profile-down", { resetResolution: true });
+                    return applyGalleryMobileQualityProfile(lowerProfile, reason || "auto-profile-down", {
+                        targetHardwareScalingLevel: getGalleryProfileTransitionHardwareScalingLevel(lowerProfile, "down", currentLevel)
+                    });
                 }
             }
         } else {
@@ -6220,7 +6288,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (nextLevel >= currentLevel - 0.015 && galleryDeviceProfile.qualityMode === "auto") {
                 var higherProfile = getGalleryNextQualityProfile("up");
                 if (higherProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
-                    return applyGalleryMobileQualityProfile(higherProfile, reason || "auto-profile-up", { resetResolution: true });
+                    return applyGalleryMobileQualityProfile(higherProfile, reason || "auto-profile-up", {
+                        targetHardwareScalingLevel: getGalleryProfileTransitionHardwareScalingLevel(higherProfile, "up", currentLevel)
+                    });
                 }
             }
         }
@@ -6251,13 +6321,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!galleryFastStartRuntime || !galleryFastStartRuntime.interactionReady) return;
         if (Date.now() < galleryAdaptiveMobileQualityRuntime.warmupUntil) return;
         if (typeof document !== "undefined" && document.hidden) {
-            resetGalleryAdaptiveQualitySample(performance.now());
+            pauseGalleryAdaptiveQualityMeasurement("document-hidden");
             return;
         }
         if (isGalleryInspectCameraTransitionActive && isGalleryInspectCameraTransitionActive()) {
-            resetGalleryAdaptiveQualitySample(performance.now());
+            pauseGalleryAdaptiveQualityMeasurement("inspect-transition");
             return;
         }
+
+        var assetWorkState = getGalleryAdaptiveQualityAssetWorkState();
+        if (assetWorkState.busy) {
+            pauseGalleryAdaptiveQualityMeasurement("asset-work-active", assetWorkState);
+            return;
+        }
+        galleryAdaptiveMobileQualityRuntime.lastAssetWorkState = assetWorkState;
 
         var frameMs = engine && engine.getDeltaTime ? Number(engine.getDeltaTime()) : 16.67;
         if (!isFinite(frameMs) || frameMs <= 0 || frameMs > 250) return;
@@ -6322,7 +6399,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C65B",
+            stage: "12C65B1",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,

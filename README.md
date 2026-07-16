@@ -1,27 +1,51 @@
-# Berryboy Art Gallery — Stage 12C65B
+# Berryboy Art Gallery — Stage 12C65B1
 
-## Adaptive Mobile Quality
+## Adaptive Quality Stabilization / Correct Downshift
 
-Built directly from Stage 12C65A. The mobile cleanup, Boot Guard, single startup gate, Inspect pipeline, popup and `tourOrder` remain intact.
+Built directly from Stage 12C65B. This is a narrow stabilization stage: no viewport, HUD, Inspect, popup or asset-streaming rebuild is included.
 
-### Profiles
+### Corrected AUTO startup
 
-- **High** — sharper internal render (`0.88` baseline), 1024 main shadow map, two active local Spot shadows and higher material light budgets.
-- **Balanced** — native-like internal render (`1.00` baseline), 512 main/local shadow maps and moderate material budgets.
-- **Safe** — conservative render (`1.18` baseline), reduced shadow/light budgets for embedded browsers and weaker devices.
+- Regular mobile devices start in **Balanced** at `hardwareScalingLevel = 1.00`.
+- Embedded browsers and devices identified as low-memory or low-CPU start in **Safe** at `1.18`.
+- iOS, a high core count or reported `deviceMemory` no longer grants **High** automatically.
+- **High** is reached only after sustained fast FPS windows, or by an explicit manual selection.
 
-`AUTO` chooses the initial profile from the single Stage 12C65A device profile and can move between profiles only after sustained performance evidence.
+### Profile resolution ranges
 
-### Dynamic resolution
+- **High** — `0.96` baseline, range `0.94–1.08`.
+- **Balanced** — `1.00` baseline, range `1.00–1.22`.
+- **Safe** — `1.18` baseline, range `1.08–1.38`.
 
-- starts only after `Interaction Ready`,
-- waits through a 3-second warm-up,
-- samples stable 1.8-second windows,
-- needs two slow windows to lower quality,
-- needs four fast windows to raise quality,
-- applies changes only after the viewer has been idle for at least 650 ms,
-- pauses measurement during Inspect transitions and hidden-tab periods,
-- uses a 4.5–5 second cooldown to prevent oscillation.
+The old automatic High startup at `0.88` has been removed. High can still improve clarity after measured performance evidence, but no profile starts with aggressive supersampling.
+
+### Monotonic profile transitions
+
+AUTO profile transitions preserve the direction of the quality change:
+
+- downshift: the hardware scaling level can stay unchanged or increase, never decrease,
+- upshift: the hardware scaling level can stay unchanged or decrease, never increase.
+
+Examples:
+
+- `High 1.08 → Balanced 1.08`, not `1.00`,
+- `Balanced 1.22 → Safe 1.22`, not `1.18`.
+
+Shadow and light budgets still change immediately with the selected profile.
+
+### Asset-aware measurement
+
+FPS sampling and quality changes pause while any of the following is active:
+
+- background asset drain,
+- startup batch hydration,
+- active model loading,
+- pending artwork texture uploads,
+- pending environment or wall texture uploads,
+- Inspect camera transition,
+- hidden browser tab.
+
+This prevents temporary loading spikes from being interpreted as the permanent performance of the device.
 
 ### Runtime APIs
 
@@ -33,9 +57,9 @@ GalleryApp.setMobileQualityMode("balanced");
 GalleryApp.setMobileQualityMode("safe");
 ```
 
-The selected mode is stored as `berryboy_mobile_quality_mode`. A future mobile HUD can listen for `gallery-mobile-quality-change`.
+The selected mode remains stored as `berryboy_mobile_quality_mode`. The visible quality selector is intentionally left for the rebuilt mobile menu in Stage 12C65C.
 
 ### Login contract
 
 - `src/Gallery_V0_11.js`: login enabled.
-- root `Gallery_V0_11_STAGE12C65B_ADAPTIVE_MOBILE_QUALITY_LOGIN_DISABLED.txt`: login disabled.
+- root `Gallery_V0_11_STAGE12C65B1_ADAPTIVE_QUALITY_STABILIZATION_CORRECT_DOWNSHIFT_LOGIN_DISABLED.txt`: login disabled.
