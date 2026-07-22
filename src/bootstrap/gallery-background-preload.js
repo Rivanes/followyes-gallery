@@ -24,6 +24,8 @@
     phase: "idle"
   };
 
+  let runtimeLoaderSignature = "";
+
   const messages = {
     pl: {
       idle: "Oczekiwanie na wolną chwilę przeglądarki…",
@@ -85,6 +87,56 @@
       }
     }));
   }
+
+  function syncRuntimeLoaderState() {
+    const loadingScreen = document.getElementById("customLoadingScreen");
+    if (!loadingScreen) return;
+
+    const retryButton = document.getElementById("galleryAssetRetryButton");
+    const loaderStatus = document.getElementById("galleryLoaderStatus");
+    const statusText = loaderStatus ? String(loaderStatus.textContent || "").toLowerCase() : "";
+    const retryVisible = !!(retryButton && retryButton.style.display && retryButton.style.display !== "none");
+    const runtimeHidden = loadingScreen.style.display === "none";
+    const failureVisible = retryVisible || statusText.includes("failed") || statusText.includes("missing critical");
+    const signature = [runtimeHidden, failureVisible, statusText].join("|");
+
+    if (signature === runtimeLoaderSignature) return;
+    runtimeLoaderSignature = signature;
+
+    if (failureVisible) {
+      state.failed = true;
+      state.ready = false;
+      publishState("error");
+      updateStatus("error");
+      return;
+    }
+
+    if (runtimeHidden) {
+      state.ready = true;
+      state.failed = false;
+      publishState("ready");
+      updateStatus("ready");
+      return;
+    }
+
+    if (state.started) {
+      state.ready = false;
+      publishState("loading");
+      updateStatus("loading");
+    }
+  }
+
+  const runtimeLoaderObserver = new MutationObserver(function () {
+    syncRuntimeLoaderState();
+  });
+
+  runtimeLoaderObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["style", "class"],
+    characterData: true
+  });
 
   function loadClassicScript(src, id) {
     return new Promise(function (resolve, reject) {
@@ -213,10 +265,13 @@
     const detail = event.detail || {};
 
     if (detail.state === "ready") {
-      state.ready = true;
+      // The first WebGL frame only confirms that the engine is alive.
+      // Actual gallery readiness is determined by the engine's own
+      // customLoadingScreen being hidden after critical assets finish.
       state.failed = false;
-      publishState("ready");
-      updateStatus("ready");
+      publishState("loading");
+      updateStatus("loading");
+      window.requestAnimationFrame(syncRuntimeLoaderState);
       return;
     }
 
@@ -238,6 +293,7 @@
   updateToggleLabels();
   updateStatus("idle");
   publishState("idle");
+  syncRuntimeLoaderState();
 
   const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   const saveData = !!(connection && connection.saveData);

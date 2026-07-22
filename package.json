@@ -1,8 +1,8 @@
 {
   "name": "berryboy-art-gallery-stage12c65e-background-preload-test",
-  "version": "0.11.65-e-preload-test-1",
+  "version": "0.11.65-e-preload-test-2",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C65E background preload test",
+  "description": "Berryboy Art Gallery — Stage 12C65E background preload hidden UI fix",
   "type": "module",
   "scripts": {
     "verify": "node tools/verify-stage12c65e.mjs",

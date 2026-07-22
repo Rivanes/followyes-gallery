@@ -1128,6 +1128,19 @@
       pointer-events: none !important;
     }
 
+    /* The engine creates a few full-screen layers directly under <body>.
+       During background preload they must stay completely invisible.
+       Their own inline display:flex values are restored automatically
+       after the user explicitly enters the gallery. */
+    body:not(.gallery-active) > #customLoadingScreen,
+    body:not(.gallery-active) > #berryboyViewerIntroOverlay,
+    body:not(.gallery-active) > #galleryPerformanceDebugPanel {
+      display: none !important;
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
     body.gallery-active #siteContent,
     body.gallery-active #siteFooter {
       visibility: hidden;
@@ -1862,7 +1875,7 @@
   </script>
 
   <!-- TEST: dependency and scene startup are scheduled in the background. -->
-  <script src="./src/bootstrap/gallery-background-preload.js?v=stage12c65e_background_preload_test_20260722"></script>
+  <script src="./src/bootstrap/gallery-background-preload.js?v=stage12c65e_background_preload_hidden_ui_fix_20260722"></script>
   <!-- verifier cache-key contract: gallery-viewer-bootstrap.js?v=stage12c65e_light_mode_exit_stall_fix_20260720 -->
 </body>
 </html>
