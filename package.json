@@ -1,12 +1,12 @@
 {
-  "name": "berryboy-art-gallery-stage12c65e-background-preload-test",
-  "version": "0.11.65-e-preload-test-2",
+  "name": "berryboy-art-gallery-stage12c65e-first-light-mode-exit-stall-fix",
+  "version": "0.11.65-e-hotfix-3",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C65E background preload hidden UI fix",
+  "description": "Berryboy Art Gallery — Stage 12C65E First Light Mode Exit Stall Fix",
   "type": "module",
   "scripts": {
     "verify": "node tools/verify-stage12c65e.mjs",
-    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-background-preload.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
+    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
     "check": "npm run syntax && npm run verify"
   }
 }

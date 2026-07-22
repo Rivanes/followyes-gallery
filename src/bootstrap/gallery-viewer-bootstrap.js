@@ -150,6 +150,7 @@ function applyLanguage(lang) {
   if (loginButton) loginButton.textContent = t("login");
   if (logoutButton) logoutButton.textContent = t("logout");
   if (saveStateButton) saveStateButton.textContent = t("save");
+  if (exploreBelowButton) exploreBelowButton.textContent = t("exploreBelow");
   if (authModalTitle) authModalTitle.textContent = t("editorLogin");
   if (authEmailLabel) authEmailLabel.textContent = t("email");
   if (authPasswordLabel) authPasswordLabel.textContent = t("password");
@@ -335,35 +336,7 @@ try {
   updateAuthUi();
 
   let firstFrameDelivered = false;
-  let galleryPresentationActive = document.body.classList.contains("gallery-active");
-  let lastBackgroundRenderAt = 0;
-  const backgroundFrameIntervalMs = 500;
-
-  function setGalleryPresentationActive(active) {
-    galleryPresentationActive = !!active;
-    if (galleryPresentationActive) {
-      lastBackgroundRenderAt = 0;
-      window.requestAnimationFrame(function () {
-        engine.resize();
-      });
-    }
-  }
-
-  window.addEventListener("berryboy-gallery-activate", function () {
-    setGalleryPresentationActive(true);
-  });
-
-  window.addEventListener("berryboy-gallery-deactivate", function () {
-    setGalleryPresentationActive(false);
-  });
-
   engine.runRenderLoop(function () {
-    const now = performance.now();
-    if (!galleryPresentationActive && now - lastBackgroundRenderAt < backgroundFrameIntervalMs) {
-      return;
-    }
-
-    lastBackgroundRenderAt = now;
     scene.render();
     if (!firstFrameDelivered) {
       firstFrameDelivered = true;
