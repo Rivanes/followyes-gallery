@@ -1,10 +1,10 @@
 /*
-  Berryboy Art Gallery — Stage 12C65E Mobile Asset Streaming / Memory Budget
+  Berryboy Art Gallery — Stage 12C65E Mobile Asset Streaming / Memory Budget — First Light Mode Exit Stall Fix
   Public bootstrap. Editor/auth actions are dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65e_mobile_asset_streaming_20260716";
+import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65e_light_mode_exit_stall_fix_20260720";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -150,7 +150,6 @@ function applyLanguage(lang) {
   if (loginButton) loginButton.textContent = t("login");
   if (logoutButton) logoutButton.textContent = t("logout");
   if (saveStateButton) saveStateButton.textContent = t("save");
-  if (exploreBelowButton) exploreBelowButton.textContent = t("exploreBelow");
   if (authModalTitle) authModalTitle.textContent = t("editorLogin");
   if (authEmailLabel) authEmailLabel.textContent = t("email");
   if (authPasswordLabel) authPasswordLabel.textContent = t("password");
@@ -336,7 +335,35 @@ try {
   updateAuthUi();
 
   let firstFrameDelivered = false;
+  let galleryPresentationActive = document.body.classList.contains("gallery-active");
+  let lastBackgroundRenderAt = 0;
+  const backgroundFrameIntervalMs = 500;
+
+  function setGalleryPresentationActive(active) {
+    galleryPresentationActive = !!active;
+    if (galleryPresentationActive) {
+      lastBackgroundRenderAt = 0;
+      window.requestAnimationFrame(function () {
+        engine.resize();
+      });
+    }
+  }
+
+  window.addEventListener("berryboy-gallery-activate", function () {
+    setGalleryPresentationActive(true);
+  });
+
+  window.addEventListener("berryboy-gallery-deactivate", function () {
+    setGalleryPresentationActive(false);
+  });
+
   engine.runRenderLoop(function () {
+    const now = performance.now();
+    if (!galleryPresentationActive && now - lastBackgroundRenderAt < backgroundFrameIntervalMs) {
+      return;
+    }
+
+    lastBackgroundRenderAt = now;
     scene.render();
     if (!firstFrameDelivered) {
       firstFrameDelivered = true;

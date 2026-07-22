@@ -6,7 +6,7 @@ const minified = fs.readFileSync(new URL('../src/Gallery_V0_11.min.js', import.m
 const index = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const bootstrap = fs.readFileSync(new URL('../src/bootstrap/gallery-viewer-bootstrap.js', import.meta.url), 'utf8');
 const editorBootstrap = fs.readFileSync(new URL('../src/bootstrap/gallery-editor-bootstrap.js', import.meta.url), 'utf8');
-const txt = fs.readFileSync(new URL('../Gallery_V0_11_STAGE12C65E_MOBILE_ASSET_STREAMING_MEMORY_BUDGET_LOGIN_DISABLED.txt', import.meta.url), 'utf8');
+const txt = fs.readFileSync(new URL('../Gallery_V0_11_STAGE12C65E_FIRST_LIGHT_MODE_EXIT_STALL_FIX_LOGIN_DISABLED.txt', import.meta.url), 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -63,10 +63,12 @@ assert(index.includes('stage: "12C65E"'), 'Boot Guard stage missing');
 assert(source.includes('Stage 12C65E: Mobile Asset Streaming / Memory Budget'), 'Stage E source history missing');
 assert(source.includes('stage: "12C65E"'), 'Source Stage E runtime identity missing');
 assert(bootstrap.includes('Stage 12C65E Mobile Asset Streaming / Memory Budget'), 'Viewer bootstrap Stage E label missing');
-assert(bootstrap.includes('stage12c65e_mobile_asset_streaming_20260716'), 'Viewer bootstrap Stage E cache key missing');
+assert(bootstrap.includes('stage12c65e_light_mode_exit_stall_fix_20260720'), 'Light Mode exit fix cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c65e_light_mode_exit_stall_fix_20260720'), 'Page bootstrap cache key missing');
 assert(bootstrap.includes('stage: "12C65E"'), 'Viewer runtime Stage E identity missing');
 assert(editorBootstrap.includes('Stage 12C65E'), 'Editor bootstrap Stage E label missing');
 assert(!bootstrap.includes('stage12c65d'), 'Old Stage D cache key remains');
+assert(!bootstrap.includes('stage12c65e_mobile_asset_streaming_20260716'), 'Pre-fix Stage E cache key remains');
 
 // Stage C/D mobile viewport + Inspect foundations stay present.
 assert(index.includes('viewport-fit=cover'), 'viewport-fit=cover missing');
@@ -152,6 +154,44 @@ const protectedHashes = {
 for (const [name, expected] of Object.entries(protectedHashes)) {
   assert(sha(extractFunction(source, name)) === expected, `Protected function changed: ${name}`);
 }
+
+
+// Stable Inspect navigation geometry: camera travel may lock buttons, but must not remove the mobile row.
+const navigationState = extractFunction(source, 'setGalleryInspectNavigationButtonState');
+assert(navigationState.includes('var missingTarget = !target;'), 'Missing-target state split missing');
+assert(navigationState.includes('var temporarilyLocked = !!target && galleryInspectRuntime.opening;'), 'Transition lock state missing');
+assert(navigationState.includes('button.classList.toggle("is-hidden", missingTarget);'), 'Buttons are still hidden during transition');
+assert(navigationState.includes('is-transition-locked'), 'Transition-lock class missing');
+assert(source.includes('#galleryInspectNavigation.is-visible {\n                min-height: var(--gallery-inspect-navigation-size) !important;'), 'Visible mobile navigation row height is not reserved');
+assert(!source.includes('.gallery-inspect-navigation-button.is-hidden,\n            .gallery-inspect-navigation-button:disabled {\n                display: none !important;'), 'Mobile disabled buttons still collapse layout');
+assert(source.includes('.gallery-inspect-navigation-button:disabled:not(.is-hidden)'), 'Visible disabled transition style missing');
+
+
+// Edit Mode button remains interactive after moving into the click-through HUD controls layer.
+assert(index.includes('#galleryMobileControlsLayer > #editModeButton'), 'Page-level Edit Mode hit-target rule missing');
+assert(index.includes(`pointer-events: auto;
+      touch-action: manipulation;`), 'Page-level Edit Mode pointer recovery missing');
+assert(source.includes('STAGE 12C65E UI FIX — the button lives inside a HUD layer'), 'Engine Edit Mode pointer fix marker missing');
+const floatingButtonCssStart = source.indexOf('.gallery-editor-floating-mode-button {', source.indexOf('.gallery-editor-floating-mode-button {') + 1);
+const floatingButtonCss = source.slice(floatingButtonCssStart, floatingButtonCssStart + 900);
+assert(floatingButtonCss.includes('pointer-events: auto;'), 'Floating Edit Mode button does not restore pointer events');
+assert(floatingButtonCss.includes('touch-action: manipulation;'), 'Floating Edit Mode button touch policy missing');
+assert(minified.includes('pointer-events: auto;\\n            touch-action: manipulation;'), 'Minified Edit Mode pointer recovery missing');
+
+
+// First Local Lights BACK TO EDIT stall fix.
+assert(count(source, 'restoredFromState: true') === 2, 'Restored manual lights are not marked explicitly');
+const registerLocalLight = extractFunction(source, 'registerLocalLight');
+assert(registerLocalLight.includes('options.deferInitialTargetCommit !== false && !options.restoredFromState'), 'Restored lights still enter deferred manual spawn retarget queue');
+assert(registerLocalLight.includes('item._localLightNeedsFinalRetarget = false;'), 'Restored pending-retarget flag is not cleared');
+const batchCommit = extractFunction(source, 'commitSegmentAwareLocalLightTargetsBatchImmediate');
+assert(batchCommit.includes('buildLocalLightSegmentToLightMap(batchReason + "Before")'), 'Batch commit does not build the segment map once');
+assert(batchCommit.includes('commitLocalLightFinalTargetGroupImmediate(affectedItems, batchReason'), 'Batch commit does not use one unified final group commit');
+assert(batchCommit.includes('scope: "backToEditSegmentAwareBatch"'), 'Back-to-edit batch scope missing');
+assert(source.includes(`commitSegmentAwareLocalLightTargetsBatchImmediate(\n                backCommitItems,\n                "backToEditSegmentAwareBatch"`), 'BACK TO EDIT does not call the batch commit');
+assert(!source.includes(`backCommitItems.forEach(function (item) {\n            commitSegmentAwareLocalLightTargetsImmediate`), 'BACK TO EDIT still repeats the single-light resolver');
+assert(minified.includes('backToEditSegmentAwareBatch'), 'Minified back-to-edit batch missing');
+assert(minified.includes('restoredFromState'), 'Minified restored-light guard missing');
 
 // Production/login-disabled exact contract.
 assert(count(source, 'var galleryEditorLoginEnabled = true;') === 1, 'Production source login must be enabled exactly once');

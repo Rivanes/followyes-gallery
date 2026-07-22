@@ -51,3 +51,17 @@ npm run check
 ```
 
 This checks JavaScript syntax, Stage identity, queue contracts, KTX2 fallback, model LOD, memory release, zone-based Local Lights, the login ON/OFF contract, minified output and protected Inspect functions.
+
+
+## Included UI hotfixes
+
+- Stable Inspect navigation keeps Previous/Next geometry during camera travel.
+- The floating Edit Mode button restores pointer input inside the HUD controls layer.
+
+## First Light Mode Exit Stall Fix
+
+The first **BACK TO EDIT** after opening Local Lights no longer treats every restored lamp as a newly spawned, manually dirty light. Restored `targetMeshNames` remain the source of truth. If several lights are genuinely dirty, their affected segment union is resolved once and committed in one segment-aware batch instead of repeating a relation scan for every lamp.
+
+## Background preload test — 2026-07-22
+
+This test variant opens on the technical information page. Babylon.js and the hidden gallery scene are scheduled during browser idle time. While the gallery is not visible, its render loop is throttled to one frame every 500 ms. Clicking **Enter gallery / Przejdź do galerii** reveals the prepared scene and restores full-speed rendering. Data Saver prevents automatic background startup and waits for the click.

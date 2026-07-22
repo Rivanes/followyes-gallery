@@ -285,6 +285,13 @@
     #galleryMobileInspectLayer { z-index: 30; }
     #galleryMobileSystemLayer { z-index: 50; }
 
+    /* Stage 12C65E hotfix: the HUD controls layer is click-through by default,
+       while the floating Edit Mode control must remain a real hit target. */
+    #galleryMobileControlsLayer > #editModeButton {
+      pointer-events: auto;
+      touch-action: manipulation;
+    }
+
     #galleryBootGuard {
       position: absolute;
       pointer-events: auto;
@@ -1088,6 +1095,130 @@
         padding: 26px 24px;
       }
     }
+
+    /* TEST: technical landing page + background gallery preload */
+    #gallerySection {
+      position: fixed;
+      top: var(--gallery-active-header-height);
+      left: 0;
+      right: 0;
+      z-index: 7000;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(10px);
+      transition: opacity 220ms ease, transform 220ms ease, visibility 0s linear 220ms;
+    }
+
+    body.gallery-active {
+      overflow: hidden;
+      background: #080909;
+    }
+
+    body.gallery-active #gallerySection {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+      transition-delay: 0s;
+    }
+
+    body:not(.gallery-active) #gallerySection,
+    body:not(.gallery-active) #gallerySection * {
+      pointer-events: none !important;
+    }
+
+    body.gallery-active #siteContent,
+    body.gallery-active #siteFooter {
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    body:not(.gallery-active) #mobileQualityControl,
+    body:not(.gallery-active) #authStatus,
+    body:not(.gallery-active) #saveStateButton,
+    body:not(.gallery-active) #loginButton,
+    body:not(.gallery-active) #logoutButton {
+      display: none !important;
+    }
+
+    #galleryEntryPanel {
+      margin-top: 42px;
+      padding: clamp(24px, 4vw, 46px);
+      border: 1px solid rgba(16, 16, 16, 0.2);
+      background: rgba(255, 255, 255, 0.36);
+      box-shadow: 0 22px 60px rgba(22, 20, 16, 0.08);
+    }
+
+    #galleryEntryPanel h2 {
+      max-width: 900px;
+      margin-bottom: 20px;
+      font-size: clamp(34px, 5vw, 70px);
+    }
+
+    #galleryEntryPanel p {
+      max-width: 760px;
+      line-height: 1.65;
+    }
+
+    .galleryEntryKicker {
+      margin-bottom: 14px;
+      font-size: 12px;
+      font-weight: 700 !important;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .galleryEntryButton {
+      min-height: 52px;
+      margin-top: 14px;
+      padding: 14px 22px;
+      border: 1px solid #111;
+      background: #111;
+      color: #fff;
+      font: 700 14px/1 var(--font);
+      cursor: pointer;
+      transition: transform 160ms ease, background 160ms ease;
+    }
+
+    .galleryEntryButton:hover {
+      transform: translateY(-2px);
+      background: #262626;
+    }
+
+    #galleryPreloadStatus {
+      margin-top: 24px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(16, 16, 16, 0.16);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    body[data-gallery-preload-state="ready"] #galleryPreloadStatus {
+      color: #1d5b27;
+      font-weight: 700;
+    }
+
+    body[data-gallery-preload-state="error"] #galleryPreloadStatus {
+      color: #8e1d1d;
+      font-weight: 700;
+    }
+
+    @media (max-width: 768px) {
+      #galleryEntryPanel {
+        margin-top: 28px;
+        padding: 22px;
+      }
+
+      #galleryEntryPanel h2 {
+        font-size: clamp(32px, 12vw, 52px);
+      }
+
+      .galleryEntryButton {
+        width: 100%;
+      }
+    }
   </style>
 </head>
 
@@ -1107,7 +1238,7 @@
       </button>
 
       <div id="headerRight">
-        <a id="exploreBelowButton" class="headerButton" href="#project-info">About project</a>
+        <button id="exploreBelowButton" class="headerButton" type="button" data-gallery-toggle>Enter gallery</button>
 
         <div id="languageSwitch" aria-label="Language switch">
           <button type="button" class="langButton active" data-set-lang="en">EN</button>
@@ -1173,6 +1304,34 @@
             A working version of a virtual gallery, used to test spatial navigation,
             artwork presentation, lighting and exhibition editing tools.
           </p>
+        </div>
+
+        <div id="galleryEntryPanel" aria-live="polite">
+          <div class="languageBlock" data-lang="pl">
+            <p class="galleryEntryKicker">Galeria przygotowuje się w tle</p>
+            <h2>Przeczytaj opis, a scena 3D będzie się w tym czasie ładować.</h2>
+            <p>
+              To testowy mechanizm. Silnik oraz zasoby galerii uruchamiają się spokojnie podczas czytania strony,
+              a po wejściu niewczytane elementy są dokańczane już w widoku galerii.
+            </p>
+            <button class="galleryEntryButton" type="button" data-enter-gallery>Przejdź do galerii</button>
+          </div>
+
+          <div class="languageBlock" data-lang="en">
+            <p class="galleryEntryKicker">The gallery is preparing in the background</p>
+            <h2>Read the description while the 3D scene loads.</h2>
+            <p>
+              This is a test mechanism. The engine and gallery assets start quietly while the page is being read,
+              and any remaining elements continue loading after entering the gallery.
+            </p>
+            <button class="galleryEntryButton" type="button" data-enter-gallery>Enter gallery</button>
+          </div>
+
+          <div id="galleryPreloadStatus" role="status" aria-live="polite"
+               data-pl="Oczekiwanie na wolną chwilę przeglądarki…"
+               data-en="Waiting for an idle browser moment…">
+            Waiting for an idle browser moment…
+          </div>
         </div>
 
         <div class="featureGrid">
@@ -1590,28 +1749,65 @@
       var details = document.getElementById("galleryBootDetails");
       var reload = document.getElementById("galleryBootReload");
       var external = document.getElementById("galleryBootExternal");
+      var started = false;
       var finished = false;
       var failure = null;
-      var bootStartedAt = Date.now();
+      var bootStartedAt = 0;
 
       function setText(element, value) {
         if (element) element.textContent = value || "";
       }
 
+      function emit(state, phase, text, error) {
+        window.dispatchEvent(new CustomEvent("berryboy-gallery-boot-state", {
+          detail: {
+            state: state,
+            phase: phase || null,
+            message: text || "",
+            error: error || null
+          }
+        }));
+      }
+
+      function startBoot() {
+        if (started || finished) return;
+        started = true;
+        bootStartedAt = Date.now();
+        api.bootStartedAt = bootStartedAt;
+        if (guard) {
+          guard.classList.remove("is-hidden", "is-error");
+          guard.dataset.phase = "starting";
+        }
+        setText(title, "Loading gallery");
+        setText(message, "Preparing the 3D scene…");
+        api.timeoutId = window.setTimeout(function () {
+          fail(
+            "boot-timeout",
+            "The gallery is taking too long to initialize. Reload it or open it in the full browser."
+          );
+        }, 60000);
+        emit("loading", "starting", "Preparing the gallery in the background…");
+      }
+
       function setPhase(phase, text) {
+        if (!started) startBoot();
         if (finished || failure) return;
         if (guard) guard.dataset.phase = phase || "boot";
         setText(message, text || "Preparing the 3D scene…");
+        emit("loading", phase || "boot", text || "Preparing the 3D scene…");
       }
 
       function ready() {
         if (finished || failure) return;
+        if (!started) startBoot();
         finished = true;
         window.clearTimeout(api.timeoutId);
         if (guard) guard.classList.add("is-hidden");
+        emit("ready", "ready", "The gallery scene is prepared. Remaining assets may continue loading in the background.");
       }
 
       function fail(code, friendlyMessage, error) {
+        if (!started) startBoot();
         finished = false;
         failure = code || "startup-error";
         window.clearTimeout(api.timeoutId);
@@ -1626,20 +1822,17 @@
           details.style.display = "block";
           details.textContent = error && error.stack ? error.stack : String(error);
         }
+        emit("error", failure, friendlyMessage || "The gallery could not start.", error);
       }
 
       var api = {
         stage: "12C65E",
         bootStartedAt: bootStartedAt,
+        start: startBoot,
         setPhase: setPhase,
         ready: ready,
         fail: fail,
-        timeoutId: window.setTimeout(function () {
-          fail(
-            "boot-timeout",
-            "The gallery is taking too long to initialize. Reload it or open it in the full browser."
-          );
-        }, 45000)
+        timeoutId: 0
       };
 
       if (reload) {
@@ -1653,13 +1846,13 @@
       }
 
       window.addEventListener("error", function (event) {
-        if (!finished) {
+        if (started && !finished) {
           fail("window-error", "A startup script failed before the gallery was ready.", event.error || event.message);
         }
       });
 
       window.addEventListener("unhandledrejection", function (event) {
-        if (!finished) {
+        if (started && !finished) {
           fail("unhandled-rejection", "A startup request failed before the gallery was ready.", event.reason);
         }
       });
@@ -1668,9 +1861,8 @@
     })();
   </script>
 
-  <script src="https://cdn.babylonjs.com/babylon.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-cdn', 'The Babylon.js engine could not be downloaded. Check the connection and reload.')"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-loaders-cdn', 'The 3D model loader could not be downloaded. Check the connection and reload.')"></script>
-
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c65c_mobile_viewport_hud_rebuild_20260716" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', 'The gallery startup module could not be loaded. Reload or open the page in the full browser.')"></script>
+  <!-- TEST: dependency and scene startup are scheduled in the background. -->
+  <script src="./src/bootstrap/gallery-background-preload.js?v=stage12c65e_background_preload_test_20260722"></script>
+  <!-- verifier cache-key contract: gallery-viewer-bootstrap.js?v=stage12c65e_light_mode_exit_stall_fix_20260720 -->
 </body>
 </html>

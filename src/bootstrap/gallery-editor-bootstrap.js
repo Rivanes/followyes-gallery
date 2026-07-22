@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C65E
+  Berryboy Art Gallery — Stage 12C65E First Light Mode Exit Stall Fix
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 

@@ -71,6 +71,9 @@
   - Stage 12C65C: Mobile Viewport / HUD Rebuild — VisualViewport ustala rzeczywistą wysokość galerii, mobilne UI trafia do jednego warstwowego HUD-u, joystick respektuje safe-area, a orientacja i dynamiczne paski przeglądarki odświeżają canvas bez zmian w Inspect.
   - Stage 12C65D: Mobile Inspect UI / Safe-Frame — mobilny popup otrzymuje jeden finalny układ avatar + treść + nawigacja, strzałki są częścią komponentu, a mierzony safe-frame omija joystick w portrait i wykorzystuje boczne miejsce w niskim landscape.
   - Stage 12C65E: Mobile Asset Streaming / Memory Budget — przestrzenne strefy galerii sterują kolejkami critical → nearby → deferred, tekstury i modele są zwalniane poza aktywnymi strefami, modele dostają distance LOD, KTX2 ma decoder/fallback, a Local Lights aktywują się dla bieżącej i sąsiednich stref.
+  - Stage 12C65E UI Fix: Stable Inspect Navigation — przyciski Previous/Next zachowują stałą geometrię podczas przejazdu kamery, dzięki czemu mobilny popup i jego safe-frame nie skaczą.
+  - Stage 12C65E UI Fix: Edit Mode Pointer Recovery — pływający przycisk Edit Mode jawnie odzyskuje pointer-events wewnątrz warstwy HUD controls.
+  - Stage 12C65E Light Mode Exit Fix: restored Local Lights no longer enter the manual pending-retarget queue, and BACK TO EDIT commits all real dirty lights in one segment-aware batch instead of repeating a full relation scan per light.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -7790,6 +7793,114 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    // STAGE 12C65E LIGHT MODE EXIT FIX — ONE SEGMENT-AWARE BATCH
+    // BACK TO EDIT can contain more than one genuinely dirty light. Running the single-light
+    // resolver in a loop repeatedly rebuilds the segment map and relation graph. Resolve the
+    // union once and commit one affected group instead.
+    function commitSegmentAwareLocalLightTargetsBatchImmediate(items, reason) {
+        var batchReason = reason || "segmentAwareBatch";
+        var batchItems = sortLocalLightRetargetItems(items || []).filter(function (item) {
+            return !!(item && item.light && !item.softDeleted && !item.hardDisposed &&
+                (item.type === "spot" || item.type === "point"));
+        });
+
+        if (!batchItems.length) {
+            return {
+                mode: "segmentAwareBatchSkipped",
+                reason: batchReason,
+                affectedLights: [],
+                retargetedLights: [],
+                ms: 0
+            };
+        }
+
+        if (batchItems.length === 1) {
+            return commitSegmentAwareLocalLightTargetsImmediate(batchItems[0], batchReason);
+        }
+
+        if (!localLightSegmentAwareRetargetEnabled) {
+            var fallbackStart = getGalleryPerformanceNow();
+            var fallbackResult = commitLocalLightFinalTargetGroupImmediate(batchItems, batchReason, {
+                scope: "backToEditBatchFallback",
+                seedBudgetFromCurrent: true
+            });
+
+            return {
+                mode: "backToEditBatchFallback",
+                reason: batchReason,
+                affectedLights: batchItems.map(getLocalLightBudgetItemId),
+                retargetedLights: fallbackResult.retargetedLightIds || [],
+                ms: Math.round((getGalleryPerformanceNow() - fallbackStart) * 100) / 100
+            };
+        }
+
+        var start = getGalleryPerformanceNow();
+        var currentMap = buildLocalLightSegmentToLightMap(batchReason + "Before");
+        var affectedSegments = [];
+        var affectedItems = [];
+
+        batchItems.forEach(function (dirtyItem) {
+            var oldSegments = getLocalLightCurrentTargetSegmentNames(dirtyItem);
+            var newSegments = getPotentialTargetSegmentNamesForLocalLight(dirtyItem, batchReason + "Discovery");
+            affectedSegments = unionLocalLightSegmentNameLists(affectedSegments, oldSegments, newSegments);
+
+            getLocalLightItemsForSegmentNames(
+                unionLocalLightSegmentNameLists(oldSegments, newSegments),
+                currentMap
+            ).forEach(function (relatedItem) {
+                if (relatedItem && affectedItems.indexOf(relatedItem) === -1) {
+                    affectedItems.push(relatedItem);
+                }
+            });
+
+            if (affectedItems.indexOf(dirtyItem) === -1) {
+                affectedItems.push(dirtyItem);
+            }
+        });
+
+        var relationExpansion = expandAffectedLocalLightItemsBySegmentRelations(
+            affectedItems,
+            affectedSegments,
+            batchItems[0],
+            batchReason
+        );
+
+        affectedItems = relationExpansion.items.filter(function (affectedItem) {
+            return !!affectedItem && (affectedItem.type === "spot" || affectedItem.type === "point");
+        });
+        affectedSegments = relationExpansion.segments;
+
+        localLightSegmentAwareRetargetDebugStats.runs += 1;
+        localLightSegmentAwareRetargetDebugStats.lastMode = "segmentAwareBatch";
+        localLightSegmentAwareRetargetDebugStats.lastReason = batchReason;
+        localLightSegmentAwareRetargetDebugStats.lastMovedLightId = batchItems.map(getLocalLightBudgetItemId).join(",");
+        localLightSegmentAwareRetargetDebugStats.lastAffectedSegments = affectedSegments.slice();
+        localLightSegmentAwareRetargetDebugStats.lastAffectedLights = affectedItems.map(getLocalLightBudgetItemId);
+
+        var commitResult = commitLocalLightFinalTargetGroupImmediate(affectedItems, batchReason, {
+            scope: "backToEditSegmentAwareBatch",
+            seedBudgetFromCurrent: true
+        });
+
+        batchItems.forEach(function (dirtyItem) {
+            dirtyItem._localLightNeedsFinalRetarget = false;
+        });
+
+        localLightSegmentAwareRetargetDebugStats.lastMs = Math.round((getGalleryPerformanceNow() - start) * 100) / 100;
+
+        return {
+            mode: "segmentAwareBatch",
+            reason: batchReason,
+            affectedSegments: affectedSegments.slice(),
+            affectedLights: localLightSegmentAwareRetargetDebugStats.lastAffectedLights.slice(),
+            relationExpandedLights: localLightSegmentAwareRetargetDebugStats.lastRelationExpandedLights.slice(),
+            retargetedLights: localLightSegmentAwareRetargetDebugStats.lastRetargetedLights.slice(),
+            skippedDisabled: commitResult.skippedDisabled,
+            skippedSoftDeleted: commitResult.skippedSoftDeleted,
+            ms: localLightSegmentAwareRetargetDebugStats.lastMs
+        };
+    }
+
     function resetLocalLightStartupCommittedTargets(reason) {
         var cleared = 0;
 
@@ -15362,6 +15473,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             right: var(--gallery-editor-screen-gap);
             bottom: var(--gallery-editor-bottom-gap);
             z-index: 999;
+            /* STAGE 12C65E UI FIX — the button lives inside a HUD layer whose default
+               pointer policy is none. Restore hit testing explicitly for this control. */
+            pointer-events: auto;
+            touch-action: manipulation;
             background:
                 linear-gradient(145deg, rgba(255, 255, 255, 0.48), rgba(246, 245, 240, 0.26)),
                 rgba(255, 255, 255, 0.20);
@@ -17742,11 +17857,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             outline: none;
         }
 
-        .gallery-inspect-navigation-button.is-hidden,
-        .gallery-inspect-navigation-button:disabled {
+        .gallery-inspect-navigation-button.is-hidden {
             opacity: 0;
             visibility: hidden;
             pointer-events: none;
+        }
+
+        /* STAGE 12C65E UI FIX — a temporarily locked navigation button must keep its
+           geometry while the camera moves between exhibits. Hiding it collapsed the
+           mobile navigation row and caused the popup safe-frame to jump. */
+        .gallery-inspect-navigation-button:disabled:not(.is-hidden) {
+            opacity: 0.48;
+            visibility: visible;
+            pointer-events: none;
+            cursor: default;
         }
 
         .gallery-inspect-navigation-button.is-previous {
@@ -17880,11 +18004,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 display: grid !important;
                 grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
                 gap: 9px !important;
+                min-height: 0 !important;
                 opacity: 0;
                 visibility: hidden;
             }
 
             #galleryInspectNavigation.is-visible {
+                min-height: var(--gallery-inspect-navigation-size) !important;
                 opacity: 1;
                 visibility: visible;
             }
@@ -17913,9 +18039,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 transform: none !important;
             }
 
-            .gallery-inspect-navigation-button.is-hidden,
-            .gallery-inspect-navigation-button:disabled {
-                display: none !important;
+            .gallery-inspect-navigation-button.is-hidden {
+                display: flex !important;
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+            }
+
+            .gallery-inspect-navigation-button:disabled:not(.is-hidden) {
+                display: flex !important;
+                opacity: 0.48 !important;
+                visibility: visible !important;
+                pointer-events: none !important;
             }
 
             .gallery-inspect-navigation-icon {
@@ -21716,7 +21851,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             helperLength: unifiedSpot.range,
             helperMaxRadius: unifiedSpot.range,
             helperSoftness: unifiedSpot.blend,
-            targetOptions: savedState.targetOptions
+            targetOptions: savedState.targetOptions,
+            restoredFromState: true,
+            deferInitialTargetCommit: false
         });
     }
 
@@ -21766,7 +21903,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             light: pointLight,
             markerMesh: markerMesh,
             helperMaxRadius: pointLight.range,
-            targetOptions: savedState.targetOptions
+            targetOptions: savedState.targetOptions,
+            restoredFromState: true,
+            deferInitialTargetCommit: false
         });
     }
 
@@ -24417,7 +24556,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateLocalLightHelper(item);
         });
         applyLocalLightRuntimeEnabled(item);
-        scheduleDeferredLocalLightSpawnSetup(item, "registerDeferred");
+
+        // STAGE 12C65E LIGHT MODE EXIT FIX:
+        // Saved lights already restore their committed targetMeshNames during state hydration.
+        // Putting them into the same deferred spawn queue as a brand-new manual light marked
+        // every restored light as _localLightNeedsFinalRetarget after startup. The first
+        // BACK TO EDIT then synchronously retargeted the whole gallery once per lamp.
+        if (options.deferInitialTargetCommit !== false && !options.restoredFromState) {
+            scheduleDeferredLocalLightSpawnSetup(item, "registerDeferred");
+        } else {
+            item._localLightNeedsFinalRetarget = false;
+        }
 
         updateLocalLightsUi();
 
@@ -25907,9 +26056,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         });
 
-        backCommitItems.forEach(function (item) {
-            commitSegmentAwareLocalLightTargetsImmediate(item, "backToEditSegmentAware");
-        });
+        if (backCommitItems.length) {
+            commitSegmentAwareLocalLightTargetsBatchImmediate(
+                backCommitItems,
+                "backToEditSegmentAwareBatch"
+            );
+        }
 
         setEditorPanelMode("edit");
     };
@@ -35528,12 +35680,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function setGalleryInspectNavigationButtonState(button, target, direction) {
         if (!button) return;
-        var unavailable = !target || galleryInspectRuntime.opening;
-        button.disabled = unavailable;
-        button.classList.toggle("is-hidden", unavailable);
-        button.setAttribute("aria-hidden", unavailable ? "true" : "false");
+        var missingTarget = !target;
+        var temporarilyLocked = !!target && galleryInspectRuntime.opening;
+
+        // Keep the button visible while navigation is temporarily locked. On mobile the
+        // buttons form the second grid row of the popup; hiding them during the camera
+        // transition collapsed that row and forced the safe-frame to recompose twice.
+        button.disabled = missingTarget || temporarilyLocked;
+        button.classList.toggle("is-hidden", missingTarget);
+        button.classList.toggle("is-transition-locked", temporarilyLocked);
+        button.setAttribute("aria-hidden", missingTarget ? "true" : "false");
+        button.setAttribute("aria-busy", temporarilyLocked ? "true" : "false");
+
         if (target) {
             button.setAttribute("aria-label", (direction === "previous" ? "Previous exhibit: " : "Next exhibit: ") + getGalleryInspectExhibitNavigationLabel(target, "exhibit"));
+        } else {
+            button.removeAttribute("aria-label");
         }
     }
 
