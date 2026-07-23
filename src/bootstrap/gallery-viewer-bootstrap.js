@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66B2R
+  Berryboy Art Gallery — Stage 12C66C
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
@@ -7,8 +7,8 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-const STAGE = "12C66B2R";
-const ENGINE_CACHE_KEY = "stage12c66b2r_repair_20260723";
+const STAGE = "12C66C";
+const ENGINE_CACHE_KEY = "stage12c66c_etap3_20260723";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -49,8 +49,11 @@ const uiText = {
     editorAccount: "konto edytora",
     login: "Zaloguj",
     logout: "Wyloguj",
-    save: "Zapisz stan",
-    saving: "Zapisywanie...",
+    save: "Zapisz zmiany",
+    saving: "Zapisywanie…",
+    allSaved: "Wszystko zapisane",
+    saved: "Zapisano",
+    saveError: "Błąd zapisu — spróbuj ponownie",
     editorLogin: "Logowanie edytora",
     email: "Login / e-mail",
     password: "Hasło",
@@ -73,8 +76,11 @@ const uiText = {
     editorAccount: "editor account",
     login: "Log in",
     logout: "Log out",
-    save: "Save state",
-    saving: "Saving...",
+    save: "Save changes",
+    saving: "Saving…",
+    allSaved: "All changes saved",
+    saved: "Saved",
+    saveError: "Save failed — try again",
     editorLogin: "Editor login",
     email: "Login / e-mail",
     password: "Password",
@@ -150,7 +156,7 @@ function applyLanguage(lang) {
 
   if (loginButton) loginButton.textContent = t("login");
   if (logoutButton) logoutButton.textContent = t("logout");
-  if (saveStateButton) saveStateButton.textContent = t("save");
+  if (saveStateButton && !saveStateButton.dataset.saveState) saveStateButton.textContent = t("save");
   if (exploreBelowButton) exploreBelowButton.textContent = t("exploreBelow");
   if (authModalTitle) authModalTitle.textContent = t("editorLogin");
   if (authEmailLabel) authEmailLabel.textContent = t("email");
@@ -439,7 +445,7 @@ async function startGalleryRuntime() {
 
     window.BerryboyViewerRuntime = {
       stage: STAGE,
-      schema: "click-start-original-intro.v1",
+      schema: "click-start-original-intro-stage3.v1",
       engine,
       scene,
       supabase,
@@ -450,12 +456,36 @@ async function startGalleryRuntime() {
       originalInstructionalPopupRestored: true
     };
 
-    // Hide the page loader first, then show the exact engine-owned popup from Stage 12C66A1.
+    // Hide the page loader first, then show and verify the exact engine-owned popup from Stage 12C66A1.
     bootGuard.ready();
     window.requestAnimationFrame(function () {
       if (window.GalleryApp && typeof window.GalleryApp.showViewerIntroOverlay === "function") {
         window.GalleryApp.showViewerIntroOverlay();
       }
+
+      window.requestAnimationFrame(function () {
+        const introOverlay = document.getElementById("berryboyViewerIntroOverlay");
+        const introCard = document.getElementById("berryboyViewerIntroCard");
+        const introVisible = !!(
+          introOverlay &&
+          introCard &&
+          introOverlay.style.display !== "none" &&
+          window.getComputedStyle(introOverlay).display !== "none"
+        );
+
+        if (!introVisible) {
+          failGalleryBoot(
+            "instruction-popup-missing",
+            t("startupError"),
+            new Error("The accepted instructional popup was not mounted after interaction readiness.")
+          );
+          return;
+        }
+
+        window.dispatchEvent(new CustomEvent("gallery-instruction-popup-confirmed", {
+          detail: { stage: STAGE, confirmedAt: Date.now() }
+        }));
+      });
     });
 
     return window.BerryboyViewerRuntime;

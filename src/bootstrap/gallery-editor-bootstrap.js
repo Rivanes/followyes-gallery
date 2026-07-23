@@ -1,10 +1,16 @@
 /*
-  Berryboy Art Gallery — Stage 12C66B2R Save Integrity Repair / Correct Startup Rebuild
+  Berryboy Art Gallery — Stage 12C66C Edit Workflow / Sticky Save
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
 let runtimeContext = null;
 let initialized = false;
+let currentDraftState = {
+  dirty: false,
+  saveInFlight: false,
+  latestResult: null
+};
+let saveConfirmationTimer = 0;
 
 function getElement(id) {
   return document.getElementById(id);
@@ -19,6 +25,30 @@ function showAuthError(message) {
 
   authError.textContent = message || "";
   authError.style.display = message ? "block" : "none";
+}
+
+
+function updateSaveButtonUi(button, forcedState) {
+  if (!button || !runtimeContext) return;
+
+  let state = forcedState || "";
+  if (!state) {
+    if (currentDraftState.saveInFlight) state = "saving";
+    else if (currentDraftState.dirty) state = "dirty";
+    else state = "clean";
+  }
+
+  button.dataset.saveState = state;
+  button.disabled = state === "clean" || state === "saving" || state === "saved";
+  button.textContent = state === "saving"
+    ? runtimeContext.t("saving")
+    : state === "saved"
+      ? runtimeContext.t("saved")
+      : state === "error"
+        ? runtimeContext.t("saveError")
+        : state === "dirty"
+          ? runtimeContext.t("save")
+          : runtimeContext.t("allSaved");
 }
 
 export function openEditorLogin() {
@@ -107,6 +137,14 @@ export function initializeEditorRuntime(context) {
 
   if (logoutButton) {
     logoutButton.addEventListener("click", async function () {
+      if (
+        window.GalleryApp &&
+        typeof window.GalleryApp.confirmDiscardUnsavedChanges === "function" &&
+        !window.GalleryApp.confirmDiscardUnsavedChanges("Logging out")
+      ) {
+        return;
+      }
+
       await supabase.auth.signOut();
       runtimeContext.setSession(null);
       runtimeContext.showToast(runtimeContext.t("loggedOut"));
@@ -114,20 +152,42 @@ export function initializeEditorRuntime(context) {
   }
 
   if (saveStateButton) {
+    updateSaveButtonUi(saveStateButton);
+
+    window.addEventListener("gallery-draft-state", function (event) {
+      const detail = event.detail || {};
+      currentDraftState.dirty = !!detail.dirty;
+      currentDraftState.saveInFlight = !!detail.saveInFlight;
+      window.clearTimeout(saveConfirmationTimer);
+      updateSaveButtonUi(saveStateButton);
+    });
+
     saveStateButton.addEventListener("click", async function () {
       if (!window.GalleryApp) {
         runtimeContext.showToast(runtimeContext.t("galleryLoading"));
         return;
       }
 
-      saveStateButton.disabled = true;
-      saveStateButton.textContent = runtimeContext.t("saving");
+      currentDraftState.saveInFlight = true;
+      updateSaveButtonUi(saveStateButton, "saving");
+      let ok = false;
 
       try {
-        await window.GalleryApp.saveStateToSupabase();
-      } finally {
-        saveStateButton.disabled = false;
-        saveStateButton.textContent = runtimeContext.t("save");
+        ok = !!(await window.GalleryApp.saveStateToSupabase());
+      } catch (error) {
+        ok = false;
+      }
+
+      currentDraftState.saveInFlight = false;
+      if (ok) {
+        currentDraftState.dirty = false;
+        updateSaveButtonUi(saveStateButton, "saved");
+        saveConfirmationTimer = window.setTimeout(function () {
+          updateSaveButtonUi(saveStateButton, currentDraftState.dirty ? "dirty" : "clean");
+        }, 1200);
+      } else {
+        currentDraftState.dirty = true;
+        updateSaveButtonUi(saveStateButton, "error");
       }
     });
   }

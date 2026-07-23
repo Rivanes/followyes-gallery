@@ -16,6 +16,8 @@
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 
   <style>
+    #siteHeader #saveStateButton { display: none !important; }
+
     :root {
       --header-height: 64px;
       --mobile-header-height: 54px;
@@ -1396,7 +1398,6 @@
 
     <footer id="siteFooter">
       <span>Berryboy Art Gallery</span>
-      <span>Gallery_V0_11 · Stage 12C66B2R</span>
     </footer>
   </div>
 
@@ -1758,7 +1759,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "12C66B2R",
+              stage: "12C66C",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1817,7 +1818,7 @@
       });
 
       window.BerryboyBootGuard = {
-        stage: "12C66B2R",
+        stage: "12C66C",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1831,6 +1832,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66b2r_repair_20260723" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66c_etap3_20260723" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

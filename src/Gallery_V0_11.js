@@ -75,6 +75,7 @@
   - Stage 12C65E UI Fix: Edit Mode Pointer Recovery — pływający przycisk Edit Mode jawnie odzyskuje pointer-events wewnątrz warstwy HUD controls.
   - Stage 12C65E Light Mode Exit Fix: restored Local Lights no longer enter the manual pending-retarget queue, and BACK TO EDIT commits all real dirty lights in one segment-aware batch instead of repeating a full relation scan per light.
   - Stage 12C66B2R: Save Integrity Repair / Correct Startup Rebuild — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
+  - Stage 12C66C: Desktop D-pad / Floor Cursor / Mobile Hold Movement / Tabbed Edit Workflow / Sticky Save / Sculpture Collision Repair — jeden wspólny system wejścia porusza kamerą bez równoległych ścieżek, edytor ma cztery sekcje i stale widoczny zapis, a collider proxy rzeźb działa także podczas zwykłego chodzenia w Edit Mode.
   - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
@@ -581,8 +582,6 @@ export const createScene = function (engineArg, canvasArg) {
     cleanupArtworkInfoPopupDom();
 
     [
-        "customLoadingScreen",
-        "customLoaderStyle",
         "editModeButton",
         "wallColorPalette",
         "editHelpPanel",
@@ -1098,6 +1097,37 @@ export const createScene = function (engineArg, canvasArg) {
     setEnvironmentRotationY(environmentRotationY);
 
 
+
+
+    registerGalleryDomEvent("galleryCrossTabStorageSync", window, "storage", function (event) {
+        if (!event || !event.key) {
+            return;
+        }
+
+        if (event.key === gallerySaveIntegrityRuntime.pendingCleanupStorageKey) {
+            restoreGalleryPendingStorageCleanupQueue();
+        } else if (event.key === gallerySaveIntegrityRuntime.pendingDraftUploadStorageKey) {
+            restoreGalleryPendingDraftUploads();
+        }
+    });
+
+    registerGalleryDomEvent("galleryCrossTabPageHide", window, "pagehide", function (event) {
+        if (!event || !event.persisted) {
+            stopGalleryEditorTabHeartbeat(true);
+        }
+    });
+
+    registerGalleryDomEvent("galleryCrossTabPageShow", window, "pageshow", function () {
+        startGalleryEditorTabHeartbeat();
+    });
+
+    registerGalleryDomEvent("galleryCrossTabVisibilityHeartbeat", document, "visibilitychange", function () {
+        touchGalleryEditorTabHeartbeat();
+    });
+
+    registerGalleryDomEvent("galleryCrossTabFocusHeartbeat", window, "focus", function () {
+        touchGalleryEditorTabHeartbeat();
+    });
     // STAGE 12C15 - VISUAL SETTINGS / QUALITY PRESETS
     // Editor-only UI controls final viewer look. Public Viewer only sees saved state.
     var visualSettingsStorageKey = "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24";
@@ -3223,12 +3253,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     camera.ellipsoidOffset = new BABYLON.Vector3(0, 0, 0);
 
     function isViewerCollisionActive() {
-        return !editMode;
+        // Viewer and normal Edit walking share one collision path. Only intentional Space fly bypasses it.
+        return !editMode || !(editMoveKeys && editMoveKeys.space);
     }
 
     function updateViewerCollisionMode() {
         scene.collisionsEnabled = true;
         camera.checkCollisions = isViewerCollisionActive();
+        refreshAllSculptureCollisionProxies();
     }
 
     function canUseViewerCollisionMesh(mesh) {
@@ -10525,46 +10557,76 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return null;
         }
 
-        var meshes = getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
-            return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()) && mesh.isVisible !== false && mesh.visibility !== 0);
+        var allMeshes = getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
+            return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()));
+        });
+        var visibleMeshes = allMeshes.filter(function (mesh) {
+            return mesh.isVisible !== false && mesh.visibility !== 0;
         });
 
-        // Empty sculpture placeholders are editor-only. In Viewer Mode they should not create invisible blockers.
-        if (!meshes.length || !viewerCollisionTargets.sculptures) {
+        // Empty placeholders stay editor-only and do not create an invisible public blocker.
+        if (!allMeshes.length || !viewerCollisionTargets.sculptures) {
             disableSculptureCollisionProxy(slot);
             return null;
         }
 
-        var bounds = getCachedVisibleBoundsForGalleryObject(slot, meshes);
+        var bounds = visibleMeshes.length
+            ? getCachedVisibleBoundsForGalleryObject(slot, visibleMeshes)
+            : cloneGalleryVisibleBounds(slot.metadata.sculptureCollisionBoundsCache);
+
+        if (!bounds && allMeshes.length) {
+            // Streaming/LOD may hide meshes. Temporarily read their bounds without changing final visibility.
+            var visibilityState = allMeshes.map(function (mesh) {
+                return { mesh: mesh, isVisible: mesh.isVisible, visibility: mesh.visibility };
+            });
+            visibilityState.forEach(function (entry) {
+                entry.mesh.isVisible = true;
+                entry.mesh.visibility = Math.max(0.001, Number(entry.visibility) || 0.001);
+            });
+            bounds = getVisibleBoundsFromMeshes(allMeshes);
+            visibilityState.forEach(function (entry) {
+                entry.mesh.isVisible = entry.isVisible;
+                entry.mesh.visibility = entry.visibility;
+            });
+        }
 
         if (!bounds) {
             disableSculptureCollisionProxy(slot);
             return null;
         }
 
+        slot.metadata.sculptureCollisionBoundsCache = cloneGalleryVisibleBounds(bounds);
         var proxy = getOrCreateSculptureCollisionProxy(slot);
 
         if (!proxy) {
             return null;
         }
 
-        var padding = 0.18;
-        var width = Math.max(bounds.size.x + padding, 0.42);
-        var height = Math.max(bounds.size.y, 0.55);
-        var depth = Math.max(bounds.size.z + padding, 0.42);
+        // The proxy covers the visible sculpture and its floor footprint/pedestal zone.
+        var floorY = getSculptureFloorYAtSlot(slot);
+        var paddingXZ = 0.24;
+        var minY = Math.min(Number(bounds.min && bounds.min.y), Number(floorY));
+        var maxY = Math.max(Number(bounds.max && bounds.max.y), minY + 0.55);
+        var width = Math.max(bounds.size.x + paddingXZ, 0.52);
+        var height = Math.max(maxY - minY, 0.62);
+        var depth = Math.max(bounds.size.z + paddingXZ, 0.52);
 
         proxy.setEnabled(true);
         proxy.position.copyFrom(bounds.center);
+        proxy.position.y = minY + height * 0.5;
         proxy.scaling.copyFrom(new BABYLON.Vector3(width, height, depth));
         proxy.rotation.copyFrom(BABYLON.Vector3.Zero());
         proxy.isVisible = true;
         proxy.visibility = 0;
         proxy.isPickable = false;
-        proxy.checkCollisions = !!viewerCollisionTargets.sculptures;
+        proxy.checkCollisions = !!viewerCollisionTargets.sculptures && isViewerCollisionActive();
         proxy.computeWorldMatrix(true);
+        proxy.metadata.cachedForStreaming = true;
+        proxy.metadata.includesPedestalFootprint = true;
 
         return proxy;
     }
+
 
     function refreshAllSculptureCollisionProxies() {
         artSpheres.forEach(function (slot) {
@@ -11961,6 +12023,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function persistGalleryPendingStorageCleanupQueue() {
         try {
+            var raw = localStorage.getItem(gallerySaveIntegrityRuntime.pendingCleanupStorageKey);
+            var stored = raw ? JSON.parse(raw) : [];
+            var merged = {};
+
+            (Array.isArray(stored) ? stored : []).concat(
+                gallerySaveIntegrityRuntime.pendingStorageDeletes || []
+            ).forEach(function (entry) {
+                var key = getGalleryQueueEntryKey(entry);
+                if (!key || gallerySaveIntegrityRuntime.resolvedCleanupKeys[key]) {
+                    return;
+                }
+                merged[key] = entry;
+            });
+
+            gallerySaveIntegrityRuntime.pendingStorageDeletes = Object.keys(merged).map(function (key) {
+                return merged[key];
+            });
+            gallerySaveIntegrityRuntime.resolvedCleanupKeys = {};
+
             localStorage.setItem(
                 gallerySaveIntegrityRuntime.pendingCleanupStorageKey,
                 JSON.stringify(gallerySaveIntegrityRuntime.pendingStorageDeletes)
@@ -11978,6 +12059,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (Array.isArray(parsedQueue)) {
                 gallerySaveIntegrityRuntime.pendingStorageDeletes = parsedQueue.filter(function (entry) {
                     return !!(entry && entry.bucket && entry.path);
+                }).map(function (entry) {
+                    return Object.assign({
+                        ownerTabId: "",
+                        ownerSessionId: "",
+                        ownerUpdatedAt: Number(entry.queuedAt) || Date.now()
+                    }, entry);
                 });
             }
         } catch (error) {
@@ -11988,6 +12075,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function persistGalleryPendingDraftUploads() {
         try {
+            var raw = localStorage.getItem(gallerySaveIntegrityRuntime.pendingDraftUploadStorageKey);
+            var stored = raw ? JSON.parse(raw) : [];
+            var merged = {};
+
+            (Array.isArray(stored) ? stored : []).concat(
+                gallerySaveIntegrityRuntime.pendingDraftUploads || []
+            ).forEach(function (entry) {
+                var key = getGalleryQueueEntryKey(entry);
+                if (!key || gallerySaveIntegrityRuntime.resolvedDraftUploadKeys[key]) {
+                    return;
+                }
+                merged[key] = entry;
+            });
+
+            gallerySaveIntegrityRuntime.pendingDraftUploads = Object.keys(merged).map(function (key) {
+                return merged[key];
+            });
+            gallerySaveIntegrityRuntime.resolvedDraftUploadKeys = {};
+
             localStorage.setItem(
                 gallerySaveIntegrityRuntime.pendingDraftUploadStorageKey,
                 JSON.stringify(gallerySaveIntegrityRuntime.pendingDraftUploads)
@@ -12005,6 +12111,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (Array.isArray(parsedRegistry)) {
                 gallerySaveIntegrityRuntime.pendingDraftUploads = parsedRegistry.filter(function (entry) {
                     return !!(entry && entry.bucket && entry.path);
+                }).map(function (entry) {
+                    return Object.assign({
+                        ownerTabId: "",
+                        ownerSessionId: "",
+                        ownerUpdatedAt: Number(entry.uploadedAt) || Date.now()
+                    }, entry);
                 });
             }
         } catch (error) {
@@ -12033,7 +12145,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             bucket: safeBucket,
             path: safePath,
             kind: kind || "draft-upload",
-            uploadedAt: Date.now()
+            uploadedAt: Date.now(),
+            ownerTabId: gallerySaveIntegrityRuntime.tabId,
+            ownerSessionId: gallerySaveIntegrityRuntime.sessionId,
+            ownerUpdatedAt: Date.now()
         });
         persistGalleryPendingDraftUploads();
         return true;
@@ -12051,8 +12166,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return;
             }
 
-            if (references[entry.bucket + "|" + entry.path]) {
+            var entryKey = getGalleryQueueEntryKey(entry);
+
+            if (references[entryKey]) {
                 committed += 1;
+                gallerySaveIntegrityRuntime.resolvedDraftUploadKeys[entryKey] = true;
+                return;
+            }
+
+            // A save in one tab must never classify a fresh upload owned by another active tab as orphaned.
+            if (isGalleryForeignQueueEntryProtected(entry)) {
+                retained.push(entry);
                 return;
             }
 
@@ -12063,6 +12187,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     entry.kind || "draft-upload",
                     options.reason || "abandoned-draft-upload"
                 );
+                gallerySaveIntegrityRuntime.resolvedDraftUploadKeys[entryKey] = true;
                 queuedOrphans += 1;
                 return;
             }
@@ -12105,7 +12230,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 path: safePath,
                 kind: kind || "asset",
                 reason: reason || "draft-replacement",
-                queuedAt: Date.now()
+                queuedAt: Date.now(),
+                ownerTabId: gallerySaveIntegrityRuntime.tabId,
+                ownerSessionId: gallerySaveIntegrityRuntime.sessionId,
+                ownerUpdatedAt: Date.now()
             });
             changed = true;
         });
@@ -12263,12 +12391,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function processGalleryDeferredStorageCleanup(savedState, previousBackupState) {
+        // Merge entries written by other open tabs before deciding what can be removed.
+        restoreGalleryPendingStorageCleanupQueue();
         var activeReferences = collectGalleryStateStorageReferences(savedState);
         var previousBackupReferences = collectGalleryStateStorageReferences(previousBackupState);
         var retained = [];
         var removableByBucket = {};
         var skippedActive = 0;
         var protectedByPreviousBackup = 0;
+        var protectedByForeignTab = 0;
 
         gallerySaveIntegrityRuntime.pendingStorageDeletes.forEach(function (entry) {
             if (!entry || !entry.bucket || !entry.path) {
@@ -12280,6 +12411,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             // A queued deletion that became part of the newly published state is cancelled.
             if (activeReferences[referenceKey]) {
                 skippedActive += 1;
+                gallerySaveIntegrityRuntime.resolvedCleanupKeys[referenceKey] = true;
+                return;
+            }
+
+            if (isGalleryForeignQueueEntryProtected(entry)) {
+                protectedByForeignTab += 1;
+                retained.push(entry);
                 return;
             }
 
@@ -12312,6 +12450,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 skippedReferenced: skippedActive,
                 skippedActive: skippedActive,
                 protectedByPreviousBackup: protectedByPreviousBackup,
+                protectedByForeignTab: protectedByForeignTab,
                 reason: "storage-not-configured"
             };
         }
@@ -12341,6 +12480,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             } else {
                 removedCount += entries.length;
                 entries.forEach(function (entry) {
+                    gallerySaveIntegrityRuntime.resolvedCleanupKeys[getGalleryQueueEntryKey(entry)] = true;
                     if (entry.kind === "model3d") {
                         clearModel3dClipboardIfStoragePathMatches({
                             storageBucket: entry.bucket,
@@ -12361,7 +12501,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             failed: failedCount,
             skippedReferenced: skippedActive,
             skippedActive: skippedActive,
-            protectedByPreviousBackup: protectedByPreviousBackup
+            protectedByPreviousBackup: protectedByPreviousBackup,
+            protectedByForeignTab: protectedByForeignTab
         };
     }
 
@@ -12717,8 +12858,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         style.textContent = `
             canvas,
             #renderCanvas {
-                overscroll-behavior: contain;
+                overscroll-behavior: none;
                 touch-action: none;
+                -webkit-user-select: none;
+                user-select: none;
+                -webkit-touch-callout: none;
             }
 
             #mobileViewerControls,
@@ -12895,6 +13039,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 if (
                     mobileJoystickActive ||
                     mobileLookActive ||
+                    mobileCanvasMoveActive ||
                     isGalleryMobileControlTarget(event.target)
                 ) {
                     preventGalleryScrollEvent(event);
@@ -12912,6 +13057,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 if (
                     mobileJoystickActive ||
                     mobileLookActive ||
+                    mobileCanvasMoveActive ||
                     isGalleryMobileControlTarget(event.target)
                 ) {
                     preventGalleryScrollEvent(event);
@@ -12945,6 +13091,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var mobileLookLastX = 0;
     var mobileLookLastY = 0;
     var mobileLookMoved = false;
+    var mobileCanvasGestureMode = "idle";
+    var mobileCanvasHoldTimer = null;
+    var mobileCanvasHoldDelayMs = 360;
+    var mobileCanvasMoveActive = false;
+    var mobileCanvasMoveVector = { x: 0, y: 0 };
+    var mobileCanvasMoveRadius = 76;
 
     var mobileTapMoveThreshold = 9;
     var mobileLookSensitivityX = 0.004;
@@ -12978,6 +13130,50 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         d: false,
         shift: false
     };
+
+
+    var galleryDesktopDpadState = {
+        forward: false,
+        backward: false,
+        turnLeft: false,
+        turnRight: false,
+        activePointerIds: {}
+    };
+    var galleryDesktopDpadTurnSpeed = 1.62;
+    var galleryDesktopDpad = null;
+    var galleryFloorCursorRing = null;
+    var galleryFloorCursorRingMaterial = null;
+    var galleryFloorCursorFramePending = false;
+    var galleryFloorCursorLastEvent = null;
+
+    function resetGalleryDesktopDpadState() {
+        galleryDesktopDpadState.forward = false;
+        galleryDesktopDpadState.backward = false;
+        galleryDesktopDpadState.turnLeft = false;
+        galleryDesktopDpadState.turnRight = false;
+        galleryDesktopDpadState.activePointerIds = {};
+
+        if (galleryDesktopDpad) {
+            Array.from(galleryDesktopDpad.querySelectorAll(".gallery-desktop-dpad-button.is-active")).forEach(function (button) {
+                button.classList.remove("is-active");
+            });
+        }
+    }
+
+    function isGalleryDesktopPointerNavigationAvailable() {
+        return !isMobileViewerActive() && !!(
+            window.matchMedia && window.matchMedia("(pointer: fine)").matches
+        );
+    }
+
+    function isGalleryDesktopDpadInputActive() {
+        return !!(
+            galleryDesktopDpadState.forward ||
+            galleryDesktopDpadState.backward ||
+            galleryDesktopDpadState.turnLeft ||
+            galleryDesktopDpadState.turnRight
+        );
+    }
 
     var viewerMovementConfig = {
         speed: 3.58,
@@ -13019,136 +13215,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var viewerMovementWasManualInputActive = false;
     var viewerCameraRollLockEnabled = true;
 
-    // CUSTOM LOADING SCREEN
-    var oldLoadingScreen = document.getElementById("customLoadingScreen");
-
-    if (oldLoadingScreen) {
-        oldLoadingScreen.remove();
-    }
-
-    var loadingScreen = document.createElement("div");
-    loadingScreen.id = "customLoadingScreen";
-
-    loadingScreen.innerHTML = `
-        <div id="loadingContent">
-            <div id="loaderSpinner"></div>
-            <div id="galleryLoaderTextBlock">
-                <div id="galleryLoaderTitle">Loading gallery</div>
-                <div id="galleryLoaderStatus">Preparing gallery assets...</div>
-                <div id="galleryLoaderHint">Walls, floor and ceiling are required before visitors can enter.</div>
-            </div>
-            <button id="galleryAssetRetryButton" type="button">Retry loading</button>
-        </div>
-    `;
-
-    loadingScreen.style.position = "fixed";
-    loadingScreen.style.inset = "0";
-    loadingScreen.style.background = "#000000";
-    loadingScreen.style.color = "white";
-    loadingScreen.style.display = "none";
-    loadingScreen.style.alignItems = "center";
-    loadingScreen.style.justifyContent = "center";
-    loadingScreen.style.zIndex = "9999";
-
-    document.body.appendChild(loadingScreen);
-
-    var oldLoaderStyle = document.getElementById("customLoaderStyle");
-
-    if (oldLoaderStyle) {
-        oldLoaderStyle.remove();
-    }
-
-    var loaderStyle = document.createElement("style");
-    loaderStyle.id = "customLoaderStyle";
-
-    loaderStyle.innerHTML = `
-        #loadingContent {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 22px;
-            min-width: min(420px, calc(100vw - 42px));
-            padding: 26px;
-            border-radius: 28px;
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            background: rgba(18, 18, 18, 0.62);
-            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54);
-            backdrop-filter: blur(22px) saturate(1.28);
-            -webkit-backdrop-filter: blur(22px) saturate(1.28);
-            text-align: center;
-        }
-
-        #galleryLoaderTextBlock {
-            display: grid;
-            gap: 7px;
-            color: #f7f3ea;
-            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        }
-
-        #galleryLoaderTitle {
-            font-size: 20px;
-            line-height: 1.1;
-            font-weight: 900;
-            letter-spacing: -0.03em;
-        }
-
-        #galleryLoaderStatus {
-            color: rgba(247, 243, 234, 0.76);
-            font-size: 13px;
-            line-height: 1.42;
-            font-weight: 650;
-        }
-
-        #galleryLoaderHint {
-            color: rgba(247, 243, 234, 0.50);
-            font-size: 12px;
-            line-height: 1.42;
-            max-width: 360px;
-        }
-
-        #galleryAssetRetryButton {
-            display: none;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            min-height: 48px;
-            border: 1px solid rgba(247, 243, 234, 0.72);
-            border-radius: 16px;
-            background: #f7f3ea;
-            color: #121212;
-            font-size: 14px;
-            font-weight: 900;
-            letter-spacing: 0.01em;
-            cursor: pointer;
-            box-shadow: 0 18px 38px rgba(0, 0, 0, 0.30);
-        }
-
-        #galleryAssetRetryButton:hover {
-            background: #fffaf0;
-        }
-
-        #loaderSpinner {
-            width: 58px;
-            height: 58px;
-            border: 6px solid rgba(255, 255, 255, 0.16);
-            border-top: 6px solid rgba(255, 255, 255, 0.92);
-            border-radius: 50%;
-            animation: galleryLoaderSpin 1s linear infinite;
-        }
-
-        @keyframes galleryLoaderSpin {
-            from {
-                transform: rotate(0deg);
-            }
-
-            to {
-                transform: rotate(360deg);
-            }
-        }
-    `;
-
-    document.head.appendChild(loaderStyle);
+    // Startup progress is owned by the single page-level Boot Guard.
+    // Engine phases are forwarded only to the editor/debug channel; no second DOM loader is created.
 
 
     // STAGE 12C10 - VIEWER INTRO OVERLAY
@@ -14179,7 +14247,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function suspendModel3dForStreaming(slot, reason) {
         if (!slot || !slot.metadata || !slot.metadata.model3d || !slot.metadata.model3dRuntime || isGalleryStreamingProtectedObject(slot)) return false;
         disposeModel3dRuntimeMaterialsForStreaming(slot);
-        disableSculptureCollisionProxy(slot);
+        // Keep the cached collision proxy alive while the heavy model runtime is streamed out.
         slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
         slot.metadata.galleryStreaming.modelState = "unloaded";
         slot.metadata.galleryStreaming.suspended = true;
@@ -14751,15 +14819,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function updateGalleryLoaderStatus(statusText, hintText) {
         try {
-            var statusElement = document.getElementById("galleryLoaderStatus");
-            var hintElement = document.getElementById("galleryLoaderHint");
-
-            if (statusElement && statusText) {
-                statusElement.textContent = statusText;
-            }
-
-            if (hintElement && hintText) {
-                hintElement.textContent = hintText;
+            if (window.BerryboyBootGuard && typeof window.BerryboyBootGuard.setPhase === "function") {
+                window.BerryboyBootGuard.setPhase(
+                    "engine-progress",
+                    [statusText, hintText].filter(Boolean).join(" | ")
+                );
             }
         } catch (error) {}
     }
@@ -15145,10 +15209,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         console.error("Critical gallery assets failed or are missing. Viewer entry blocked.", galleryAssetLoadDebug);
 
-        if (loadingScreen) {
-            loadingScreen.style.display = "none";
-        }
-
         try {
             window.dispatchEvent(new CustomEvent("gallery-startup-failure", {
                 detail: {
@@ -15440,7 +15500,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionReady = false;
         galleryStartupFinalizeDebug.finalLightMode = "12C65E-current-zone-streaming-gate";
 
-        loadingScreen.style.display = "none";
         // The page-level startup gate remains visible until the real interaction-ready signal.
         // The original instructional popup is shown by the public bootstrap only after that signal.
         viewerIntroOverlayMovementUnlocked = !!editMode;
@@ -15836,10 +15895,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     };
 
+    function createGalleryEditorPageInstanceId() {
+        var key = "berryboy_gallery_editor_page_instance_v1";
+        var tabId = "tab-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+
+        // Always write a fresh page-instance id. A duplicated browser tab receives a copy of
+        // sessionStorage, so reusing the stored value would incorrectly merge two live owners.
+        try {
+            if (window.sessionStorage) {
+                window.sessionStorage.setItem(key, tabId);
+            }
+        } catch (error) {}
+
+        return tabId;
+    }
+
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66B2R",
-        schema: "gallery-save-integrity.v2",
+        stage: "12C66C",
+        schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
+        tabId: createGalleryEditorPageInstanceId(),
+        activeTabsStorageKey: "berryboy_gallery_active_editor_tabs_v1",
+        heartbeatIntervalMs: 4000,
+        heartbeatStaleMs: 2 * 60 * 1000,
+        backgroundTabGraceMs: 24 * 60 * 60 * 1000,
+        foreignDraftGraceMs: 24 * 60 * 60 * 1000,
+        heartbeatTimer: null,
+        resolvedCleanupKeys: {},
+        resolvedDraftUploadKeys: {},
         publishedRevision: 0,
         publishedStateFingerprint: "",
         publishedServerStateFingerprint: "",
@@ -15864,6 +15947,143 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         pendingDraftUploadStorageKey: "berryboy_gallery_pending_draft_uploads_v1",
         latestSaveResult: null
     };
+
+
+    function getGalleryQueueEntryKey(entry) {
+        return entry && entry.bucket && entry.path
+            ? String(entry.bucket) + "|" + String(entry.path)
+            : "";
+    }
+
+    function readGalleryActiveEditorTabs() {
+        try {
+            var raw = localStorage.getItem(gallerySaveIntegrityRuntime.activeTabsStorageKey);
+            var parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch (error) {
+            return {};
+        }
+    }
+
+    function writeGalleryActiveEditorTabs(registry) {
+        try {
+            localStorage.setItem(
+                gallerySaveIntegrityRuntime.activeTabsStorageKey,
+                JSON.stringify(registry || {})
+            );
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function pruneGalleryActiveEditorTabs(registry, now) {
+        registry = registry || {};
+        now = Number(now) || Date.now();
+
+        Object.keys(registry).forEach(function (tabId) {
+            var entry = registry[tabId];
+            var lastSeenAt = Number(entry && entry.lastSeenAt) || 0;
+            var maxAge = entry && entry.visibility === "hidden"
+                ? gallerySaveIntegrityRuntime.backgroundTabGraceMs
+                : gallerySaveIntegrityRuntime.heartbeatStaleMs * 4;
+
+            if (!lastSeenAt || now - lastSeenAt > maxAge) {
+                delete registry[tabId];
+            }
+        });
+
+        return registry;
+    }
+
+    function touchGalleryEditorTabHeartbeat() {
+        var now = Date.now();
+        var registry = pruneGalleryActiveEditorTabs(readGalleryActiveEditorTabs(), now);
+
+        // Public Viewer tabs do not own editor drafts and must not pollute the active-editor registry.
+        if (!editorAuthenticated) {
+            delete registry[gallerySaveIntegrityRuntime.tabId];
+            writeGalleryActiveEditorTabs(registry);
+            return registry;
+        }
+
+        registry[gallerySaveIntegrityRuntime.tabId] = {
+            tabId: gallerySaveIntegrityRuntime.tabId,
+            sessionId: gallerySaveIntegrityRuntime.sessionId,
+            lastSeenAt: now,
+            editMode: !!editMode,
+            authenticated: true,
+            visibility: document.visibilityState || "visible"
+        };
+
+        writeGalleryActiveEditorTabs(registry);
+        return registry;
+    }
+
+    function isGalleryEditorTabActive(tabId) {
+        tabId = String(tabId || "");
+
+        if (!tabId) {
+            return false;
+        }
+
+        if (tabId === gallerySaveIntegrityRuntime.tabId) {
+            return true;
+        }
+
+        var entry = readGalleryActiveEditorTabs()[tabId];
+        var age = entry ? Date.now() - Number(entry.lastSeenAt || 0) : Infinity;
+        return !!(
+            entry &&
+            Number(entry.lastSeenAt) > 0 &&
+            (
+                age <= gallerySaveIntegrityRuntime.heartbeatStaleMs ||
+                (entry.visibility === "hidden" && age <= gallerySaveIntegrityRuntime.backgroundTabGraceMs)
+            )
+        );
+    }
+
+    function isGalleryForeignQueueEntryProtected(entry) {
+        if (!entry || !entry.ownerTabId || entry.ownerTabId === gallerySaveIntegrityRuntime.tabId) {
+            return false;
+        }
+
+        if (isGalleryEditorTabActive(entry.ownerTabId)) {
+            return true;
+        }
+
+        var createdAt = Number(entry.uploadedAt || entry.queuedAt || entry.ownerUpdatedAt) || 0;
+        return !!(
+            createdAt &&
+            Date.now() - createdAt < gallerySaveIntegrityRuntime.foreignDraftGraceMs
+        );
+    }
+
+    function stopGalleryEditorTabHeartbeat(removeEntry) {
+        if (gallerySaveIntegrityRuntime.heartbeatTimer) {
+            clearInterval(gallerySaveIntegrityRuntime.heartbeatTimer);
+            gallerySaveIntegrityRuntime.heartbeatTimer = null;
+        }
+
+        if (removeEntry) {
+            var registry = readGalleryActiveEditorTabs();
+            delete registry[gallerySaveIntegrityRuntime.tabId];
+            writeGalleryActiveEditorTabs(registry);
+        }
+    }
+
+    function startGalleryEditorTabHeartbeat() {
+        touchGalleryEditorTabHeartbeat();
+
+        if (!gallerySaveIntegrityRuntime.heartbeatTimer) {
+            gallerySaveIntegrityRuntime.heartbeatTimer = setInterval(
+                touchGalleryEditorTabHeartbeat,
+                gallerySaveIntegrityRuntime.heartbeatIntervalMs
+            );
+        }
+    }
+
+    startGalleryEditorTabHeartbeat();
 
     // STAGE 12C - SCULPTURE ADD/DELETE UNIFIED ARTWORK FLOW
     // Statyczne sloty ArtSphere_* muszą mieć listę usuniętych nazw, tak jak artworki.
@@ -18888,6 +19108,108 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         }
 
+
+        .gallery-editor-primary-tabs {
+            flex: 0 0 auto;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 6px;
+            padding: 14px 22px 12px;
+            border-bottom: 1px solid rgba(66, 66, 66, 0.10);
+            background: rgba(247, 247, 243, 0.76);
+            backdrop-filter: blur(18px) saturate(1.12);
+            -webkit-backdrop-filter: blur(18px) saturate(1.12);
+        }
+
+        .gallery-editor-primary-tab {
+            min-width: 0;
+            min-height: 39px;
+            padding: 7px 5px;
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.25);
+            color: rgba(35, 35, 35, 0.72);
+            font-size: 10px;
+            line-height: 1.12;
+            font-weight: 760;
+            cursor: pointer;
+        }
+
+        .gallery-editor-primary-tab.is-active {
+            border-color: rgba(63, 127, 61, 0.44);
+            background: rgba(63, 127, 61, 0.14);
+            color: #285d2a;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.56);
+        }
+
+        .gallery-editor-tab-content { display: none; }
+        .gallery-editor-tab-content.is-active { display: block; }
+
+        #galleryEditorPanel .gallery-editor-scroll {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        .gallery-editor-save-bar {
+            flex: 0 0 auto;
+            display: none;
+            gap: 10px;
+            align-items: center;
+            padding: 13px 18px calc(13px + env(safe-area-inset-bottom));
+            border-top: 1px solid rgba(255,255,255,0.58);
+            background: rgba(245, 245, 241, 0.72);
+            backdrop-filter: blur(22px) saturate(1.22);
+            -webkit-backdrop-filter: blur(22px) saturate(1.22);
+            box-shadow: 0 -12px 28px rgba(0,0,0,0.08);
+        }
+
+        body.is-editor-authenticated.gallery-edit-mode-active .gallery-editor-save-bar {
+            display: flex;
+        }
+
+        #galleryEditorPanel #saveStateButton {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 48px;
+            margin: 0;
+            border: 1px solid rgba(40, 93, 42, 0.42);
+            border-radius: 15px;
+            background: #315f34;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 820;
+            letter-spacing: 0.01em;
+            box-shadow: 0 12px 24px rgba(49,95,52,0.18);
+        }
+
+        #galleryEditorPanel #saveStateButton:disabled {
+            cursor: default;
+            opacity: 0.64;
+            box-shadow: none;
+        }
+
+        #galleryEditorPanel #saveStateButton[data-save-state="dirty"] {
+            background: #315f34;
+            opacity: 1;
+            cursor: pointer;
+        }
+
+        #galleryEditorPanel #saveStateButton[data-save-state="error"] {
+            background: #873c3c;
+            border-color: rgba(115,36,36,0.56);
+            opacity: 1;
+            cursor: pointer;
+        }
+
+        .gallery-editor-settings-note {
+            margin: 0;
+            color: rgba(45,45,45,0.66);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
         @media (max-width: 380px) and (pointer: coarse) {
             #galleryArtworkInfoPopup.gallery-artwork-info-popup {
                 --gallery-inspect-avatar-size: 66px;
@@ -18924,23 +19246,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     editModeLabel.className = "gallery-editor-mode-label";
     editModeLabel.innerText = "Mode: Edit";
 
-    var editorMenuButton = document.createElement("button");
-    editorMenuButton.type = "button";
-    editorMenuButton.className = "gallery-editor-menu-button";
-    editorMenuButton.title = "Lighting settings";
-    editorMenuButton.innerHTML = `
-        <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <path d="M8 6h10"></path>
-            <path d="M8 12h10"></path>
-            <path d="M8 18h10"></path>
-            <path d="M4.5 6h.01"></path>
-            <path d="M4.5 12h.01"></path>
-            <path d="M4.5 18h.01"></path>
-        </svg>
-    `;
-
     editorHeader.appendChild(editModeLabel);
-    editorHeader.appendChild(editorMenuButton);
     editorScroll.appendChild(editorHeader);
 
     function createEditorSection(title) {
@@ -21863,10 +22169,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     editButton.type = "button";
     editButton.className = "gallery-editor-floating-mode-button";
 
-    var lightingQuickButton = document.createElement("button");
-    lightingQuickButton.type = "button";
-    lightingQuickButton.className = "gallery-editor-panel-lighting-button";
-
     function getEditModeIconSvg() {
         return `
             <svg class="gallery-editor-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -21885,16 +22187,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         `;
     }
 
-    function getLightingModeIconSvg() {
-        return `
-            <svg class="gallery-editor-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M9 18h6"></path>
-                <path d="M10 22h4"></path>
-                <path d="M12 2a7 7 0 0 0-4 12.7c.6.45 1 1.15 1 1.9V18h6v-1.4c0-.75.4-1.45 1-1.9A7 7 0 0 0 12 2Z"></path>
-            </svg>
-        `;
-    }
-
     function setModeButtonContent(isEditing) {
         editButton.innerHTML = (isEditing ? getViewerModeIconSvg() : getEditModeIconSvg()) +
             "<span>" + (isEditing ? "VIEWER MODE" : "EDIT MODE") + "</span>";
@@ -21902,10 +22194,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     setModeButtonContent(false);
 
-    lightingQuickButton.innerHTML = getLightingModeIconSvg() + "<span>LIGHT MODE</span>";
-
     editorFooterActions.appendChild(editButton);
-    editorFooterActions.appendChild(lightingQuickButton);
     editorFooter.appendChild(editorFooterActions);
     editorScroll.appendChild(editorFooter);
     editHelpPanel.appendChild(editorScroll);
@@ -22011,6 +22300,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Lighting UI helpers are shared by MAIN LIGHT and VISUAL LOOK sections.
     // A control key starting with "visual" must never persist/sync Main Light state.
     function persistLightingUiControlState(controlKey) {
+        markGalleryDraftDirty("lighting-control-" + String(controlKey || "unknown"));
+
         if (typeof controlKey === "string" && controlKey.indexOf("visual") === 0) {
             if (typeof persistCurrentVisualSettings === "function") {
                 persistCurrentVisualSettings();
@@ -26853,28 +27144,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateLocalLightsUi();
     }
 
-    editorMenuButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (!editMode) {
-            return;
-        }
-
-        setEditorPanelMode("lighting");
-    };
-
-    lightingQuickButton.onclick = function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (!editMode) {
-            return;
-        }
-
-        setEditorPanelMode("lighting");
-    };
-
     lightingMenuButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -26911,7 +27180,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             );
         }
 
-        setEditorPanelMode("edit");
+        setGalleryEditorPrimaryTab(galleryEditorPrimaryTab === "lighting" ? galleryEditorLastContentTab : galleryEditorPrimaryTab);
     };
 
     lightingDefaultSettings = readLightingSettingsFromScene();
@@ -26922,6 +27191,164 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     updateLightingPresetRows();
     setEditorPanelMode("edit");
+
+    var galleryEditorPrimaryTab = "exhibits";
+    var galleryEditorLastContentTab = "exhibits";
+    var galleryEditorPrimaryTabs = document.createElement("div");
+    galleryEditorPrimaryTabs.className = "gallery-editor-primary-tabs";
+
+    var galleryEditorTabContents = {
+        exhibits: document.createElement("div"),
+        space: document.createElement("div"),
+        settings: document.createElement("div")
+    };
+
+    Object.keys(galleryEditorTabContents).forEach(function (key) {
+        galleryEditorTabContents[key].className = "gallery-editor-tab-content";
+        galleryEditorTabContents[key].dataset.editorTabContent = key;
+    });
+
+    function moveGalleryEditorSectionToTab(sectionData, tabName) {
+        var section = sectionData && sectionData.section ? sectionData.section : sectionData;
+        if (section && galleryEditorTabContents[tabName]) {
+            galleryEditorTabContents[tabName].appendChild(section);
+        }
+    }
+
+    [
+        artworkManageSectionData,
+        artworkImageSectionData,
+        imageOptimizationSectionData,
+        model3dSectionData,
+        sculptureInfoSectionData,
+        model3dTransformSectionData,
+        artworkInfoSectionData,
+        artworkTransformSectionData,
+        focusCameraSectionData,
+        galleryTourOrderSectionData,
+        alignSectionData
+    ].forEach(function (sectionData) {
+        moveGalleryEditorSectionToTab(sectionData, "exhibits");
+    });
+    moveGalleryEditorSectionToTab(wallColorSectionData, "space");
+    moveGalleryEditorSectionToTab(helpSection, "settings");
+
+    function setGalleryEditorPrimaryTab(nextTab) {
+        if (nextTab !== "lighting") {
+            nextTab = galleryEditorTabContents[nextTab] ? nextTab : "exhibits";
+            galleryEditorLastContentTab = nextTab;
+        }
+
+        galleryEditorPrimaryTab = nextTab;
+        Array.from(galleryEditorPrimaryTabs.querySelectorAll(".gallery-editor-primary-tab")).forEach(function (button) {
+            button.classList.toggle("is-active", button.dataset.editorTab === nextTab);
+        });
+
+        if (nextTab === "lighting") {
+            Object.keys(galleryEditorTabContents).forEach(function (key) {
+                galleryEditorTabContents[key].classList.remove("is-active");
+            });
+            setEditorPanelMode("lighting");
+            return;
+        }
+
+        setEditorPanelMode("edit");
+        Object.keys(galleryEditorTabContents).forEach(function (key) {
+            galleryEditorTabContents[key].classList.toggle("is-active", key === nextTab);
+        });
+
+        if (editorScroll) editorScroll.scrollTop = 0;
+    }
+
+    [
+        { key: "exhibits", label: "EXHIBITS" },
+        { key: "space", label: "SPACE" },
+        { key: "lighting", label: "LIGHTING" },
+        { key: "settings", label: "SETTINGS" }
+    ].forEach(function (definition) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "gallery-editor-primary-tab";
+        button.dataset.editorTab = definition.key;
+        button.innerText = definition.label;
+        button.onclick = function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            setGalleryEditorPrimaryTab(definition.key);
+        };
+        galleryEditorPrimaryTabs.appendChild(button);
+    });
+
+    editHelpPanel.insertBefore(galleryEditorPrimaryTabs, editorScroll);
+    selectionSectionData.section.insertAdjacentElement("afterend", galleryEditorTabContents.exhibits);
+    galleryEditorTabContents.exhibits.insertAdjacentElement("afterend", galleryEditorTabContents.space);
+    galleryEditorTabContents.space.insertAdjacentElement("afterend", galleryEditorTabContents.settings);
+
+    // Lighting is available only through the primary LIGHTING tab.
+
+    var galleryEditorSaveBar = document.createElement("div");
+    galleryEditorSaveBar.className = "gallery-editor-save-bar";
+    var sharedSaveStateButton = document.getElementById("saveStateButton");
+    if (sharedSaveStateButton) {
+        galleryEditorSaveBar.appendChild(sharedSaveStateButton);
+    }
+    editHelpPanel.appendChild(galleryEditorSaveBar);
+
+    setGalleryEditorPrimaryTab("exhibits");
+
+
+    var galleryEditorControlDraftCheckTimer = null;
+
+    function scheduleGalleryEditorControlDraftCheck(reason) {
+        if (galleryEditorControlDraftCheckTimer) {
+            clearTimeout(galleryEditorControlDraftCheckTimer);
+        }
+
+        galleryEditorControlDraftCheckTimer = setTimeout(function () {
+            galleryEditorControlDraftCheckTimer = null;
+            checkGalleryDraftStateNow(reason || "editor-control-change");
+        }, 90);
+    }
+
+    [editorScroll, lightingScroll].forEach(function (scrollRoot) {
+        if (!scrollRoot) return;
+
+        registerGalleryDomEvent(
+            "galleryEditorDraftInput-" + (scrollRoot.className || "root"),
+            scrollRoot,
+            "input",
+            function (event) {
+                var target = event && event.target;
+                if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "")) {
+                    scheduleGalleryEditorControlDraftCheck("editor-control-input");
+                }
+            }
+        );
+        registerGalleryDomEvent(
+            "galleryEditorDraftChange-" + (scrollRoot.className || "root"),
+            scrollRoot,
+            "change",
+            function (event) {
+                var target = event && event.target;
+                if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "")) {
+                    scheduleGalleryEditorControlDraftCheck("editor-control-change");
+                }
+            }
+        );
+        registerGalleryDomEvent(
+            "galleryEditorDraftButton-" + (scrollRoot.className || "root"),
+            scrollRoot,
+            "click",
+            function (event) {
+                var target = event && event.target && event.target.closest
+                    ? event.target.closest("button")
+                    : null;
+                if (target) {
+                    scheduleGalleryEditorControlDraftCheck("editor-control-button");
+                }
+            }
+        );
+    });
 
     appendGalleryUiElement(editHelpPanel, "controls");
 
@@ -27000,16 +27427,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 editorFooterActions.appendChild(editButton);
             }
 
-            if (lightingQuickButton.parentElement !== editorFooterActions) {
-                editorFooterActions.appendChild(lightingQuickButton);
-            }
-
-            lightingQuickButton.style.display = "inline-flex";
             editButton.className = "gallery-editor-panel-mode-button";
+            setGalleryEditorPrimaryTab(galleryEditorPrimaryTab === "lighting" ? galleryEditorLastContentTab : galleryEditorPrimaryTab);
         } else {
             setEditorPanelMode("edit");
-
-            lightingQuickButton.style.display = "none";
 
             if (editButton.parentElement !== getGalleryUiElementParent("controls")) {
                 appendGalleryUiElement(editButton, "controls");
@@ -27380,6 +27801,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             deselectArtwork();
 
             selectedWallMaterial = material;
+            if (editMode && typeof setGalleryEditorPrimaryTab === "function") {
+                setGalleryEditorPrimaryTab("space");
+            }
 
             Array.from(wallPalette.querySelectorAll("button")).forEach(function (item) {
                 item.classList.remove("is-selected");
@@ -27597,6 +28021,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         configureMeshMaterialForMainShadows(wallMesh);
         scheduleCommonLightingMaterialSupport("wallPaintSegment");
         markGallerySurfaceDirty("wallSegmentPainted");
+        markGalleryDraftDirty("wall-segment-painted");
         updateEditHelpStatus();
 
         return true;
@@ -28054,12 +28479,37 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return Object.assign({}, viewerPlaceholderVisibilityDebug);
     }
 
+
+    function hasGalleryUnsavedChanges() {
+        return !!(
+            gallerySaveIntegrityRuntime &&
+            gallerySaveIntegrityRuntime.baselineReady &&
+            gallerySaveIntegrityRuntime.dirty
+        );
+    }
+
+    function confirmGalleryDiscardUnsavedChanges(actionLabel) {
+        if (!hasGalleryUnsavedChanges()) {
+            return true;
+        }
+
+        return window.confirm(
+            "You have unsaved gallery changes. " +
+            (actionLabel || "Leaving Edit Mode") +
+            " will leave them unpublished, and closing this tab will discard them. Continue?"
+        );
+    }
+
     editButton.onclick = function (event) {
         closeGalleryInspect("edit-mode-toggle");
 
         if (event) {
             event.preventDefault();
             event.stopPropagation();
+        }
+
+        if (editMode && !confirmGalleryDiscardUnsavedChanges("Leaving Edit Mode")) {
+            return;
         }
 
         if (galleryEditorLoginEnabled && !editorAuthenticated) {
@@ -28161,6 +28611,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     setEditorAuthenticated(editorAuthenticated);
 
+
+    registerGalleryDomEvent("galleryUnsavedBeforeUnload", window, "beforeunload", function (event) {
+        if (!hasGalleryUnsavedChanges()) {
+            return;
+        }
+
+        event.preventDefault();
+        event.returnValue = "";
+        return "";
+    });
 
 
     function getMobileResponsiveWidth() {
@@ -28523,9 +28983,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var z = 0;
         var analog = false;
 
-        if (isMobileViewerActive() && mobileJoystickActive) {
+        if (isMobileViewerActive() && (mobileJoystickActive || mobileCanvasMoveActive)) {
+            var activeMobileVector = mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector;
             var deadZone = viewerMovementConfig.joystickDeadZone || 0.08;
-            var joystickZ = Math.abs(mobileJoystickVector.y) >= deadZone ? -mobileJoystickVector.y : 0;
+            var joystickZ = Math.abs(activeMobileVector.y) >= deadZone ? -activeMobileVector.y : 0;
 
             // STAGE 12C3:
             // Mobile joystick X wraca do obrotu kamery.
@@ -28542,11 +29003,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 x -= 1;
             }
 
-            if (viewerMoveKeys.w) {
+            if (viewerMoveKeys.w || galleryDesktopDpadState.forward) {
                 z += 1;
             }
 
-            if (viewerMoveKeys.s) {
+            if (viewerMoveKeys.s || galleryDesktopDpadState.backward) {
                 z -= 1;
             }
         }
@@ -28766,14 +29227,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (
             !viewerMovementMobileJoystickTurnEnabled ||
             !isMobileViewerActive() ||
-            !mobileJoystickActive ||
+            !(mobileJoystickActive || mobileCanvasMoveActive) ||
             editMode ||
             !camera
         ) {
             return false;
         }
 
-        var turnInput = mobileJoystickVector.x || 0;
+        var activeMobileVector = mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector;
+        var turnInput = activeMobileVector.x || 0;
 
         if (Math.abs(turnInput) < viewerMovementMobileJoystickTurnDeadZone) {
             return false;
@@ -28872,11 +29334,42 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var keyboard = !!(viewerMoveKeys.w || viewerMoveKeys.a || viewerMoveKeys.s || viewerMoveKeys.d);
         var joystick = !!(
             isMobileViewerActive() &&
-            mobileJoystickActive &&
-            (Math.abs(mobileJoystickVector.x || 0) >= (viewerMovementMobileJoystickTurnDeadZone || 0.08) ||
-             Math.abs(mobileJoystickVector.y || 0) >= (viewerMovementConfig.joystickDeadZone || 0.08))
+            (mobileJoystickActive || mobileCanvasMoveActive) &&
+            (Math.abs((mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector).x || 0) >= (viewerMovementMobileJoystickTurnDeadZone || 0.08) ||
+             Math.abs((mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector).y || 0) >= (viewerMovementConfig.joystickDeadZone || 0.08))
         );
         return keyboard || joystick;
+    }
+
+
+    function updateGalleryDesktopDpadTurn(dt) {
+        if (!isGalleryDesktopPointerNavigationAvailable() || !camera) {
+            return false;
+        }
+
+        var turnInput = (galleryDesktopDpadState.turnRight ? 1 : 0) - (galleryDesktopDpadState.turnLeft ? 1 : 0);
+
+        if (!turnInput) {
+            return false;
+        }
+
+        if (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) {
+            resetGalleryDesktopDpadState();
+            return false;
+        }
+
+        if (galleryInspectRuntime && galleryInspectRuntime.active) {
+            closeGalleryInspect("desktop-dpad-movement");
+        }
+
+        clearViewerWASDVisualOffsets();
+        try {
+            scene.stopAnimation(camera);
+        } catch (error) {}
+        camera.rotation.y += turnInput * galleryDesktopDpadTurnSpeed * Math.max(0.001, dt || 0.016);
+        camera.rotation.z = 0;
+        markGalleryViewerActivity("desktop-dpad-turn");
+        return true;
     }
 
     function updateViewerWASDMovement() {
@@ -28896,16 +29389,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var mobileJoystickTurnActive = updateViewerMobileJoystickTurn(dt);
+        var desktopDpadTurnActive = updateGalleryDesktopDpadTurn(dt);
 
         var inputState = getViewerWASDInputState();
         var hasInput = inputState.hasInput;
-        if (hasInput || mobileJoystickTurnActive || viewerMovementVelocity.length() > 0.035) {
+        if (hasInput || mobileJoystickTurnActive || desktopDpadTurnActive || viewerMovementVelocity.length() > 0.035) {
             markGalleryViewerActivity("viewer-movement");
         }
-        if ((hasInput || mobileJoystickTurnActive) && galleryInspectRuntime.active) {
+        if ((hasInput || mobileJoystickTurnActive || desktopDpadTurnActive) && galleryInspectRuntime.active) {
             closeGalleryInspect("viewer-manual-movement");
         }
-        updateGalleryFocusPreviewReturnToWalk(dt, hasInput || mobileJoystickTurnActive);
+        updateGalleryFocusPreviewReturnToWalk(dt, hasInput || mobileJoystickTurnActive || desktopDpadTurnActive);
         var speedBeforeStop = viewerMovementVelocity.length();
 
         if (hasInput && inputState.direction.lengthSquared() > 0.00001) {
@@ -28913,7 +29407,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             viewerMovementLastMoveDirection.normalize();
         }
 
-        if ((hasInput || mobileJoystickTurnActive) && !viewerMovementWasManualInputActive) {
+        if ((hasInput || mobileJoystickTurnActive || desktopDpadTurnActive) && !viewerMovementWasManualInputActive) {
             scene.stopAnimation(camera);
 
             if (typeof stopViewerSafeFocusRuntimeAnimation === "function") {
@@ -28921,7 +29415,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         }
 
-        viewerMovementWasManualInputActive = hasInput || mobileJoystickTurnActive;
+        viewerMovementWasManualInputActive = hasInput || mobileJoystickTurnActive || desktopDpadTurnActive;
 
         var speedFactor = updateViewerMovementSpeedFactor(inputState, dt);
         var speed = viewerMovementConfig.speed || 3.58;
@@ -28976,15 +29470,58 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
     }
 
+
+    function isGalleryTouchGestureUiTarget(target) {
+        return !!(
+            target &&
+            target.closest &&
+            target.closest(
+                "#mobileViewerControls, #galleryArtworkInfoPopup, #berryboyViewerIntroOverlay, " +
+                "#galleryEditorPanel, #siteHeader, #galleryBootGuard, button, a, input, textarea, select, label"
+            )
+        );
+    }
+
+    function clearMobileCanvasHoldTimer() {
+        if (mobileCanvasHoldTimer) {
+            clearTimeout(mobileCanvasHoldTimer);
+            mobileCanvasHoldTimer = null;
+        }
+    }
+
+    function resetMobileCanvasMoveGesture() {
+        clearMobileCanvasHoldTimer();
+        mobileCanvasMoveActive = false;
+        mobileCanvasMoveVector.x = 0;
+        mobileCanvasMoveVector.y = 0;
+        mobileCanvasGestureMode = "idle";
+    }
+
+    function updateMobileCanvasMoveVector(event) {
+        var dx = event.clientX - mobileLookStartX;
+        var dy = event.clientY - mobileLookStartY;
+        var radius = Math.max(24, mobileCanvasMoveRadius);
+        var length = Math.sqrt(dx * dx + dy * dy);
+
+        if (length > radius) {
+            dx = dx / length * radius;
+            dy = dy / length * radius;
+        }
+
+        mobileCanvasMoveVector.x = BABYLON.Scalar.Clamp(dx / radius, -1, 1);
+        mobileCanvasMoveVector.y = BABYLON.Scalar.Clamp(dy / radius, -1, 1);
+    }
+
     function beginMobileCanvasLook(event) {
-        if (!isMobileViewerActive()) {
+        if (!isMobileViewerActive() || !event || isGalleryTouchGestureUiTarget(event.target)) {
             return false;
         }
 
-        if (event.target && event.target.closest && event.target.closest("#mobileViewerControls")) {
+        if (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) {
             return false;
         }
 
+        resetMobileCanvasMoveGesture();
         mobileLookActive = true;
         mobileLookPointerId = event.pointerId;
         mobileLookStartX = event.clientX;
@@ -28992,12 +29529,35 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mobileLookLastX = event.clientX;
         mobileLookLastY = event.clientY;
         mobileLookMoved = false;
+        mobileCanvasGestureMode = "pending";
 
+        if (canvas && canvas.setPointerCapture && event.pointerId !== undefined) {
+            try {
+                canvas.setPointerCapture(event.pointerId);
+            } catch (error) {}
+        }
+
+        mobileCanvasHoldTimer = setTimeout(function () {
+            mobileCanvasHoldTimer = null;
+
+            if (!mobileLookActive || mobileCanvasGestureMode !== "pending") {
+                return;
+            }
+
+            mobileCanvasGestureMode = "move";
+            mobileCanvasMoveActive = true;
+            mobileLookMoved = true;
+            markGalleryViewerActivity("mobile-hold-movement-ready");
+        }, mobileCanvasHoldDelayMs);
+
+        if (event.cancelable) {
+            event.preventDefault();
+        }
         return true;
     }
 
     function updateMobileCanvasLook(event) {
-        if (!mobileLookActive) {
+        if (!mobileLookActive || !event) {
             return false;
         }
 
@@ -29005,46 +29565,52 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        if (event.cancelable) {
+            event.preventDefault();
+        }
+
         var totalDx = event.clientX - mobileLookStartX;
         var totalDy = event.clientY - mobileLookStartY;
+        var crossedThreshold = Math.abs(totalDx) > mobileTapMoveThreshold || Math.abs(totalDy) > mobileTapMoveThreshold;
 
-        if (
-            Math.abs(totalDx) > mobileTapMoveThreshold ||
-            Math.abs(totalDy) > mobileTapMoveThreshold
-        ) {
+        if (mobileCanvasGestureMode === "pending" && crossedThreshold) {
+            clearMobileCanvasHoldTimer();
+            mobileCanvasGestureMode = "look";
             mobileLookMoved = true;
+        }
+
+        if (mobileCanvasGestureMode === "move") {
+            updateMobileCanvasMoveVector(event);
+            if (galleryInspectRuntime.active) {
+                closeGalleryInspect("mobile-hold-movement");
+            }
+            markGalleryViewerActivity("mobile-hold-movement");
+            return true;
+        }
+
+        if (mobileCanvasGestureMode !== "look") {
+            return true;
         }
 
         var dx = event.clientX - mobileLookLastX;
         var dy = event.clientY - mobileLookLastY;
-
         mobileLookLastX = event.clientX;
         mobileLookLastY = event.clientY;
 
-        if (mobileLookMoved) {
-            if (galleryInspectRuntime.active) {
-                closeGalleryInspect("mobile-manual-look");
-            }
-            // STAGE 12C2:
-            // Obrót na mobile też trzyma horyzont. Bez zostawiania kadru pod skosem.
-            if (!editMode && typeof clearViewerWASDVisualOffsets === "function") {
-                clearViewerWASDVisualOffsets();
-                camera.rotation.z = 0;
-            }
-
-            camera.rotation.y += dx * mobileLookSensitivityX;
-            camera.rotation.x += dy * mobileLookSensitivityY;
-
-            camera.rotation.x = BABYLON.Scalar.Clamp(
-                camera.rotation.x,
-                -0.58,
-                0.58
-            );
-
-            camera.rotation.z = 0;
-            markGalleryViewerActivity("mobile-camera-look");
+        if (galleryInspectRuntime.active) {
+            closeGalleryInspect("mobile-manual-look");
         }
 
+        if (!editMode && typeof clearViewerWASDVisualOffsets === "function") {
+            clearViewerWASDVisualOffsets();
+            camera.rotation.z = 0;
+        }
+
+        camera.rotation.y += dx * mobileLookSensitivityX;
+        camera.rotation.x += dy * mobileLookSensitivityY;
+        camera.rotation.x = BABYLON.Scalar.Clamp(camera.rotation.x, -0.58, 0.58);
+        camera.rotation.z = 0;
+        markGalleryViewerActivity("mobile-camera-look");
         return true;
     }
 
@@ -29068,18 +29634,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             pickY = event.clientY - rect.top;
         }
 
-        var pickResult = scene.pick(
-            pickX,
-            pickY
-        );
+        var pickResult = scene.pick(pickX, pickY);
 
         if (!pickResult || !pickResult.hit || !pickResult.pickedMesh) {
             closeGalleryInspect("mobile-empty-tap");
             return;
         }
 
-        // STAGE 12C5:
-        // Mobile tap musi działać też na imagePlane obrazu, nie tylko na box artworku.
         var pickedArtworkMesh = getArtworkFromPopupPickMesh(pickResult.pickedMesh);
 
         if (pickedArtworkMesh) {
@@ -29087,35 +29648,40 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        // STAGE 12C5:
-        // Mobile tap na rzeźbę/model GLB mapujemy do parent model slotu.
         var pickedModelSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
 
-        if (
-            artSpheres.includes(pickResult.pickedMesh) ||
-            pickedModelSlot
-        ) {
+        if (artSpheres.includes(pickResult.pickedMesh) || pickedModelSlot) {
             openGalleryInspectTarget(pickedModelSlot || pickResult.pickedMesh, { reason: "mobile-sculpture-tap" });
-            return;
         }
-
-        // Podloga na mobile nie wykonuje juz skoku kamery.
-        // Chodzenie jest tylko z joysticka, a ekran sluzy do obrotu kamery.
     }
 
-    function endMobileCanvasLook(event) {
+    function endMobileCanvasLook(event, cancelled) {
         if (!mobileLookActive) {
+            resetMobileCanvasMoveGesture();
             return false;
         }
 
-        if (mobileLookPointerId !== null && event.pointerId !== mobileLookPointerId) {
+        if (
+            event &&
+            mobileLookPointerId !== null &&
+            event.pointerId !== undefined &&
+            event.pointerId !== mobileLookPointerId
+        ) {
             return false;
         }
 
-        var wasTap = !mobileLookMoved;
+        var wasTap = !cancelled && mobileCanvasGestureMode === "pending" && !mobileLookMoved;
+        clearMobileCanvasHoldTimer();
+
+        if (canvas && canvas.releasePointerCapture && event && event.pointerId !== undefined) {
+            try {
+                canvas.releasePointerCapture(event.pointerId);
+            } catch (error) {}
+        }
 
         mobileLookActive = false;
         mobileLookPointerId = null;
+        resetMobileCanvasMoveGesture();
 
         if (wasTap) {
             handleMobileViewerTap(event);
@@ -29127,6 +29693,240 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
 
 
+
+
+    function createGalleryDesktopDpad() {
+        var old = document.getElementById("galleryDesktopDpad");
+        if (old) old.remove();
+
+        var oldStyle = document.getElementById("galleryDesktopDpadStyle");
+        if (oldStyle) oldStyle.remove();
+
+        var style = document.createElement("style");
+        style.id = "galleryDesktopDpadStyle";
+        style.textContent = `
+            #galleryDesktopDpad {
+                position: absolute;
+                right: clamp(20px, 2.6vw, 36px);
+                bottom: calc(env(safe-area-inset-bottom) + 24px);
+                z-index: 22;
+                display: grid;
+                grid-template-columns: repeat(3, 46px);
+                grid-template-rows: repeat(2, 46px);
+                gap: 6px;
+                pointer-events: auto;
+                user-select: none;
+                -webkit-user-select: none;
+                touch-action: none;
+                transition: opacity 160ms ease, transform 160ms ease;
+            }
+            body.gallery-edit-mode-active #galleryDesktopDpad {
+                right: auto;
+                left: clamp(20px, 2.6vw, 36px);
+            }
+            #galleryDesktopDpad.is-blocked {
+                opacity: 0;
+                pointer-events: none;
+                transform: translateY(8px);
+            }
+            .gallery-desktop-dpad-button {
+                width: 46px;
+                height: 46px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid rgba(255,255,255,0.28);
+                border-radius: 14px;
+                background: rgba(20,20,20,0.46);
+                color: rgba(255,255,255,0.94);
+                box-shadow: 0 12px 28px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.12);
+                backdrop-filter: blur(14px);
+                -webkit-backdrop-filter: blur(14px);
+                cursor: pointer;
+                padding: 0;
+                outline: none;
+            }
+            .gallery-desktop-dpad-button:hover,
+            .gallery-desktop-dpad-button:focus-visible {
+                background: rgba(255,255,255,0.16);
+                border-color: rgba(255,255,255,0.52);
+            }
+            .gallery-desktop-dpad-button.is-active {
+                transform: translateY(1px) scale(0.97);
+                background: rgba(255,255,255,0.28);
+            }
+            .gallery-desktop-dpad-button svg {
+                width: 20px;
+                height: 20px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 2.4;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+            .gallery-desktop-dpad-button[data-direction="forward"] { grid-column: 2; grid-row: 1; }
+            .gallery-desktop-dpad-button[data-direction="turnLeft"] { grid-column: 1; grid-row: 2; }
+            .gallery-desktop-dpad-button[data-direction="backward"] { grid-column: 2; grid-row: 2; }
+            .gallery-desktop-dpad-button[data-direction="turnRight"] { grid-column: 3; grid-row: 2; }
+            @media (max-width: 768px), (pointer: coarse) {
+                #galleryDesktopDpad { display: none !important; }
+            }
+        `;
+        document.head.appendChild(style);
+
+        galleryDesktopDpad = document.createElement("div");
+        galleryDesktopDpad.id = "galleryDesktopDpad";
+        galleryDesktopDpad.setAttribute("aria-label", "On-screen gallery navigation");
+
+        var definitions = [
+            { key: "forward", label: "Move forward", path: "M12 19V5M6.5 10.5 12 5l5.5 5.5" },
+            { key: "turnLeft", label: "Turn left", path: "M19 12H5m5.5-5.5L5 12l5.5 5.5" },
+            { key: "backward", label: "Move backward", path: "M12 5v14m5.5-5.5L12 19l-5.5-5.5" },
+            { key: "turnRight", label: "Turn right", path: "M5 12h14m-5.5-5.5L19 12l-5.5 5.5" }
+        ];
+
+        definitions.forEach(function (definition) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "gallery-desktop-dpad-button";
+            button.dataset.direction = definition.key;
+            button.setAttribute("aria-label", definition.label);
+            button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + definition.path + '"></path></svg>';
+
+            function setPressed(event, pressed) {
+                if (!isGalleryDesktopPointerNavigationAvailable()) return;
+                if (pressed && typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) return;
+                if (event && event.cancelable) event.preventDefault();
+                if (event && event.stopPropagation) event.stopPropagation();
+
+                galleryDesktopDpadState[definition.key] = !!pressed;
+                button.classList.toggle("is-active", !!pressed);
+
+                if (pressed && event && event.pointerId !== undefined) {
+                    galleryDesktopDpadState.activePointerIds[event.pointerId] = definition.key;
+                    try { button.setPointerCapture(event.pointerId); } catch (error) {}
+                } else if (event && event.pointerId !== undefined) {
+                    delete galleryDesktopDpadState.activePointerIds[event.pointerId];
+                }
+
+                if (pressed) {
+                    markGalleryViewerActivity("desktop-dpad-" + definition.key);
+                }
+            }
+
+            button.addEventListener("pointerdown", function (event) { setPressed(event, true); });
+            button.addEventListener("pointerup", function (event) { setPressed(event, false); });
+            button.addEventListener("pointercancel", function (event) { setPressed(event, false); });
+            button.addEventListener("lostpointercapture", function (event) { setPressed(event, false); });
+            galleryDesktopDpad.appendChild(button);
+        });
+
+        appendGalleryUiElement(galleryDesktopDpad, "controls");
+    }
+
+    function syncGalleryDesktopDpadVisibility() {
+        if (!galleryDesktopDpad) return;
+        var blocked = !isGalleryDesktopPointerNavigationAvailable() ||
+            (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement());
+        galleryDesktopDpad.classList.toggle("is-blocked", !!blocked);
+        if (blocked) resetGalleryDesktopDpadState();
+    }
+
+    function getOrCreateGalleryFloorCursorRing() {
+        if (galleryFloorCursorRing && !(galleryFloorCursorRing.isDisposed && galleryFloorCursorRing.isDisposed())) {
+            return galleryFloorCursorRing;
+        }
+
+        galleryFloorCursorRingMaterial = new BABYLON.StandardMaterial("GalleryFloorCursorRingMaterial", scene);
+        galleryFloorCursorRingMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        galleryFloorCursorRingMaterial.emissiveColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+        galleryFloorCursorRingMaterial.specularColor = BABYLON.Color3.Black();
+        galleryFloorCursorRingMaterial.alpha = 0.52;
+        galleryFloorCursorRingMaterial.disableLighting = true;
+        galleryFloorCursorRingMaterial.backFaceCulling = false;
+
+        galleryFloorCursorRing = BABYLON.MeshBuilder.CreateTorus(
+            "GalleryFloorCursorRing",
+            { diameter: 0.56, thickness: 0.026, tessellation: 48 },
+            scene
+        );
+        galleryFloorCursorRing.material = galleryFloorCursorRingMaterial;
+        galleryFloorCursorRing.isPickable = false;
+        galleryFloorCursorRing.checkCollisions = false;
+        galleryFloorCursorRing.receiveShadows = false;
+        galleryFloorCursorRing.doNotSerialize = true;
+        galleryFloorCursorRing.metadata = {
+            displayType: "floor-cursor-highlight",
+            ignoreLocalLightTargeting: true,
+            ignoreGalleryStreaming: true
+        };
+        galleryFloorCursorRing.setEnabled(false);
+        return galleryFloorCursorRing;
+    }
+
+    function hideGalleryFloorCursorRing() {
+        if (galleryFloorCursorRing) galleryFloorCursorRing.setEnabled(false);
+    }
+
+    function updateGalleryFloorCursorRingFromPointer(event) {
+        galleryFloorCursorFramePending = false;
+        event = event || galleryFloorCursorLastEvent;
+
+        if (!event || !isGalleryDesktopPointerNavigationAvailable() ||
+            (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
+            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere) {
+            hideGalleryFloorCursorRing();
+            return;
+        }
+
+        var rect = canvas.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        var pick = scene.pick(x, y, function (mesh) {
+            return !!(mesh && floorMeshes.indexOf(mesh) !== -1);
+        }, false, camera);
+
+        if (!pick || !pick.hit || !pick.pickedPoint) {
+            hideGalleryFloorCursorRing();
+            return;
+        }
+
+        var ring = getOrCreateGalleryFloorCursorRing();
+        ring.position.copyFrom(pick.pickedPoint);
+        ring.position.y += 0.018;
+        ring.rotationQuaternion = null;
+        ring.rotation.copyFrom(BABYLON.Vector3.Zero());
+        ring.setEnabled(true);
+    }
+
+    function scheduleGalleryFloorCursorRingUpdate(event) {
+        galleryFloorCursorLastEvent = event;
+        if (galleryFloorCursorFramePending) return;
+        galleryFloorCursorFramePending = true;
+        requestAnimationFrame(function () {
+            updateGalleryFloorCursorRingFromPointer(galleryFloorCursorLastEvent);
+        });
+    }
+
+    createGalleryDesktopDpad();
+    registerGalleryDomEvent("galleryDesktopDpadWindowBlur", window, "blur", function () {
+        resetGalleryDesktopDpadState();
+        hideGalleryFloorCursorRing();
+    });
+    registerGalleryDomEvent("galleryDesktopDpadVisibility", document, "visibilitychange", function () {
+        if (document.hidden) {
+            resetGalleryDesktopDpadState();
+            hideGalleryFloorCursorRing();
+        }
+    });
+    registerGalleryDomEvent("galleryDesktopDpadResize", window, "resize", syncGalleryDesktopDpadVisibility);
+    registerGalleryDomEvent("galleryFloorCursorPointerMove", canvas, "pointermove", function (event) {
+        if (event.pointerType === "mouse" || !event.pointerType) {
+            scheduleGalleryFloorCursorRingUpdate(event);
+        }
+    });
+    registerGalleryDomEvent("galleryFloorCursorPointerLeave", canvas, "pointerleave", hideGalleryFloorCursorRing);
+    syncGalleryDesktopDpadVisibility();
 
     function createMobileViewerUi() {
         var oldMobileControls = document.getElementById("mobileViewerControls");
@@ -29327,12 +30127,38 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     setupMobileViewerControls();
 
+
+    registerGalleryDomEvent("mobileCanvasPointerCancelSafety", canvas, "pointercancel", function (event) {
+        if (mobileLookActive) {
+            endMobileCanvasLook(event, true);
+        }
+    }, true);
+
+    registerGalleryDomEvent("mobileCanvasLostPointerCaptureSafety", canvas, "lostpointercapture", function (event) {
+        if (mobileLookActive) {
+            endMobileCanvasLook(event, true);
+        }
+    }, true);
+
+    registerGalleryDomEvent("mobileCanvasDragStartSafety", canvas, "dragstart", function (event) {
+        if (event && event.preventDefault) {
+            event.preventDefault();
+        }
+    }, true);
+
+    registerGalleryDomEvent("mobileCanvasSelectStartSafety", canvas, "selectstart", function (event) {
+        if (event && event.preventDefault) {
+            event.preventDefault();
+        }
+    }, true);
+
     if (galleryPerformanceDebugEnabled) {
         setGalleryPerformanceDebugEnabled(true);
     }
 
 
     function runGalleryFrameTick() {
+        syncGalleryDesktopDpadVisibility();
         updateViewerWASDMovement();
         updateViewerWallCollisionIfCameraMoved();
         updateGalleryZoneStreamingRuntime(false);
@@ -29983,6 +30809,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function selectArtwork(artwork, addToSelection) {
 
+        if (editMode && typeof setGalleryEditorPrimaryTab === "function") {
+            setGalleryEditorPrimaryTab("exhibits");
+        }
+
         // Selekcja obrazow, modeli 3D i lokalnych lamp jest rozdzielna.
         // Nie moze byc jednoczesnie zaznaczony obraz, rzezba/model i lampa.
         clearLocalLightSelection();
@@ -30235,9 +31065,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             right.normalize();
         }
 
+        updateGalleryDesktopDpadTurn(scene.getEngine().getDeltaTime() / 1000);
+
         // STAGE 12C54 - EDIT FLY MODE
         // Space + W/S moves camera vertically in Edit Mode so lights above ceilings can be reached.
-        // Without Space, W/S keeps the normal floor-parallel edit movement.
+        // Without Space, W/S and the on-screen D-pad use normal collision-aware floor-parallel movement.
         if (editMoveKeys.space) {
             if (editMoveKeys.w) {
                 moveDirection.y += 1;
@@ -30247,11 +31079,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 moveDirection.y -= 1;
             }
         } else {
-            if (editMoveKeys.w) {
+            if (editMoveKeys.w || galleryDesktopDpadState.forward) {
                 moveDirection.addInPlace(forward);
             }
 
-            if (editMoveKeys.s) {
+            if (editMoveKeys.s || galleryDesktopDpadState.backward) {
                 moveDirection.subtractInPlace(forward);
             }
         }
@@ -30279,9 +31111,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             var delta = scene.getEngine().getDeltaTime() / 16.666;
 
-            camera.position.addInPlace(
-                moveDirection.scale(editMoveSpeed * delta)
-            );
+            var editMoveDelta = moveDirection.scale(editMoveSpeed * delta);
+
+            if (editMoveKeys.space) {
+                camera.position.addInPlace(editMoveDelta);
+            } else {
+                moveCameraWithViewerCollisionIfActive(editMoveDelta);
+            }
         }
 
         updateAlignmentPanelIfDirty();
@@ -34000,6 +34836,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function selectModel3dSlot(slot, addToSelection) {
+        if (editMode && typeof setGalleryEditorPrimaryTab === "function") {
+            setGalleryEditorPrimaryTab("exhibits");
+        }
         if (!slot) {
             return false;
         }
@@ -37587,7 +38426,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 // Selekcja lamp automatycznie odznacza obrazy i narzedzia edycji obrazow.
                 clearEditSelection();
 
-                setEditorPanelMode("lighting");
+                setGalleryEditorPrimaryTab("lighting");
                 setLightingContentMode("local");
                 selectLocalLightItem(
                     pickedLocalLightItem,
@@ -39021,6 +39860,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         isEditModeActive: function () {
             return !!editMode;
         },
+        hasUnsavedChanges: hasGalleryUnsavedChanges,
+        confirmDiscardUnsavedChanges: confirmGalleryDiscardUnsavedChanges,
         setEditorLoginEnabled: function (isEnabled) {
             galleryEditorLoginEnabled = !!isEnabled;
             setEditorAuthenticated(globalThis.galleryEditorAuthenticated);
@@ -39038,6 +39879,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 revision: gallerySaveIntegrityRuntime.publishedRevision,
                 saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
                 pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length,
+                pendingDraftUploads: gallerySaveIntegrityRuntime.pendingDraftUploads.length,
+                tabId: gallerySaveIntegrityRuntime.tabId,
+                activeTabs: readGalleryActiveEditorTabs(),
                 cleanupFailures: gallerySaveIntegrityRuntime.cleanupFailures.slice(),
                 latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult
             };

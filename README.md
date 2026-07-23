@@ -1,26 +1,24 @@
-# Berryboy Art Gallery — Stage 12C66B2R
+# Berryboy Art Gallery — Stage 12C66C / Etap 3
 
-Etap naprawczy łączący **1R** i **2R**, wykonany ponownie na bazie Stage 12C66A1. Odrzucone paczki 12C66B i 12C66B1 nie są bazą tej wersji.
+Stage 12C66C powstał bezpośrednio na naprawionej bazie **12C66B2R**. Zachowuje integralność zapisu, startup uruchamiany dopiero po kliknięciu, neutralne czasoumilacze oraz oryginalny popup instruktażowy.
 
-## 1R — integralność zapisu
+## Zakres Etapu 3
 
-- Stare zasoby wykorzystywane przez `main_previous` są chronione przed cleanupem.
-- Kolejka usunięcia pozostaje aktywna i może usunąć zasób dopiero po kolejnym poprawnym zapisie, gdy backup zostanie obrócony.
-- Uploady wersji roboczej są rejestrowane. Pliki nieużyte przez opublikowany stan trafiają do bezpiecznej kolejki cleanup po poprawnym zapisie.
-- Zdalny backup nie używa już `upsert(... onConflict: "id")`; wykonuje kontrolowany `select → update/insert`, bez kasowania rekordów.
-- Dirty-state ma natychmiastowe oznaczanie przy operacjach edycyjnych oraz wolniejszy, pięciosekundowy fallback.
-- Produkcyjny `Gallery_V0_11.min.js` jest generowany przez powtarzalny build i jest realnie mniejszy od źródła.
+- Bezpieczne rozróżnianie draftów i kolejek Storage pomiędzy kartami przeglądarki.
+- Potwierdzenie runtime, że oryginalny popup instruktażowy rzeczywiście pojawił się po `gallery-interaction-ready`.
+- Ekranowy D-pad na PC: przód, tył, obrót w lewo i w prawo, z ruchem podczas przytrzymania.
+- Subtelny pierścień kursora widoczny tylko na powierzchni podłogi.
+- Mobilne zabezpieczenia long-press oraz gest: krótki drag obraca kamerę, przytrzymanie przełącza drag w tymczasowy joystick.
+- Cztery główne sekcje Edit Mode: Exhibits, Space, Lighting i Settings.
+- Jeden istniejący przycisk Save przeniesiony do stałego dolnego paska Edit Mode.
+- Stany zapisu: wszystko zapisane, niezapisane zmiany, zapisywanie, zapisano i błąd.
+- Ostrzeżenia przed opuszczeniem Edit Mode, wylogowaniem i zamknięciem karty z niezapisanymi zmianami.
+- Naprawiony istniejący collider proxy rzeźb; działa w Viewer Mode i podczas zwykłego chodzenia w Edit Mode, a świadomy `Space` fly mode może go ominąć.
+- Usunięte równoległe ścieżki: drugi techniczny loader, stare wejścia do Light Mode i nagłówkowa akcja Save.
 
-## 2R — poprawny startup
+## Chronione elementy
 
-- Babylon.js, loader GLB, moduł silnika, Engine i scena 3D nie uruchamiają się przed kliknięciem **Enter gallery / Uruchom galerię**.
-- Sprawdzenie sesji edytora działa równolegle i nie może zablokować publicznego startu galerii, gdy autoryzacja jest wolna albo niedostępna.
-- Zachowany jest zaakceptowany wygląd ekranu wejścia i ładowania ze Stage 12C66B; usunięta została wyłącznie jego zastępcza instrukcja po załadowaniu.
-- Podczas ładowania działa osobny ekran z neutralnymi czasoumilaczami.
-- Ekran oczekuje na prawdziwy sygnał `gallery-interaction-ready`, a nie pierwszą klatkę ani wczesne `gallery-ready`.
-- Po gotowości sceny pojawia się dokładnie oryginalny popup instruktażowy ze Stage 12C66A1. Jego HTML, CSS, animacje, teksty i zachowanie są chronione testem hash.
-- Komunikaty techniczne domyślnie trafiają do kanału edytora. Są wyświetlane tylko zalogowanej osobie znajdującej się faktycznie w Edit Mode.
-- Publiczny błąd nie pokazuje stack trace ani nazw technicznych etapów.
+Oryginalny popup instruktażowy nie został przeprojektowany. Testy blokują zmianę jego dwóch kluczowych funkcji za pomocą hashy SHA-256.
 
 ## Build i testy
 
@@ -28,8 +26,17 @@ Etap naprawczy łączący **1R** i **2R**, wykonany ponownie na bazie Stage 12C6
 npm run check
 ```
 
-Polecenie generuje wersję produkcyjną i TXT login-disabled, sprawdza składnię, chronione kontrakty Stage 12C65E/Inspect, bezpieczeństwo zapisu, startup, oryginalny popup oraz walidację obrazów.
+Polecenie:
+
+1. buduje prawdziwy plik produkcyjny `Gallery_V0_11.min.js`,
+2. generuje TXT z logowaniem wyłączonym,
+3. sprawdza składnię,
+4. uruchamia verifier kontraktów,
+5. testuje integralność zapisu,
+6. testuje startup i oryginalny popup,
+7. testuje limity obrazów,
+8. testuje systemy Etapu 3.
 
 ## Ważne
 
-Testy automatyczne nie zastępują manualnego sprawdzenia na prawdziwym Supabase i urządzeniach. Lista testów znajduje się w `STAGE12C66B2R_TEST_CHECKLIST.txt`.
+Testy automatyczne nie zastępują manualnego sprawdzenia na prawdziwym Supabase oraz fizycznych urządzeniach z Androidem i iOS. Szczegółowa lista znajduje się w `STAGE12C66C_TEST_CHECKLIST.txt`.
