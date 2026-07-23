@@ -305,13 +305,13 @@
         max(22px, env(safe-area-inset-bottom))
         max(18px, env(safe-area-inset-left));
       background:
-        radial-gradient(circle at 50% 38%, rgba(71, 39, 45, 0.22), transparent 44%),
-        #080909;
+        radial-gradient(circle at 50% 34%, rgba(111, 65, 75, 0.24), transparent 43%),
+        linear-gradient(180deg, rgba(8, 9, 9, 0.96), rgba(8, 9, 9, 1));
       color: #f7f3ea;
       font-family: var(--font);
       opacity: 1;
       visibility: visible;
-      transition: opacity 220ms ease, visibility 220ms ease;
+      transition: opacity 240ms ease, visibility 240ms ease;
     }
 
     #galleryBootGuard.is-hidden {
@@ -321,25 +321,51 @@
     }
 
     .galleryBootCard {
-      width: min(440px, 100%);
-      padding: 24px;
+      width: min(560px, 100%);
+      padding: clamp(22px, 4vw, 32px);
       border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 22px;
-      background: rgba(15, 17, 18, 0.86);
-      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.09);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      border-radius: 24px;
+      background: rgba(15, 17, 18, 0.82);
+      box-shadow: 0 28px 84px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
       text-align: center;
     }
 
+    .galleryBootBrand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      color: rgba(247, 243, 234, 0.86);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .galleryBootBrand::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #f0eade;
+      box-shadow: 0 0 0 5px rgba(240, 234, 222, 0.10);
+    }
+
     .galleryBootSpinner {
-      width: 42px;
-      height: 42px;
-      margin: 0 auto 18px;
-      border: 3px solid rgba(255, 255, 255, 0.16);
+      display: none;
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 20px;
+      border: 3px solid rgba(255, 255, 255, 0.15);
       border-top-color: rgba(255, 255, 255, 0.94);
       border-radius: 50%;
-      animation: galleryBootSpin 850ms linear infinite;
+      animation: galleryBootSpin 880ms linear infinite;
+    }
+
+    #galleryBootGuard[data-state="loading"] .galleryBootSpinner {
+      display: block;
     }
 
     @keyframes galleryBootSpin {
@@ -348,59 +374,137 @@
 
     #galleryBootTitle {
       margin: 0;
-      font-size: 22px;
-      line-height: 1.1;
-      letter-spacing: -0.035em;
+      font-size: clamp(25px, 4vw, 38px);
+      line-height: 1.06;
+      letter-spacing: -0.04em;
     }
 
     #galleryBootMessage {
-      margin: 10px 0 0;
+      margin: 12px auto 0;
+      max-width: 460px;
       color: rgba(247, 243, 234, 0.72);
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.55;
+    }
+
+    #galleryBootTimefiller {
+      display: none;
+      min-height: 42px;
+      margin: 22px 0 0;
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.055);
+      color: rgba(247, 243, 234, 0.78);
+      font-size: 13px;
+      line-height: 1.4;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 180ms ease;
+    }
+
+    #galleryBootGuard[data-state="loading"] #galleryBootTimefiller {
+      display: flex;
+    }
+
+    #galleryBootControls {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+      text-align: left;
+    }
+
+    #galleryBootGuard[data-state="ready"] #galleryBootControls {
+      display: grid;
+    }
+
+    .galleryBootControl {
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .galleryBootControl strong {
+      display: block;
+      margin-bottom: 5px;
+      color: rgba(247, 243, 234, 0.94);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .galleryBootControl span {
+      color: rgba(247, 243, 234, 0.62);
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    #galleryBootLookChoice {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 8px;
+      padding: 5px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .galleryBootLookButton {
+      flex: 1 1 0;
+      min-height: 40px;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      background: transparent;
+      color: rgba(247, 243, 234, 0.68);
+      font: 700 12px/1.2 var(--font);
+      cursor: pointer;
+    }
+
+    .galleryBootLookButton.is-active {
+      border-color: rgba(247, 243, 234, 0.24);
+      background: rgba(247, 243, 234, 0.13);
+      color: #f7f3ea;
     }
 
     #galleryBootDetails {
       display: none;
-      margin: 12px 0 0;
-      padding: 10px 12px;
-      max-height: 120px;
-      overflow: auto;
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.055);
-      color: rgba(247, 243, 234, 0.62);
-      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      text-align: left;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
     }
 
     #galleryBootActions {
-      display: none;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      display: flex;
       gap: 10px;
-      margin-top: 18px;
+      margin-top: 22px;
     }
 
-    #galleryBootGuard.is-error .galleryBootSpinner {
+    #galleryBootStart,
+    #galleryBootEnter,
+    #galleryBootReload,
+    #galleryBootExternal,
+    #galleryBootAbout {
       display: none;
     }
 
-    #galleryBootGuard.is-error #galleryBootActions {
-      display: grid;
+    #galleryBootGuard[data-state="prestart"] #galleryBootStart,
+    #galleryBootGuard[data-state="prestart"] #galleryBootAbout,
+    #galleryBootGuard[data-state="ready"] #galleryBootEnter,
+    #galleryBootGuard[data-state="error"] #galleryBootReload,
+    #galleryBootGuard[data-state="error"] #galleryBootExternal {
+      display: inline-flex;
     }
 
     .galleryBootAction {
-      min-height: 44px;
-      padding: 10px 12px;
-      display: inline-flex;
+      flex: 1 1 0;
+      min-height: 48px;
+      padding: 11px 14px;
       align-items: center;
       justify-content: center;
       border: 1px solid rgba(255, 255, 255, 0.24);
-      border-radius: 12px;
+      border-radius: 13px;
       background: rgba(255, 255, 255, 0.08);
       color: #f7f3ea;
-      font: 700 13px/1.2 var(--font);
+      font: 750 13px/1.2 var(--font);
       text-decoration: none;
       cursor: pointer;
     }
@@ -411,14 +515,36 @@
       border-color: #f0eade;
     }
 
-    @media (max-width: 720px) {
+    .galleryBootAction:disabled {
+      cursor: wait;
+      opacity: 0.58;
+    }
+
+    @media (min-width: 721px) and (pointer: fine) {
+      #galleryBootControls [data-control="mobile-move"],
+      #galleryBootControls [data-control="mobile-look"] {
+        display: none;
+      }
+    }
+
+    @media (max-width: 720px), (pointer: coarse) {
+      #galleryBootControls [data-control="desktop-move"],
+      #galleryBootControls [data-control="desktop-look"],
+      #galleryBootLookChoice {
+        display: none;
+      }
+
       .galleryBootCard {
-        padding: 21px 18px;
-        border-radius: 18px;
+        padding: 22px 18px;
+        border-radius: 19px;
+      }
+
+      #galleryBootControls {
+        grid-template-columns: 1fr;
       }
 
       #galleryBootActions {
-        grid-template-columns: 1fr;
+        flex-direction: column;
       }
     }
 
@@ -1146,13 +1272,46 @@
         <div id="galleryMobileControlsLayer" class="galleryMobileHudLayer"></div>
         <div id="galleryMobileInspectLayer" class="galleryMobileHudLayer"></div>
         <div id="galleryMobileSystemLayer" class="galleryMobileHudLayer">
-          <div id="galleryBootGuard" role="status" aria-live="polite">
+          <div id="galleryBootGuard" data-state="prestart" role="status" aria-live="polite">
             <div class="galleryBootCard">
+              <div class="galleryBootBrand">Berryboy Art Gallery</div>
               <div class="galleryBootSpinner" aria-hidden="true"></div>
-              <h2 id="galleryBootTitle">Loading gallery</h2>
-              <p id="galleryBootMessage">Preparing the 3D scene…</p>
-              <pre id="galleryBootDetails"></pre>
+              <h2 id="galleryBootTitle">Berryboy Art Gallery</h2>
+              <p id="galleryBootMessage">The 3D exhibition starts only after you choose to enter.</p>
+              <p id="galleryBootTimefiller"></p>
+
+              <div id="galleryBootControls" aria-label="Gallery controls">
+                <div class="galleryBootControl" data-control="desktop-move">
+                  <strong>Move</strong>
+                  <span>Use WASD to walk through the gallery.</span>
+                </div>
+                <div class="galleryBootControl" data-control="desktop-look">
+                  <strong>Look around</strong>
+                  <span>Hold the mouse button and drag to rotate the camera.</span>
+                </div>
+                <div id="galleryBootLookChoice" aria-label="Mouse camera button">
+                  <button type="button" class="galleryBootLookButton is-active" data-gallery-look-mode="middle">Middle mouse</button>
+                  <button type="button" class="galleryBootLookButton" data-gallery-look-mode="right">Right mouse</button>
+                </div>
+                <div class="galleryBootControl" data-control="mobile-move">
+                  <strong>Move</strong>
+                  <span>Use the joystick on the screen.</span>
+                </div>
+                <div class="galleryBootControl" data-control="mobile-look">
+                  <strong>Look around</strong>
+                  <span>Drag with one finger to rotate the camera.</span>
+                </div>
+                <div class="galleryBootControl" data-control="inspect">
+                  <strong>View artworks</strong>
+                  <span>Click or tap an artwork or sculpture.</span>
+                </div>
+              </div>
+
+              <pre id="galleryBootDetails" aria-hidden="true"></pre>
               <div id="galleryBootActions">
+                <button id="galleryBootStart" type="button" class="galleryBootAction is-primary">Enter gallery</button>
+                <a id="galleryBootAbout" class="galleryBootAction" href="#project-info">About project</a>
+                <button id="galleryBootEnter" type="button" class="galleryBootAction is-primary">Start exploring</button>
                 <button id="galleryBootReload" type="button" class="galleryBootAction is-primary">Reload gallery</button>
                 <a id="galleryBootExternal" class="galleryBootAction" href="./" target="_blank" rel="noopener noreferrer">Open in browser</a>
               </div>
@@ -1351,7 +1510,7 @@
 
     <footer id="siteFooter">
       <span>Berryboy Art Gallery</span>
-      <span>Gallery_V0_11 · Stage 12C66A</span>
+      <span>Gallery_V0_11 · Stage 12C66B</span>
     </footer>
   </div>
 
@@ -1594,90 +1753,271 @@
       var guard = document.getElementById("galleryBootGuard");
       var title = document.getElementById("galleryBootTitle");
       var message = document.getElementById("galleryBootMessage");
+      var timefiller = document.getElementById("galleryBootTimefiller");
       var details = document.getElementById("galleryBootDetails");
+      var startButton = document.getElementById("galleryBootStart");
+      var enterButton = document.getElementById("galleryBootEnter");
+      var aboutButton = document.getElementById("galleryBootAbout");
       var reload = document.getElementById("galleryBootReload");
       var external = document.getElementById("galleryBootExternal");
-      var finished = false;
+      var lookButtons = document.querySelectorAll("[data-gallery-look-mode]");
+      var selectedLookMode = localStorage.getItem("berryboyViewerLookButtonMode") === "right" ? "right" : "middle";
+      var state = "prestart";
+      var currentLanguage = localStorage.getItem("berryboy_art_gallery_lang") === "pl" ? "pl" : "en";
       var failure = null;
-      var bootStartedAt = Date.now();
+      var loadingStartedAt = null;
+      var technicalPhase = null;
+      var technicalMessage = null;
+      var fillerIndex = 0;
+      var fillerTimer = 0;
+      var timeoutId = 0;
+      var startResolved = false;
+      var entryResolved = false;
+      var resolveStart;
+      var resolveEntry;
+      var startPromise = new Promise(function (resolve) { resolveStart = resolve; });
+      var entryPromise = new Promise(function (resolve) { resolveEntry = resolve; });
+
+      var copy = {
+        pl: {
+          preTitle: "Berryboy Art Gallery",
+          preMessage: "Interaktywna wystawa 3D uruchomi się dopiero po wybraniu wejścia.",
+          start: "Uruchom galerię",
+          about: "O projekcie",
+          loadingTitle: "Przygotowujemy galerię",
+          loadingMessage: "Jeszcze chwila — za moment rozpoczniesz zwiedzanie.",
+          readyTitle: "Galeria jest gotowa",
+          readyMessage: "Zapoznaj się ze sterowaniem i rozpocznij zwiedzanie.",
+          enter: "Rozpocznij zwiedzanie",
+          errorTitle: "Nie udało się uruchomić galerii",
+          errorMessage: "Odśwież stronę i spróbuj ponownie.",
+          reload: "Odśwież galerię",
+          external: "Otwórz w przeglądarce",
+          controls: {
+            desktopMove: ["Ruch", "Użyj klawiszy WASD, aby chodzić po galerii."],
+            desktopLook: ["Rozglądanie", "Przytrzymaj przycisk myszy i przeciągnij, aby obrócić kamerę."],
+            mobileMove: ["Ruch", "Skorzystaj z joysticka widocznego na ekranie."],
+            mobileLook: ["Rozglądanie", "Przeciągnij jednym palcem, aby obrócić kamerę."],
+            inspect: ["Oglądanie prac", "Kliknij lub dotknij obrazu albo rzeźby."]
+          },
+          lookMiddle: "Środkowy przycisk myszy",
+          lookRight: "Prawy przycisk myszy",
+          fillers: [
+            "Za chwilę wejdziesz do galerii.",
+            "Przygotowujemy przestrzeń do zwiedzania.",
+            "Światło i prace zajmują swoje miejsca.",
+            "Jeszcze moment — wystawa jest prawie gotowa."
+          ]
+        },
+        en: {
+          preTitle: "Berryboy Art Gallery",
+          preMessage: "The interactive 3D exhibition starts only after you choose to enter.",
+          start: "Enter gallery",
+          about: "About project",
+          loadingTitle: "Preparing the gallery",
+          loadingMessage: "One moment — your visit will begin shortly.",
+          readyTitle: "The gallery is ready",
+          readyMessage: "Review the controls and begin exploring.",
+          enter: "Start exploring",
+          errorTitle: "The gallery could not start",
+          errorMessage: "Reload the page and try again.",
+          reload: "Reload gallery",
+          external: "Open in browser",
+          controls: {
+            desktopMove: ["Move", "Use WASD to walk through the gallery."],
+            desktopLook: ["Look around", "Hold the mouse button and drag to rotate the camera."],
+            mobileMove: ["Move", "Use the joystick visible on the screen."],
+            mobileLook: ["Look around", "Drag with one finger to rotate the camera."],
+            inspect: ["View artworks", "Click or tap an artwork or sculpture."]
+          },
+          lookMiddle: "Middle mouse",
+          lookRight: "Right mouse",
+          fillers: [
+            "You will enter the gallery in a moment.",
+            "Preparing the space for your visit.",
+            "The artworks and lighting are taking their places.",
+            "Almost there — the exhibition is nearly ready."
+          ]
+        }
+      };
 
       function setText(element, value) {
         if (element) element.textContent = value || "";
       }
 
-      function setPhase(phase, text) {
-        if (finished || failure) return;
-        if (guard) guard.dataset.phase = phase || "boot";
-        setText(message, text || "Preparing the 3D scene…");
+      function setControlCopy(selector, values) {
+        var element = document.querySelector(selector);
+        if (!element || !values) return;
+        setText(element.querySelector("strong"), values[0]);
+        setText(element.querySelector("span"), values[1]);
       }
 
-      function ready() {
-        if (finished || failure) return;
-        finished = true;
-        window.clearTimeout(api.timeoutId);
-        if (guard) guard.classList.add("is-hidden");
-      }
-
-      function fail(code, friendlyMessage, error) {
-        finished = false;
-        failure = code || "startup-error";
-        window.clearTimeout(api.timeoutId);
-        if (guard) {
-          guard.classList.remove("is-hidden");
-          guard.classList.add("is-error");
-          guard.dataset.failure = failure;
+      function renderLanguage() {
+        var langCopy = copy[currentLanguage] || copy.en;
+        if (state === "prestart") {
+          setText(title, langCopy.preTitle);
+          setText(message, langCopy.preMessage);
+        } else if (state === "loading") {
+          setText(title, langCopy.loadingTitle);
+          setText(message, langCopy.loadingMessage);
+          setText(timefiller, langCopy.fillers[fillerIndex % langCopy.fillers.length]);
+        } else if (state === "ready") {
+          setText(title, langCopy.readyTitle);
+          setText(message, langCopy.readyMessage);
+        } else if (state === "error") {
+          setText(title, langCopy.errorTitle);
+          setText(message, api.friendlyFailureMessage || langCopy.errorMessage);
         }
-        setText(title, "Gallery could not start");
-        setText(message, friendlyMessage || "The 3D scene could not be initialized on this browser.");
-        if (details && error) {
-          details.style.display = "block";
-          details.textContent = error && error.stack ? error.stack : String(error);
-        }
-      }
 
-      var api = {
-        stage: "12C66A",
-        bootStartedAt: bootStartedAt,
-        setPhase: setPhase,
-        ready: ready,
-        fail: fail,
-        timeoutId: window.setTimeout(function () {
-          fail(
-            "boot-timeout",
-            "The gallery is taking too long to initialize. Reload it or open it in the full browser."
-          );
-        }, 45000)
-      };
-
-      if (reload) {
-        reload.addEventListener("click", function () {
-          window.location.reload();
+        setText(startButton, langCopy.start);
+        setText(aboutButton, langCopy.about);
+        setText(enterButton, langCopy.enter);
+        setText(reload, langCopy.reload);
+        setText(external, langCopy.external);
+        setControlCopy('[data-control="desktop-move"]', langCopy.controls.desktopMove);
+        setControlCopy('[data-control="desktop-look"]', langCopy.controls.desktopLook);
+        setControlCopy('[data-control="mobile-move"]', langCopy.controls.mobileMove);
+        setControlCopy('[data-control="mobile-look"]', langCopy.controls.mobileLook);
+        setControlCopy('[data-control="inspect"]', langCopy.controls.inspect);
+        lookButtons.forEach(function (button) {
+          var mode = button.getAttribute("data-gallery-look-mode");
+          setText(button, mode === "right" ? langCopy.lookRight : langCopy.lookMiddle);
+          button.classList.toggle("is-active", mode === selectedLookMode);
         });
       }
 
-      if (external) {
-        external.href = window.location.href;
+      function setState(nextState) {
+        state = nextState;
+        if (guard) guard.dataset.state = nextState;
+        renderLanguage();
       }
 
+      function stopFillerRotation() {
+        window.clearInterval(fillerTimer);
+        fillerTimer = 0;
+      }
+
+      function startFillerRotation() {
+        stopFillerRotation();
+        fillerIndex = 0;
+        renderLanguage();
+        fillerTimer = window.setInterval(function () {
+          fillerIndex += 1;
+          if (timefiller) timefiller.style.opacity = "0";
+          window.setTimeout(function () {
+            renderLanguage();
+            if (timefiller) timefiller.style.opacity = "1";
+          }, 180);
+        }, 4300);
+      }
+
+      function requestStart() {
+        if (startResolved || state !== "prestart") return;
+        startResolved = true;
+        loadingStartedAt = Date.now();
+        setState("loading");
+        startFillerRotation();
+        timeoutId = window.setTimeout(function () {
+          fail("boot-timeout", (copy[currentLanguage] || copy.en).errorMessage);
+        }, 90000);
+        resolveStart({ requestedAt: loadingStartedAt });
+      }
+
+      function ready() {
+        if (failure || state === "ready" || state === "hidden") return;
+        stopFillerRotation();
+        window.clearTimeout(timeoutId);
+        setState("ready");
+      }
+
+      function completeEntry() {
+        if (state !== "ready") return;
+        state = "hidden";
+        if (guard) {
+          guard.dataset.state = "hidden";
+          guard.classList.add("is-hidden");
+        }
+        if (!entryResolved) {
+          entryResolved = true;
+          resolveEntry({ enteredAt: Date.now() });
+        }
+      }
+
+      function fail(code, friendlyMessage, error) {
+        failure = code || "startup-error";
+        api.friendlyFailureMessage = friendlyMessage || null;
+        stopFillerRotation();
+        window.clearTimeout(timeoutId);
+        setState("error");
+        if (guard) guard.dataset.failure = failure;
+        if (details) {
+          details.textContent = "";
+          details.style.display = "none";
+        }
+        console.error("Berryboy gallery startup failure:", failure, error || "");
+      }
+
+      var api = {
+        stage: "12C66B",
+        schema: "single-public-startup-gate.v1",
+        get state() { return state; },
+        get technicalPhase() { return technicalPhase; },
+        get technicalMessage() { return technicalMessage; },
+        friendlyFailureMessage: null,
+        setLanguage: function (lang) {
+          currentLanguage = lang === "pl" ? "pl" : "en";
+          renderLanguage();
+        },
+        setPhase: function (phase, text) {
+          technicalPhase = phase || "boot";
+          technicalMessage = text || "";
+          if (guard) guard.dataset.phase = technicalPhase;
+          window.dispatchEvent(new CustomEvent("gallery-debug-status", {
+            detail: { phase: technicalPhase, message: technicalMessage, audience: "debug" }
+          }));
+        },
+        waitForStart: function () { return startPromise; },
+        waitForEntry: function () { return entryPromise; },
+        requestStart: requestStart,
+        ready: ready,
+        completeEntry: completeEntry,
+        fail: fail
+      };
+
+      lookButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          selectedLookMode = button.getAttribute("data-gallery-look-mode") === "right" ? "right" : "middle";
+          try { localStorage.setItem("berryboyViewerLookButtonMode", selectedLookMode); } catch (_error) {}
+          if (window.GalleryApp && typeof window.GalleryApp.setDesktopViewerLookButtonMode === "function") {
+            window.GalleryApp.setDesktopViewerLookButtonMode(selectedLookMode);
+          }
+          renderLanguage();
+        });
+      });
+
+      if (startButton) startButton.addEventListener("click", requestStart);
+      if (enterButton) enterButton.addEventListener("click", completeEntry);
+      if (reload) reload.addEventListener("click", function () { window.location.reload(); });
+      if (external) external.href = window.location.href;
+
       window.addEventListener("error", function (event) {
-        if (!finished) {
-          fail("window-error", "A startup script failed before the gallery was ready.", event.error || event.message);
+        if (state === "loading") {
+          fail("window-error", (copy[currentLanguage] || copy.en).errorMessage, event.error || event.message);
         }
       });
 
       window.addEventListener("unhandledrejection", function (event) {
-        if (!finished) {
-          fail("unhandled-rejection", "A startup request failed before the gallery was ready.", event.reason);
+        if (state === "loading") {
+          fail("unhandled-rejection", (copy[currentLanguage] || copy.en).errorMessage, event.reason);
         }
       });
 
+      renderLanguage();
       window.BerryboyBootGuard = api;
     })();
   </script>
 
-  <script src="https://cdn.babylonjs.com/babylon.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-cdn', 'The Babylon.js engine could not be downloaded. Check the connection and reload.')"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('babylon-loaders-cdn', 'The 3D model loader could not be downloaded. Check the connection and reload.')"></script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66a_save_integrity_20260723" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', 'The gallery startup module could not be loaded. Reload or open the page in the full browser.')"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66b_single_startup_20260723" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap')"></script>
 </body>
 </html>

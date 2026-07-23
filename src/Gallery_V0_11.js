@@ -65,6 +65,7 @@
   - Stage 12C64M: Inspect Collision Broad Phase / Exact Runtime Guard — lokalny snapshot przeszkód należy wyłącznie do jednego przejazdu Inspect; tani broad phase AABB ogranicza kandydatów przed dokładnymi raycastami, bez zmiany Custom Focus, safe-frame, tourOrder, popupu, animacji i częstotliwości runtime guard.
   - Stage 12C64Q: Inspect Owns Camera Transition / Clean WASD Handoff — jawny stan WALK → TRANSITION → INSPECT daje kamerze jednego właściciela; ruch WASD/Edit, bobbing, kontrolki Babylon i zwykły wall resolver są wstrzymane wyłącznie podczas przejazdu, start pozostaje rzeczywistym transformem, a koniec dokładnym Custom Focus bez recovery, dockingu i teleportu.
   - Stage 12C64S: Single Startup Gate / Batched Finalization — stary Balanced Entry Gate i blokujący Image prefetch zostały usunięte. Po zastosowaniu stanu działa jedna bramka Interaction Ready: preview artworków, Props i modele rzeźb są ładowane raz, globalne kolizje/materiały/Local Lights finalizują się jednym batchem, a sterowanie odblokowuje się po stabilnych klatkach.
+  - Stage 12C66B: Single Public Startup Gate / Visitor Timefillers / Clean Status — silnik i scena startują dopiero po świadomym kliknięciu na stronie, wewnętrzny loader oraz automatyczny popup wejściowy nie tworzą równoległych warstw, publiczny ekran oczekiwania pokazuje wyłącznie przyjazne czasoumilacze, a komunikaty techniczne są kierowane do edytora/debug.
   - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
   - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
   - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
@@ -75,6 +76,7 @@
   - Stage 12C65E UI Fix: Edit Mode Pointer Recovery — pływający przycisk Edit Mode jawnie odzyskuje pointer-events wewnątrz warstwy HUD controls.
   - Stage 12C65E Light Mode Exit Fix: restored Local Lights no longer enter the manual pending-retarget queue, and BACK TO EDIT commits all real dirty lights in one segment-aware batch instead of repeating a full relation scan per light.
   - Stage 12C66A: Save Integrity / Draft Commit / Deferred Storage Cleanup — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
+  - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -580,8 +582,6 @@ export const createScene = function (engineArg, canvasArg) {
     cleanupArtworkInfoPopupDom();
 
     [
-        "customLoadingScreen",
-        "customLoaderStyle",
         "editModeButton",
         "wallColorPalette",
         "editHelpPanel",
@@ -633,9 +633,49 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    // STAGE 12C66A1 — VIEWER GROUNDED KEYBOARD HOTFIX
+    // UniversalCamera dodaje domyślny FreeCameraKeyboardMoveInput dla strzałek.
+    // Gdy obserwator trzyma środkowy przycisk myszy i patrzy w górę lub w dół,
+    // ten wbudowany input przesuwa kamerę po pełnym wektorze patrzenia, także po osi Y.
+    // Galeria ma własny, spłaszczony system WASD/Edit, więc domyślny input Babylon jest zbędny
+    // i musi być usunięty po każdym ponownym attachControl().
+    function disableGalleryBuiltInKeyboardCameraMovement() {
+        if (!camera || !camera.inputs) {
+            return;
+        }
+
+        var keyboardInput = camera.inputs.attached
+            ? camera.inputs.attached.keyboard
+            : null;
+
+        if (keyboardInput) {
+            [
+                "keysUp",
+                "keysDown",
+                "keysLeft",
+                "keysRight",
+                "keysUpward",
+                "keysDownward"
+            ].forEach(function (propertyName) {
+                if (Array.isArray(keyboardInput[propertyName])) {
+                    keyboardInput[propertyName].length = 0;
+                }
+            });
+        }
+
+        if (typeof camera.inputs.removeByType === "function") {
+            try {
+                camera.inputs.removeByType("FreeCameraKeyboardMoveInput");
+            } catch (keyboardInputRemovalError) {
+                // Wyzerowane mapowania pozostają bezpiecznym fallbackiem.
+            }
+        }
+    }
+
     function attachGalleryCameraControl() {
         camera.attachControl(canvas, true);
         configureCameraPointerButtons();
+        disableGalleryBuiltInKeyboardCameraMovement();
     }
 
     attachGalleryCameraControl();
@@ -12797,491 +12837,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var viewerMovementWasManualInputActive = false;
     var viewerCameraRollLockEnabled = true;
 
-    // CUSTOM LOADING SCREEN
-    var oldLoadingScreen = document.getElementById("customLoadingScreen");
+    // STAGE 12C66B — SINGLE PUBLIC STARTUP GATE
+    // The page bootstrap owns the only public startup surface. The engine never creates
+    // a second full-screen loader. Internal startup phases are emitted as diagnostics,
+    // while visitors only see the timefillers controlled by BerryboyBootGuard.
 
-    if (oldLoadingScreen) {
-        oldLoadingScreen.remove();
-    }
-
-    var loadingScreen = document.createElement("div");
-    loadingScreen.id = "customLoadingScreen";
-
-    loadingScreen.innerHTML = `
-        <div id="loadingContent">
-            <div id="loaderSpinner"></div>
-            <div id="galleryLoaderTextBlock">
-                <div id="galleryLoaderTitle">Loading gallery</div>
-                <div id="galleryLoaderStatus">Preparing gallery assets...</div>
-                <div id="galleryLoaderHint">Walls, floor and ceiling are required before visitors can enter.</div>
-            </div>
-            <button id="galleryAssetRetryButton" type="button">Retry loading</button>
-        </div>
-    `;
-
-    loadingScreen.style.position = "fixed";
-    loadingScreen.style.inset = "0";
-    loadingScreen.style.background = "#000000";
-    loadingScreen.style.color = "white";
-    loadingScreen.style.display = "flex";
-    loadingScreen.style.alignItems = "center";
-    loadingScreen.style.justifyContent = "center";
-    loadingScreen.style.zIndex = "9999";
-
-    document.body.appendChild(loadingScreen);
-
-    var oldLoaderStyle = document.getElementById("customLoaderStyle");
-
-    if (oldLoaderStyle) {
-        oldLoaderStyle.remove();
-    }
-
-    var loaderStyle = document.createElement("style");
-    loaderStyle.id = "customLoaderStyle";
-
-    loaderStyle.innerHTML = `
-        #loadingContent {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 22px;
-            min-width: min(420px, calc(100vw - 42px));
-            padding: 26px;
-            border-radius: 28px;
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            background: rgba(18, 18, 18, 0.62);
-            box-shadow: 0 30px 95px rgba(0, 0, 0, 0.54);
-            backdrop-filter: blur(22px) saturate(1.28);
-            -webkit-backdrop-filter: blur(22px) saturate(1.28);
-            text-align: center;
-        }
-
-        #galleryLoaderTextBlock {
-            display: grid;
-            gap: 7px;
-            color: #f7f3ea;
-            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        }
-
-        #galleryLoaderTitle {
-            font-size: 20px;
-            line-height: 1.1;
-            font-weight: 900;
-            letter-spacing: -0.03em;
-        }
-
-        #galleryLoaderStatus {
-            color: rgba(247, 243, 234, 0.76);
-            font-size: 13px;
-            line-height: 1.42;
-            font-weight: 650;
-        }
-
-        #galleryLoaderHint {
-            color: rgba(247, 243, 234, 0.50);
-            font-size: 12px;
-            line-height: 1.42;
-            max-width: 360px;
-        }
-
-        #galleryAssetRetryButton {
-            display: none;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            min-height: 48px;
-            border: 1px solid rgba(247, 243, 234, 0.72);
-            border-radius: 16px;
-            background: #f7f3ea;
-            color: #121212;
-            font-size: 14px;
-            font-weight: 900;
-            letter-spacing: 0.01em;
-            cursor: pointer;
-            box-shadow: 0 18px 38px rgba(0, 0, 0, 0.30);
-        }
-
-        #galleryAssetRetryButton:hover {
-            background: #fffaf0;
-        }
-
-        #loaderSpinner {
-            width: 58px;
-            height: 58px;
-            border: 6px solid rgba(255, 255, 255, 0.16);
-            border-top: 6px solid rgba(255, 255, 255, 0.92);
-            border-radius: 50%;
-            animation: galleryLoaderSpin 1s linear infinite;
-        }
-
-        @keyframes galleryLoaderSpin {
-            from {
-                transform: rotate(0deg);
-            }
-
-            to {
-                transform: rotate(360deg);
-            }
-        }
-    `;
-
-    document.head.appendChild(loaderStyle);
-
-
-    // STAGE 12C10 - VIEWER INTRO OVERLAY
-    // All visible copy is intentionally in English.
-    var viewerIntroOverlay = null;
+    // STAGE 12C66B — EXTERNAL VIEWER ENTRY GATE
+    // The legacy engine-owned intro DOM was removed. The page BootGuard owns pre-start,
+    // timefillers, control instructions and the final entry action. These small bridge
+    // functions preserve the established movement lock and public GalleryApp API.
     var viewerIntroOverlayMovementUnlocked = false;
+    var galleryInteractionReadyEventDispatched = false;
 
     function isViewerIntroOverlayBlockingMovement() {
         return !viewerIntroOverlayMovementUnlocked && !editMode;
     }
 
-    function createViewerIntroOverlayStyles() {
-        if (document.getElementById("berryboyViewerIntroOverlayStyle")) {
-            return;
-        }
-
-        var style = document.createElement("style");
-        style.id = "berryboyViewerIntroOverlayStyle";
-        style.textContent = `
-            #berryboyViewerIntroOverlay {
-                position: fixed;
-                inset: 0;
-                z-index: 9998;
-                display: none;
-                align-items: center;
-                justify-content: center;
-                padding: 22px;
-                box-sizing: border-box;
-                background:
-                    radial-gradient(circle at 50% 40%, rgba(255,255,255,0.08), rgba(0,0,0,0.62) 58%, rgba(0,0,0,0.86) 100%);
-                color: #f7f3ea;
-                font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                pointer-events: auto;
-            }
-
-            #berryboyViewerIntroCard {
-                width: min(760px, calc(100vw - 34px));
-                max-height: min(88vh, 760px);
-                overflow: auto;
-                border-radius: 28px;
-                padding: 26px;
-                box-sizing: border-box;
-                border: 1px solid rgba(255,255,255,0.20);
-                background: rgba(18, 18, 18, 0.58);
-                box-shadow: 0 30px 95px rgba(0,0,0,0.54);
-                backdrop-filter: blur(22px) saturate(1.32);
-                -webkit-backdrop-filter: blur(22px) saturate(1.32);
-                transform: translateY(10px) scale(0.985);
-                opacity: 0;
-                animation: berryboyIntroCardIn 540ms cubic-bezier(.19,1,.22,1) forwards;
-            }
-
-            #berryboyViewerIntroCard h1 {
-                margin: 0 0 8px;
-                font-size: clamp(24px, 4.3vw, 42px);
-                line-height: 1.02;
-                letter-spacing: -0.04em;
-            }
-
-            #berryboyViewerIntroCard p {
-                margin: 0;
-                color: rgba(247,243,234,0.76);
-                font-size: 14px;
-                line-height: 1.55;
-            }
-
-            .berryboyIntroGrid {
-                display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 12px;
-                margin: 22px 0;
-            }
-
-            .berryboyMobileOnly {
-                display: none !important;
-            }
-
-            .berryboyDesktopOnly {
-                display: block;
-            }
-
-            .berryboyIntroTile {
-                border: 1px solid rgba(255,255,255,0.14);
-                background: rgba(255,255,255,0.075);
-                border-radius: 18px;
-                padding: 15px;
-                min-height: 122px;
-                box-sizing: border-box;
-                position: relative;
-                overflow: hidden;
-            }
-
-            .berryboyIntroTile strong {
-                display: block;
-                font-size: 13px;
-                letter-spacing: .05em;
-                text-transform: uppercase;
-                margin-bottom: 8px;
-            }
-
-            .berryboyIntroIcon {
-                width: 100%;
-                height: 44px;
-                margin-bottom: 10px;
-                opacity: .95;
-            }
-
-            .berryboyKeyRow {
-                display: flex;
-                gap: 6px;
-                align-items: center;
-            }
-
-            .berryboyKey {
-                min-width: 32px;
-                height: 30px;
-                border-radius: 8px;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                border: 1px solid rgba(255,255,255,0.24);
-                background: rgba(255,255,255,0.12);
-                font-size: 12px;
-                font-weight: 800;
-                animation: berryboyKeyPulse 1.8s ease-in-out infinite;
-            }
-
-            .berryboyKey:nth-child(2) { animation-delay: .08s; }
-            .berryboyKey:nth-child(3) { animation-delay: .16s; }
-            .berryboyKey:nth-child(4) { animation-delay: .24s; }
-
-            .berryboyMouseIcon {
-                width: 44px;
-                height: 44px;
-                border: 2px solid rgba(255,255,255,0.64);
-                border-radius: 18px 18px 22px 22px;
-                position: relative;
-                margin: 0 auto 10px;
-            }
-
-            .berryboyMouseIcon::before {
-                content: "";
-                position: absolute;
-                left: 50%;
-                top: 8px;
-                width: 4px;
-                height: 10px;
-                border-radius: 99px;
-                background: rgba(255,255,255,0.82);
-                transform: translateX(-50%);
-                animation: berryboyMouseWheelMove 1.4s ease-in-out infinite;
-            }
-
-            .berryboyJoystickIcon {
-                width: 48px;
-                height: 48px;
-                border-radius: 999px;
-                border: 1px solid rgba(255,255,255,0.28);
-                background: rgba(255,255,255,0.08);
-                margin: 0 auto 10px;
-                position: relative;
-            }
-
-            .berryboyJoystickIcon::after {
-                content: "";
-                position: absolute;
-                left: 50%;
-                top: 50%;
-                width: 22px;
-                height: 22px;
-                border-radius: 999px;
-                background: rgba(255,255,255,0.72);
-                transform: translate(-50%, -50%);
-                animation: berryboyJoystickMove 1.75s ease-in-out infinite;
-            }
-
-            .berryboyTapIcon {
-                width: 46px;
-                height: 46px;
-                border-radius: 14px;
-                border: 1px solid rgba(255,255,255,0.26);
-                margin: 0 auto 10px;
-                position: relative;
-            }
-
-            .berryboyTapIcon::after {
-                content: "";
-                position: absolute;
-                left: 50%;
-                top: 50%;
-                width: 12px;
-                height: 12px;
-                border-radius: 999px;
-                border: 2px solid rgba(255,255,255,0.92);
-                transform: translate(-50%, -50%);
-                animation: berryboyTapPulse 1.3s ease-out infinite;
-            }
-
-            .berryboyLookChoice {
-                margin-top: 16px;
-                padding-top: 16px;
-                border-top: 1px solid rgba(255,255,255,0.12);
-            }
-
-            .berryboyLookButtons {
-                display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 10px;
-                margin-top: 10px;
-            }
-
-            .berryboyLookButton {
-                border: 1px solid rgba(255,255,255,0.18);
-                border-radius: 16px;
-                background: rgba(255,255,255,0.075);
-                color: #f7f3ea;
-                padding: 13px 14px;
-                cursor: pointer;
-                text-align: left;
-                font: inherit;
-                transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
-            }
-
-            .berryboyLookButton:hover {
-                transform: translateY(-1px);
-                background: rgba(255,255,255,0.12);
-            }
-
-            .berryboyLookButton.is-active {
-                border-color: rgba(247,243,234,0.72);
-                background: rgba(247,243,234,0.18);
-                box-shadow: 0 0 0 2px rgba(247,243,234,0.08) inset;
-            }
-
-            .berryboyLookButton span {
-                display: block;
-                margin-top: 4px;
-                font-size: 12px;
-                opacity: .72;
-            }
-
-            #berryboyIntroStart {
-                width: 100%;
-                margin-top: 18px;
-                border: 0;
-                border-radius: 18px;
-                padding: 15px 18px;
-                background: #f7f3ea;
-                color: #121212;
-                font-weight: 900;
-                letter-spacing: .02em;
-                cursor: pointer;
-                box-shadow: 0 16px 38px rgba(0,0,0,0.28);
-                transition: transform 170ms ease, box-shadow 170ms ease;
-            }
-
-            #berryboyIntroStart:hover:not(:disabled) {
-                transform: translateY(-1px);
-                box-shadow: 0 20px 46px rgba(0,0,0,0.34);
-            }
-
-            #berryboyIntroStart:disabled {
-                cursor: wait;
-                opacity: .58;
-                transform: none;
-                box-shadow: 0 10px 26px rgba(0,0,0,0.18);
-            }
-
-            @keyframes berryboyIntroCardIn {
-                to {
-                    transform: translateY(0) scale(1);
-                    opacity: 1;
-                }
-            }
-
-            @keyframes berryboyKeyPulse {
-                0%, 100% { transform: translateY(0); opacity: .72; }
-                50% { transform: translateY(-3px); opacity: 1; }
-            }
-
-            @keyframes berryboyMouseWheelMove {
-                0%, 100% { transform: translate(-50%, 0); opacity: .55; }
-                50% { transform: translate(-50%, 8px); opacity: 1; }
-            }
-
-            @keyframes berryboyJoystickMove {
-                0%, 100% { transform: translate(-50%, -50%); }
-                25% { transform: translate(-34%, -64%); }
-                50% { transform: translate(-50%, -38%); }
-                75% { transform: translate(-66%, -50%); }
-            }
-
-            @keyframes berryboyTapPulse {
-                0% { width: 8px; height: 8px; opacity: 1; }
-                100% { width: 38px; height: 38px; opacity: 0; }
-            }
-
-            @media (max-width: 720px) {
-                #berryboyViewerIntroCard {
-                    padding: 18px;
-                    border-radius: 22px;
-                }
-
-                .berryboyIntroGrid {
-                    grid-template-columns: 1fr;
-                    gap: 10px;
-                    margin: 18px 0;
-                }
-
-                .berryboyIntroTile {
-                    min-height: 96px;
-                }
-
-                .berryboyDesktopOnly {
-                    display: none !important;
-                }
-
-                .berryboyMobileOnly {
-                    display: block !important;
-                }
-
-                .berryboyLookChoice {
-                    display: none;
-                }
-            }
-        `;
-
-        document.head.appendChild(style);
-    }
-
-    function updateViewerIntroLookButtons() {
-        if (!viewerIntroOverlay) {
-            return;
-        }
-
-        var buttons = viewerIntroOverlay.querySelectorAll(".berryboyLookButton");
-
-        buttons.forEach(function (button) {
-            button.classList.toggle(
-                "is-active",
-                button.getAttribute("data-look-mode") === desktopViewerLookButtonMode
-            );
-        });
-    }
-
     function updateViewerIntroInteractionState() {
-        if (!viewerIntroOverlay) return;
-        var startButton = viewerIntroOverlay.querySelector("#berryboyIntroStart");
-        if (!startButton) return;
-        var ready = !!(galleryFastStartRuntime && galleryFastStartRuntime.interactionReady);
-        startButton.disabled = !ready;
-        startButton.setAttribute("aria-busy", ready ? "false" : "true");
-        startButton.textContent = ready
-            ? "Start exploring"
-            : (galleryFastStartRuntime && galleryFastStartRuntime.interactionGateTimedOut ? "Still finishing gallery…" : "Finishing gallery…");
+        return !!(galleryFastStartRuntime && galleryFastStartRuntime.interactionReady);
     }
 
     function markGalleryViewerActivity(reason) {
@@ -13301,148 +12874,44 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
             galleryFastStartRuntime.interactionGateWatchdogTimer = null;
         }
-        updateViewerIntroInteractionState();
         if (ready) {
             startGalleryAdaptiveMobileQuality(reason || "interaction-ready");
+            if (!galleryInteractionReadyEventDispatched) {
+                galleryInteractionReadyEventDispatched = true;
+                window.dispatchEvent(new CustomEvent("gallery-ready", {
+                    detail: {
+                        stage: "12C66B",
+                        schema: "interaction-ready-gate.v1",
+                        reason: reason || "interaction-ready",
+                        readyAt: Date.now()
+                    }
+                }));
+            }
         }
     }
 
     function hideViewerIntroOverlay() {
         if (!editMode && galleryFastStartRuntime && !galleryFastStartRuntime.interactionReady) {
-            updateViewerIntroInteractionState();
             return false;
         }
 
         viewerIntroOverlayMovementUnlocked = true;
         markGalleryViewerActivity("viewer-entry");
-
-        if (viewerIntroOverlay) {
-            viewerIntroOverlay.style.opacity = "0";
-            viewerIntroOverlay.style.transition = "opacity 220ms ease";
-
-            setTimeout(function () {
-                if (viewerIntroOverlay) {
-                    viewerIntroOverlay.style.display = "none";
-                }
-            }, 230);
-        }
-
         resetViewerWASDMovementRuntime(true);
         scheduleGalleryFastStartFullArtworkDrainWhenIdle("viewer-entry");
         return true;
     }
 
     function showViewerIntroOverlay() {
-        createViewerIntroOverlayStyles();
-
-        if (!viewerIntroOverlay) {
-            viewerIntroOverlay = document.createElement("div");
-            viewerIntroOverlay.id = "berryboyViewerIntroOverlay";
-            viewerIntroOverlay.innerHTML = `
-                <div id="berryboyViewerIntroCard" role="dialog" aria-modal="true" aria-label="Viewer controls">
-                    <h1>Explore the gallery</h1>
-
-                    <p class="berryboyDesktopOnly">Move through the space with WASD or left-click the floor. Choose how you want to rotate the camera.</p>
-                    <p class="berryboyMobileOnly">Move with the joystick, drag with one finger to rotate the camera, and tap artworks to approach them.</p>
-
-                    <div class="berryboyIntroGrid">
-                        <div class="berryboyIntroTile berryboyDesktopOnly">
-                            <div class="berryboyIntroIcon">
-                                <div class="berryboyKeyRow">
-                                    <span class="berryboyKey">W</span>
-                                    <span class="berryboyKey">A</span>
-                                    <span class="berryboyKey">S</span>
-                                    <span class="berryboyKey">D</span>
-                                </div>
-                            </div>
-                            <strong>Desktop movement</strong>
-                            <p>Use WASD to walk, or left-click the floor to move.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile berryboyDesktopOnly">
-                            <div class="berryboyMouseIcon"></div>
-                            <strong>Desktop camera</strong>
-                            <p>Hold your selected mouse button and drag to look around.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile berryboyDesktopOnly">
-                            <div class="berryboyTapIcon"></div>
-                            <strong>Artworks and sculptures</strong>
-                            <p>Left-click an artwork or sculpture to smoothly approach it.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile berryboyMobileOnly">
-                            <div class="berryboyJoystickIcon"></div>
-                            <strong>Mobile movement</strong>
-                            <p>Use the joystick to move through the gallery.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile berryboyMobileOnly">
-                            <div class="berryboyMouseIcon"></div>
-                            <strong>Mobile camera</strong>
-                            <p>Drag with one finger to rotate the camera.</p>
-                        </div>
-
-                        <div class="berryboyIntroTile berryboyMobileOnly">
-                            <div class="berryboyTapIcon"></div>
-                            <strong>Artworks and sculptures</strong>
-                            <p>Tap an artwork or sculpture to smoothly approach it.</p>
-                        </div>
-                    </div>
-
-                    <div class="berryboyLookChoice berryboyDesktopOnly">
-                        <p><strong>Choose desktop camera rotation</strong></p>
-                        <div class="berryboyLookButtons">
-                            <button type="button" class="berryboyLookButton" data-look-mode="middle">
-                                Middle mouse
-                                <span>Hold the wheel button and drag.</span>
-                            </button>
-                            <button type="button" class="berryboyLookButton" data-look-mode="right">
-                                Right mouse
-                                <span>Hold right click and drag.</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <button id="berryboyIntroStart" type="button">Start exploring</button>
-                </div>
-            `;
-
-            document.body.appendChild(viewerIntroOverlay);
-
-            var lookButtons = viewerIntroOverlay.querySelectorAll(".berryboyLookButton");
-
-            lookButtons.forEach(function (button) {
-                button.addEventListener("click", function (event) {
-                    var mode = button.getAttribute("data-look-mode");
-
-                    setDesktopViewerLookButtonMode(mode);
-                    updateViewerIntroLookButtons();
-
-                    if (event.preventDefault) {
-                        event.preventDefault();
-                    }
-                });
-            });
-
-            var startButton = viewerIntroOverlay.querySelector("#berryboyIntroStart");
-
-            if (startButton) {
-                startButton.addEventListener("click", function () {
-                    if (!galleryFastStartRuntime || !galleryFastStartRuntime.interactionReady) {
-                        updateViewerIntroInteractionState();
-                        return;
-                    }
-                    hideViewerIntroOverlay();
-                });
-            }
+        var bootGuard = window.BerryboyBootGuard;
+        if (!bootGuard || bootGuard.state === "hidden" || bootGuard.state === "error") {
+            return false;
         }
-
         viewerIntroOverlayMovementUnlocked = false;
-        viewerIntroOverlay.style.display = "flex";
-        viewerIntroOverlay.style.opacity = "1";
-        updateViewerIntroLookButtons();
-        updateViewerIntroInteractionState();
+        if (typeof bootGuard.ready === "function") {
+            bootGuard.ready();
+        }
+        return true;
     }
 
     // STAGE 12C65A - SINGLE STARTUP GATE / BATCHED FINALIZATION
@@ -14515,16 +13984,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function updateGalleryLoaderStatus(statusText, hintText) {
         try {
-            var statusElement = document.getElementById("galleryLoaderStatus");
-            var hintElement = document.getElementById("galleryLoaderHint");
-
-            if (statusElement && statusText) {
-                statusElement.textContent = statusText;
-            }
-
-            if (hintElement && hintText) {
-                hintElement.textContent = hintText;
-            }
+            window.dispatchEvent(new CustomEvent("gallery-debug-status", {
+                detail: {
+                    audience: "debug",
+                    source: "engine-startup",
+                    phase: galleryAssetLoadDebug && galleryAssetLoadDebug.lastReason
+                        ? galleryAssetLoadDebug.lastReason
+                        : "startup",
+                    message: statusText || "",
+                    hint: hintText || ""
+                }
+            }));
         } catch (error) {}
     }
 
@@ -14909,38 +14379,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         console.error("Critical gallery assets failed or are missing. Viewer entry blocked.", galleryAssetLoadDebug);
 
-        if (loadingScreen) {
-            loadingScreen.style.display = "flex";
-        }
-
-        updateGalleryLoaderStatus(
-            "Gallery assets failed to load.",
-            "Missing critical assets: " + (galleryAssetLoadDebug.missingCritical.join(", ") || "unknown") + ". Please retry loading before entering the gallery."
-        );
-
-        var spinner = document.getElementById("loaderSpinner");
-
-        if (spinner) {
-            spinner.style.animation = "none";
-            spinner.style.borderTopColor = "rgba(224, 109, 109, 0.92)";
-        }
-
-        var retryButton = document.getElementById("galleryAssetRetryButton");
-
-        if (retryButton) {
-            retryButton.style.display = "inline-flex";
-            retryButton.onclick = function (event) {
-                if (event && event.preventDefault) {
-                    event.preventDefault();
-                }
-
-                try {
-                    window.location.reload();
-                } catch (reloadError) {
-                    location.reload();
-                }
-            };
-        }
+        window.dispatchEvent(new CustomEvent("gallery-startup-failure", {
+            detail: {
+                audience: "visitor",
+                code: "critical-gallery-assets",
+                message: document.documentElement.getAttribute("lang") === "pl"
+                    ? "Nie udało się przygotować galerii. Odśwież stronę i spróbuj ponownie."
+                    : "The gallery could not be prepared. Reload the page and try again.",
+                technicalMessage: "Missing critical assets: " + (galleryAssetLoadDebug.missingCritical.join(", ") || "unknown"),
+                reason: reason || "critical-failed"
+            }
+        }));
     }
 
     function runGalleryFastStartFinalizationNow(reason) {
@@ -15222,8 +14671,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionReady = false;
         galleryStartupFinalizeDebug.finalLightMode = "12C65E-current-zone-streaming-gate";
 
-        loadingScreen.style.display = "none";
-        if (!editMode) showViewerIntroOverlay();
+        // Stage 12C66B: the page BootGuard remains the only public overlay.
+        // Viewer movement stays locked until its final "Start exploring" action.
+        if (!editMode) viewerIntroOverlayMovementUnlocked = false;
         else viewerIntroOverlayMovementUnlocked = true;
 
         if (typeof requestAnimationFrame === "function") {
@@ -27841,7 +27291,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             editMode = false;
             if (document.body) document.body.classList.remove("gallery-edit-mode-active");
             setEditorUiVisible(false);
-            notifyGalleryStatus("Zaloguj sie jako edytor, aby otworzyc panel edycji.");
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby otworzyc panel edycji.", { audience: "visitor", code: "editor-login-required" });
             return;
         }
 
@@ -29925,6 +29375,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var key = event.key.toLowerCase();
         var isSpaceKey = key === " " || key === "spacebar" || event.code === "Space";
+        var isArrowKey = key === "arrowup" || key === "arrowdown" || key === "arrowleft" || key === "arrowright";
+
+        // Stage 12C66A1: strzałki nie są sterowaniem chodzenia.
+        // Left/Right w aktywnym Inspect przechwytuje osobny handler na fazie capture.
+        // Poza nim blokujemy domyślne przewijanie strony, ale nie przekazujemy wejścia do kamery.
+        if (!editMode && isArrowKey) {
+            event.preventDefault();
+        }
 
         if (key === "w" || key === "a" || key === "s" || key === "d") {
             if (editMode) {
@@ -37735,14 +37193,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // WEB STATE / SUPABASE
     // ============================================================
 
-    function notifyGalleryStatus(message) {
+    function notifyGalleryStatus(message, options) {
         if (!message) {
             return;
         }
 
+        options = options || {};
+        var audience = options.audience || "editor";
+
         window.dispatchEvent(new CustomEvent("gallery-status", {
             detail: {
-                message: message
+                message: message,
+                audience: audience,
+                severity: options.severity || "info",
+                code: options.code || null,
+                source: options.source || "gallery-engine"
             }
         }));
     }
@@ -39575,7 +39040,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
     rebuildGalleryExhibitTour({ reason: "scene-ready", recalculateAutoOrder: true, force: true });
     refreshGalleryExhibitTourOrderBadges();
-    window.dispatchEvent(new CustomEvent("gallery-ready"));
 
 
     return scene;

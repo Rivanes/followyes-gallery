@@ -1,15 +1,16 @@
 {
-  "name": "berryboy-art-gallery-stage12c66a-save-integrity",
-  "version": "0.11.66-a",
+  "name": "berryboy-art-gallery-stage12c66b-single-startup-clean-viewer",
+  "version": "0.11.66-b",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66A Save Integrity / Draft Commit / Deferred Storage Cleanup",
+  "description": "Berryboy Art Gallery — Stage 12C66B Single Startup Gate / Visitor Timefillers / Clean Public Status",
   "type": "module",
   "scripts": {
-    "verify": "node tools/verify-stage12c66a.mjs",
+    "verify": "node tools/verify-stage12c66b.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "check": "npm run build:mirrors && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:image-validation",
+    "check": "npm run build:mirrors && npm run syntax && npm run verify && npm run test:startup && npm run test:save-integrity && npm run test:image-validation",
+    "test:startup": "node tools/test-stage12c66b-startup.mjs",
     "test:save-integrity": "node tools/test-stage12c66a-save-integrity.mjs",
     "test:image-validation": "node tools/test-stage12c66a-image-validation.mjs",
-    "build:mirrors": "node tools/build-stage12c66a-mirrors.mjs"
+    "build:mirrors": "node tools/build-stage12c66b-mirrors.mjs"
   }
 }

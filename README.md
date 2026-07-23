@@ -1,55 +1,91 @@
-# Berryboy Art Gallery — Stage 12C66A
+# Berryboy Art Gallery — Stage 12C66B
 
-## Etap 1: Save Integrity / Draft Commit / Deferred Storage Cleanup
+## Etap 2: Single Startup Gate / Visitor Timefillers / Clean Public Status
 
-Stage 12C66A zabezpiecza zapis galerii i pliki w Supabase Storage. Zmiany wykonane w edytorze pozostają wersją roboczą do chwili użycia istniejącego przycisku **Save state**. Ten etap nie przenosi jeszcze przycisku do panelu Edit Mode — to zakres późniejszej przebudowy UI.
+Stage 12C66B powstaje na stabilnej paczce **12C66A1**. Zachowuje zabezpieczenia zapisu i Storage z Etapu 1 oraz hotfix blokujący latanie obserwatora za pomocą środkowego przycisku myszy i strzałek.
 
 ## Najważniejsze zmiany
 
-- usunięto automatyczne publikowanie zmian po uploadzie, podmianie, duplikowaniu i usuwaniu modeli lub ilustracji,
-- wszystkie zmiany ustawiają stan roboczy `dirty`, który można odczytać przez `GalleryApp.getDraftStatus()`,
-- stary plik nie jest usuwany podczas edycji,
-- ścieżki starych plików trafiają do trwałej kolejki cleanup w `localStorage`,
-- cleanup uruchamia się dopiero po poprawnym zapisie rekordu `gallery_state/main`,
-- plik nadal używany przez zapisany stan nigdy nie jest usuwany,
-- błąd zapisu pozostawia poprzedni stan i wszystkie pliki bez zmian,
-- usunięto fallback `delete main + insert main`,
-- zapis istniejącego rekordu jest atomowo warunkowany wartością `updated_at` odczytaną przed publikacją,
-- pierwszy zapis używa bezpiecznego `insert`, a wyścig dwóch sesji nie przechodzi jako ciche nadpisanie,
-- utworzenie albo usunięcie rekordu `main` w innej sesji również jest wykrywane jako konflikt,
-- fingerprint stanu jest kanoniczny i odporny na zmianę kolejności kluczy JSONB,
-- przed nadpisaniem zapisywana jest poprzednia wersja lokalnie i — best effort — w rekordzie `gallery_state/main_previous`,
-- zapis wykrywa zmianę galerii wykonaną w innej sesji i blokuje ciche nadpisanie,
-- podmiany modeli, ręczne URL-e ilustracji i zdjęć autorów również korzystają z odroczonego cleanup; nieudana podmiana modelu przywraca poprzedni model,
-- wersja opublikowana i lokalny draft ustawień nie są już cicho mieszane przy starcie,
-- dodano limity wejściowe dla ilustracji i zdjęć autorów przed pełnym dekodowaniem pliku.
+### 1. Galeria nie uruchamia się automatycznie
 
-## Kolejność bezpiecznego zapisu
+Po wejściu na stronę widoczna jest warstwa informacyjna z przyciskiem uruchomienia galerii. Przed jego kliknięciem:
 
-1. Użytkownik wykonuje zmiany w wersji roboczej.
-2. Nowy zasób może zostać wysłany do Storage, ale poprzedni zasób pozostaje dostępny.
-3. Po kliknięciu Save odczytywana jest aktualna wersja `main`.
-4. Sprawdzany jest konflikt z wersją bazową sesji.
-5. Tworzona jest kopia poprzedniego stanu.
-6. Istniejący `main` jest aktualizowany tylko wtedy, gdy `updated_at` nadal odpowiada wersji odczytanej przed zapisem; brakujący rekord jest tworzony przez `insert`.
-7. Dopiero po sukcesie usuwane są nieużywane stare pliki.
-8. Nieudany cleanup pozostaje w kolejce do kolejnej próby.
+- nie jest pobierany Babylon.js,
+- nie jest tworzony `BABYLON.Engine`,
+- nie jest tworzona scena,
+- nie rozpoczyna się ładowanie modeli galerii.
 
-## Limity obrazów
+Lekki odczyt sesji Supabase może odbyć się wcześniej, aby nagłówek poprawnie pokazywał status logowania. Nie uruchamia to galerii 3D.
 
-### Ilustracje
+### 2. Jeden publiczny system startupu
 
-- maksymalny plik: 24 MB,
-- maksymalny bok: 10 000 px,
-- maksymalna powierzchnia: 40 megapikseli.
+Usunięto z normalnego flow dwie równoległe warstwy tworzone przez silnik:
 
-### Zdjęcia autorów
+- `customLoadingScreen`,
+- silnikowy `berryboyViewerIntroOverlay`.
 
-- maksymalny plik: 12 MB,
-- maksymalny bok: 8 000 px,
-- maksymalna powierzchnia: 24 megapiksele.
+Całe wejście obsługuje teraz jeden `BerryboyBootGuard`:
 
-Obsługiwane nagłówki wymiarów: JPEG, PNG, WebP i GIF. Dla innych poprawnych formatów obrazów używany jest kontrolowany fallback dekodowania w przeglądarce.
+1. ekran przed uruchomieniem,
+2. czasoumilacze podczas ładowania,
+3. krótkie objaśnienie sterowania,
+4. wejście do gotowej galerii,
+5. przyjazny ekran błędu.
+
+### 3. Gotowość oparta na prawdziwej bramce
+
+Ekran ładowania nie znika po pierwszej wyrenderowanej klatce. Zdarzenie `gallery-ready` jest wysyłane dokładnie raz dopiero po:
+
+- załadowaniu krytycznej architektury,
+- zastosowaniu zapisanego stanu,
+- przygotowaniu krytycznych ilustracji i modeli bieżącej strefy,
+- finalizacji kolizji, materiałów i Local Lights,
+- przejściu stabilnych klatek rozgrzewkowych.
+
+Dopiero wtedy odwiedzający może nacisnąć **Rozpocznij zwiedzanie**.
+
+### 4. Czasoumilacze dla odwiedzających
+
+Podczas oczekiwania wyświetlane są zmienne, nietechniczne komunikaty w języku polskim lub angielskim, np.:
+
+- „Przygotowujemy przestrzeń do zwiedzania.”
+- „Światło i prace zajmują swoje miejsca.”
+- „Jeszcze moment — wystawa jest prawie gotowa.”
+
+Nie są pokazywane nazwy plików, liczby lamp, Supabase, targety ani etapy pracy silnika.
+
+### 5. Rozdzielenie komunikatów
+
+`gallery-status` ma teraz kanały odbiorców:
+
+- `visitor` — tylko przyjazne informacje potrzebne odwiedzającemu,
+- `editor` — komunikaty edycji, uploadu i zapisu,
+- `debug` — diagnostyka startupu i silnika.
+
+Wszystkie istniejące komunikaty silnika domyślnie trafiają do `editor`. Odwiedzający nie widzi już toastów typu „Wczytano stan galerii. Lampy: X”. Diagnostyka startupu jest dostępna zalogowanemu edytorowi w konsoli.
+
+### 6. Publiczne błędy bez stack trace
+
+Odwiedzający widzi jedynie krótki komunikat i przyciski ponowienia. Stack trace, nazwy funkcji i szczegóły brakujących assetów pozostają w konsoli, a nie w publicznym interfejsie.
+
+### 7. Sterowanie przed wejściem
+
+Po osiągnięciu gotowości jedna warstwa pokazuje instrukcje dopasowane do urządzenia. Na PC zachowano wybór:
+
+- środkowy przycisk myszy,
+- prawy przycisk myszy.
+
+Wybór zapisuje się w `localStorage` i jest stosowany przez silnik.
+
+## Zachowane systemy
+
+- Stage 12C66A — Save Integrity / Draft Commit / Deferred Storage Cleanup,
+- Stage 12C66A1 — Viewer Grounded Keyboard Hotfix,
+- Stage 12C65E — strefowy streaming critical → nearby → deferred,
+- Adaptive Mobile Quality,
+- mobilny HUD i Inspect safe-frame,
+- Click-to-Inspect i trasa zwiedzania,
+- Local Lights i bezpieczny rebuild targetów.
 
 ## Weryfikacja
 
@@ -60,18 +96,20 @@ npm run check
 Polecenie:
 
 1. regeneruje produkcyjny mirror i TXT z logowaniem wyłączonym,
-2. sprawdza składnię,
-3. uruchamia verifier kontraktów Stage 12C66A oraz chronionych systemów Stage 12C65E,
-4. testuje kolejność backup → zapis → cleanup,
-5. testuje brak usuwania plików po błędzie zapisu,
-6. testuje konflikt równoległych sesji,
-7. testuje limity i odczyt wymiarów obrazów.
+2. sprawdza składnię wszystkich skryptów,
+3. uruchamia verifier Stage 12C66B i chronionych systemów poprzednich etapów,
+4. testuje maszynę stanów prestart → loading → ready → entry,
+5. sprawdza brak automatycznego Babylon/scene startupu,
+6. sprawdza brak technicznych komunikatów w publicznym kanale,
+7. ponownie testuje bezpieczeństwo zapisu i limity obrazów z Etapu 1.
 
 ## Pliki startowe
 
 - `index.html` — wersja WWW, logowanie aktywne,
-- `Gallery_V0_11_STAGE12C66A_SAVE_INTEGRITY_LOGIN_DISABLED.txt` — pełny silnik z logowaniem wyłączonym do testów,
+- `Gallery_V0_11_STAGE12C66B_SINGLE_STARTUP_CLEAN_VIEWER_LOGIN_DISABLED.txt` — pełny silnik z logowaniem wyłączonym do testów,
 - `src/Gallery_V0_11.js` — źródło silnika,
-- `src/Gallery_V0_11.min.js` — w tym etapie kontrolowany, byte-identyczny mirror źródła.
+- `src/Gallery_V0_11.min.js` — kontrolowany, byte-identyczny mirror źródła.
 
-Mirror nie jest jeszcze minifikowany. Celowo pozostaje identyczny ze źródłem, aby wykluczyć rozjazd dwóch wersji kodu. Prawdziwy, powtarzalny pipeline minifikacji należy do późniejszego etapu jakości/build.
+## Ręczny test wymagany
+
+Automatyczne testy nie zastępują sprawdzenia na prawdziwym urządzeniu i połączeniu z Supabase. Przed publikacją trzeba ręcznie potwierdzić pełny startup, modele GLB, tekstury, światła oraz zachowanie na telefonie.

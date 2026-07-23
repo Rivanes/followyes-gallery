@@ -1,13 +1,15 @@
 /*
-  Berryboy Art Gallery — Stage 12C66A Save Integrity / Draft Commit / Deferred Storage Cleanup
-  Public bootstrap. Editor/auth actions are dynamically imported only when needed.
+  Berryboy Art Gallery — Stage 12C66B Single Startup Gate / Visitor Timefillers / Clean Public Status
+  Public bootstrap. The 3D engine and gallery scene are created only after the visitor explicitly starts the gallery.
+  Editor/auth actions remain dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c66a_save_integrity_20260723";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
+const STAGE = "12C66B";
+const ENGINE_CACHE_KEY = "stage12c66b_single_startup_20260723";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
@@ -35,6 +37,9 @@ const mobileQualityOptionSafe = document.getElementById("mobileQualityOptionSafe
 let currentSession = null;
 let editorModulePromise = null;
 let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
+let activeEngine = null;
+let activeScene = null;
+let galleryStartPromise = null;
 
 const uiText = {
   pl: {
@@ -52,8 +57,8 @@ const uiText = {
     loginFailed: "Nie udało się zalogować. Sprawdź login i hasło.",
     loggedIn: "Zalogowano edytora.",
     loggedOut: "Wylogowano.",
-    galleryLoading: "Galeria jeszcze się ładuje.",
-    startupError: "Nie udało się uruchomić galerii.",
+    galleryLoading: "Galeria jeszcze się przygotowuje.",
+    startupError: "Nie udało się uruchomić galerii. Odśwież stronę i spróbuj ponownie.",
     exploreBelow: "O projekcie",
     quality: "Jakość",
     qualityAuto: "Auto",
@@ -76,8 +81,8 @@ const uiText = {
     loginFailed: "Login failed. Check your login and password.",
     loggedIn: "Editor logged in.",
     loggedOut: "Logged out.",
-    galleryLoading: "The gallery is still loading.",
-    startupError: "The gallery could not be started.",
+    galleryLoading: "The gallery is still being prepared.",
+    startupError: "The gallery could not be started. Reload the page and try again.",
     exploreBelow: "About project",
     quality: "Quality",
     qualityAuto: "Auto",
@@ -92,13 +97,9 @@ function t(key) {
 }
 
 function showToast(message) {
-  if (!message || !galleryToast) {
-    return;
-  }
-
+  if (!message || !galleryToast) return;
   galleryToast.textContent = message;
   galleryToast.style.display = "block";
-
   window.clearTimeout(showToast.timeoutId);
   showToast.timeoutId = window.setTimeout(function () {
     galleryToast.style.display = "none";
@@ -109,17 +110,9 @@ function updateAuthUi() {
   const isLoggedIn = !!currentSession;
   window.galleryEditorAuthenticated = isLoggedIn;
 
-  if (loginButton) {
-    loginButton.classList.toggle("hidden", isLoggedIn);
-  }
-
-  if (logoutButton) {
-    logoutButton.classList.toggle("hidden", !isLoggedIn);
-  }
-
-  if (saveStateButton) {
-    saveStateButton.classList.toggle("hidden", !isLoggedIn);
-  }
+  if (loginButton) loginButton.classList.toggle("hidden", isLoggedIn);
+  if (logoutButton) logoutButton.classList.toggle("hidden", !isLoggedIn);
+  if (saveStateButton) saveStateButton.classList.toggle("hidden", !isLoggedIn);
 
   if (authStatus) {
     authStatus.textContent = isLoggedIn
@@ -127,9 +120,7 @@ function updateAuthUi() {
       : t("publicGallery");
   }
 
-  if (window.GalleryApp) {
-    window.GalleryApp.setEditorAuthenticated(isLoggedIn);
-  }
+  if (window.GalleryApp) window.GalleryApp.setEditorAuthenticated(isLoggedIn);
 }
 
 function setSession(session) {
@@ -162,6 +153,10 @@ function applyLanguage(lang) {
   if (mobileQualityOptionBalanced) mobileQualityOptionBalanced.textContent = t("qualityBalanced");
   if (mobileQualityOptionSafe) mobileQualityOptionSafe.textContent = t("qualitySafe");
 
+  if (window.BerryboyBootGuard && typeof window.BerryboyBootGuard.setLanguage === "function") {
+    window.BerryboyBootGuard.setLanguage(currentLang);
+  }
+
   updateAuthUi();
 }
 
@@ -171,20 +166,17 @@ function getEditorContext() {
     t,
     showToast,
     setSession,
-    getSession: function () {
-      return currentSession;
-    }
+    getSession: function () { return currentSession; }
   };
 }
 
 async function loadEditorModule() {
   if (!editorModulePromise) {
-    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c66a").then(function (module) {
+    editorModulePromise = import(`./gallery-editor-bootstrap.js?v=${ENGINE_CACHE_KEY}`).then(function (module) {
       module.initializeEditorRuntime(getEditorContext());
       return module;
     });
   }
-
   return editorModulePromise;
 }
 
@@ -205,8 +197,24 @@ if (loginButton) {
   });
 }
 
+// Stage 12C66B: public visitors only receive explicitly visitor-facing status messages.
+// Existing engine notices default to the editor channel and never leak technical startup details.
 window.addEventListener("gallery-status", function (event) {
-  showToast(event.detail && event.detail.message);
+  const detail = event.detail || {};
+  const audience = detail.audience || "editor";
+
+  if (audience === "debug") {
+    if (currentSession) console.info("Gallery debug status:", detail);
+    return;
+  }
+
+  if (audience === "editor" && !currentSession) return;
+  if (audience !== "editor" && audience !== "visitor" && audience !== "all") return;
+  showToast(detail.message);
+});
+
+window.addEventListener("gallery-debug-status", function (event) {
+  if (currentSession) console.info("Gallery startup diagnostic:", event.detail || {});
 });
 
 function getStoredMobileQualityMode() {
@@ -236,9 +244,7 @@ if (mobileQualitySelect) {
   mobileQualitySelect.value = getStoredMobileQualityMode();
   mobileQualitySelect.addEventListener("change", function () {
     const mode = mobileQualitySelect.value;
-    try {
-      localStorage.setItem("berryboy_mobile_quality_mode", mode);
-    } catch (_error) {}
+    try { localStorage.setItem("berryboy_mobile_quality_mode", mode); } catch (_error) {}
 
     if (window.GalleryApp && typeof window.GalleryApp.setMobileQualityMode === "function") {
       const state = window.GalleryApp.setMobileQualityMode(mode);
@@ -251,101 +257,120 @@ window.addEventListener("gallery-mobile-quality-change", function (event) {
   syncMobileQualityControl(event.detail || null);
 });
 
-window.addEventListener("gallery-ready", function () {
-  updateAuthUi();
-  if (mobileQualitySelect && window.GalleryApp && typeof window.GalleryApp.setMobileQualityMode === "function") {
-    const currentState = window.GalleryApp.getMobileQuality();
-    if (!currentState || currentState.mode !== mobileQualitySelect.value) {
-      window.GalleryApp.setMobileQualityMode(mobileQualitySelect.value);
-    }
-  }
-  syncMobileQualityControl();
-});
 applyLanguage(currentLang);
 
 const bootGuard = window.BerryboyBootGuard || {
+  setLanguage: function () {},
   setPhase: function () {},
+  waitForStart: function () { return Promise.resolve(); },
+  waitForEntry: function () { return Promise.resolve(); },
   ready: function () {},
+  completeEntry: function () {},
   fail: function () {}
 };
 
 function failGalleryBoot(code, message, error) {
   console.error("Gallery boot failure:", code, error || "");
-  bootGuard.fail(code, message, error);
+  bootGuard.fail(code, message || t("startupError"), error);
+
+  if (startupError) {
+    startupError.style.display = "none";
+    startupError.textContent = "";
+  }
 }
 
-function installCanvasContextRecovery(canvas, getEngine) {
-  canvas.addEventListener("webglcontextcreationerror", function (event) {
-    failGalleryBoot(
-      "webgl-context-creation",
-      "This browser could not create the WebGL graphics context. Reload it or open the page in the full browser.",
-      event && event.statusMessage ? event.statusMessage : event
-    );
+function loadClassicScript(src, id) {
+  const existing = id ? document.getElementById(id) : null;
+  if (existing && existing.dataset.loaded === "true") return Promise.resolve(existing);
+
+  return new Promise(function (resolve, reject) {
+    const script = existing || document.createElement("script");
+    script.src = src;
+    script.async = true;
+    if (id) script.id = id;
+
+    function cleanup() {
+      script.removeEventListener("load", onLoad);
+      script.removeEventListener("error", onError);
+    }
+
+    function onLoad() {
+      cleanup();
+      script.dataset.loaded = "true";
+      resolve(script);
+    }
+
+    function onError() {
+      cleanup();
+      reject(new Error(`Could not load dependency: ${src}`));
+    }
+
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
+    if (!existing) document.head.appendChild(script);
+  });
+}
+
+async function ensureBabylonDependencies() {
+  bootGuard.setPhase("dependencies", "Loading Babylon.js and the GLB loader.");
+  await loadClassicScript("https://cdn.babylonjs.com/babylon.js", "berryboyBabylonRuntime");
+  await loadClassicScript("https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js", "berryboyBabylonLoaders");
+
+  if (!window.BABYLON || !window.BABYLON.Engine) {
+    throw new Error("BABYLON.Engine is unavailable after dependency loading.");
+  }
+}
+
+function installCanvasContextRecovery(targetCanvas, getEngine) {
+  targetCanvas.addEventListener("webglcontextcreationerror", function (event) {
+    failGalleryBoot("webgl-context-creation", t("startupError"), event && event.statusMessage ? event.statusMessage : event);
   });
 
-  canvas.addEventListener("webglcontextlost", function (event) {
+  targetCanvas.addEventListener("webglcontextlost", function (event) {
     event.preventDefault();
     const engine = typeof getEngine === "function" ? getEngine() : null;
     if (engine && engine.stopRenderLoop) engine.stopRenderLoop();
-    failGalleryBoot(
-      "webgl-context-lost",
-      "The phone released the 3D graphics context. Reload the gallery to restore it.",
-      event
-    );
+    failGalleryBoot("webgl-context-lost", t("startupError"), event);
   });
 
-  canvas.addEventListener("webglcontextrestored", function () {
-    failGalleryBoot(
-      "webgl-context-restored-reload",
-      "The graphics context was restored. Reload the gallery to rebuild the scene safely."
-    );
+  targetCanvas.addEventListener("webglcontextrestored", function () {
+    failGalleryBoot("webgl-context-restored-reload", t("startupError"));
   });
 }
 
-let activeEngine = null;
-installCanvasContextRecovery(canvas, function () {
-  return activeEngine;
-});
+installCanvasContextRecovery(canvas, function () { return activeEngine; });
 
-try {
-  bootGuard.setPhase("dependencies", "Checking the 3D engine…");
-  if (!window.BABYLON || !BABYLON.Engine) {
-    throw new Error("BABYLON.Engine is unavailable.");
-  }
+function waitForInteractionReady(timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    let timeoutId = 0;
 
-  bootGuard.setPhase("session", "Connecting to the gallery…");
-  const sessionResult = await supabase.auth.getSession();
-  setSession(sessionResult.data.session || null);
-
-  if (currentSession) {
-    await loadEditorModule();
-  }
-
-  bootGuard.setPhase("engine", "Creating the graphics engine…");
-  const engine = new BABYLON.Engine(canvas, true, {
-    preserveDrawingBuffer: false,
-    stencil: true,
-    antialias: true,
-    powerPreference: "high-performance",
-    failIfMajorPerformanceCaveat: false
-  });
-  activeEngine = engine;
-
-  bootGuard.setPhase("scene", "Building the gallery scene…");
-  const scene = createScene(engine, canvas);
-  updateAuthUi();
-
-  let firstFrameDelivered = false;
-  engine.runRenderLoop(function () {
-    scene.render();
-    if (!firstFrameDelivered) {
-      firstFrameDelivered = true;
-      window.requestAnimationFrame(function () {
-        bootGuard.ready();
-      });
+    function cleanup() {
+      window.removeEventListener("gallery-ready", onReady);
+      window.removeEventListener("gallery-startup-failure", onFailure);
+      window.clearTimeout(timeoutId);
     }
-  });
 
+    function onReady(event) {
+      cleanup();
+      resolve(event.detail || {});
+    }
+
+    function onFailure(event) {
+      cleanup();
+      const detail = event.detail || {};
+      reject(new Error(detail.technicalMessage || detail.message || "Gallery startup failed."));
+    }
+
+    window.addEventListener("gallery-ready", onReady, { once: true });
+    window.addEventListener("gallery-startup-failure", onFailure, { once: true });
+    timeoutId = window.setTimeout(function () {
+      cleanup();
+      reject(new Error("Gallery interaction-ready gate timed out."));
+    }, timeoutMs || 90000);
+  });
+}
+
+function installResizeRuntime(engine) {
   let resizeFrame = 0;
   function scheduleEngineResize() {
     if (resizeFrame) return;
@@ -358,17 +383,98 @@ try {
   window.addEventListener("resize", scheduleEngineResize, { passive: true });
   window.addEventListener("orientationchange", scheduleEngineResize, { passive: true });
   window.addEventListener("gallery-mobile-viewport-change", scheduleEngineResize, { passive: true });
-
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", scheduleEngineResize, { passive: true });
-  }
-
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleEngineResize, { passive: true });
   scheduleEngineResize();
-  syncMobileQualityControl();
+}
+
+async function startGalleryRuntime() {
+  if (galleryStartPromise) return galleryStartPromise;
+
+  galleryStartPromise = (async function () {
+    await ensureBabylonDependencies();
+
+    bootGuard.setPhase("engine-module", "Loading the gallery engine module.");
+    const engineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
+    if (!engineModule || typeof engineModule.createScene !== "function") {
+      throw new Error("The gallery scene factory is unavailable.");
+    }
+
+    const interactionReadyPromise = waitForInteractionReady(90000);
+
+    bootGuard.setPhase("engine", "Creating the WebGL engine.");
+    const engine = new window.BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: true,
+      antialias: true,
+      powerPreference: "high-performance",
+      failIfMajorPerformanceCaveat: false
+    });
+    activeEngine = engine;
+
+    bootGuard.setPhase("scene", "Creating the gallery scene.");
+    const scene = engineModule.createScene(engine, canvas);
+    activeScene = scene;
+    updateAuthUi();
+
+    engine.runRenderLoop(function () {
+      scene.render();
+    });
+
+    installResizeRuntime(engine);
+    syncMobileQualityControl();
+
+    await interactionReadyPromise;
+
+    if (mobileQualitySelect && window.GalleryApp && typeof window.GalleryApp.setMobileQualityMode === "function") {
+      const currentState = window.GalleryApp.getMobileQuality();
+      if (!currentState || currentState.mode !== mobileQualitySelect.value) {
+        window.GalleryApp.setMobileQualityMode(mobileQualitySelect.value);
+      }
+    }
+    syncMobileQualityControl();
+    bootGuard.ready();
+
+    await bootGuard.waitForEntry();
+    if (window.GalleryApp && typeof window.GalleryApp.hideViewerIntroOverlay === "function") {
+      window.GalleryApp.hideViewerIntroOverlay();
+    }
+    bootGuard.completeEntry();
+
+    window.BerryboyViewerRuntime = {
+      stage: STAGE,
+      schema: "single-public-startup-gate.v1",
+      engine,
+      scene,
+      supabase,
+      deviceProfile: window.BerryboyArtGalleryDeviceProfile || null,
+      getSession: function () { return currentSession; },
+      loadEditorModule,
+      startedAfterExplicitEntry: true
+    };
+
+    return window.BerryboyViewerRuntime;
+  })().catch(function (error) {
+    failGalleryBoot("bootstrap-exception", t("startupError"), error);
+    throw error;
+  });
+
+  return galleryStartPromise;
+}
+
+window.addEventListener("gallery-startup-failure", function (event) {
+  const detail = event.detail || {};
+  failGalleryBoot(detail.code || "engine-startup-failure", detail.message || t("startupError"), detail.technicalMessage || null);
+});
+
+try {
+  bootGuard.setPhase("session", "Checking the current editor session.");
+  const sessionResult = await supabase.auth.getSession();
+  setSession(sessionResult.data.session || null);
+
+  if (currentSession) await loadEditorModule();
 
   supabase.auth.onAuthStateChange(function (_event, session) {
     setSession(session);
-
     if (session) {
       loadEditorModule().catch(function (error) {
         console.warn("Editor bootstrap warning:", error);
@@ -376,25 +482,8 @@ try {
     }
   });
 
-  window.BerryboyViewerRuntime = {
-    stage: "12C66A",
-    engine,
-    scene,
-    supabase,
-    deviceProfile: window.BerryboyArtGalleryDeviceProfile || null,
-    getSession: function () {
-      return currentSession;
-    },
-    loadEditorModule
-  };
+  await bootGuard.waitForStart();
+  await startGalleryRuntime();
 } catch (error) {
-  console.error(error);
   failGalleryBoot("bootstrap-exception", t("startupError"), error);
-
-  if (startupError) {
-    startupError.style.display = "block";
-    startupError.textContent =
-      t("startupError") + "\n\n" +
-      (error && error.stack ? error.stack : String(error));
-  }
 }
