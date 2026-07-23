@@ -1,16 +1,16 @@
 {
-  "name": "berryboy-art-gallery-stage12c66b1-single-startup-intro-restore",
-  "version": "0.11.66-b1",
+  "name": "berryboy-art-gallery-stage12c66b2r-repair",
+  "version": "0.11.66-b2r",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66B1 Restored Instructional Intro / Single Startup Gate",
+  "description": "Berryboy Art Gallery — Stage 12C66B2R Save Integrity Repair / Correct Startup Rebuild",
   "type": "module",
   "scripts": {
-    "verify": "node tools/verify-stage12c66b1.mjs",
+    "build": "node tools/build-stage12c66b2r.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "check": "npm run build:mirrors && npm run syntax && npm run verify && npm run test:startup && npm run test:save-integrity && npm run test:image-validation",
-    "test:startup": "node tools/test-stage12c66b1-startup.mjs",
-    "test:save-integrity": "node tools/test-stage12c66a-save-integrity.mjs",
-    "test:image-validation": "node tools/test-stage12c66a-image-validation.mjs",
-    "build:mirrors": "node tools/build-stage12c66b1-mirrors.mjs"
+    "verify": "node tools/verify-stage12c66b2r.mjs",
+    "test:save-integrity": "node tools/test-stage12c66b2r-save-integrity.mjs",
+    "test:startup": "node tools/test-stage12c66b2r-startup.mjs",
+    "test:image-validation": "node tools/test-stage12c66b2r-image-validation.mjs",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation"
   }
 }
