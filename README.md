@@ -1,8 +1,8 @@
-# Berryboy Art Gallery — Stage 12C66B
+# Berryboy Art Gallery — Stage 12C66B1
 
 ## Etap 2: Single Startup Gate / Visitor Timefillers / Clean Public Status
 
-Stage 12C66B powstaje na stabilnej paczce **12C66A1**. Zachowuje zabezpieczenia zapisu i Storage z Etapu 1 oraz hotfix blokujący latanie obserwatora za pomocą środkowego przycisku myszy i strzałek.
+Stage 12C66B1 powstaje na stabilnej paczce **12C66A1**. Zachowuje zabezpieczenia zapisu i Storage z Etapu 1 oraz hotfix blokujący latanie obserwatora za pomocą środkowego przycisku myszy i strzałek.
 
 ## Najważniejsze zmiany
 
@@ -97,7 +97,7 @@ Polecenie:
 
 1. regeneruje produkcyjny mirror i TXT z logowaniem wyłączonym,
 2. sprawdza składnię wszystkich skryptów,
-3. uruchamia verifier Stage 12C66B i chronionych systemów poprzednich etapów,
+3. uruchamia verifier Stage 12C66B1 i chronionych systemów poprzednich etapów,
 4. testuje maszynę stanów prestart → loading → ready → entry,
 5. sprawdza brak automatycznego Babylon/scene startupu,
 6. sprawdza brak technicznych komunikatów w publicznym kanale,
@@ -106,10 +106,15 @@ Polecenie:
 ## Pliki startowe
 
 - `index.html` — wersja WWW, logowanie aktywne,
-- `Gallery_V0_11_STAGE12C66B_SINGLE_STARTUP_CLEAN_VIEWER_LOGIN_DISABLED.txt` — pełny silnik z logowaniem wyłączonym do testów,
+- `Gallery_V0_11_STAGE12C66B1_SINGLE_STARTUP_CLEAN_VIEWER_LOGIN_DISABLED.txt` — pełny silnik z logowaniem wyłączonym do testów,
 - `src/Gallery_V0_11.js` — źródło silnika,
 - `src/Gallery_V0_11.min.js` — kontrolowany, byte-identyczny mirror źródła.
 
 ## Ręczny test wymagany
 
 Automatyczne testy nie zastępują sprawdzenia na prawdziwym urządzeniu i połączeniu z Supabase. Przed publikacją trzeba ręcznie potwierdzić pełny startup, modele GLB, tekstury, światła oraz zachowanie na telefonie.
+
+
+## Stage 12C66B1 UI correction
+
+The accepted instructional popup design was restored inside the single page-owned startup gate. Animated WASD, mouse, joystick and artwork interaction instructions are visible before startup and again when the scene is ready. The old engine-owned duplicate popup remains removed.

@@ -1,16 +1,16 @@
 {
-  "name": "berryboy-art-gallery-stage12c66b-single-startup-clean-viewer",
-  "version": "0.11.66-b",
+  "name": "berryboy-art-gallery-stage12c66b1-single-startup-intro-restore",
+  "version": "0.11.66-b1",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66B Single Startup Gate / Visitor Timefillers / Clean Public Status",
+  "description": "Berryboy Art Gallery — Stage 12C66B1 Restored Instructional Intro / Single Startup Gate",
   "type": "module",
   "scripts": {
-    "verify": "node tools/verify-stage12c66b.mjs",
+    "verify": "node tools/verify-stage12c66b1.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
     "check": "npm run build:mirrors && npm run syntax && npm run verify && npm run test:startup && npm run test:save-integrity && npm run test:image-validation",
-    "test:startup": "node tools/test-stage12c66b-startup.mjs",
+    "test:startup": "node tools/test-stage12c66b1-startup.mjs",
     "test:save-integrity": "node tools/test-stage12c66a-save-integrity.mjs",
     "test:image-validation": "node tools/test-stage12c66a-image-validation.mjs",
-    "build:mirrors": "node tools/build-stage12c66b-mirrors.mjs"
+    "build:mirrors": "node tools/build-stage12c66b1-mirrors.mjs"
   }
 }

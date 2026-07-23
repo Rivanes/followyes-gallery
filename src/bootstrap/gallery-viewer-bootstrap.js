@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66B Single Startup Gate / Visitor Timefillers / Clean Public Status
+  Berryboy Art Gallery — Stage 12C66B1 Restored Instructional Intro / Single Startup Gate
   Public bootstrap. The 3D engine and gallery scene are created only after the visitor explicitly starts the gallery.
   Editor/auth actions remain dynamically imported only when needed.
 */
@@ -8,8 +8,8 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
-const STAGE = "12C66B";
-const ENGINE_CACHE_KEY = "stage12c66b_single_startup_20260723";
+const STAGE = "12C66B1";
+const ENGINE_CACHE_KEY = "stage12c66b1_intro_restore_20260723";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
@@ -197,7 +197,7 @@ if (loginButton) {
   });
 }
 
-// Stage 12C66B: public visitors only receive explicitly visitor-facing status messages.
+// Stage 12C66B1: public visitors only receive explicitly visitor-facing status messages.
 // Existing engine notices default to the editor channel and never leak technical startup details.
 window.addEventListener("gallery-status", function (event) {
   const detail = event.detail || {};

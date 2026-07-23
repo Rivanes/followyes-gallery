@@ -65,7 +65,7 @@
   - Stage 12C64M: Inspect Collision Broad Phase / Exact Runtime Guard — lokalny snapshot przeszkód należy wyłącznie do jednego przejazdu Inspect; tani broad phase AABB ogranicza kandydatów przed dokładnymi raycastami, bez zmiany Custom Focus, safe-frame, tourOrder, popupu, animacji i częstotliwości runtime guard.
   - Stage 12C64Q: Inspect Owns Camera Transition / Clean WASD Handoff — jawny stan WALK → TRANSITION → INSPECT daje kamerze jednego właściciela; ruch WASD/Edit, bobbing, kontrolki Babylon i zwykły wall resolver są wstrzymane wyłącznie podczas przejazdu, start pozostaje rzeczywistym transformem, a koniec dokładnym Custom Focus bez recovery, dockingu i teleportu.
   - Stage 12C64S: Single Startup Gate / Batched Finalization — stary Balanced Entry Gate i blokujący Image prefetch zostały usunięte. Po zastosowaniu stanu działa jedna bramka Interaction Ready: preview artworków, Props i modele rzeźb są ładowane raz, globalne kolizje/materiały/Local Lights finalizują się jednym batchem, a sterowanie odblokowuje się po stabilnych klatkach.
-  - Stage 12C66B: Single Public Startup Gate / Visitor Timefillers / Clean Status — silnik i scena startują dopiero po świadomym kliknięciu na stronie, wewnętrzny loader oraz automatyczny popup wejściowy nie tworzą równoległych warstw, publiczny ekran oczekiwania pokazuje wyłącznie przyjazne czasoumilacze, a komunikaty techniczne są kierowane do edytora/debug.
+  - Stage 12C66B1: Restored Instructional Intro / Single Startup Gate — zachowany pojedynczy page-owned startup gate odzyskuje zaakceptowany informacyjny popup z animowanymi instrukcjami WASD, myszy, joysticka i Inspect. Silnik nadal startuje wyłącznie po kliknięciu; nie wraca engine-owned overlay ani techniczne komunikaty publiczne.
   - Stage 12C65A: Mobile Cleanup / Boot Recovery — jeden profil urządzenia zastępuje Survival Mode i trzy detektory mobilne; usunięto legacy Mobile Focus oraz konfliktujące publiczne CSS popupu. Statyczny Boot Guard obsługuje błędy CDN/WebGL, context loss, timeout i ekran odzyskiwania zamiast białej strony.
   - Stage 12C65B: Adaptive Mobile Quality — profile High/Balanced/Safe sterują rozdzielczością, budżetami materiałów i mapami cieni; AUTO mierzy stabilne okna FPS, używa histerezy i zmienia jakość wyłącznie podczas bezczynności widza.
   - Stage 12C65B1: Adaptive Quality Stabilization / Correct Downshift — AUTO startuje od Balanced (Safe dla ryzykownych urządzeń), High wymaga potwierdzonego zapasu FPS, zmiana profilu nigdy nie odwraca kierunku rozdzielczości, a pomiar pauzuje podczas aktywnego ładowania assetów.
@@ -12837,12 +12837,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var viewerMovementWasManualInputActive = false;
     var viewerCameraRollLockEnabled = true;
 
-    // STAGE 12C66B — SINGLE PUBLIC STARTUP GATE
+    // STAGE 12C66B1 — SINGLE PUBLIC STARTUP GATE
     // The page bootstrap owns the only public startup surface. The engine never creates
     // a second full-screen loader. Internal startup phases are emitted as diagnostics,
     // while visitors only see the timefillers controlled by BerryboyBootGuard.
 
-    // STAGE 12C66B — EXTERNAL VIEWER ENTRY GATE
+    // STAGE 12C66B1 — EXTERNAL VIEWER ENTRY GATE
     // The legacy engine-owned intro DOM was removed. The page BootGuard owns pre-start,
     // timefillers, control instructions and the final entry action. These small bridge
     // functions preserve the established movement lock and public GalleryApp API.
@@ -12880,7 +12880,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 galleryInteractionReadyEventDispatched = true;
                 window.dispatchEvent(new CustomEvent("gallery-ready", {
                     detail: {
-                        stage: "12C66B",
+                        stage: "12C66B1",
                         schema: "interaction-ready-gate.v1",
                         reason: reason || "interaction-ready",
                         readyAt: Date.now()
@@ -14671,7 +14671,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionReady = false;
         galleryStartupFinalizeDebug.finalLightMode = "12C65E-current-zone-streaming-gate";
 
-        // Stage 12C66B: the page BootGuard remains the only public overlay.
+        // Stage 12C66B1: the page BootGuard remains the only public overlay.
         // Viewer movement stays locked until its final "Start exploring" action.
         if (!editMode) viewerIntroOverlayMovementUnlocked = false;
         else viewerIntroOverlayMovementUnlocked = true;

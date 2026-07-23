@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66B Single Startup Gate / Visitor Timefillers / Clean Public Status
+  Berryboy Art Gallery — Stage 12C66B1 Restored Instructional Intro / Single Startup Gate
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
