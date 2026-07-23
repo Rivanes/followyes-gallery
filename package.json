@@ -1,17 +1,17 @@
 {
-  "name": "berryboy-art-gallery-stage12c66c-etap3",
-  "version": "0.11.66-c",
+  "name": "berryboy-art-gallery-stage12c66c1-input-ui-hotfix",
+  "version": "0.11.66-c1",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C Etap 3 / Input, Edit Workflow and Sculpture Collision",
+  "description": "Berryboy Art Gallery — Stage 12C66C1 / Input and HUD Polish Hotfix",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c.mjs",
+    "build": "node tools/build-stage12c66c1.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "verify": "node tools/verify-stage12c66c.mjs",
-    "test:save-integrity": "node tools/test-stage12c66c-save-integrity.mjs",
-    "test:startup": "node tools/test-stage12c66c-startup.mjs",
-    "test:image-validation": "node tools/test-stage12c66c-image-validation.mjs",
-    "test:stage3": "node tools/test-stage12c66c-stage3.mjs",
+    "verify": "node tools/verify-stage12c66c1.mjs",
+    "test:save-integrity": "node tools/test-stage12c66c1-save-integrity.mjs",
+    "test:startup": "node tools/test-stage12c66c1-startup.mjs",
+    "test:image-validation": "node tools/test-stage12c66c1-image-validation.mjs",
+    "test:stage3": "node tools/test-stage12c66c1-stage3.mjs",
     "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:stage3"
   }
 }

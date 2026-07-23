@@ -76,6 +76,7 @@
   - Stage 12C65E Light Mode Exit Fix: restored Local Lights no longer enter the manual pending-retarget queue, and BACK TO EDIT commits all real dirty lights in one segment-aware batch instead of repeating a full relation scan per light.
   - Stage 12C66B2R: Save Integrity Repair / Correct Startup Rebuild — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
   - Stage 12C66C: Desktop D-pad / Floor Cursor / Mobile Hold Movement / Tabbed Edit Workflow / Sticky Save / Sculpture Collision Repair — jeden wspólny system wejścia porusza kamerą bez równoległych ścieżek, edytor ma cztery sekcje i stale widoczny zapis, a collider proxy rzeźb działa także podczas zwykłego chodzenia w Edit Mode.
+  - Stage 12C66C1: Input / HUD Polish Hotfix — czytelniejszy floor cursor z ripple po kliknięciu, bezkolizyjne pozycjonowanie D-pada przy przycisku Edit Mode oraz twarde odcięcie Babylon Touch Input i pionowego dryfu kamery w mobilnym Viewerze.
   - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
@@ -672,10 +673,41 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function clearGalleryBuiltInCameraMotionResidue() {
+        if (!camera) {
+            return;
+        }
+
+        ["cameraDirection", "_localDirection", "_transformedDirection"].forEach(function (propertyName) {
+            var direction = camera[propertyName];
+            if (direction && typeof direction.set === "function") {
+                direction.set(0, 0, 0);
+            } else if (direction) {
+                if (typeof direction.x === "number") direction.x = 0;
+                if (typeof direction.y === "number") direction.y = 0;
+                if (typeof direction.z === "number") direction.z = 0;
+            }
+        });
+    }
+
     function attachGalleryCameraControl() {
+        // Stage 12C66C1: mobile Viewer owns touch input itself.
+        // Any generic reattach (for example after Inspect) must not restore Babylon's
+        // FreeCameraTouchInput, because combining it with the custom joystick/drag path
+        // can move along the pitched camera vector and create a rare vertical flight.
+        if (mobileViewerEnabled === true && editMode !== true) {
+            try {
+                camera.detachControl(canvas);
+            } catch (mobileDetachError) {}
+            disableGalleryBuiltInKeyboardCameraMovement();
+            clearGalleryBuiltInCameraMotionResidue();
+            return false;
+        }
+
         camera.attachControl(canvas, true);
         configureCameraPointerButtons();
         disableGalleryBuiltInKeyboardCameraMovement();
+        return true;
     }
 
     attachGalleryCameraControl();
@@ -13143,6 +13175,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryDesktopDpad = null;
     var galleryFloorCursorRing = null;
     var galleryFloorCursorRingMaterial = null;
+    var galleryFloorCursorPulseRing = null;
+    var galleryFloorCursorPulseMaterial = null;
+    var galleryFloorCursorPulseStartedAt = 0;
+    var galleryFloorCursorPulseDurationMs = 520;
     var galleryFloorCursorFramePending = false;
     var galleryFloorCursorLastEvent = null;
 
@@ -13600,7 +13636,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66B2R",
+                            stage: "12C66C1",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -15911,7 +15947,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C",
+        stage: "12C66C1",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -28699,6 +28735,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (shouldEnable === mobileViewerEnabled) {
+            // Stage 12C66C1: heal any generic camera reattach that may have happened
+            // after Inspect, recovery or a viewport refresh. Mobile Viewer must never
+            // keep Babylon touch controls attached in parallel with custom input.
+            if (shouldEnable && !editMode) {
+                try { camera.detachControl(canvas); } catch (mobileRefreshDetachError) {}
+                disableGalleryBuiltInKeyboardCameraMovement();
+                clearGalleryBuiltInCameraMotionResidue();
+            }
             setMobileViewerUiVisible(isMobileViewerActive());
             return;
         }
@@ -29372,6 +29416,56 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
+    function shouldEnforceMobileViewerGroundedWalkHeight() {
+        if (!isMobileViewerActive() || editMode || !camera || !camera.position) {
+            return false;
+        }
+
+        if (typeof isGalleryInspectCameraOwnedByInspect === "function" && isGalleryInspectCameraOwnedByInspect()) {
+            return false;
+        }
+
+        if (typeof galleryFocusPreviewRuntime !== "undefined" && galleryFocusPreviewRuntime && galleryFocusPreviewRuntime.active) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function enforceMobileViewerGroundedWalkHeight() {
+        if (!shouldEnforceMobileViewerGroundedWalkHeight()) {
+            return false;
+        }
+
+        var walkY = getGalleryDefaultWalkCameraY();
+        if (isFinite(Number(walkY)) && Math.abs(camera.position.y - Number(walkY)) > 0.0001) {
+            camera.position.y = Number(walkY);
+        }
+
+        if (camera.rotation) {
+            camera.rotation.z = 0;
+        }
+
+        clearGalleryBuiltInCameraMotionResidue();
+        return true;
+    }
+
+    function resetGalleryMobileNavigationState(reason) {
+        resetMobileJoystick();
+        if (mobileLookActive) {
+            endMobileCanvasLook(null, true);
+        } else {
+            mobileLookPointerId = null;
+            resetMobileCanvasMoveGesture();
+        }
+        clearViewerWASDMoveKeys();
+        resetGalleryDesktopDpadState();
+        viewerMovementVelocity.set(0, 0, 0);
+        clearGalleryBuiltInCameraMotionResidue();
+        enforceMobileViewerGroundedWalkHeight();
+        return reason || "mobile-input-reset";
+    }
+
     function updateViewerWASDMovement() {
         if (isGalleryInspectCameraTransitionActive()) {
             if (!hasViewerTransitionCancelInput()) return;
@@ -29379,6 +29473,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         clearViewerWASDVisualOffsets();
+        enforceMobileViewerGroundedWalkHeight();
 
         var dt = scene.getEngine().getDeltaTime() / 1000;
         dt = Math.min(0.05, Math.max(0.001, dt));
@@ -29453,6 +29548,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var movementDelta = viewerMovementVelocity.scale(dt);
         moveViewerCameraWithGroundedCollision(movementDelta);
+        enforceMobileViewerGroundedWalkHeight();
 
         var step = getViewerMovementStepVisual(dt, hasInput, viewerMovementVelocity.length());
         var stopSettle = updateViewerMovementStopSettle(dt, hasInput, speedBeforeStop);
@@ -29521,6 +29617,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        // One canvas gesture has one owner. A second finger must not replace the
+        // captured pointer and leave the first movement vector active.
+        if (mobileLookActive) {
+            if (event.cancelable) event.preventDefault();
+            return false;
+        }
+
         resetMobileCanvasMoveGesture();
         mobileLookActive = true;
         mobileLookPointerId = event.pointerId;
@@ -29529,7 +29632,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mobileLookLastX = event.clientX;
         mobileLookLastY = event.clientY;
         mobileLookMoved = false;
-        mobileCanvasGestureMode = "pending";
+        // While the real joystick is held, the second thumb is camera-look only.
+        // The temporary hold joystick is allowed only when no other movement owner exists.
+        mobileCanvasGestureMode = mobileJoystickActive ? "look" : "pending";
 
         if (canvas && canvas.setPointerCapture && event.pointerId !== undefined) {
             try {
@@ -29537,18 +29642,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             } catch (error) {}
         }
 
-        mobileCanvasHoldTimer = setTimeout(function () {
-            mobileCanvasHoldTimer = null;
+        if (mobileCanvasGestureMode === "pending") {
+            mobileCanvasHoldTimer = setTimeout(function () {
+                mobileCanvasHoldTimer = null;
 
-            if (!mobileLookActive || mobileCanvasGestureMode !== "pending") {
-                return;
-            }
+                if (!mobileLookActive || mobileCanvasGestureMode !== "pending") {
+                    return;
+                }
 
-            mobileCanvasGestureMode = "move";
-            mobileCanvasMoveActive = true;
-            mobileLookMoved = true;
-            markGalleryViewerActivity("mobile-hold-movement-ready");
-        }, mobileCanvasHoldDelayMs);
+                if (mobileJoystickActive) {
+                    mobileCanvasGestureMode = "look";
+                    mobileLookMoved = true;
+                    return;
+                }
+
+                mobileCanvasGestureMode = "move";
+                mobileCanvasMoveActive = true;
+                mobileLookMoved = true;
+                markGalleryViewerActivity("mobile-hold-movement-ready");
+            }, mobileCanvasHoldDelayMs);
+        }
 
         if (event.cancelable) {
             event.preventDefault();
@@ -29673,9 +29786,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var wasTap = !cancelled && mobileCanvasGestureMode === "pending" && !mobileLookMoved;
         clearMobileCanvasHoldTimer();
 
-        if (canvas && canvas.releasePointerCapture && event && event.pointerId !== undefined) {
+        var releasePointerId = event && event.pointerId !== undefined
+            ? event.pointerId
+            : mobileLookPointerId;
+
+        if (canvas && canvas.releasePointerCapture && releasePointerId !== null && releasePointerId !== undefined) {
             try {
-                canvas.releasePointerCapture(event.pointerId);
+                canvas.releasePointerCapture(releasePointerId);
             } catch (error) {}
         }
 
@@ -29718,7 +29835,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 user-select: none;
                 -webkit-user-select: none;
                 touch-action: none;
-                transition: opacity 160ms ease, transform 160ms ease;
+                transition: opacity 160ms ease, transform 160ms ease, right 180ms ease, left 180ms ease;
+            }
+            body.is-editor-authenticated:not(.gallery-edit-mode-active) #galleryDesktopDpad {
+                right: calc(var(--gallery-editor-screen-gap, 30px) + 196px);
+                left: auto;
             }
             body.gallery-edit-mode-active #galleryDesktopDpad {
                 right: auto;
@@ -29832,6 +29953,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (blocked) resetGalleryDesktopDpadState();
     }
 
+    function configureGalleryFloorIndicatorMesh(mesh, displayType) {
+        mesh.isPickable = false;
+        mesh.checkCollisions = false;
+        mesh.receiveShadows = false;
+        mesh.doNotSerialize = true;
+        mesh.renderOutline = true;
+        mesh.outlineColor = new BABYLON.Color3(0.07, 0.07, 0.07);
+        mesh.outlineWidth = 0.035;
+        mesh.metadata = {
+            displayType: displayType,
+            ignoreLocalLightTargeting: true,
+            ignoreGalleryStreaming: true
+        };
+    }
+
     function getOrCreateGalleryFloorCursorRing() {
         if (galleryFloorCursorRing && !(galleryFloorCursorRing.isDisposed && galleryFloorCursorRing.isDisposed())) {
             return galleryFloorCursorRing;
@@ -29839,33 +29975,114 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryFloorCursorRingMaterial = new BABYLON.StandardMaterial("GalleryFloorCursorRingMaterial", scene);
         galleryFloorCursorRingMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
-        galleryFloorCursorRingMaterial.emissiveColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+        galleryFloorCursorRingMaterial.emissiveColor = new BABYLON.Color3(0.96, 0.96, 0.96);
         galleryFloorCursorRingMaterial.specularColor = BABYLON.Color3.Black();
-        galleryFloorCursorRingMaterial.alpha = 0.52;
+        galleryFloorCursorRingMaterial.alpha = 0.90;
         galleryFloorCursorRingMaterial.disableLighting = true;
         galleryFloorCursorRingMaterial.backFaceCulling = false;
 
         galleryFloorCursorRing = BABYLON.MeshBuilder.CreateTorus(
             "GalleryFloorCursorRing",
-            { diameter: 0.56, thickness: 0.026, tessellation: 48 },
+            { diameter: 0.64, thickness: 0.038, tessellation: 56 },
             scene
         );
         galleryFloorCursorRing.material = galleryFloorCursorRingMaterial;
-        galleryFloorCursorRing.isPickable = false;
-        galleryFloorCursorRing.checkCollisions = false;
-        galleryFloorCursorRing.receiveShadows = false;
-        galleryFloorCursorRing.doNotSerialize = true;
-        galleryFloorCursorRing.metadata = {
-            displayType: "floor-cursor-highlight",
-            ignoreLocalLightTargeting: true,
-            ignoreGalleryStreaming: true
-        };
+        configureGalleryFloorIndicatorMesh(galleryFloorCursorRing, "floor-cursor-highlight");
         galleryFloorCursorRing.setEnabled(false);
         return galleryFloorCursorRing;
     }
 
+    function getOrCreateGalleryFloorCursorPulseRing() {
+        if (galleryFloorCursorPulseRing && !(galleryFloorCursorPulseRing.isDisposed && galleryFloorCursorPulseRing.isDisposed())) {
+            return galleryFloorCursorPulseRing;
+        }
+
+        galleryFloorCursorPulseMaterial = new BABYLON.StandardMaterial("GalleryFloorCursorPulseMaterial", scene);
+        galleryFloorCursorPulseMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        galleryFloorCursorPulseMaterial.emissiveColor = new BABYLON.Color3(1, 1, 1);
+        galleryFloorCursorPulseMaterial.specularColor = BABYLON.Color3.Black();
+        galleryFloorCursorPulseMaterial.alpha = 0;
+        galleryFloorCursorPulseMaterial.disableLighting = true;
+        galleryFloorCursorPulseMaterial.backFaceCulling = false;
+
+        galleryFloorCursorPulseRing = BABYLON.MeshBuilder.CreateTorus(
+            "GalleryFloorCursorPulseRing",
+            { diameter: 0.64, thickness: 0.032, tessellation: 56 },
+            scene
+        );
+        galleryFloorCursorPulseRing.material = galleryFloorCursorPulseMaterial;
+        configureGalleryFloorIndicatorMesh(galleryFloorCursorPulseRing, "floor-cursor-click-pulse");
+        galleryFloorCursorPulseRing.outlineWidth = 0.026;
+        galleryFloorCursorPulseRing.setEnabled(false);
+        return galleryFloorCursorPulseRing;
+    }
+
     function hideGalleryFloorCursorRing() {
         if (galleryFloorCursorRing) galleryFloorCursorRing.setEnabled(false);
+    }
+
+    function hideGalleryFloorCursorPulse() {
+        galleryFloorCursorPulseStartedAt = 0;
+        if (galleryFloorCursorPulseRing) galleryFloorCursorPulseRing.setEnabled(false);
+        if (galleryFloorCursorPulseMaterial) galleryFloorCursorPulseMaterial.alpha = 0;
+    }
+
+    function pickGalleryFloorFromPointer(event) {
+        if (!event || !canvas || !canvas.getBoundingClientRect) {
+            return null;
+        }
+
+        var rect = canvas.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        var visiblePick = scene.pick(x, y, null, false, camera);
+
+        if (!visiblePick || !visiblePick.hit || !visiblePick.pickedMesh || floorMeshes.indexOf(visiblePick.pickedMesh) === -1) {
+            return null;
+        }
+
+        return visiblePick;
+    }
+
+    function startGalleryFloorCursorClickPulse(event) {
+        if (!event || event.button !== 0 || !isGalleryDesktopPointerNavigationAvailable() ||
+            (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
+            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere) {
+            return false;
+        }
+
+        var pick = pickGalleryFloorFromPointer(event);
+        if (!pick || !pick.hit || !pick.pickedPoint) {
+            return false;
+        }
+
+        var pulse = getOrCreateGalleryFloorCursorPulseRing();
+        pulse.position.copyFrom(pick.pickedPoint);
+        pulse.position.y += 0.021;
+        pulse.rotationQuaternion = null;
+        pulse.rotation.copyFrom(BABYLON.Vector3.Zero());
+        pulse.scaling.set(0.82, 0.82, 0.82);
+        galleryFloorCursorPulseMaterial.alpha = 0.92;
+        galleryFloorCursorPulseStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        pulse.setEnabled(true);
+        return true;
+    }
+
+    function updateGalleryFloorCursorClickPulse() {
+        if (!galleryFloorCursorPulseStartedAt || !galleryFloorCursorPulseRing || !galleryFloorCursorPulseMaterial) {
+            return;
+        }
+
+        var now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        var t = Math.max(0, Math.min(1, (now - galleryFloorCursorPulseStartedAt) / galleryFloorCursorPulseDurationMs));
+        var eased = 1 - Math.pow(1 - t, 3);
+        var scale = 0.82 + eased * 0.78;
+        galleryFloorCursorPulseRing.scaling.set(scale, scale, scale);
+        galleryFloorCursorPulseMaterial.alpha = 0.92 * Math.pow(1 - t, 1.55);
+
+        if (t >= 1) {
+            hideGalleryFloorCursorPulse();
+        }
     }
 
     function updateGalleryFloorCursorRingFromPointer(event) {
@@ -29879,12 +30096,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var rect = canvas.getBoundingClientRect();
-        var x = event.clientX - rect.left;
-        var y = event.clientY - rect.top;
-        var pick = scene.pick(x, y, function (mesh) {
-            return !!(mesh && floorMeshes.indexOf(mesh) !== -1);
-        }, false, camera);
+        var pick = pickGalleryFloorFromPointer(event);
 
         if (!pick || !pick.hit || !pick.pickedPoint) {
             hideGalleryFloorCursorRing();
@@ -29893,9 +30105,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var ring = getOrCreateGalleryFloorCursorRing();
         ring.position.copyFrom(pick.pickedPoint);
-        ring.position.y += 0.018;
+        ring.position.y += 0.020;
         ring.rotationQuaternion = null;
         ring.rotation.copyFrom(BABYLON.Vector3.Zero());
+        ring.scaling.set(1, 1, 1);
         ring.setEnabled(true);
     }
 
@@ -29912,11 +30125,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     registerGalleryDomEvent("galleryDesktopDpadWindowBlur", window, "blur", function () {
         resetGalleryDesktopDpadState();
         hideGalleryFloorCursorRing();
+        hideGalleryFloorCursorPulse();
     });
     registerGalleryDomEvent("galleryDesktopDpadVisibility", document, "visibilitychange", function () {
         if (document.hidden) {
             resetGalleryDesktopDpadState();
             hideGalleryFloorCursorRing();
+            hideGalleryFloorCursorPulse();
         }
     });
     registerGalleryDomEvent("galleryDesktopDpadResize", window, "resize", syncGalleryDesktopDpadVisibility);
@@ -29925,6 +30140,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             scheduleGalleryFloorCursorRingUpdate(event);
         }
     });
+    registerGalleryDomEvent("galleryFloorCursorPointerDown", canvas, "pointerdown", function (event) {
+        if (event.pointerType === "mouse" || !event.pointerType) {
+            startGalleryFloorCursorClickPulse(event);
+        }
+    }, true);
     registerGalleryDomEvent("galleryFloorCursorPointerLeave", canvas, "pointerleave", hideGalleryFloorCursorRing);
     syncGalleryDesktopDpadVisibility();
 
@@ -30105,7 +30325,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         registerGalleryDomEvent("mobileViewerOrientationChange", window, "orientationchange", function () {
-            resetMobileJoystick();
+            resetGalleryMobileNavigationState("orientationchange");
             scheduleRefreshMobileViewerMode();
         });
 
@@ -30140,6 +30360,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }, true);
 
+    registerGalleryDomEvent("mobileNavigationWindowBlurSafety", window, "blur", function () {
+        resetGalleryMobileNavigationState("window-blur");
+    }, true);
+
+    registerGalleryDomEvent("mobileNavigationPageHideSafety", window, "pagehide", function () {
+        resetGalleryMobileNavigationState("pagehide");
+    }, true);
+
+    registerGalleryDomEvent("mobileNavigationVisibilitySafety", document, "visibilitychange", function () {
+        if (document.hidden) {
+            resetGalleryMobileNavigationState("document-hidden");
+        }
+    }, true);
+
     registerGalleryDomEvent("mobileCanvasDragStartSafety", canvas, "dragstart", function (event) {
         if (event && event.preventDefault) {
             event.preventDefault();
@@ -30159,6 +30393,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function runGalleryFrameTick() {
         syncGalleryDesktopDpadVisibility();
+        updateGalleryFloorCursorClickPulse();
         updateViewerWASDMovement();
         updateViewerWallCollisionIfCameraMoved();
         updateGalleryZoneStreamingRuntime(false);

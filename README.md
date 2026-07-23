@@ -1,24 +1,18 @@
-# Berryboy Art Gallery — Stage 12C66C / Etap 3
+# Berryboy Art Gallery — Stage 12C66C1
 
-Stage 12C66C powstał bezpośrednio na naprawionej bazie **12C66B2R**. Zachowuje integralność zapisu, startup uruchamiany dopiero po kliknięciu, neutralne czasoumilacze oraz oryginalny popup instruktażowy.
+Wąski hotfix stabilizujący Etap 3 na bazie **12C66C**. Nie przebudowuje popupu, startupu, Edit Mode, zapisu, Inspect ani kolizji rzeźb.
 
-## Zakres Etapu 3
+## Poprawki
 
-- Bezpieczne rozróżnianie draftów i kolejek Storage pomiędzy kartami przeglądarki.
-- Potwierdzenie runtime, że oryginalny popup instruktażowy rzeczywiście pojawił się po `gallery-interaction-ready`.
-- Ekranowy D-pad na PC: przód, tył, obrót w lewo i w prawo, z ruchem podczas przytrzymania.
-- Subtelny pierścień kursora widoczny tylko na powierzchni podłogi.
-- Mobilne zabezpieczenia long-press oraz gest: krótki drag obraca kamerę, przytrzymanie przełącza drag w tymczasowy joystick.
-- Cztery główne sekcje Edit Mode: Exhibits, Space, Lighting i Settings.
-- Jeden istniejący przycisk Save przeniesiony do stałego dolnego paska Edit Mode.
-- Stany zapisu: wszystko zapisane, niezapisane zmiany, zapisywanie, zapisano i błąd.
-- Ostrzeżenia przed opuszczeniem Edit Mode, wylogowaniem i zamknięciem karty z niezapisanymi zmianami.
-- Naprawiony istniejący collider proxy rzeźb; działa w Viewer Mode i podczas zwykłego chodzenia w Edit Mode, a świadomy `Space` fly mode może go ominąć.
-- Usunięte równoległe ścieżki: drugi techniczny loader, stare wejścia do Light Mode i nagłówkowa akcja Save.
-
-## Chronione elementy
-
-Oryginalny popup instruktażowy nie został przeprojektowany. Testy blokują zmianę jego dwóch kluczowych funkcji za pomocą hashy SHA-256.
+- Floor cursor jest większy, jaśniejszy i ma ciemny outline, dzięki czemu pozostaje widoczny na jasnej i odbijającej podłodze.
+- Kliknięcie widocznego fragmentu podłogi uruchamia jeden krótki, wielokrotnego użytku ripple/pulse.
+- Ring i pulse nie przebijają przez ściany, obrazy ani rzeźby — pierwszy widoczny hit musi należeć do `floorMeshes`.
+- D-pad zachowuje prawą pozycję u publicznego obserwatora, ale przy zalogowanym edytorze odsuwa się od pływającego przycisku `EDIT MODE`.
+- Mobilny Viewer nie może ponownie podłączyć Babylon `FreeCameraTouchInput` po Inspect, recovery ani odświeżeniu viewportu.
+- Jedna aktywna ścieżka dotyku ma jednego właściciela; drugi palec nie nadpisuje przechwyconego gestu.
+- Prawdziwy joystick i tymczasowy hold-joystick nie mogą równocześnie sterować ruchem.
+- Po anulowaniu gestu, utracie focusu, `pagehide`, zmianie orientacji lub ukryciu karty zerowane są wszystkie wektory ruchu.
+- W mobilnym Viewerze kamera jest twardo utrzymywana na zapisanej wysokości chodzenia, poza świadomym Inspect/Custom Focus.
 
 ## Build i testy
 
@@ -26,17 +20,6 @@ Oryginalny popup instruktażowy nie został przeprojektowany. Testy blokują zmi
 npm run check
 ```
 
-Polecenie:
+Polecenie buduje plik produkcyjny, generuje TXT login-disabled oraz uruchamia verifier i testy Etapu 1–3 wraz z testami hotfixu C1.
 
-1. buduje prawdziwy plik produkcyjny `Gallery_V0_11.min.js`,
-2. generuje TXT z logowaniem wyłączonym,
-3. sprawdza składnię,
-4. uruchamia verifier kontraktów,
-5. testuje integralność zapisu,
-6. testuje startup i oryginalny popup,
-7. testuje limity obrazów,
-8. testuje systemy Etapu 3.
-
-## Ważne
-
-Testy automatyczne nie zastępują manualnego sprawdzenia na prawdziwym Supabase oraz fizycznych urządzeniach z Androidem i iOS. Szczegółowa lista znajduje się w `STAGE12C66C_TEST_CHECKLIST.txt`.
+Manualne sprawdzenie na fizycznym Androidzie i iOS nadal jest obowiązkowe. Lista: `STAGE12C66C1_TEST_CHECKLIST.txt`.

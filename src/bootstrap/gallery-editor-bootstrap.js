@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C Edit Workflow / Sticky Save
+  Berryboy Art Gallery — Stage 12C66C1 Edit Workflow / Sticky Save
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
