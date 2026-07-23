@@ -74,6 +74,7 @@
   - Stage 12C65E UI Fix: Stable Inspect Navigation — przyciski Previous/Next zachowują stałą geometrię podczas przejazdu kamery, dzięki czemu mobilny popup i jego safe-frame nie skaczą.
   - Stage 12C65E UI Fix: Edit Mode Pointer Recovery — pływający przycisk Edit Mode jawnie odzyskuje pointer-events wewnątrz warstwy HUD controls.
   - Stage 12C65E Light Mode Exit Fix: restored Local Lights no longer enter the manual pending-retarget queue, and BACK TO EDIT commits all real dirty lights in one segment-aware batch instead of repeating a full relation scan per light.
+  - Stage 12C66A: Save Integrity / Draft Commit / Deferred Storage Cleanup — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
   - UI ONLY: Transform przeniesiony pod naglowek GENERAL SETTINGS, mixed-info przeniesione pod Range.
@@ -8819,6 +8820,198 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    function readGalleryUint24LittleEndian(bytes, offset) {
+        return (bytes[offset] || 0) |
+            ((bytes[offset + 1] || 0) << 8) |
+            ((bytes[offset + 2] || 0) << 16);
+    }
+
+    function parseGalleryImageDimensionsFromHeader(arrayBuffer) {
+        var bytes = new Uint8Array(arrayBuffer || new ArrayBuffer(0));
+        var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+        if (bytes.length >= 24 &&
+            bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+            return {
+                width: view.getUint32(16, false),
+                height: view.getUint32(20, false),
+                format: "png"
+            };
+        }
+
+        if (bytes.length >= 10 &&
+            bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+            return {
+                width: view.getUint16(6, true),
+                height: view.getUint16(8, true),
+                format: "gif"
+            };
+        }
+
+        if (bytes.length >= 30 &&
+            String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === "RIFF" &&
+            String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]) === "WEBP") {
+            var chunk = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+
+            if (chunk === "VP8X" && bytes.length >= 30) {
+                return {
+                    width: 1 + readGalleryUint24LittleEndian(bytes, 24),
+                    height: 1 + readGalleryUint24LittleEndian(bytes, 27),
+                    format: "webp"
+                };
+            }
+
+            if (chunk === "VP8L" && bytes.length >= 25 && bytes[20] === 0x2F) {
+                return {
+                    width: 1 + bytes[21] + ((bytes[22] & 0x3F) << 8),
+                    height: 1 + ((bytes[22] >> 6) | (bytes[23] << 2) | ((bytes[24] & 0x0F) << 10)),
+                    format: "webp"
+                };
+            }
+
+            if (chunk === "VP8 " && bytes.length >= 30 &&
+                bytes[23] === 0x9D && bytes[24] === 0x01 && bytes[25] === 0x2A) {
+                return {
+                    width: view.getUint16(26, true) & 0x3FFF,
+                    height: view.getUint16(28, true) & 0x3FFF,
+                    format: "webp"
+                };
+            }
+        }
+
+        if (bytes.length >= 4 && bytes[0] === 0xFF && bytes[1] === 0xD8) {
+            var offset = 2;
+            var sofMarkers = {
+                0xC0: true, 0xC1: true, 0xC2: true, 0xC3: true,
+                0xC5: true, 0xC6: true, 0xC7: true,
+                0xC9: true, 0xCA: true, 0xCB: true,
+                0xCD: true, 0xCE: true, 0xCF: true
+            };
+
+            while (offset + 8 < bytes.length) {
+                if (bytes[offset] !== 0xFF) {
+                    offset += 1;
+                    continue;
+                }
+
+                while (offset < bytes.length && bytes[offset] === 0xFF) {
+                    offset += 1;
+                }
+
+                var marker = bytes[offset];
+                offset += 1;
+
+                if (marker === 0xD8 || marker === 0xD9 || (marker >= 0xD0 && marker <= 0xD7)) {
+                    continue;
+                }
+
+                if (offset + 1 >= bytes.length) {
+                    break;
+                }
+
+                var segmentLength = view.getUint16(offset, false);
+
+                if (sofMarkers[marker] && segmentLength >= 7 && offset + 7 < bytes.length) {
+                    return {
+                        width: view.getUint16(offset + 5, false),
+                        height: view.getUint16(offset + 3, false),
+                        format: "jpeg"
+                    };
+                }
+
+                if (segmentLength < 2) {
+                    break;
+                }
+
+                offset += segmentLength;
+            }
+        }
+
+        return null;
+    }
+
+    async function readGalleryImageDimensions(file) {
+        var headerSize = Math.min(Number(file && file.size) || 0, 512 * 1024);
+
+        if (file && file.slice && headerSize > 0) {
+            try {
+                var headerBuffer = await file.slice(0, headerSize).arrayBuffer();
+                var headerDimensions = parseGalleryImageDimensionsFromHeader(headerBuffer);
+
+                if (headerDimensions && headerDimensions.width > 0 && headerDimensions.height > 0) {
+                    return headerDimensions;
+                }
+            } catch (headerError) {
+                console.warn("Image header validation warning:", headerError);
+            }
+        }
+
+        var image = await loadImageElementFromBlob(file);
+
+        return {
+            width: Number(image.naturalWidth || image.width) || 0,
+            height: Number(image.naturalHeight || image.height) || 0,
+            format: "browser-decoded"
+        };
+    }
+
+    async function validateGalleryImageUploadFile(file, profileName) {
+        var limits = galleryImageUploadLimits[profileName] || galleryImageUploadLimits.artwork;
+        var allowedMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"];
+
+        if (!file || !file.type || allowedMimeTypes.indexOf(String(file.type).toLowerCase()) === -1) {
+            return {
+                ok: false,
+                message: "Nieobslugiwany format obrazu. Uzyj JPG, PNG, WebP, AVIF lub GIF."
+            };
+        }
+
+        if ((Number(file.size) || 0) > limits.maxBytes) {
+            return {
+                ok: false,
+                message: "Plik jest za duzy. Limit dla " + limits.label + " to " + Math.round(limits.maxBytes / 1024 / 1024) + " MB."
+            };
+        }
+
+        var dimensions = null;
+
+        try {
+            dimensions = await readGalleryImageDimensions(file);
+        } catch (dimensionError) {
+            console.warn("Image dimension validation failed:", dimensionError);
+            return {
+                ok: false,
+                message: "Nie udalo sie odczytac wymiarow obrazu. Sprawdz plik i sprobuj ponownie."
+            };
+        }
+
+        var width = Number(dimensions && dimensions.width) || 0;
+        var height = Number(dimensions && dimensions.height) || 0;
+        var pixels = width * height;
+
+        if (!width || !height) {
+            return {
+                ok: false,
+                message: "Obraz nie ma poprawnych wymiarow."
+            };
+        }
+
+        if (width > limits.maxSide || height > limits.maxSide || pixels > limits.maxPixels) {
+            return {
+                ok: false,
+                message: "Rozdzielczosc jest za duza dla bezpiecznego przetwarzania. Maksymalnie " + limits.maxSide + " px na bok i " + Math.round(limits.maxPixels / 1000000) + " MP."
+            };
+        }
+
+        return {
+            ok: true,
+            width: width,
+            height: height,
+            pixels: pixels,
+            format: dimensions.format || "unknown"
+        };
+    }
+
     function canvasToBlobSafe(canvas, mimeType, quality) {
         return new Promise(function (resolve, reject) {
             if (!canvas || !canvas.toBlob) {
@@ -11408,6 +11601,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        var artworkImageValidation = await validateGalleryImageUploadFile(file, "artwork");
+
+        if (!artworkImageValidation.ok) {
+            notifyGalleryStatus(artworkImageValidation.message);
+            return false;
+        }
+
         var previousImageState = getArtworkImageState(artwork);
         var storagePath = createArtworkStoragePath(artwork, file);
         notifyGalleryStatus("Wgrywam obraz i kompresuje warianty...");
@@ -11513,35 +11713,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
         }, 850);
 
-        var previousDeleteState = null;
-
-        try {
-            previousDeleteState = getArtworkStorageDeleteState(previousImageState);
-        } catch (deleteStateError) {
-            console.warn("Previous artwork delete state warning:", deleteStateError);
-        }
+        var previousDeleteState = getArtworkStorageDeleteState(previousImageState);
 
         if (
             previousDeleteState &&
-            previousDeleteState.imagePath &&
-            previousDeleteState.imagePath !== storagePath
+            (previousDeleteState.imagePaths || [previousDeleteState.imagePath]).some(function (previousPath) {
+                return !!previousPath && previousPath !== storagePath;
+            })
         ) {
-            try {
-                deleteArtworkImageFromSupabase(previousDeleteState)
-                    .then(function (removedOldFile) {
-                        if (!removedOldFile) {
-                            console.warn("Previous artwork image was not removed from Storage:", previousDeleteState);
-                        }
-                    })
-                    .catch(function (error) {
-                        console.warn("Previous artwork image delete warning:", error);
-                    });
-            } catch (previousDeleteError) {
-                console.warn("Previous artwork image delete startup warning:", previousDeleteError);
-            }
+            queueGalleryArtworkStateForCleanup(previousImageState, "artwork-image-replaced");
         }
 
-        notifyGalleryStatus("Wgrano obraz i warianty. Zapisz stan galerii, aby zachowac zmiane.");
+        markGalleryDraftDirty("artwork-image-uploaded");
+        notifyGalleryStatus("Wgrano obraz i warianty. Poprzedni plik zostanie usuniety dopiero po poprawnym zapisie galerii.");
         return true;
     }
 
@@ -11612,51 +11796,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
-    async function deleteArtworkImageFromSupabase(imageState) {
-        var deleteState = getArtworkStorageDeleteState(imageState);
-
-        if (!deleteState || !deleteState.imagePath) {
-            return true;
-        }
-
-        var client = window.gallerySupabase;
-
-        if (!client || !client.storage) {
-            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany. Usuwam tylko z aktualnego obrazu.");
-            return true;
-        }
-
-        var pathsToRemove = deleteState.imagePaths && deleteState.imagePaths.length
-            ? deleteState.imagePaths
-            : [deleteState.imagePath];
-
-        var removeResponse = await client
-            .storage
-            .from(deleteState.storageBucket)
-            .remove(pathsToRemove);
-
-        if (removeResponse.error) {
-            console.warn("Artwork Storage delete error:", {
-                bucket: deleteState.storageBucket,
-                path: deleteState.imagePath,
-                paths: pathsToRemove,
-                originalState: imageState,
-                error: removeResponse.error
-            });
-            notifyGalleryStatus("Nie udalo sie usunac pliku ze Storage.");
-            return false;
-        }
-
-        console.info("Artwork Storage file removed:", {
-            bucket: deleteState.storageBucket,
-            path: deleteState.imagePath,
-            data: removeResponse.data || null
-        });
-
-        return true;
-    }
-
-
     function getModel3dStorageDeleteState(modelState) {
         modelState = normalizeModel3dState(modelState);
 
@@ -11684,6 +11823,533 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    function cloneGalleryStateForIntegrity(value) {
+        try {
+            return JSON.parse(JSON.stringify(value || null));
+        } catch (error) {
+            console.warn("Gallery state integrity clone warning:", error);
+            return null;
+        }
+    }
+
+    function createGalleryComparableState(state) {
+        var clone = cloneGalleryStateForIntegrity(state) || {};
+
+        if (clone && typeof clone === "object") {
+            delete clone.savedAt;
+            delete clone.saveIntegrity;
+        }
+
+        return clone;
+    }
+
+    function createGalleryCanonicalFingerprintValue(value) {
+        if (Array.isArray(value)) {
+            return value.map(function (item) {
+                return createGalleryCanonicalFingerprintValue(item);
+            });
+        }
+
+        if (value && typeof value === "object") {
+            var normalized = {};
+
+            Object.keys(value).sort().forEach(function (key) {
+                normalized[key] = createGalleryCanonicalFingerprintValue(value[key]);
+            });
+
+            return normalized;
+        }
+
+        return value;
+    }
+
+    function getGalleryStateIntegrityFingerprint(state) {
+        try {
+            return JSON.stringify(
+                createGalleryCanonicalFingerprintValue(
+                    createGalleryComparableState(state)
+                )
+            );
+        } catch (error) {
+            console.warn("Gallery state fingerprint warning:", error);
+            return "";
+        }
+    }
+
+    function getGalleryStateRevision(state) {
+        return Math.max(
+            0,
+            Number(state && state.saveIntegrity && state.saveIntegrity.revision) || 0
+        );
+    }
+
+    function dispatchGalleryDraftState(reason) {
+        try {
+            window.dispatchEvent(new CustomEvent("gallery-draft-state", {
+                detail: {
+                    stage: gallerySaveIntegrityRuntime.stage,
+                    dirty: !!gallerySaveIntegrityRuntime.dirty,
+                    reason: reason || gallerySaveIntegrityRuntime.dirtyReason || "unknown",
+                    dirtySince: gallerySaveIntegrityRuntime.dirtySince || 0,
+                    revision: gallerySaveIntegrityRuntime.publishedRevision,
+                    saveInFlight: !!gallerySaveIntegrityRuntime.saveInFlight,
+                    pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length
+                }
+            }));
+        } catch (error) {}
+    }
+
+    function markGalleryDraftDirty(reason) {
+        if (!gallerySaveIntegrityRuntime.baselineReady || gallerySaveIntegrityRuntime.saveInFlight) {
+            return false;
+        }
+
+        if (!gallerySaveIntegrityRuntime.dirty) {
+            gallerySaveIntegrityRuntime.dirty = true;
+            gallerySaveIntegrityRuntime.dirtySince = Date.now();
+        }
+
+        gallerySaveIntegrityRuntime.dirtyReason = reason || "scene-change";
+        dispatchGalleryDraftState(gallerySaveIntegrityRuntime.dirtyReason);
+        return true;
+    }
+
+    function persistGalleryPendingStorageCleanupQueue() {
+        try {
+            localStorage.setItem(
+                gallerySaveIntegrityRuntime.pendingCleanupStorageKey,
+                JSON.stringify(gallerySaveIntegrityRuntime.pendingStorageDeletes)
+            );
+        } catch (error) {
+            console.warn("Pending Storage cleanup queue persist warning:", error);
+        }
+    }
+
+    function restoreGalleryPendingStorageCleanupQueue() {
+        try {
+            var rawQueue = localStorage.getItem(gallerySaveIntegrityRuntime.pendingCleanupStorageKey);
+            var parsedQueue = rawQueue ? JSON.parse(rawQueue) : [];
+
+            if (Array.isArray(parsedQueue)) {
+                gallerySaveIntegrityRuntime.pendingStorageDeletes = parsedQueue.filter(function (entry) {
+                    return !!(entry && entry.bucket && entry.path);
+                });
+            }
+        } catch (error) {
+            console.warn("Pending Storage cleanup queue restore warning:", error);
+            gallerySaveIntegrityRuntime.pendingStorageDeletes = [];
+        }
+    }
+
+    function queueGalleryStorageCleanupPaths(bucketName, paths, kind, reason) {
+        var safeBucket = String(bucketName || galleryArtworkStorageBucket || "").trim();
+        var changed = false;
+
+        (Array.isArray(paths) ? paths : [paths]).forEach(function (path) {
+            var safePath = String(path || "").trim();
+
+            if (!safeBucket || !safePath) {
+                return;
+            }
+
+            var exists = gallerySaveIntegrityRuntime.pendingStorageDeletes.some(function (entry) {
+                return entry && entry.bucket === safeBucket && entry.path === safePath;
+            });
+
+            if (exists) {
+                return;
+            }
+
+            gallerySaveIntegrityRuntime.pendingStorageDeletes.push({
+                bucket: safeBucket,
+                path: safePath,
+                kind: kind || "asset",
+                reason: reason || "draft-replacement",
+                queuedAt: Date.now()
+            });
+            changed = true;
+        });
+
+        if (changed) {
+            persistGalleryPendingStorageCleanupQueue();
+            dispatchGalleryDraftState("storage-cleanup-queued");
+        }
+
+        return changed;
+    }
+
+    function queueGalleryArtworkStateForCleanup(imageState, reason) {
+        var deleteState = getArtworkStorageDeleteState(imageState);
+
+        if (!deleteState) {
+            return false;
+        }
+
+        return queueGalleryStorageCleanupPaths(
+            deleteState.storageBucket,
+            deleteState.imagePaths || [deleteState.imagePath],
+            "artwork-image",
+            reason
+        );
+    }
+
+    function queueReplacedGalleryArtworkStateForCleanup(previousState, nextState, reason) {
+        var previousDeleteState = getArtworkStorageDeleteState(previousState);
+
+        if (!previousDeleteState) {
+            return false;
+        }
+
+        var nextDeleteState = getArtworkStorageDeleteState(nextState);
+
+        if (
+            nextDeleteState &&
+            nextDeleteState.storageBucket === previousDeleteState.storageBucket &&
+            nextDeleteState.imagePath === previousDeleteState.imagePath
+        ) {
+            return false;
+        }
+
+        return queueGalleryArtworkStateForCleanup(previousState, reason || "artwork-image-replaced");
+    }
+
+    function queueGalleryAuthorPhotoForCleanup(info, reason) {
+        info = Object.assign({}, info || {});
+        var paths = getAuthorPhotoPathsForDelete(info);
+
+        return queueGalleryStorageCleanupPaths(
+            info.authorPhotoBucket || info.photoBucket || galleryArtworkStorageBucket,
+            paths,
+            "author-photo",
+            reason
+        );
+    }
+
+    function queueGalleryModelStateForCleanup(modelState, reason) {
+        var deleteState = getModel3dStorageDeleteState(modelState);
+
+        if (!deleteState) {
+            return false;
+        }
+
+        return queueGalleryStorageCleanupPaths(
+            deleteState.storageBucket,
+            [deleteState.modelPath],
+            "model3d",
+            reason
+        );
+    }
+
+    function queueReplacedGalleryModelStateForCleanup(previousState, nextState, reason) {
+        var previousDeleteState = getModel3dStorageDeleteState(previousState);
+
+        if (!previousDeleteState) {
+            return false;
+        }
+
+        var nextDeleteState = getModel3dStorageDeleteState(nextState);
+
+        if (
+            nextDeleteState &&
+            nextDeleteState.storageBucket === previousDeleteState.storageBucket &&
+            nextDeleteState.modelPath === previousDeleteState.modelPath
+        ) {
+            return false;
+        }
+
+        return queueGalleryModelStateForCleanup(previousState, reason || "model3d-replaced");
+    }
+
+    function collectGalleryStateStorageReferences(state) {
+        var references = {};
+        var pathKeys = {
+            imagePath: true,
+            imagePathWeb: true,
+            imagePathMobile: true,
+            imagePathPreview: true,
+            modelPath: true,
+            authorPhotoPath: true,
+            authorPhotoPathWeb: true,
+            authorPhotoPathMobile: true,
+            authorPhotoPathPreview: true,
+            photoPath: true,
+            photoPathWeb: true,
+            photoPathMobile: true,
+            photoPathPreview: true
+        };
+
+        function addReference(bucket, path) {
+            var safeBucket = String(bucket || galleryArtworkStorageBucket || "").trim();
+            var safePath = String(path || "").trim();
+
+            if (safeBucket && safePath) {
+                references[safeBucket + "|" + safePath] = true;
+            }
+        }
+
+        function visit(value, inheritedBucket) {
+            if (!value || typeof value !== "object") {
+                return;
+            }
+
+            if (Array.isArray(value)) {
+                value.forEach(function (item) {
+                    visit(item, inheritedBucket);
+                });
+                return;
+            }
+
+            var localBucket = value.storageBucket || value.authorPhotoBucket || value.photoBucket || inheritedBucket || galleryArtworkStorageBucket;
+
+            Object.keys(value).forEach(function (key) {
+                var child = value[key];
+
+                if (pathKeys[key] && typeof child === "string") {
+                    addReference(localBucket, child);
+                }
+
+                if (key === "path" && typeof child === "string" && (value.modelUrl || value.modelPath || value.storageBucket)) {
+                    addReference(localBucket, child);
+                }
+
+                if (child && typeof child === "object") {
+                    visit(child, localBucket);
+                }
+            });
+        }
+
+        visit(state, galleryArtworkStorageBucket);
+        return references;
+    }
+
+    async function processGalleryDeferredStorageCleanup(savedState) {
+        var references = collectGalleryStateStorageReferences(savedState);
+        var retained = [];
+        var removableByBucket = {};
+        var skippedReferenced = 0;
+
+        gallerySaveIntegrityRuntime.pendingStorageDeletes.forEach(function (entry) {
+            if (!entry || !entry.bucket || !entry.path) {
+                return;
+            }
+
+            if (references[entry.bucket + "|" + entry.path]) {
+                skippedReferenced += 1;
+                return;
+            }
+
+            removableByBucket[entry.bucket] = removableByBucket[entry.bucket] || [];
+            removableByBucket[entry.bucket].push(entry);
+        });
+
+        var client = window.gallerySupabase;
+        var removedCount = 0;
+        var failedCount = 0;
+
+        if (!client || !client.storage) {
+            gallerySaveIntegrityRuntime.pendingStorageDeletes.forEach(function (entry) {
+                if (entry && !references[entry.bucket + "|" + entry.path]) {
+                    retained.push(entry);
+                }
+            });
+            gallerySaveIntegrityRuntime.pendingStorageDeletes = retained;
+            persistGalleryPendingStorageCleanupQueue();
+            return {
+                ok: false,
+                removed: 0,
+                failed: retained.length,
+                skippedReferenced: skippedReferenced,
+                reason: "storage-not-configured"
+            };
+        }
+
+        var buckets = Object.keys(removableByBucket);
+
+        for (var i = 0; i < buckets.length; i++) {
+            var bucket = buckets[i];
+            var entries = removableByBucket[bucket];
+            var paths = entries.map(function (entry) { return entry.path; });
+            var response = await client.storage.from(bucket).remove(paths);
+
+            if (response.error) {
+                failedCount += entries.length;
+                retained = retained.concat(entries);
+                gallerySaveIntegrityRuntime.cleanupFailures.push({
+                    bucket: bucket,
+                    paths: paths.slice(),
+                    message: response.error.message || String(response.error),
+                    failedAt: Date.now()
+                });
+                console.warn("Deferred Storage cleanup failed:", {
+                    bucket: bucket,
+                    paths: paths,
+                    error: response.error
+                });
+            } else {
+                removedCount += entries.length;
+                entries.forEach(function (entry) {
+                    if (entry.kind === "model3d") {
+                        clearModel3dClipboardIfStoragePathMatches({
+                            storageBucket: entry.bucket,
+                            modelPath: entry.path
+                        });
+                    }
+                });
+            }
+        }
+
+        gallerySaveIntegrityRuntime.pendingStorageDeletes = retained;
+        persistGalleryPendingStorageCleanupQueue();
+        dispatchGalleryDraftState("storage-cleanup-finished");
+
+        return {
+            ok: failedCount === 0,
+            removed: removedCount,
+            failed: failedCount,
+            skippedReferenced: skippedReferenced
+        };
+    }
+
+    function setGalleryPublishedStateBaseline(runtimeState, options) {
+        options = options || {};
+        var comparableFingerprint = getGalleryStateIntegrityFingerprint(runtimeState || serializeGalleryState());
+        var serverState = options.serverState || null;
+
+        gallerySaveIntegrityRuntime.publishedStateFingerprint = comparableFingerprint;
+        gallerySaveIntegrityRuntime.publishedServerStateFingerprint = serverState
+            ? getGalleryStateIntegrityFingerprint(serverState)
+            : comparableFingerprint;
+        gallerySaveIntegrityRuntime.publishedStateSnapshot = cloneGalleryStateForIntegrity(serverState || runtimeState);
+        gallerySaveIntegrityRuntime.publishedServerRowExists = options.serverRowExists !== undefined
+            ? !!options.serverRowExists
+            : !!serverState;
+        gallerySaveIntegrityRuntime.publishedRevision = options.revision !== undefined
+            ? Math.max(0, Number(options.revision) || 0)
+            : getGalleryStateRevision(serverState || runtimeState);
+        gallerySaveIntegrityRuntime.publishedStateConfirmed = options.confirmed !== false;
+        gallerySaveIntegrityRuntime.baselineReady = true;
+        gallerySaveIntegrityRuntime.dirty = false;
+        gallerySaveIntegrityRuntime.dirtyReason = options.reason || "published-baseline";
+        gallerySaveIntegrityRuntime.dirtySince = 0;
+        dispatchGalleryDraftState(gallerySaveIntegrityRuntime.dirtyReason);
+        startGalleryDraftStateWatcher();
+    }
+
+    function checkGalleryDraftStateNow(reason) {
+        if (!gallerySaveIntegrityRuntime.baselineReady || gallerySaveIntegrityRuntime.saveInFlight || galleryFastStartRuntime.stateApplyActive) {
+            return gallerySaveIntegrityRuntime.dirty;
+        }
+
+        var currentFingerprint = getGalleryStateIntegrityFingerprint(serializeGalleryState());
+        gallerySaveIntegrityRuntime.lastStateCheckAt = Date.now();
+        var nextDirty = currentFingerprint !== gallerySaveIntegrityRuntime.publishedStateFingerprint;
+
+        if (nextDirty !== gallerySaveIntegrityRuntime.dirty) {
+            gallerySaveIntegrityRuntime.dirty = nextDirty;
+            gallerySaveIntegrityRuntime.dirtySince = nextDirty ? Date.now() : 0;
+            gallerySaveIntegrityRuntime.dirtyReason = reason || (nextDirty ? "state-changed" : "state-matches-published");
+            dispatchGalleryDraftState(gallerySaveIntegrityRuntime.dirtyReason);
+        }
+
+        return nextDirty;
+    }
+
+    function startGalleryDraftStateWatcher() {
+        if (gallerySaveIntegrityRuntime.stateWatcherStarted) {
+            return;
+        }
+
+        gallerySaveIntegrityRuntime.stateWatcherStarted = true;
+        restoreGalleryPendingStorageCleanupQueue();
+
+        function scheduleNextCheck() {
+            if (gallerySaveIntegrityRuntime.stateCheckTimer) {
+                clearTimeout(gallerySaveIntegrityRuntime.stateCheckTimer);
+            }
+
+            gallerySaveIntegrityRuntime.stateCheckTimer = setTimeout(function () {
+                gallerySaveIntegrityRuntime.stateCheckTimer = null;
+
+                try {
+                    if (!galleryEditorLoginEnabled || editorAuthenticated || editMode) {
+                        checkGalleryDraftStateNow("draft-watch");
+                    }
+                } catch (error) {
+                    console.warn("Draft state watcher warning:", error);
+                }
+
+                scheduleNextCheck();
+            }, gallerySaveIntegrityRuntime.stateCheckIntervalMs);
+        }
+
+        scheduleNextCheck();
+    }
+
+    function persistGalleryPreviousStateBackup(previousState, metadata) {
+        if (!previousState) {
+            return false;
+        }
+
+        try {
+            localStorage.setItem(
+                gallerySaveIntegrityRuntime.localBackupStorageKey,
+                JSON.stringify({
+                    schema: gallerySaveIntegrityRuntime.schema,
+                    backedUpAt: new Date().toISOString(),
+                    metadata: metadata || {},
+                    state: previousState
+                })
+            );
+            return true;
+        } catch (error) {
+            console.warn("Local previous gallery state backup failed:", error);
+            return false;
+        }
+    }
+
+    function readGalleryPreviousStateBackup() {
+        try {
+            var rawBackup = localStorage.getItem(gallerySaveIntegrityRuntime.localBackupStorageKey);
+            return rawBackup ? JSON.parse(rawBackup) : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async function writeGalleryRemotePreviousStateBackup(client, previousState) {
+        if (!client || !previousState) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: "missing-client-or-state"
+            };
+        }
+
+        var response = await client
+            .from("gallery_state")
+            .upsert({
+                id: gallerySaveIntegrityRuntime.remoteBackupId,
+                state: previousState,
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: "id"
+            });
+
+        if (response.error) {
+            console.warn("Remote previous gallery state backup failed:", response.error);
+            return {
+                ok: false,
+                skipped: false,
+                error: response.error
+            };
+        }
+
+        return {
+            ok: true,
+            skipped: false
+        };
+    }
+
     function areModel3dStorageDeleteStatesEqual(a, b) {
         if (!a || !b) {
             return false;
@@ -11691,31 +12357,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         return String(a.storageBucket || "") === String(b.storageBucket || "") &&
             String(a.modelPath || "") === String(b.modelPath || "");
-    }
-
-    function isModel3dStoragePathUsedByOtherSlot(modelState, excludedSlot) {
-        var targetDeleteState = getModel3dStorageDeleteState(modelState);
-
-        if (!targetDeleteState) {
-            return false;
-        }
-
-        for (var i = 0; i < artSpheres.length; i++) {
-            var slot = artSpheres[i];
-
-            if (!slot || slot === excludedSlot || (slot.isDisposed && slot.isDisposed())) {
-                continue;
-            }
-
-            var otherState = getModel3dState(slot);
-            var otherDeleteState = getModel3dStorageDeleteState(otherState);
-
-            if (areModel3dStorageDeleteStatesEqual(targetDeleteState, otherDeleteState)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     function clearModel3dClipboardIfStoragePathMatches(deleteState) {
@@ -11734,150 +12375,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    async function deleteModel3dFileFromSupabaseIfUnused(modelState, excludedSlot, contextLabel) {
-        var deleteState = getModel3dStorageDeleteState(modelState);
-
-        if (!deleteState || !deleteState.modelPath) {
-            galleryModel3dStorageDeleteLastDebug = {
-                status: "skipped",
-                reason: "no-storage-path",
-                context: contextLabel || "model3d-delete"
-            };
-            return {
-                ok: true,
-                removed: false,
-                skipped: true,
-                reason: "no-storage-path"
-            };
-        }
-
-        if (isModel3dStoragePathUsedByOtherSlot(modelState, excludedSlot)) {
-            galleryModel3dStorageDeleteLastDebug = {
-                status: "skipped",
-                reason: "still-used-by-other-slot",
-                bucket: deleteState.storageBucket,
-                path: deleteState.modelPath,
-                context: contextLabel || "model3d-delete"
-            };
-            notifyGalleryStatus("Model usuniety ze slotu. Plik GLB zostal zachowany, bo jest uzywany przez inny slot.");
-            return {
-                ok: true,
-                removed: false,
-                skipped: true,
-                reason: "still-used-by-other-slot"
-            };
-        }
-
-        var client = window.gallerySupabase;
-
-        if (!client || !client.storage) {
-            galleryModel3dStorageDeleteLastDebug = {
-                status: "failed",
-                reason: "storage-not-configured",
-                bucket: deleteState.storageBucket,
-                path: deleteState.modelPath,
-                context: contextLabel || "model3d-delete"
-            };
-            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany. Nie usuwam modelu ze sceny, zeby nie zostawic pliku w Storage.");
-            return {
-                ok: false,
-                removed: false,
-                skipped: false,
-                reason: "storage-not-configured"
-            };
-        }
-
-        if (galleryEditorLoginEnabled && !editorAuthenticated) {
-            galleryModel3dStorageDeleteLastDebug = {
-                status: "failed",
-                reason: "editor-not-authenticated",
-                bucket: deleteState.storageBucket,
-                path: deleteState.modelPath,
-                context: contextLabel || "model3d-delete"
-            };
-            notifyGalleryStatus("Zaloguj sie jako edytor, aby usunac model 3D ze Storage.");
-            return {
-                ok: false,
-                removed: false,
-                skipped: false,
-                reason: "editor-not-authenticated"
-            };
-        }
-
-        var removeResponse = await client
-            .storage
-            .from(deleteState.storageBucket)
-            .remove([deleteState.modelPath]);
-
-        if (removeResponse.error) {
-            console.warn("Model3D Storage delete error:", {
-                bucket: deleteState.storageBucket,
-                path: deleteState.modelPath,
-                modelState: modelState,
-                error: removeResponse.error
-            });
-
-            galleryModel3dStorageDeleteLastDebug = {
-                status: "failed",
-                reason: "storage-remove-error",
-                bucket: deleteState.storageBucket,
-                path: deleteState.modelPath,
-                message: removeResponse.error.message || String(removeResponse.error),
-                context: contextLabel || "model3d-delete"
-            };
-            notifyGalleryStatus("Nie udalo sie usunac modelu GLB ze Storage. Slot zostaje, zeby nie zostawic osieroconego pliku.");
-            return {
-                ok: false,
-                removed: false,
-                skipped: false,
-                reason: "storage-remove-error"
-            };
-        }
-
-        clearModel3dClipboardIfStoragePathMatches(deleteState);
-
-        galleryModel3dStorageDeleteLastDebug = {
-            status: "removed",
-            bucket: deleteState.storageBucket,
-            path: deleteState.modelPath,
-            data: removeResponse.data || null,
-            context: contextLabel || "model3d-delete"
-        };
-
-        console.info("Model3D Storage file removed:", {
-            bucket: deleteState.storageBucket,
-            path: deleteState.modelPath,
-            data: removeResponse.data || null
-        });
-
-        return {
-            ok: true,
-            removed: true,
-            skipped: false,
-            reason: "removed"
-        };
-    }
-
     async function removeModel3dFromSlotWithStorageDelete(slot) {
         if (!slot) {
             return false;
         }
 
         var modelState = getModel3dState(slot);
-        var storageDeleteResult = await deleteModel3dFileFromSupabaseIfUnused(
-            modelState,
-            slot,
-            "remove-model-from-slot"
-        );
-
-        if (!storageDeleteResult.ok) {
-            return false;
-        }
+        queueGalleryModelStateForCleanup(modelState, "remove-model-from-slot");
 
         var removedFromSlot = removeModel3dFromSlot(slot);
 
-        if (removedFromSlot && storageDeleteResult.removed) {
-            notifyGalleryStatus("Model usuniety ze slotu i ze Storage.");
+        if (removedFromSlot) {
+            markGalleryDraftDirty("model3d-removed-from-slot");
+            notifyGalleryStatus("Model usuniety z wersji roboczej. Plik GLB zostanie usuniety dopiero po poprawnym zapisie galerii, jezeli nie uzywa go inny slot.");
         }
 
         return removedFromSlot;
@@ -11889,20 +12399,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var modelState = getModel3dState(slot);
-        var storageDeleteResult = await deleteModel3dFileFromSupabaseIfUnused(
-            modelState,
-            slot,
-            "delete-model-slot"
-        );
-
-        if (!storageDeleteResult.ok) {
-            return false;
-        }
+        queueGalleryModelStateForCleanup(modelState, "delete-model-slot");
 
         var deleted = deleteModel3dSlotRuntime(slot, options || {});
 
-        if (deleted && storageDeleteResult.removed) {
-            notifyGalleryStatus("Deleted sculpture/model slot and removed GLB from Storage. Save state to keep the change.");
+        if (deleted) {
+            markGalleryDraftDirty("model3d-slot-deleted");
+            notifyGalleryStatus("Slot rzezby/modelu usuniety z wersji roboczej. Cleanup Storage nastapi po poprawnym zapisie.");
         }
 
         return deleted;
@@ -11914,15 +12417,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var imageState = getArtworkImageState(artwork);
-        var removedFromStorage = await deleteArtworkImageFromSupabase(imageState);
+        queueGalleryArtworkStateForCleanup(imageState, "artwork-image-removed");
 
-        if (!removedFromStorage) {
-            return false;
+        var removedFromMesh = removeArtworkImageFromMesh(artwork, true);
+        updateArtworkTransformUi();
+
+        if (removedFromMesh) {
+            markGalleryDraftDirty("artwork-image-removed");
         }
 
-        removeArtworkImageFromMesh(artwork, true);
-        updateArtworkTransformUi();
-        return true;
+        return removedFromMesh;
     }
 
     var selectedArtwork = null;
@@ -14296,6 +14800,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryFastStartRuntime.stateApplied = true;
             galleryStartupFinalizeDebug.stateApplyFinishedAt = Date.now();
             galleryStartupFinalizeDebug.stateApplyMs = galleryStartupFinalizeDebug.stateApplyFinishedAt - galleryStartupFinalizeDebug.stateApplyStartedAt;
+
+            setTimeout(function () {
+                try {
+                    setGalleryPublishedStateBaseline(serializeGalleryState(), {
+                        serverState: result && result.state ? result.state : null,
+                        revision: getGalleryStateRevision(result && result.state ? result.state : null),
+                        confirmed: !!(result && result.ok),
+                        serverRowExists: !!(result && result.state),
+                        reason: "startup-state-baseline"
+                    });
+                } catch (baselineError) {
+                    console.warn("Startup published baseline warning:", baselineError);
+                }
+            }, 0);
         }
     }
 
@@ -15080,6 +15598,51 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryModel3dCreateCounter = 0;
     var galleryModel3dLastDebug = null;
     var galleryModel3dStorageDeleteLastDebug = null;
+
+    // STAGE 12C66A — SAVE INTEGRITY / DRAFT COMMIT / DEFERRED STORAGE CLEANUP
+    // Scene edits are a local draft. Supabase gallery_state changes only through the explicit Save action.
+    // Replaced/deleted Storage files are queued and removed only after the new state is safely published.
+    var galleryImageUploadLimits = {
+        artwork: {
+            maxBytes: 24 * 1024 * 1024,
+            maxSide: 10000,
+            maxPixels: 40000000,
+            label: "obraz pracy"
+        },
+        author: {
+            maxBytes: 12 * 1024 * 1024,
+            maxSide: 8000,
+            maxPixels: 24000000,
+            label: "zdjecie autora"
+        }
+    };
+
+    var gallerySaveIntegrityRuntime = {
+        stage: "12C66A",
+        schema: "gallery-save-integrity.v1",
+        sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
+        publishedRevision: 0,
+        publishedStateFingerprint: "",
+        publishedServerStateFingerprint: "",
+        publishedStateSnapshot: null,
+        publishedServerRowExists: false,
+        publishedStateConfirmed: false,
+        baselineReady: false,
+        dirty: false,
+        dirtyReason: "startup",
+        dirtySince: 0,
+        lastStateCheckAt: 0,
+        stateCheckTimer: null,
+        stateCheckIntervalMs: 650,
+        stateWatcherStarted: false,
+        saveInFlight: false,
+        pendingStorageDeletes: [],
+        cleanupFailures: [],
+        remoteBackupId: "main_previous",
+        localBackupStorageKey: "berryboy_gallery_previous_state_backup_v1",
+        pendingCleanupStorageKey: "berryboy_gallery_pending_storage_cleanup_v1",
+        latestSaveResult: null
+    };
 
     // STAGE 12C - SCULPTURE ADD/DELETE UNIFIED ARTWORK FLOW
     // Statyczne sloty ArtSphere_* muszą mieć listę usuniętych nazw, tak jak artworki.
@@ -18798,6 +19361,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        var sculptureAuthorImageValidation = await validateGalleryImageUploadFile(file, "author");
+
+        if (!sculptureAuthorImageValidation.ok) {
+            notifyGalleryStatus(sculptureAuthorImageValidation.message);
+            return false;
+        }
+
         var authorNameForUpload = sculptureInfoAuthorInput
             ? sculptureInfoAuthorInput.value.trim()
             : "";
@@ -18900,7 +19470,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             photoHeightPreview: info.authorPhotoHeightPreview,
             photoUploadedAt: info.authorPhotoUploadedAt,
             photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt
-        });
+        }, { replacePhotoState: true });
 
         if (authorRecord) {
             syncSculptureInfoWithAuthor(slot, authorRecord);
@@ -18916,17 +19486,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateArtworkInfoPopupContent(slot);
         updateSculptureAuthorFoundUi(authorRecord);
 
-        if (
-            previousInfo.authorPhotoPath &&
-            previousInfo.authorPhotoPath !== storagePath
-        ) {
-            deleteAuthorPhotoFromSupabase(previousInfo)
-                .catch(function (error) {
-                    console.warn("Previous sculpture author photo delete warning:", error);
-                });
+        if (getAuthorPhotoPathsForDelete(previousInfo).some(function (previousPath) {
+            return !!previousPath && previousPath !== storagePath;
+        })) {
+            queueGalleryAuthorPhotoForCleanup(previousInfo, "sculpture-author-photo-replaced");
         }
 
-        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Save state to keep the change.");
+        markGalleryDraftDirty("sculpture-author-photo-uploaded");
+        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Previous files will be removed after a successful gallery save.");
         return true;
     }
 
@@ -18938,7 +19505,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var currentInfo = normalizeSculptureInfo(getSculptureInfoState(slot));
+        var previousInfoForCleanup = cloneGalleryStateForIntegrity(getSculptureInfoState(slot));
+        var currentInfo = normalizeSculptureInfo(previousInfoForCleanup);
         var previousPhotoUrl = currentInfo.authorPhotoUrl;
 
         currentInfo.authorPhotoUrl = sculptureInfoAuthorPhotoInput.value.trim();
@@ -19003,7 +19571,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     photoUploadedAt: currentInfo.authorPhotoUploadedAt,
                     photoVariantsGeneratedAt: currentInfo.authorPhotoVariantsGeneratedAt,
                     photoVariantsRebuiltAt: currentInfo.authorPhotoVariantsRebuiltAt
-                });
+                }, { replacePhotoState: currentInfo.authorPhotoUrl !== previousPhotoUrl });
 
                 setSculptureInfoState(slot, currentInfo);
             }
@@ -19011,9 +19579,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setSculptureInfoState(slot, currentInfo);
         }
 
+        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            queueGalleryAuthorPhotoForCleanup(
+                previousInfoForCleanup,
+                "sculpture-author-photo-manual-url-replaced"
+            );
+        }
+
         updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(slot);
         updateSculptureAuthorFoundUi(getAuthorById(currentInfo.authorId));
+        markGalleryDraftDirty("sculpture-info-updated");
         notifyGalleryStatus("Sculpture info updated. Save state to keep the change.");
     }
 
@@ -19023,7 +19599,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         applySculptureInfoFromUi();
     };
 
-    sculptureInfoClearButton.onclick = function (event) {
+    sculptureInfoClearButton.onclick = async function (event) {
         event.preventDefault();
         event.stopPropagation();
 
@@ -19033,7 +19609,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        var previousInfo = cloneGalleryStateForIntegrity(getSculptureInfoState(slot));
         setSculptureInfoState(slot, null);
+
+        if (previousInfo && previousInfo.authorId) {
+            await cleanupUnusedAuthorPhotoIfNeeded(previousInfo.authorId, slot);
+        } else {
+            queueGalleryAuthorPhotoForCleanup(previousInfo, "sculpture-info-cleared");
+        }
+
+        markGalleryDraftDirty("sculpture-info-cleared");
         updateSculptureInfoUi();
         updateArtworkInfoPopupContent(slot);
         notifyGalleryStatus("Sculpture info cleared. Save state to keep the change.");
@@ -19219,11 +19804,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 console.info("Artwork image variants rebuild:", result);
 
                 if (result.rebuilt > 0) {
-                    return saveGalleryStateToSupabase()
-                        .then(function () {
-                            notifyGalleryStatus("Artwork variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
-                            return result;
-                        });
+                    markGalleryDraftDirty("artwork-variants-rebuilt");
+                    notifyGalleryStatus("Artwork variants ready in the draft. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ". Use Save to publish them.");
+                    return result;
                 }
 
                 notifyGalleryStatus("No artwork variants to rebuild. Failed: " + result.failed + ".");
@@ -19264,11 +19847,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 console.info("Author photo variants rebuild:", result);
 
                 if (result.rebuilt > 0) {
-                    return saveGalleryStateToSupabase()
-                        .then(function () {
-                            notifyGalleryStatus("Author variants ready and saved. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ".");
-                            return result;
-                        });
+                    markGalleryDraftDirty("author-variants-rebuilt");
+                    notifyGalleryStatus("Author variants ready in the draft. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ". Use Save to publish them.");
+                    return result;
                 }
 
                 notifyGalleryStatus("No author variants to rebuild. Failed: " + result.failed + ".");
@@ -19582,7 +20163,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return getAuthorById(getAuthorIdFromName(name));
     }
 
-    function upsertAuthorRecord(author) {
+    function upsertAuthorRecord(author, options) {
+        options = options || {};
         author = normalizeAuthorRecord(author);
 
         if (!author.id) {
@@ -19592,7 +20174,43 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var existing = getAuthorById(author.id);
 
         if (existing) {
+            var photoStateKeys = {
+                photoUrl: true,
+                photoUrlOriginal: true,
+                photoUrlWeb: true,
+                photoUrlMobile: true,
+                photoUrlPreview: true,
+                photoPath: true,
+                photoPathWeb: true,
+                photoPathMobile: true,
+                photoPathPreview: true,
+                photoBucket: true,
+                photoOriginalName: true,
+                photoMimeType: true,
+                photoMimeTypeWeb: true,
+                photoMimeTypeMobile: true,
+                photoMimeTypePreview: true,
+                photoSize: true,
+                photoSizeWeb: true,
+                photoSizeMobile: true,
+                photoSizePreview: true,
+                photoWidthWeb: true,
+                photoHeightWeb: true,
+                photoWidthMobile: true,
+                photoHeightMobile: true,
+                photoWidthPreview: true,
+                photoHeightPreview: true,
+                photoUploadedAt: true,
+                photoVariantsGeneratedAt: true,
+                photoVariantsRebuiltAt: true
+            };
+
             Object.keys(author).forEach(function (key) {
+                if (options.replacePhotoState && photoStateKeys[key]) {
+                    existing[key] = author[key];
+                    return;
+                }
+
                 if (author[key] !== "" && author[key] !== 0) {
                     existing[key] = author[key];
                 }
@@ -19756,13 +20374,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (author.photoPath || author.photoPathWeb || author.photoPathMobile || author.photoPathPreview) {
-            await deleteAuthorPhotoFromSupabase({
+            queueGalleryAuthorPhotoForCleanup({
                 authorPhotoPath: author.photoPath,
                 authorPhotoPathWeb: author.photoPathWeb,
                 authorPhotoPathMobile: author.photoPathMobile,
                 authorPhotoPathPreview: author.photoPathPreview,
                 authorPhotoBucket: author.photoBucket
-            });
+            }, "unused-author-removed");
         }
 
         artworkAuthors = artworkAuthors.filter(function (item) {
@@ -19779,34 +20397,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         // STAGE 11C - STORAGE FOLDERS
         // Nowe oryginały zdjęć autorów trafiają do czytelnego folderu Original.
         return galleryArtworkStoragePrefix + "/authors/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
-    }
-
-    async function deleteAuthorPhotoFromSupabase(info) {
-        info = Object.assign({}, info || {});
-
-        var pathsToRemove = getAuthorPhotoPathsForDelete(info);
-
-        if (!pathsToRemove.length) {
-            return true;
-        }
-
-        var client = window.gallerySupabase;
-
-        if (!client || !client.storage) {
-            return true;
-        }
-
-        var response = await client
-            .storage
-            .from(info.authorPhotoBucket || info.photoBucket || galleryArtworkStorageBucket)
-            .remove(pathsToRemove);
-
-        if (response.error) {
-            console.warn("Author photo delete warning:", response.error);
-            return false;
-        }
-
-        return true;
     }
 
     async function uploadAuthorPhotoForArtwork(artwork, file) {
@@ -19834,6 +20424,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (!file.type || file.type.indexOf("image/") !== 0) {
             notifyGalleryStatus("Choose an image file.");
+            return false;
+        }
+
+        var artworkAuthorImageValidation = await validateGalleryImageUploadFile(file, "author");
+
+        if (!artworkAuthorImageValidation.ok) {
+            notifyGalleryStatus(artworkAuthorImageValidation.message);
             return false;
         }
 
@@ -19939,7 +20536,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             photoHeightPreview: info.authorPhotoHeightPreview,
             photoUploadedAt: info.authorPhotoUploadedAt,
             photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt
-        });
+        }, { replacePhotoState: true });
 
         if (authorRecord) {
             syncArtworkInfoWithAuthor(artwork, authorRecord);
@@ -19955,17 +20552,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(authorRecord);
 
-        if (
-            previousInfo.authorPhotoPath &&
-            previousInfo.authorPhotoPath !== storagePath
-        ) {
-            deleteAuthorPhotoFromSupabase(previousInfo)
-                .catch(function (error) {
-                    console.warn("Previous author photo delete warning:", error);
-                });
+        if (getAuthorPhotoPathsForDelete(previousInfo).some(function (previousPath) {
+            return !!previousPath && previousPath !== storagePath;
+        })) {
+            queueGalleryAuthorPhotoForCleanup(previousInfo, "artwork-author-photo-replaced");
         }
 
-        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Save state to keep the change.");
+        markGalleryDraftDirty("artwork-author-photo-uploaded");
+        notifyGalleryStatus("Author photo uploaded with web/mobile variants. Previous files will be removed after a successful gallery save.");
         return true;
     }
 
@@ -19977,7 +20571,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var currentInfo = normalizeArtworkInfo(getArtworkInfoState(artwork));
+        var previousInfoForCleanup = cloneGalleryStateForIntegrity(getArtworkInfoState(artwork));
+        var currentInfo = normalizeArtworkInfo(previousInfoForCleanup);
         var previousPhotoUrl = currentInfo.authorPhotoUrl;
 
         currentInfo.authorPhotoUrl = artworkInfoAuthorPhotoInput.value.trim();
@@ -20042,7 +20637,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     photoUploadedAt: currentInfo.authorPhotoUploadedAt,
                     photoVariantsGeneratedAt: currentInfo.authorPhotoVariantsGeneratedAt,
                     photoVariantsRebuiltAt: currentInfo.authorPhotoVariantsRebuiltAt
-                });
+                }, { replacePhotoState: currentInfo.authorPhotoUrl !== previousPhotoUrl });
 
                 setArtworkInfoState(artwork, currentInfo);
             }
@@ -20050,9 +20645,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setArtworkInfoState(artwork, currentInfo);
         }
 
+        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
+            queueGalleryAuthorPhotoForCleanup(
+                previousInfoForCleanup,
+                "artwork-author-photo-manual-url-replaced"
+            );
+        }
+
         updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(getAuthorById(currentInfo.authorId));
+        markGalleryDraftDirty("artwork-info-updated");
         notifyGalleryStatus("Artwork info updated. Save state to keep the change.");
     }
 
@@ -20062,7 +20665,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         applyArtworkInfoFromUi();
     };
 
-    artworkInfoClearButton.onclick = function (event) {
+    artworkInfoClearButton.onclick = async function (event) {
         event.preventDefault();
         event.stopPropagation();
 
@@ -20072,7 +20675,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        var previousInfo = cloneGalleryStateForIntegrity(getArtworkInfoState(artwork));
         setArtworkInfoState(artwork, null);
+
+        if (previousInfo && previousInfo.authorId) {
+            await cleanupUnusedAuthorPhotoIfNeeded(previousInfo.authorId, artwork);
+        } else {
+            queueGalleryAuthorPhotoForCleanup(previousInfo, "artwork-info-cleared");
+        }
+
+        markGalleryDraftDirty("artwork-info-cleared");
         updateArtworkInfoUi();
         updateArtworkInfoPopupContent(artwork);
         notifyGalleryStatus("Artwork info cleared. Save state to keep the change.");
@@ -20752,16 +21364,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        applyArtworkImageState(artwork, {
+        var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
+        var nextImageState = {
             imageUrl: imageUrl,
             imageUrlOriginal: imageUrl,
             fitMode: galleryArtworkDefaultFitMode,
             source: "manual-url",
             updatedAt: new Date().toISOString()
-        });
+        };
+
+        applyArtworkImageState(artwork, nextImageState);
+        queueReplacedGalleryArtworkStateForCleanup(
+            previousImageState,
+            nextImageState,
+            "artwork-manual-url-replaced"
+        );
 
         updateArtworkTransformUi();
-        notifyGalleryStatus("Ustawiono obraz z URL. Zapisz stan galerii, aby zachowac zmiane.");
+        markGalleryDraftDirty("artwork-url-applied");
+        notifyGalleryStatus("Ustawiono obraz z URL w wersji roboczej. Uzyj Save, aby opublikowac zmiane.");
     };
 
     artworkImageRemoveButton.onclick = function (event) {
@@ -20781,7 +21402,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        notifyGalleryStatus("Usuwam obraz...");
+        notifyGalleryStatus("Usuwam obraz z wersji roboczej...");
 
         removeArtworkImageWithStorageDelete(artwork)
             .then(function (removedImage) {
@@ -20789,7 +21410,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     return;
                 }
 
-                notifyGalleryStatus("Usunieto obraz i plik ze Storage. Zapisz stan galerii, aby zachowac zmiane.");
+                notifyGalleryStatus("Usunieto obraz z wersji roboczej. Pliki Storage zostana usuniete dopiero po poprawnym zapisie.");
             })
             .catch(function (error) {
                 console.warn("Artwork remove error:", error);
@@ -24927,7 +25548,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         lightingControlRefs.shadowSoftness.setValue(settings.shadowSoftness);
     }
 
-    function applyLightingSettings(settings, shouldSyncControls) {
+    function applyLightingSettings(settings, shouldSyncControls, skipPersist) {
         if (!settings) {
             return;
         }
@@ -24986,7 +25607,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             syncLightingControls(readLightingSettingsFromScene());
         }
 
-        persistCurrentLightingSettings();
+        if (!skipPersist) {
+            persistCurrentLightingSettings();
+        }
     }
 
     function readLightingPresets() {
@@ -26068,19 +26691,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     lightingDefaultSettings = readLightingSettingsFromScene();
 
-    var savedVisualSettingsAtStartup = readSavedVisualSettings();
-
-    if (savedVisualSettingsAtStartup) {
-        applyVisualSettings(savedVisualSettingsAtStartup, true, true);
-    } else {
-        applyVisualSettings(visualDefaultSettings, true, true);
-    }
-
-    var savedLightingState = readSavedLightingState();
-
-    if (savedLightingState) {
-        applyLightingSettings(savedLightingState, true);
-    }
+    // Stage 12C66A: local presets stay explicit editor drafts and never override the public state on startup.
+    applyVisualSettings(visualDefaultSettings, true, true);
+    applyLightingSettings(lightingDefaultSettings, true, true);
 
     updateLightingPresetRows();
     setEditorPanelMode("edit");
@@ -28720,10 +29333,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         uploadModel3dToSlot(selectedSphere, file)
             .then(function (ok) {
                 if (ok) {
-                    return saveGalleryStateToSupabase();
+                    markGalleryDraftDirty("model3d-uploaded");
+                    notifyGalleryStatus("Model 3D jest gotowy w wersji roboczej. Uzyj Save, aby go opublikowac.");
                 }
 
-                return false;
+                return ok;
             })
             .catch(function (error) {
                 console.warn("3D model upload UI error:", error);
@@ -28751,16 +29365,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var modelState = createModel3dStateFromUrl(selectedSphere, modelUrl);
+        var targetSlot = selectedSphere;
+        var modelState = createModel3dStateFromUrl(targetSlot, modelUrl);
 
-        applyModel3dStateToSlot(selectedSphere, modelState)
+        replaceModel3dStateInSlotSafely(
+            targetSlot,
+            modelState,
+            "model3d-url-replaced"
+        )
             .then(function (ok) {
                 if (ok) {
-                    notifyGalleryStatus("Model przypisany z URL. Zapisz stan galerii.");
-                    return saveGalleryStateToSupabase();
+                    markGalleryDraftDirty("model3d-url-applied");
+                    notifyGalleryStatus("Model przypisany z URL w wersji roboczej. Uzyj Save, aby go opublikowac.");
+                } else {
+                    notifyGalleryStatus("Nie udalo sie przypisac modelu z URL. Poprzedni model zostal przywrocony.");
                 }
 
-                return false;
+                return ok;
             })
             .catch(function (error) {
                 console.warn("Apply 3D model URL error:", error);
@@ -28778,11 +29399,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         removeModel3dFromSlotWithStorageDelete(selectedSphere)
             .then(function (ok) {
-                if (ok) {
-                    return saveGalleryStateToSupabase();
-                }
-
-                return false;
+                return ok;
             })
             .catch(function (error) {
                 console.warn("Remove 3D model with storage cleanup error:", error);
@@ -28794,8 +29411,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         event.preventDefault();
         event.stopPropagation();
 
-        duplicateSelectedModel3dSlot();
-        saveGalleryStateToSupabase();
+        if (duplicateSelectedModel3dSlot()) {
+            markGalleryDraftDirty("model3d-slot-duplicated");
+        }
     };
 
     model3dCopyButton.onclick = function (event) {
@@ -28809,8 +29427,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         event.preventDefault();
         event.stopPropagation();
 
-        pasteModel3dFromClipboardToSelectedSlot();
-        saveGalleryStateToSupabase();
+        pasteModel3dFromClipboardToSelectedSlot()
+            .then(function (ok) {
+                if (ok) {
+                    markGalleryDraftDirty("model3d-pasted");
+                }
+
+                return ok;
+            })
+            .catch(function (error) {
+                console.warn("Paste 3D model error:", error);
+                notifyGalleryStatus("Nie udalo sie wkleic modelu 3D.");
+            });
     };
 
     function updateEditHelpStatus() {
@@ -32716,6 +33344,67 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return loadModel3dIntoSlot(slot, modelState);
     }
 
+    async function restoreModel3dSlotAfterFailedReplacement(slot, previousState) {
+        if (!slot) {
+            return false;
+        }
+
+        if (previousState) {
+            var restoreState = cloneGalleryStateForIntegrity(previousState);
+            restoreState._galleryFastStartForceImmediate = true;
+            return applyModel3dStateToSlot(slot, restoreState);
+        }
+
+        slot.metadata = slot.metadata || {};
+        disposeModel3dSlotRuntime(slot);
+        slot.metadata.model3d = null;
+        applySculptureSlotVisualState(slot);
+        disableSculptureCollisionProxy(slot);
+        refreshSculptureOutlines();
+        updateViewerModePlaceholderVisibility();
+        updateModel3dSlotUi();
+        return true;
+    }
+
+    async function replaceModel3dStateInSlotSafely(slot, nextState, reason, options) {
+        options = options || {};
+
+        if (!slot || !nextState) {
+            return false;
+        }
+
+        var previousState = cloneGalleryStateForIntegrity(getModel3dState(slot));
+        var loaded = false;
+
+        try {
+            loaded = await applyModel3dStateToSlot(slot, nextState);
+        } catch (replacementError) {
+            console.warn("3D model replacement error:", replacementError);
+            loaded = false;
+        }
+
+        if (loaded) {
+            queueReplacedGalleryModelStateForCleanup(
+                previousState,
+                nextState,
+                reason || "model3d-replaced"
+            );
+            return true;
+        }
+
+        if (options.cleanupFailedNextState) {
+            queueGalleryModelStateForCleanup(nextState, options.cleanupReason || "failed-model3d-upload");
+        }
+
+        var restored = await restoreModel3dSlotAfterFailedReplacement(slot, previousState);
+
+        if (!restored) {
+            console.warn("Previous 3D model state could not be restored after failed replacement.");
+        }
+
+        return false;
+    }
+
     function removeModel3dFromSlot(slot) {
         if (!slot) {
             return false;
@@ -32822,10 +33511,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             assignedAt: new Date().toISOString()
         });
 
-        var loaded = await applyModel3dStateToSlot(slot, modelState);
+        var loaded = await replaceModel3dStateInSlotSafely(
+            slot,
+            modelState,
+            "model3d-upload-replaced",
+            {
+                cleanupFailedNextState: true,
+                cleanupReason: "failed-model3d-upload"
+            }
+        );
 
         if (loaded) {
-            notifyGalleryStatus("Model 3D wgrany. Zapisz stan galerii, aby zachowac zmiane.");
+            markGalleryDraftDirty("model3d-uploaded");
+            notifyGalleryStatus("Model 3D wgrany do wersji roboczej. Uzyj Save, aby opublikowac zmiane.");
+        } else {
+            notifyGalleryStatus("Nowy model nie zostal zastosowany. Poprzedni model przywrocono, a nowy plik trafil do bezpiecznej kolejki cleanup.");
         }
 
         return loaded;
@@ -32845,20 +33545,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    function pasteModel3dFromClipboardToSelectedSlot() {
+    async function pasteModel3dFromClipboardToSelectedSlot() {
         if (!selectedSphere || !galleryModel3dClipboardState) {
             notifyGalleryStatus("Brak modelu w schowku albo brak zaznaczonego slotu.");
             return false;
         }
 
+        var targetSlot = selectedSphere;
         var pastedState = JSON.parse(JSON.stringify(galleryModel3dClipboardState));
         pastedState.sourceSlotName = pastedState.sourceSlotName || "clipboard";
         pastedState.isDuplicate = true;
         pastedState.assignedAt = new Date().toISOString();
 
-        applyModel3dStateToSlot(selectedSphere, pastedState);
-        notifyGalleryStatus("Model przypisany do slotu bez ponownego uploadu.");
-        return true;
+        var applied = await replaceModel3dStateInSlotSafely(
+            targetSlot,
+            pastedState,
+            "model3d-paste-replaced"
+        );
+
+        if (applied) {
+            notifyGalleryStatus("Model przypisany do slotu bez ponownego uploadu.");
+        } else {
+            notifyGalleryStatus("Nie udalo sie przypisac modelu ze schowka. Poprzedni model zostal przywrocony.");
+        }
+
+        return applied;
     }
 
     function duplicateSelectedModel3dSlot() {
@@ -34137,11 +34848,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var imageState = getArtworkImageState(artwork);
 
         if (imageState) {
-            var removedImage = await deleteArtworkImageFromSupabase(imageState);
-
-            if (!removedImage) {
-                return false;
-            }
+            queueGalleryArtworkStateForCleanup(imageState, "artwork-deleted");
         }
 
         var infoState = getArtworkInfoState(artwork);
@@ -37619,17 +38326,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (state.lighting) {
-            applyLightingSettings(state.lighting, true);
+            applyLightingSettings(state.lighting, true, true);
         }
 
         if (state.visualSettings) {
             applyVisualSettings(normalizeVisualSettings(state.visualSettings), true, true);
         } else {
-            var savedVisualSettings = readSavedVisualSettings();
-
-            if (savedVisualSettings) {
-                applyVisualSettings(normalizeVisualSettings(savedVisualSettings), true, true);
-            }
+            applyVisualSettings(visualDefaultSettings, true, true);
         }
 
         if (Array.isArray(state.lightingPresets)) {
@@ -37790,16 +38493,35 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 notifyGalleryStatus("Wczytano zapisany stan galerii. Lampy: " + getStateLightCount(row.state) + ".");
             }
 
+            setGalleryPublishedStateBaseline(serializeGalleryState(), {
+                serverState: row.state,
+                revision: getGalleryStateRevision(row.state),
+                confirmed: true,
+                serverRowExists: true,
+                reason: "manual-load-baseline"
+            });
             return true;
         }
 
         notifyGalleryStatus("Brak zapisanego stanu. Uzywam ukladu startowego.");
+        setGalleryPublishedStateBaseline(serializeGalleryState(), {
+            serverState: null,
+            revision: 0,
+            confirmed: true,
+            serverRowExists: false,
+            reason: "manual-load-empty-baseline"
+        });
         return false;
     }
 
     async function saveGalleryStateToSupabase() {
         if (galleryEditorLoginEnabled && !editorAuthenticated) {
             notifyGalleryStatus("Zaloguj sie jako edytor, aby zapisac stan.");
+            return false;
+        }
+
+        if (gallerySaveIntegrityRuntime.saveInFlight) {
+            notifyGalleryStatus("Zapis galerii juz trwa.");
             return false;
         }
 
@@ -37810,55 +38532,239 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
-        var state = serializeGalleryState();
-        globalThis.BerryboyArtGalleryLatestState = state;
+        gallerySaveIntegrityRuntime.saveInFlight = true;
+        dispatchGalleryDraftState("save-started");
 
-        var payload = {
-            id: "main",
-            state: state,
-            updated_at: new Date().toISOString()
-        };
+        try {
+            checkGalleryDraftStateNow("before-save");
 
-        var response = await client
-            .from("gallery_state")
-            .upsert(payload, {
-                onConflict: "id"
-            });
-
-        if (response.error) {
-            console.warn(response.error);
-
-            // Fallback dla tabeli bez constraintu/unikalnego id.
-            // V0_8 dzialal na id=main; tutaj probujemy utrzymac jeden aktualny rekord.
-            var deleteResponse = await client
+            var currentServerResponse = await client
                 .from("gallery_state")
-                .delete()
-                .eq("id", "main");
+                .select("state, updated_at")
+                .eq("id", "main")
+                .order("updated_at", {
+                    ascending: false,
+                    nullsFirst: false
+                })
+                .limit(1);
 
-            if (deleteResponse.error) {
-                console.warn(deleteResponse.error);
+            var currentServerState = null;
+            var currentServerUpdatedAt = null;
+            var currentServerRowExists = false;
+
+            if (currentServerResponse.error) {
+                console.warn("Pre-save gallery state read failed:", currentServerResponse.error);
+                notifyGalleryStatus("Nie udalo sie potwierdzic aktualnej wersji galerii. Zapis przerwany bez nadpisywania danych.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: "pre-save-read-error",
+                    message: currentServerResponse.error.message || String(currentServerResponse.error),
+                    failedAt: Date.now()
+                };
+                return false;
+            } else {
+                var currentRows = Array.isArray(currentServerResponse.data)
+                    ? currentServerResponse.data
+                    : (currentServerResponse.data ? [currentServerResponse.data] : []);
+                var currentRow = currentRows[0] || null;
+                currentServerRowExists = !!currentRow;
+                currentServerState = currentRow && currentRow.state ? currentRow.state : null;
+                currentServerUpdatedAt = currentRow ? currentRow.updated_at || null : null;
             }
 
-            response = await client
-                .from("gallery_state")
-                .insert(payload);
-        }
+            if (!gallerySaveIntegrityRuntime.publishedStateConfirmed && currentServerState) {
+                notifyGalleryStatus("Nie potwierdzono wersji bazowej po starcie. Wczytaj aktualny stan galerii przed zapisem.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: "unconfirmed-published-baseline",
+                    detectedAt: Date.now()
+                };
+                return false;
+            }
 
-        if (response.error) {
-            console.warn(response.error);
-            notifyGalleryStatus("Blad zapisu stanu galerii.");
+            if (
+                gallerySaveIntegrityRuntime.publishedStateConfirmed &&
+                gallerySaveIntegrityRuntime.publishedServerRowExists !== currentServerRowExists
+            ) {
+                notifyGalleryStatus("Rekord galerii zostal utworzony lub usuniety w innej sesji. Wczytaj najnowszy stan przed zapisem.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: "server-row-presence-conflict",
+                    detectedAt: Date.now()
+                };
+                return false;
+            }
+
+            if (
+                gallerySaveIntegrityRuntime.publishedStateConfirmed &&
+                gallerySaveIntegrityRuntime.publishedStateSnapshot &&
+                currentServerState &&
+                getGalleryStateIntegrityFingerprint(currentServerState) !== gallerySaveIntegrityRuntime.publishedServerStateFingerprint
+            ) {
+                notifyGalleryStatus("Galeria zostala zmieniona w innej sesji. Wczytaj najnowszy stan przed zapisem.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: "revision-conflict",
+                    detectedAt: Date.now()
+                };
+                return false;
+            }
+
+            var localBackupOk = true;
+            var remoteBackupResult = {
+                ok: true,
+                skipped: true
+            };
+
+            if (currentServerState) {
+                localBackupOk = persistGalleryPreviousStateBackup(currentServerState, {
+                    serverUpdatedAt: currentServerUpdatedAt,
+                    previousRevision: getGalleryStateRevision(currentServerState),
+                    sessionId: gallerySaveIntegrityRuntime.sessionId
+                });
+
+                remoteBackupResult = await writeGalleryRemotePreviousStateBackup(client, currentServerState);
+
+                if (!localBackupOk && !remoteBackupResult.ok) {
+                    notifyGalleryStatus("Nie udalo sie utworzyc kopii poprzedniej wersji. Zapis przerwany bez nadpisywania galerii.");
+                    return false;
+                }
+            }
+
+            var previousRevision = Math.max(
+                getGalleryStateRevision(currentServerState),
+                gallerySaveIntegrityRuntime.publishedRevision
+            );
+            var nextRevision = previousRevision + 1;
+            var state = serializeGalleryState();
+            var savedAt = new Date().toISOString();
+
+            state.savedAt = savedAt;
+            state.saveIntegrity = {
+                schema: gallerySaveIntegrityRuntime.schema,
+                revision: nextRevision,
+                basedOnRevision: previousRevision,
+                sessionId: gallerySaveIntegrityRuntime.sessionId,
+                savedAt: savedAt,
+                previousBackupId: currentServerState ? gallerySaveIntegrityRuntime.remoteBackupId : null,
+                remoteBackupOk: !!remoteBackupResult.ok
+            };
+
+            globalThis.BerryboyArtGalleryLatestState = state;
+
+            var payload = {
+                id: "main",
+                state: state,
+                updated_at: savedAt
+            };
+
+            var response = null;
+
+            if (currentServerRowExists) {
+                var commitQuery = client
+                    .from("gallery_state")
+                    .update({
+                        state: state,
+                        updated_at: savedAt
+                    })
+                    .eq("id", "main");
+
+                commitQuery = currentServerUpdatedAt
+                    ? commitQuery.eq("updated_at", currentServerUpdatedAt)
+                    : commitQuery.is("updated_at", null);
+
+                response = await commitQuery.select("id");
+            } else {
+                response = await client
+                    .from("gallery_state")
+                    .insert(payload)
+                    .select("id");
+            }
+
+            if (response.error) {
+                console.warn(response.error);
+                notifyGalleryStatus("Blad zapisu stanu galerii. Poprzednia wersja i pliki pozostaly bez zmian.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: currentServerRowExists ? "state-update-error" : "state-insert-error",
+                    message: response.error.message || String(response.error),
+                    failedAt: Date.now()
+                };
+                return false;
+            }
+
+            var committedRows = Array.isArray(response.data)
+                ? response.data
+                : (response.data ? [response.data] : []);
+
+            if (committedRows.length === 0) {
+                notifyGalleryStatus("Galeria zostala zmieniona podczas zapisu. Publikacja zostala zatrzymana bez nadpisywania danych.");
+                gallerySaveIntegrityRuntime.latestSaveResult = {
+                    ok: false,
+                    reason: "atomic-commit-conflict",
+                    detectedAt: Date.now()
+                };
+                return false;
+            }
+
+            setGalleryPublishedStateBaseline(serializeGalleryState(), {
+                serverState: state,
+                revision: nextRevision,
+                confirmed: true,
+                serverRowExists: true,
+                reason: "save-success"
+            });
+
+            var cleanupResult = await processGalleryDeferredStorageCleanup(state);
+
+            gallerySaveIntegrityRuntime.latestSaveResult = {
+                ok: true,
+                revision: nextRevision,
+                savedAt: savedAt,
+                localBackupOk: localBackupOk,
+                remoteBackupOk: !!remoteBackupResult.ok,
+                cleanup: cleanupResult
+            };
+
+            if (cleanupResult.failed > 0) {
+                notifyGalleryStatus("Zapisano galerie. Niektore stare pliki pozostaly w kolejce cleanup i zostana ponowione przy nastepnym zapisie.");
+            } else {
+                notifyGalleryStatus("Zapisano stan galerii online. Rewizja: " + nextRevision + ".");
+            }
+
+            return true;
+        } catch (error) {
+            console.warn("Gallery save integrity error:", error);
+            notifyGalleryStatus("Nie udalo sie zapisac galerii. Poprzednia wersja pozostala aktywna.");
+            gallerySaveIntegrityRuntime.latestSaveResult = {
+                ok: false,
+                reason: "unexpected-save-error",
+                message: error && error.message ? error.message : String(error),
+                failedAt: Date.now()
+            };
             return false;
+        } finally {
+            gallerySaveIntegrityRuntime.saveInFlight = false;
+            dispatchGalleryDraftState("save-finished");
         }
-
-        notifyGalleryStatus("Zapisano stan galerii online. Lampy: " + getStateLightCount(state) + ".");
-        return true;
     }
 
     globalThis.BerryboyArtGalleryWebState = {
         exportState: serializeGalleryState,
         importState: applyGalleryState,
         save: saveGalleryStateToSupabase,
-        load: loadGalleryStateFromSupabase
+        load: loadGalleryStateFromSupabase,
+        getDraftStatus: function () {
+            checkGalleryDraftStateNow("web-state-status");
+            return {
+                dirty: gallerySaveIntegrityRuntime.dirty,
+                revision: gallerySaveIntegrityRuntime.publishedRevision,
+                saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
+                pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length,
+                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult
+            };
+        },
+        getPreviousBackup: readGalleryPreviousStateBackup
     };
 
     globalThis.GalleryApp = {
@@ -37874,6 +38780,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         setMobileQualityMode: setGalleryMobileQualityMode,
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
+        getDraftStatus: function () {
+            checkGalleryDraftStateNow("gallery-app-status");
+            return {
+                stage: gallerySaveIntegrityRuntime.stage,
+                dirty: gallerySaveIntegrityRuntime.dirty,
+                reason: gallerySaveIntegrityRuntime.dirtyReason,
+                revision: gallerySaveIntegrityRuntime.publishedRevision,
+                saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
+                pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length,
+                cleanupFailures: gallerySaveIntegrityRuntime.cleanupFailures.slice(),
+                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult
+            };
+        },
+        getPreviousStateBackup: readGalleryPreviousStateBackup,
+        applyPreviousStateBackupAsDraft: function () {
+            var backup = readGalleryPreviousStateBackup();
+
+            if (!backup || !backup.state) {
+                return false;
+            }
+
+            applyGalleryState(backup.state);
+            markGalleryDraftDirty("previous-backup-applied");
+            return true;
+        },
         getState: serializeGalleryState,
         applyState: applyGalleryState,
         serializeGalleryState: serializeGalleryState,
@@ -37900,12 +38831,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
                 : getArtworkByName(artworkNameOrIndex);
-
-            return applyArtworkImageState(artwork, {
+            var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
+            var nextImageState = {
                 imageUrl: imageUrl,
+                imageUrlOriginal: imageUrl,
                 fitMode: galleryArtworkDefaultFitMode,
                 source: "GalleryApp"
-            });
+            };
+            var applied = applyArtworkImageState(artwork, nextImageState);
+
+            if (applied) {
+                queueReplacedGalleryArtworkStateForCleanup(
+                    previousImageState,
+                    nextImageState,
+                    "gallery-app-artwork-url-replaced"
+                );
+                markGalleryDraftDirty("gallery-app-artwork-url-applied");
+            }
+
+            return applied;
         },
         rebuildArtworkImageVariants: function (artworkNameOrIndex) {
             var artwork = typeof artworkNameOrIndex === "number"
@@ -38605,6 +39549,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     setEditorAuthenticated(editorAuthenticated);
+    restoreGalleryPendingStorageCleanupQueue();
+    globalThis.BerryboyArtGallerySaveIntegrity = {
+        getStatus: function () {
+            checkGalleryDraftStateNow("debug-status");
+            return JSON.parse(JSON.stringify({
+                stage: gallerySaveIntegrityRuntime.stage,
+                schema: gallerySaveIntegrityRuntime.schema,
+                sessionId: gallerySaveIntegrityRuntime.sessionId,
+                revision: gallerySaveIntegrityRuntime.publishedRevision,
+                dirty: gallerySaveIntegrityRuntime.dirty,
+                dirtyReason: gallerySaveIntegrityRuntime.dirtyReason,
+                dirtySince: gallerySaveIntegrityRuntime.dirtySince,
+                publishedStateConfirmed: gallerySaveIntegrityRuntime.publishedStateConfirmed,
+                saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
+                pendingStorageDeletes: gallerySaveIntegrityRuntime.pendingStorageDeletes,
+                cleanupFailures: gallerySaveIntegrityRuntime.cleanupFailures,
+                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult,
+                imageUploadLimits: galleryImageUploadLimits
+            }));
+        },
+        markDirty: markGalleryDraftDirty,
+        checkDirty: checkGalleryDraftStateNow,
+        getPreviousBackup: readGalleryPreviousStateBackup
+    };
     rebuildGalleryExhibitTour({ reason: "scene-ready", recalculateAutoOrder: true, force: true });
     refreshGalleryExhibitTourOrderBadges();
     window.dispatchEvent(new CustomEvent("gallery-ready"));

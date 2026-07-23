@@ -1,10 +1,10 @@
 /*
-  Berryboy Art Gallery — Stage 12C65E Mobile Asset Streaming / Memory Budget — First Light Mode Exit Stall Fix
+  Berryboy Art Gallery — Stage 12C66A Save Integrity / Draft Commit / Deferred Storage Cleanup
   Public bootstrap. Editor/auth actions are dynamically imported only when needed.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createScene } from "../Gallery_V0_11.min.js?v=stage12c65e_light_mode_exit_stall_fix_20260720";
+import { createScene } from "../Gallery_V0_11.min.js?v=stage12c66a_save_integrity_20260723";
 
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -179,7 +179,7 @@ function getEditorContext() {
 
 async function loadEditorModule() {
   if (!editorModulePromise) {
-    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c65e").then(function (module) {
+    editorModulePromise = import("./gallery-editor-bootstrap.js?v=stage12c66a").then(function (module) {
       module.initializeEditorRuntime(getEditorContext());
       return module;
     });
@@ -377,7 +377,7 @@ try {
   });
 
   window.BerryboyViewerRuntime = {
-    stage: "12C65E",
+    stage: "12C66A",
     engine,
     scene,
     supabase,

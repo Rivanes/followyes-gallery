@@ -1,12 +1,15 @@
 {
-  "name": "berryboy-art-gallery-stage12c65e-first-light-mode-exit-stall-fix",
-  "version": "0.11.65-e-hotfix-3",
+  "name": "berryboy-art-gallery-stage12c66a-save-integrity",
+  "version": "0.11.66-a",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C65E First Light Mode Exit Stall Fix",
+  "description": "Berryboy Art Gallery — Stage 12C66A Save Integrity / Draft Commit / Deferred Storage Cleanup",
   "type": "module",
   "scripts": {
-    "verify": "node tools/verify-stage12c65e.mjs",
+    "verify": "node tools/verify-stage12c66a.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "check": "npm run syntax && npm run verify"
+    "check": "npm run build:mirrors && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:image-validation",
+    "test:save-integrity": "node tools/test-stage12c66a-save-integrity.mjs",
+    "test:image-validation": "node tools/test-stage12c66a-image-validation.mjs",
+    "build:mirrors": "node tools/build-stage12c66a-mirrors.mjs"
   }
 }

@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C65E First Light Mode Exit Stall Fix
+  Berryboy Art Gallery — Stage 12C66A Save Integrity / Draft Commit / Deferred Storage Cleanup
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
