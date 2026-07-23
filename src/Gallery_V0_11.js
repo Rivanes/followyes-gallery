@@ -77,6 +77,7 @@
   - Stage 12C66B2R: Save Integrity Repair / Correct Startup Rebuild — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
   - Stage 12C66C: Desktop D-pad / Floor Cursor / Mobile Hold Movement / Tabbed Edit Workflow / Sticky Save / Sculpture Collision Repair — jeden wspólny system wejścia porusza kamerą bez równoległych ścieżek, edytor ma cztery sekcje i stale widoczny zapis, a collider proxy rzeźb działa także podczas zwykłego chodzenia w Edit Mode.
   - Stage 12C66C1: Input / HUD Polish Hotfix — czytelniejszy floor cursor z ripple po kliknięciu, bezkolizyjne pozycjonowanie D-pada przy przycisku Edit Mode oraz twarde odcięcie Babylon Touch Input i pionowego dryfu kamery w mobilnym Viewerze.
+  - Stage 12C66C2: Micro Stabilization — floor cursor jest renderowany ponad wszystkimi segmentami podłogi, przejazd Inspect ma nieprzerywalny lock do końca animacji, a automatyczne camera/zone light culling i fade Local Lights zostały całkowicie usunięte.
   - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
@@ -691,7 +692,7 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function attachGalleryCameraControl() {
-        // Stage 12C66C1: mobile Viewer owns touch input itself.
+        // Stage 12C66C2: mobile Viewer owns touch input itself.
         // Any generic reattach (for example after Inspect) must not restore Babylon's
         // FreeCameraTouchInput, because combining it with the custom joystick/drag path
         // can move along the pitched camera vector and create a rare vertical flight.
@@ -2809,7 +2810,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function refreshAllLocalSpotShadowsImmediate() {
-        markLocalLightCameraCullingDirty();
 
         var shadowCandidates = [];
         localSpotShadowBudgetDebugStats.activeShadowIds = [];
@@ -5379,7 +5379,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 name: item.name,
                 type: item.type,
                 enabled: getLocalLightUserEnabled(item),
-                cameraCulled: !!item.cameraCulled,
                 targetCount: targets.length,
                 targetNames: targets.map(function (mesh) {
                     return mesh.name;
@@ -5497,56 +5496,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return camera.position.clone();
     }
 
-    // STAGE 10E - CAMERA VIEW LOCAL LIGHT CULLING TEST
-    // Test optymalizacji: Local Light działa tylko, gdy znajduje się w środkowej części widoku kamery.
-    // Na próbę ustawione na 2/3 kadru, żeby efekt był łatwy do zauważenia.
-    var localLightCameraCullingEnabled = true;
-    // STAGE 12C14 - GENTLER LOCAL LIGHT CAMERA CULLING
-    // 1.0 = exact viewport. 1.22 gives a small margin outside the visible screen,
-    // so lights do not fade too early while the viewer is looking at an artwork target.
-    var localLightCameraCullingViewScale = 1.22;
-    var localLightCameraCullingCheckEveryFrames = 4;
-    var localLightCameraCullingFrameCounter = 0;
-
-    var localLightCameraCullingGraceMs = 900;
-    var localLightCameraCullingDirty = true;
-    var localLightCameraCullingLastCameraPosition = null;
-    var localLightCameraCullingLastCameraRotation = null;
-    var localLightCameraCullingPositionEpsilonSq = 0.0004;
-    var localLightCameraCullingRotationEpsilonSq = 0.000004;
-
-    function markLocalLightCameraCullingDirty() {
-        localLightCameraCullingDirty = true;
-    }
-
-    function hasLocalLightCameraChangedForCulling() {
-        if (!camera || !camera.position || !camera.rotation) {
-            return true;
-        }
-
-        if (!localLightCameraCullingLastCameraPosition || !localLightCameraCullingLastCameraRotation) {
-            localLightCameraCullingLastCameraPosition = camera.position.clone();
-            localLightCameraCullingLastCameraRotation = camera.rotation.clone();
-            return true;
-        }
-
-        var positionChanged = camera.position.subtract(localLightCameraCullingLastCameraPosition).lengthSquared() > localLightCameraCullingPositionEpsilonSq;
-        var rotationChanged = camera.rotation.subtract(localLightCameraCullingLastCameraRotation).lengthSquared() > localLightCameraCullingRotationEpsilonSq;
-
-        if (positionChanged || rotationChanged) {
-            localLightCameraCullingLastCameraPosition.copyFrom(camera.position);
-            localLightCameraCullingLastCameraRotation.copyFrom(camera.rotation);
-            return true;
-        }
-
-        return false;
-    }
-
+    // STAGE 12C66C2 — PERSISTENT LOCAL LIGHTS
+    // Automatyczne wygaszanie Local Lights zależne od kadru kamery lub aktywnej strefy
+    // zostało usunięte. Runtime respektuje wyłącznie zapisany stan Enabled i Intensity.
 
     // STAGE 12C43 - EDIT MODE PERFORMANCE OPTIMIZATION
     // Light culling, popup raycasts and editor UI sync are no longer allowed to do heavy work every frame.
     var galleryPerformanceMetrics = {
-        localLightsMs: 0,
         popupMs: 0,
         wallCollisionMs: 0,
         lightTargetsMs: 0,
@@ -5674,7 +5630,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             "FPS: " + Math.round(fps),
             "Active meshes: " + activeMeshes,
             "Draw calls: " + drawCalls,
-            "Local cull: " + galleryPerformanceMetrics.localLightsMs.toFixed(2) + " ms",
             "Popup: " + galleryPerformanceMetrics.popupMs.toFixed(2) + " ms",
             "Wall collision: " + galleryPerformanceMetrics.wallCollisionMs.toFixed(2) + " ms",
             "Light targets: " + galleryPerformanceMetrics.lightTargetsMs.toFixed(2) + " ms",
@@ -5710,21 +5665,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryPerformanceDebugEnabled;
     };
 
-    // STAGE 10E3 - SMOOTH CAMERA LIGHT FADE
-    // Camera culling nie robi już natychmiastowego intensity 0 / userIntensity.
-    // Zamiast tego światło płynnie dochodzi do target intensity.
-    var localLightCameraCullingSmoothFadeEnabled = true;
-    var localLightCameraCullingFadeInSpeed = 7.5;
-    var localLightCameraCullingFadeOutSpeed = 5.0;
-    var localLightCameraCullingSnapEpsilon = 0.003;
-
-    // STAGE 10G - BEAM / TARGET AWARE CAMERA CULLING
-    // Nie wystarczy sprawdzać pozycji lampy. Jeśli patrzymy na ścianę/obraz,
-    // który lampa oświetla, albo na promień/stożek światła, lampa ma zostać aktywna.
-    var localLightCameraCullingBeamAwareEnabled = true;
-    var localLightCameraCullingMaxTargetMeshSamples = 10;
-    var localLightCameraCullingPointLightSampleRadiusFactor = 0.35;
-
+    // STAGE 12C66C2 — LOCAL LIGHT USER STATE IS AUTHORITATIVE
+    // Żadna rotacja kamery, frustum ani streaming zone nie może zmieniać intensywności lampy.
     function getLocalLightUserEnabled(item) {
         if (!item) {
             return false;
@@ -5743,10 +5685,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    // STAGE 10E1 - CAMERA CULLING WITHOUT LIGHT SETENABLED FLICKER
-    // Camera culling nie wyłącza już świateł przez setEnabled(true/false),
-    // bo to potrafi wymuszać przebudowę materiałów i wygląda jak przeładowanie tekstur.
-    // Zamiast tego światło zostaje enabled, a runtime intensity spada do 0.
     function getLocalLightUserIntensity(item) {
         if (!item || !item.light) {
             return 0;
@@ -5760,395 +5698,33 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return item.userIntensity;
     }
 
+    function applyLocalLightUserState(item) {
+        if (!item || !item.light) {
+            return false;
+        }
+
+        var shouldEnable = !item.softDeleted && getLocalLightUserEnabled(item);
+
+        if (item.light.setEnabled && item.light.isEnabled) {
+            var currentlyEnabled = !!item.light.isEnabled();
+            if (currentlyEnabled !== shouldEnable) {
+                item.light.setEnabled(shouldEnable);
+            }
+        }
+
+        item.light.intensity = shouldEnable ? getLocalLightUserIntensity(item) : 0;
+        item.runtimeMode = "persistent-user-state";
+        return shouldEnable;
+    }
+
     function setLocalLightUserIntensity(item, value) {
         if (!item || !item.light) {
             return;
         }
 
         item.userIntensity = Math.max(0, Number(value) || 0);
-
-        if (!item.cameraCulled && getLocalLightUserEnabled(item)) {
-            item.light.intensity = item.userIntensity;
-        }
+        applyLocalLightUserState(item);
     }
-
-    function isProjectedPointInsideCameraCullingViewport(point, viewportInfo) {
-        var projected = BABYLON.Vector3.Project(
-            point,
-            BABYLON.Matrix.Identity(),
-            scene.getTransformMatrix(),
-            viewportInfo.viewport
-        );
-
-        var inside =
-            projected.z >= 0 &&
-            projected.z <= 1 &&
-            projected.x >= viewportInfo.minX &&
-            projected.x <= viewportInfo.maxX &&
-            projected.y >= viewportInfo.minY &&
-            projected.y <= viewportInfo.maxY;
-
-        return {
-            inside: inside,
-            screenX: Math.round(projected.x),
-            screenY: Math.round(projected.y),
-            screenZ: Number(projected.z.toFixed ? projected.z.toFixed(4) : projected.z)
-        };
-    }
-
-    function addLocalLightCameraCullingSample(samples, label, point) {
-        if (!point || !isFinite(point.x) || !isFinite(point.y) || !isFinite(point.z)) {
-            return;
-        }
-
-        samples.push({
-            label: label,
-            point: point.clone ? point.clone() : point
-        });
-    }
-
-    function getLocalLightCameraCullingSamples(item) {
-        var samples = [];
-        var lightPosition = getLocalLightPosition(item);
-
-        addLocalLightCameraCullingSample(samples, "lightPosition", lightPosition);
-
-        if (
-            localLightCameraCullingBeamAwareEnabled &&
-            item &&
-            item.light
-        ) {
-            if (item.type === "spot" && item.light.direction) {
-                var direction = item.light.direction.clone();
-
-                if (direction.length() > 0.0001) {
-                    direction.normalize();
-
-                    var range = item.light.range && isFinite(item.light.range)
-                        ? item.light.range
-                        : 8;
-
-                    [0.20, 0.40, 0.65, 0.90].forEach(function (factor) {
-                        addLocalLightCameraCullingSample(
-                            samples,
-                            "spotBeam_" + factor,
-                            lightPosition.add(direction.scale(range * factor))
-                        );
-                    });
-                }
-            } else if (item.type === "point") {
-                var pointRange = item.light.range && isFinite(item.light.range)
-                    ? item.light.range
-                    : 8;
-
-                var radius = Math.max(
-                    0.5,
-                    pointRange * localLightCameraCullingPointLightSampleRadiusFactor
-                );
-
-                addLocalLightCameraCullingSample(
-                    samples,
-                    "pointRadius_forward",
-                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(0, 0, 1)).scale(radius))
-                );
-                addLocalLightCameraCullingSample(
-                    samples,
-                    "pointRadius_right",
-                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(1, 0, 0)).scale(radius))
-                );
-                addLocalLightCameraCullingSample(
-                    samples,
-                    "pointRadius_left",
-                    lightPosition.add(camera.getDirection(new BABYLON.Vector3(-1, 0, 0)).scale(radius))
-                );
-            }
-
-            if (item.light.includedOnlyMeshes && item.light.includedOnlyMeshes.length) {
-                item.light.includedOnlyMeshes.slice(0, localLightCameraCullingMaxTargetMeshSamples).forEach(function (mesh, index) {
-                    if (!mesh || mesh.isDisposed && mesh.isDisposed()) {
-                        return;
-                    }
-
-                    addLocalLightCameraCullingSample(
-                        samples,
-                        "targetMesh_" + index + "_" + mesh.name,
-                        getMeshWorldCenter(mesh)
-                    );
-                });
-            }
-
-            if (item.ownerMesh) {
-                addLocalLightCameraCullingSample(
-                    samples,
-                    "ownerMesh_" + item.ownerMesh.name,
-                    getMeshWorldCenter(item.ownerMesh)
-                );
-            }
-        }
-
-        return samples;
-    }
-
-    function getLocalLightCameraCullingViewportData(item) {
-        if (
-            !item ||
-            !scene ||
-            !scene.getTransformMatrix ||
-            !engine ||
-            !engine.getRenderWidth ||
-            !engine.getRenderHeight
-        ) {
-            return {
-                inside: true,
-                reason: "missingSceneData"
-            };
-        }
-
-        var width = Math.max(1, engine.getRenderWidth());
-        var height = Math.max(1, engine.getRenderHeight());
-        var viewport = camera.viewport.toGlobal(width, height);
-        var margin = (1 - localLightCameraCullingViewScale) * 0.5;
-        var viewportInfo = {
-            viewport: viewport,
-            minX: width * margin,
-            maxX: width * (1 - margin),
-            minY: height * margin,
-            maxY: height * (1 - margin)
-        };
-
-        var samples = getLocalLightCameraCullingSamples(item);
-        var projectedSamples = [];
-        var firstInsideSample = null;
-
-        try {
-            samples.forEach(function (sample) {
-                var projected = isProjectedPointInsideCameraCullingViewport(
-                    sample.point,
-                    viewportInfo
-                );
-
-                projected.label = sample.label;
-                projectedSamples.push(projected);
-
-                if (!firstInsideSample && projected.inside) {
-                    firstInsideSample = projected;
-                }
-            });
-        } catch (error) {
-            return {
-                inside: true,
-                reason: "projectionError"
-            };
-        }
-
-        var inside = !!firstInsideSample;
-        var fallbackSample = projectedSamples.length ? projectedSamples[0] : null;
-
-        return {
-            inside: inside,
-            reason: inside
-                ? ("insideCameraView:" + firstInsideSample.label)
-                : "outsideCameraView",
-            matchedSampleLabel: firstInsideSample ? firstInsideSample.label : null,
-            screenX: firstInsideSample
-                ? firstInsideSample.screenX
-                : (fallbackSample ? fallbackSample.screenX : null),
-            screenY: firstInsideSample
-                ? firstInsideSample.screenY
-                : (fallbackSample ? fallbackSample.screenY : null),
-            screenZ: firstInsideSample
-                ? firstInsideSample.screenZ
-                : (fallbackSample ? fallbackSample.screenZ : null),
-            minX: Math.round(viewportInfo.minX),
-            maxX: Math.round(viewportInfo.maxX),
-            minY: Math.round(viewportInfo.minY),
-            maxY: Math.round(viewportInfo.maxY),
-            viewScale: localLightCameraCullingViewScale,
-            beamAware: localLightCameraCullingBeamAwareEnabled,
-            sampleCount: samples.length,
-            insideSampleCount: projectedSamples.filter(function (sample) {
-                return !!sample.inside;
-            }).length,
-            sampleLabels: projectedSamples.map(function (sample) {
-                return sample.label + ":" + (sample.inside ? "in" : "out");
-            })
-        };
-    }
-
-    function shouldLocalLightBeRuntimeEnabled(item) {
-        if (!getLocalLightUserEnabled(item)) {
-            return false;
-        }
-
-        if (galleryZoneStreamingRuntime && galleryZoneStreamingRuntime.started && galleryZoneStreamingRuntime.enabled) {
-            var selectedForEditing = Array.isArray(selectedLocalLights) && selectedLocalLights.indexOf(item) !== -1;
-            var lightZoneId = getGalleryStreamingZoneIdForPosition(getLocalLightPosition(item));
-            item.galleryStreamingZoneId = lightZoneId;
-            item.zoneCulled = !selectedForEditing && !isGalleryStreamingZoneActive(lightZoneId);
-            if (item.zoneCulled) {
-                item.cameraCulled = true;
-                item._cameraCullingDebug = {
-                    inside: false,
-                    reason: "outsideActiveGalleryZone",
-                    zoneId: lightZoneId,
-                    activeZoneIds: galleryZoneStreamingRuntime.activeZoneIds.slice()
-                };
-                galleryZoneStreamingRuntime.lightZoneCullCount += 1;
-                return false;
-            }
-        }
-
-        if (!localLightCameraCullingEnabled) {
-            item.cameraCulled = false;
-            item._cameraCullingDebug = {
-                inside: true,
-                reason: "disabled"
-            };
-            return true;
-        }
-
-        var viewportData = getLocalLightCameraCullingViewportData(item);
-        var now = Date.now();
-
-        if (viewportData.inside) {
-            item._lastCameraCullingInsideTime = now;
-            item.cameraCulled = false;
-            item._cameraCullingDebug = viewportData;
-            return true;
-        }
-
-        var lastInsideTime = item._lastCameraCullingInsideTime || 0;
-        var withinGrace = lastInsideTime > 0 && now - lastInsideTime <= localLightCameraCullingGraceMs;
-
-        if (withinGrace) {
-            item.cameraCulled = false;
-            item._cameraCullingDebug = Object.assign(
-                {},
-                viewportData,
-                {
-                    inside: true,
-                    reason: "outsideCameraViewGrace",
-                    rawInside: false,
-                    graceMs: localLightCameraCullingGraceMs,
-                    msSinceInside: now - lastInsideTime
-                }
-            );
-            return true;
-        }
-
-        item._cameraCullingDebug = viewportData;
-        item.cameraCulled = true;
-
-        return false;
-    }
-
-    function getLocalLightRuntimeTargetIntensity(item) {
-        if (!item || !item.light) {
-            return 0;
-        }
-
-        var userEnabled = getLocalLightUserEnabled(item);
-        var runtimeEnabled = shouldLocalLightBeRuntimeEnabled(item);
-
-        if (!userEnabled) {
-            return 0;
-        }
-
-        return runtimeEnabled ? getLocalLightUserIntensity(item) : 0;
-    }
-
-    function applyLocalLightRuntimeEnabled(item) {
-        if (!item || !item.light) {
-            return;
-        }
-
-        var userEnabled = getLocalLightUserEnabled(item);
-        var targetIntensity = getLocalLightRuntimeTargetIntensity(item);
-
-        item.runtimeTargetIntensity = targetIntensity;
-
-        if (!userEnabled) {
-            if (item.light.setEnabled && item.light.isEnabled && item.light.isEnabled()) {
-                item.light.setEnabled(false);
-            }
-
-            item.light.intensity = 0;
-            item.runtimeCurrentIntensity = 0;
-            return;
-        }
-
-        if (item.light.setEnabled && item.light.isEnabled && !item.light.isEnabled()) {
-            item.light.setEnabled(true);
-        }
-
-        if (!localLightCameraCullingSmoothFadeEnabled) {
-            item.light.intensity = targetIntensity;
-            item.runtimeCurrentIntensity = targetIntensity;
-            return;
-        }
-
-        if (item.runtimeCurrentIntensity === undefined) {
-            item.runtimeCurrentIntensity = Number(item.light.intensity) || 0;
-        }
-    }
-
-    function updateLocalLightSmoothIntensity(item, deltaSeconds) {
-        if (!item || !item.light || !getLocalLightUserEnabled(item)) {
-            return;
-        }
-
-        var targetIntensity = item.runtimeTargetIntensity !== undefined
-            ? item.runtimeTargetIntensity
-            : getLocalLightRuntimeTargetIntensity(item);
-
-        var currentIntensity = Number(item.light.intensity) || 0;
-        var speed = targetIntensity > currentIntensity
-            ? localLightCameraCullingFadeInSpeed
-            : localLightCameraCullingFadeOutSpeed;
-
-        var alpha = 1 - Math.exp(-Math.max(0.0001, speed) * Math.max(0, deltaSeconds));
-        var nextIntensity = currentIntensity + (targetIntensity - currentIntensity) * alpha;
-
-        if (Math.abs(nextIntensity - targetIntensity) <= localLightCameraCullingSnapEpsilon) {
-            nextIntensity = targetIntensity;
-        }
-
-        item.runtimeCurrentIntensity = nextIntensity;
-        item.light.intensity = nextIntensity;
-    }
-
-
-    function updateLocalLightsCameraCulling(force) {
-        if (!localLightItems || !localLightItems.length) {
-            return;
-        }
-
-        localLightCameraCullingFrameCounter += 1;
-
-        var cameraChangedForCulling = hasLocalLightCameraChangedForCulling();
-        var shouldRefreshCulling = !!(
-            force ||
-            localLightCameraCullingDirty ||
-            cameraChangedForCulling
-        );
-
-        var deltaSeconds = engine && engine.getDeltaTime
-            ? Math.min(0.1, engine.getDeltaTime() / 1000)
-            : 1 / 60;
-
-        if (shouldRefreshCulling) {
-            localLightCameraCullingDirty = false;
-        }
-
-        localLightItems.forEach(function (item) {
-            if (shouldRefreshCulling) {
-                applyLocalLightRuntimeEnabled(item);
-            }
-
-            updateLocalLightSmoothIntensity(item, deltaSeconds);
-        });
-    }
-
 
     function getLocalLightBudgetDebug() {
         return {
@@ -6649,142 +6225,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         start: startGalleryAdaptiveMobileQuality
     };
 
-    function getLocalLightCameraCullingDebug() {
-        updateLocalLightsCameraCulling(true);
-
-        return {
-            enabled: localLightCameraCullingEnabled,
-            viewScale: localLightCameraCullingViewScale,
-            graceMs: localLightCameraCullingGraceMs,
-            expandedViewportEnabled: localLightCameraCullingViewScale > 1,
-            checkEveryFrames: localLightCameraCullingCheckEveryFrames,
-            smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
-            fadeInSpeed: localLightCameraCullingFadeInSpeed,
-            fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
-            beamAwareEnabled: localLightCameraCullingBeamAwareEnabled,
-            maxTargetMeshSamples: localLightCameraCullingMaxTargetMeshSamples,
-            activeCount: localLightItems.filter(function (item) {
-                return item && item.light && item.light.isEnabled && item.light.isEnabled() && item.light.intensity > 0;
-            }).length,
-            culledCount: localLightItems.filter(function (item) {
-                return !!(item && item.cameraCulled);
-            }).length,
-            softDeletedCount: localLightSoftDeletedItems.length,
-            reusePoolCount: localLightSoftDeletedItems.length,
-            cleanDisabledLightsAvailable: localLightSoftDeletedItems.length > 0,
-            lightBudget: getLocalLightBudgetDebug(),
-            zeroTouchDeleteMode: true,
-            reusePoolByType: {
-                spot: localLightSoftDeletedItems.filter(function (item) {
-                    return item && item.type === "spot";
-                }).length,
-                point: localLightSoftDeletedItems.filter(function (item) {
-                    return item && item.type === "point";
-                }).length
-            },
-            quarantineDummyMeshName: localLightQuarantineDummyMesh ? localLightQuarantineDummyMesh.name : null,
-            quarantinedLights: localLightSoftDeletedItems.map(function (item) {
-                return {
-                    id: item.id,
-                    name: item.name,
-                    type: item.type,
-                    lightExists: !!item.light,
-                    intensity: item.light ? item.light.intensity : null,
-                    zeroTouchDeleted: !!(item.light && item.light.metadata && item.light.metadata.zeroTouchDeleted),
-                    includedOnlyMeshNames: item.light && item.light.includedOnlyMeshes
-                        ? item.light.includedOnlyMeshes.map(function (mesh) {
-                            return mesh ? mesh.name : null;
-                        })
-                        : []
-                };
-            }),
-            lights: localLightItems.map(function (item) {
-                return {
-                    id: item.id,
-                    name: item.name,
-                    type: item.type,
-                    userEnabled: getLocalLightUserEnabled(item),
-                    runtimeEnabled: item.light && item.light.isEnabled
-                        ? item.light.isEnabled() && item.light.intensity > 0
-                        : false,
-                    actualLightEnabled: item.light && item.light.isEnabled
-                        ? item.light.isEnabled()
-                        : false,
-                    userIntensity: getLocalLightUserIntensity(item),
-                    runtimeTargetIntensity: item.runtimeTargetIntensity !== undefined
-                        ? item.runtimeTargetIntensity
-                        : null,
-                    runtimeIntensity: item.light ? item.light.intensity : null,
-                    cameraCulled: !!item.cameraCulled,
-                    lastCameraCullingInsideTime: item._lastCameraCullingInsideTime || null,
-                    cameraCulling: item._cameraCullingDebug || null
-                };
-            })
-        };
-    }
-
-    function setLocalLightCameraCullingDebugOptions(options) {
-        options = options || {};
-
-        if (options.enabled !== undefined) {
-            localLightCameraCullingEnabled = !!options.enabled;
-        }
-
-        if (options.viewScale !== undefined) {
-            localLightCameraCullingViewScale = Math.max(
-                0.1,
-                Math.min(1.6, Number(options.viewScale) || 1.22)
-            );
-        }
-
-        if (options.graceMs !== undefined) {
-            localLightCameraCullingGraceMs = Math.max(
-                0,
-                Math.min(4000, Number(options.graceMs) || localLightCameraCullingGraceMs)
-            );
-        }
-
-        if (options.checkEveryFrames !== undefined) {
-            localLightCameraCullingCheckEveryFrames = Math.max(
-                1,
-                Math.floor(Number(options.checkEveryFrames) || 4)
-            );
-        }
-
-        if (options.smoothFadeEnabled !== undefined) {
-            localLightCameraCullingSmoothFadeEnabled = !!options.smoothFadeEnabled;
-        }
-
-        if (options.fadeInSpeed !== undefined) {
-            localLightCameraCullingFadeInSpeed = Math.max(
-                0.1,
-                Number(options.fadeInSpeed) || 7.5
-            );
-        }
-
-        if (options.fadeOutSpeed !== undefined) {
-            localLightCameraCullingFadeOutSpeed = Math.max(
-                0.1,
-                Number(options.fadeOutSpeed) || 5.0
-            );
-        }
-
-        if (options.beamAwareEnabled !== undefined) {
-            localLightCameraCullingBeamAwareEnabled = !!options.beamAwareEnabled;
-        }
-
-        if (options.maxTargetMeshSamples !== undefined) {
-            localLightCameraCullingMaxTargetMeshSamples = Math.max(
-                0,
-                Math.floor(Number(options.maxTargetMeshSamples) || 0)
-            );
-        }
-
-        updateLocalLightsCameraCulling(true);
-
-        return getLocalLightCameraCullingDebug();
-    }
-
     function getLocalLightWallHitFromSpotRay(item, wallSegments) {
         if (
             !item ||
@@ -6927,8 +6367,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 runtimeEnabled: item.light && item.light.isEnabled
                     ? item.light.isEnabled()
                     : false,
-                cameraCulled: !!item.cameraCulled,
-                cameraCulling: item._cameraCullingDebug || null,
                 wallTargetCount: wallTargets.length,
                 wallTargetNames: wallTargets.map(function (mesh) {
                     return mesh.name;
@@ -7359,7 +6797,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item._lastCommittedTargetSegmentNames = getLocalLightTargetSegmentNamesFromMeshes(nextMeshes);
         item._lastTargetUpdateReason = reason || "unknown";
         localLightTargetDebugStats.targetChanged += 1;
-        markLocalLightCameraCullingDirty();
         return true;
     }
 
@@ -8247,7 +7684,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function refreshAllCommonLocalLightTargetsImmediate() {
-        markLocalLightCameraCullingDirty();
         localLightWallSegmentBudgetMap = {};
         localLightFloorSegmentBudgetMap = {};
         localLightCeilingSegmentBudgetMap = {};
@@ -13636,7 +13072,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66C1",
+                            stage: "12C66C2",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -14212,8 +13648,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryZoneStreamingRuntime.lastReason = reason || "zone-change";
             sortGalleryStreamingQueue(galleryFastStartRuntime.deferredArtworkLoads, "artwork");
             sortGalleryStreamingQueue(galleryFastStartRuntime.deferredModelLoads, "slot");
-            markLocalLightCameraCullingDirty();
-            return true;
+                return true;
         }
         return false;
     }
@@ -15947,7 +15382,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C1",
+        stage: "12C66C2",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -22887,7 +22322,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             item.light.intensity = item.userIntensity;
         }
 
-        applyLocalLightRuntimeEnabled(item);
+        applyLocalLightUserState(item);
 
         if (savedState.range !== undefined) {
             item.light.range = Math.max(0.1, Number(savedState.range));
@@ -23429,9 +22864,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             if (key === "enabled") {
                 item.userEnabled = !!value;
-                markLocalLightCameraCullingDirty();
-                markLocalLightTargetItemCacheDirty(item, item.userEnabled ? "enabledTargetRefresh" : "disabledTargetClear");
-                applyLocalLightRuntimeEnabled(item);
+                        markLocalLightTargetItemCacheDirty(item, item.userEnabled ? "enabledTargetRefresh" : "disabledTargetClear");
+                applyLocalLightUserState(item);
 
                 if (item.userEnabled) {
                     updateLocalLightAfterParameterChange(item, !!forceShadowRefresh, {
@@ -23447,11 +22881,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 updateLocalLightMarkerColor(item, color);
             } else if (key === "intensity") {
                 setLocalLightUserIntensity(item, value);
-                markLocalLightCameraCullingDirty();
-            } else if (key === "range") {
+                    } else if (key === "range") {
                 item.light.range = Math.max(0.1, Number(value));
-                markLocalLightCameraCullingDirty();
-                needsGeometryUpdate = true;
+                        needsGeometryUpdate = true;
             } else if (key === "spotAngle") {
                 if (item.type === "spot") {
                     item.light.angle = BABYLON.Tools.ToRadians(
@@ -24410,9 +23842,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item.selected = false;
         item.userEnabled = false;
         item.userIntensity = 0;
-        item.runtimeTargetIntensity = 0;
-        item.runtimeCurrentIntensity = 0;
-        item.cameraCulled = true;
 
         if (item.light) {
             item._zeroTouchDeleteOriginalIncludedOnlyMeshes = item.light.includedOnlyMeshes
@@ -24512,9 +23941,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item.softDeleted = false;
         item.selected = false;
         item.userEnabled = true;
-        item.cameraCulled = false;
-        item.runtimeTargetIntensity = 0;
-        item.runtimeCurrentIntensity = 0;
         item.targetOptions = normalizeLocalTargetOptions(null);
         if (isPoint) {
             item.targetOptions.ceiling = true;
@@ -24581,7 +24007,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         runWithFastLocalLightHelperPreview(item, function () {
             updateLocalLightHelper(item);
         });
-        applyLocalLightRuntimeEnabled(item);
+        applyLocalLightUserState(item);
         scheduleDeferredLocalLightSpawnSetup(item, "reuseDeferred");
         updateLocalLightsUi();
         updateViewerModePlaceholderVisibility();
@@ -25424,8 +24850,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         item.userEnabled = !!isEnabled;
-        markLocalLightCameraCullingDirty();
-        applyLocalLightRuntimeEnabled(item);
+        applyLocalLightUserState(item);
 
         if (item.type === "point") {
             disableLocalPointLightShadow(item);
@@ -25706,8 +25131,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             userEnabled: options.light && options.light.isEnabled
                 ? !!options.light.isEnabled()
                 : true,
-            userIntensity: options.light ? Number(options.light.intensity) || 0 : 0,
-            cameraCulled: false
+            userIntensity: options.light ? Number(options.light.intensity) || 0 : 0
         };
 
         // STAGE 12C51: PointLight is spherical, so it should include the nearby ceiling by default.
@@ -25728,7 +25152,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         runWithFastLocalLightHelperPreview(item, function () {
             updateLocalLightHelper(item);
         });
-        applyLocalLightRuntimeEnabled(item);
+        applyLocalLightUserState(item);
 
         // STAGE 12C65E LIGHT MODE EXIT FIX:
         // Saved lights already restore their committed targetMeshNames during state hydration.
@@ -28537,12 +27961,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     editButton.onclick = function (event) {
-        closeGalleryInspect("edit-mode-toggle");
-
         if (event) {
             event.preventDefault();
             event.stopPropagation();
         }
+
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            clearGalleryInspectTransitionInput();
+            return;
+        }
+
+        closeGalleryInspect("edit-mode-toggle");
 
         if (editMode && !confirmGalleryDiscardUnsavedChanges("Leaving Edit Mode")) {
             return;
@@ -28735,7 +28164,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (shouldEnable === mobileViewerEnabled) {
-            // Stage 12C66C1: heal any generic camera reattach that may have happened
+            // Stage 12C66C2: heal any generic camera reattach that may have happened
             // after Inspect, recovery or a viewport refresh. Mobile Viewer must never
             // keep Babylon touch controls attached in parallel with custom input.
             if (shouldEnable && !editMode) {
@@ -29321,6 +28750,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryInspectCameraRuntime.state === "TRANSITION" || galleryInspectCameraRuntime.state === "INSPECT";
     }
 
+    function isGalleryInspectTransitionInteractionLocked() {
+        return !!(
+            galleryInspectRuntime &&
+            galleryInspectRuntime.opening &&
+            galleryInspectCameraRuntime.state === "TRANSITION"
+        );
+    }
+
+    function clearGalleryInspectTransitionInput() {
+        resetViewerWASDMovementRuntime(true);
+        if (typeof clearEditMoveKeys === "function") clearEditMoveKeys();
+        resetGalleryDesktopDpadState();
+        resetMobileJoystick();
+        resetMobileCanvasMoveGesture();
+        if (mobileLookActive) endMobileCanvasLook(null, true);
+    }
+
     function syncGalleryInspectCameraCollisionHandoff() {
         if (!camera || !camera.position) return;
         viewerWallLastSafeCameraPosition = camera.position.clone();
@@ -29374,19 +28820,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         restoreGalleryCameraAfterInspectTransition();
     }
 
-    function hasViewerTransitionCancelInput() {
-        var keyboard = !!(viewerMoveKeys.w || viewerMoveKeys.a || viewerMoveKeys.s || viewerMoveKeys.d);
-        var joystick = !!(
-            isMobileViewerActive() &&
-            (mobileJoystickActive || mobileCanvasMoveActive) &&
-            (Math.abs((mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector).x || 0) >= (viewerMovementMobileJoystickTurnDeadZone || 0.08) ||
-             Math.abs((mobileJoystickActive ? mobileJoystickVector : mobileCanvasMoveVector).y || 0) >= (viewerMovementConfig.joystickDeadZone || 0.08))
-        );
-        return keyboard || joystick;
-    }
-
 
     function updateGalleryDesktopDpadTurn(dt) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            resetGalleryDesktopDpadState();
+            return false;
+        }
+
         if (!isGalleryDesktopPointerNavigationAvailable() || !camera) {
             return false;
         }
@@ -29468,8 +28908,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function updateViewerWASDMovement() {
         if (isGalleryInspectCameraTransitionActive()) {
-            if (!hasViewerTransitionCancelInput()) return;
-            closeGalleryInspect("viewer-manual-movement");
+            clearGalleryInspectTransitionInput();
+            return;
         }
 
         clearViewerWASDVisualOffsets();
@@ -29609,6 +29049,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function beginMobileCanvasLook(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            if (event && event.cancelable) event.preventDefault();
+            clearGalleryInspectTransitionInput();
+            return false;
+        }
+
         if (!isMobileViewerActive() || !event || isGalleryTouchGestureUiTarget(event.target)) {
             return false;
         }
@@ -29670,6 +29116,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function updateMobileCanvasLook(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            if (event && event.cancelable) event.preventDefault();
+            clearGalleryInspectTransitionInput();
+            return false;
+        }
+
         if (!mobileLookActive || !event) {
             return false;
         }
@@ -29728,6 +29180,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function handleMobileViewerTap(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            clearGalleryInspectTransitionInput();
+            return;
+        }
+
         if (!isMobileViewerActive()) {
             return;
         }
@@ -29917,6 +29374,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             function setPressed(event, pressed) {
                 if (!isGalleryDesktopPointerNavigationAvailable()) return;
                 if (pressed && typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) return;
+                if (pressed && isGalleryInspectTransitionInteractionLocked()) return;
                 if (event && event.cancelable) event.preventDefault();
                 if (event && event.stopPropagation) event.stopPropagation();
 
@@ -29977,9 +29435,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFloorCursorRingMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
         galleryFloorCursorRingMaterial.emissiveColor = new BABYLON.Color3(0.96, 0.96, 0.96);
         galleryFloorCursorRingMaterial.specularColor = BABYLON.Color3.Black();
-        galleryFloorCursorRingMaterial.alpha = 0.90;
+        galleryFloorCursorRingMaterial.alpha = 0.94;
         galleryFloorCursorRingMaterial.disableLighting = true;
+        galleryFloorCursorRingMaterial.disableDepthWrite = true;
         galleryFloorCursorRingMaterial.backFaceCulling = false;
+        galleryFloorCursorRingMaterial.zOffset = -4;
+        if (galleryFloorCursorRingMaterial.zOffsetUnits !== undefined) {
+            galleryFloorCursorRingMaterial.zOffsetUnits = -4;
+        }
 
         galleryFloorCursorRing = BABYLON.MeshBuilder.CreateTorus(
             "GalleryFloorCursorRing",
@@ -30003,7 +29466,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFloorCursorPulseMaterial.specularColor = BABYLON.Color3.Black();
         galleryFloorCursorPulseMaterial.alpha = 0;
         galleryFloorCursorPulseMaterial.disableLighting = true;
+        galleryFloorCursorPulseMaterial.disableDepthWrite = true;
         galleryFloorCursorPulseMaterial.backFaceCulling = false;
+        galleryFloorCursorPulseMaterial.zOffset = -4;
+        if (galleryFloorCursorPulseMaterial.zOffsetUnits !== undefined) {
+            galleryFloorCursorPulseMaterial.zOffsetUnits = -4;
+        }
 
         galleryFloorCursorPulseRing = BABYLON.MeshBuilder.CreateTorus(
             "GalleryFloorCursorPulseRing",
@@ -30047,7 +29515,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function startGalleryFloorCursorClickPulse(event) {
         if (!event || event.button !== 0 || !isGalleryDesktopPointerNavigationAvailable() ||
             (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
-            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere) {
+            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere ||
+            isGalleryInspectTransitionInteractionLocked()) {
             return false;
         }
 
@@ -30058,10 +29527,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var pulse = getOrCreateGalleryFloorCursorPulseRing();
         pulse.position.copyFrom(pick.pickedPoint);
-        pulse.position.y += 0.021;
+        pulse.position.y += 0.060;
         pulse.rotationQuaternion = null;
         pulse.rotation.copyFrom(BABYLON.Vector3.Zero());
-        pulse.scaling.set(0.82, 0.82, 0.82);
+        pulse.scaling.set(0.82, 0.10, 0.82);
         galleryFloorCursorPulseMaterial.alpha = 0.92;
         galleryFloorCursorPulseStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         pulse.setEnabled(true);
@@ -30077,7 +29546,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var t = Math.max(0, Math.min(1, (now - galleryFloorCursorPulseStartedAt) / galleryFloorCursorPulseDurationMs));
         var eased = 1 - Math.pow(1 - t, 3);
         var scale = 0.82 + eased * 0.78;
-        galleryFloorCursorPulseRing.scaling.set(scale, scale, scale);
+        galleryFloorCursorPulseRing.scaling.set(scale, 0.10, scale);
         galleryFloorCursorPulseMaterial.alpha = 0.92 * Math.pow(1 - t, 1.55);
 
         if (t >= 1) {
@@ -30091,7 +29560,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (!event || !isGalleryDesktopPointerNavigationAvailable() ||
             (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
-            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere) {
+            desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere ||
+            isGalleryInspectTransitionInteractionLocked()) {
             hideGalleryFloorCursorRing();
             return;
         }
@@ -30105,10 +29575,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var ring = getOrCreateGalleryFloorCursorRing();
         ring.position.copyFrom(pick.pickedPoint);
-        ring.position.y += 0.020;
+        ring.position.y += 0.060;
         ring.rotationQuaternion = null;
         ring.rotation.copyFrom(BABYLON.Vector3.Zero());
-        ring.scaling.set(1, 1, 1);
+        ring.scaling.set(1, 0.10, 1);
         ring.setEnabled(true);
     }
 
@@ -30397,10 +29867,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerWASDMovement();
         updateViewerWallCollisionIfCameraMoved();
         updateGalleryZoneStreamingRuntime(false);
-
-        measureGalleryPerformanceMetric("localLightsMs", function () {
-            updateLocalLightsCameraCulling(false);
-        });
 
         updateEditModeMovementFrame();
         maybeUpdateGalleryPerformanceDebugPanel(false);
@@ -31217,6 +30683,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var isSpaceKey = key === " " || key === "spacebar" || event.code === "Space";
         var isArrowKey = key === "arrowup" || key === "arrowdown" || key === "arrowleft" || key === "arrowright";
 
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            if (key === "w" || key === "a" || key === "s" || key === "d" || key === "shift" || isSpaceKey || isArrowKey || key === "escape") {
+                event.preventDefault();
+                clearGalleryInspectTransitionInput();
+            }
+            return;
+        }
+
         // Stage 12C66A1: strzałki nie są sterowaniem chodzenia.
         // Left/Right w aktywnym Inspect przechwytuje osobny handler na fazie capture.
         // Poza nim blokujemy domyślne przewijanie strony, ale nie przekazujemy wejścia do kamery.
@@ -31279,9 +30753,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (isGalleryInspectCameraTransitionActive()) {
-            var transitionCancelInput = !!(editMoveKeys.w || editMoveKeys.a || editMoveKeys.s || editMoveKeys.d || editMoveKeys.space);
-            if (!transitionCancelInput) return;
-            closeGalleryInspect("edit-manual-movement");
+            clearGalleryInspectTransitionInput();
+            return;
         }
 
         var moveDirection = BABYLON.Vector3.Zero();
@@ -38483,6 +37956,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     registerGalleryDomEvent("galleryInspectEscape", window, "keydown", function (event) {
         if (event.key === "Escape" && galleryInspectRuntime.active) {
             event.preventDefault();
+            if (isGalleryInspectTransitionInteractionLocked()) {
+                clearGalleryInspectTransitionInput();
+                return;
+            }
             closeGalleryInspect("escape");
         }
     });
@@ -38616,6 +38093,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     scene.onPointerDown = function (evt, pickResult) {
+
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            if (evt && evt.preventDefault) evt.preventDefault();
+            clearGalleryInspectTransitionInput();
+            return;
+        }
 
         if (isMobileViewerActive()) {
             evt.preventDefault();
@@ -40644,12 +40127,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 }
             };
         },
-        getLocalLightCameraCullingDebug: function () {
-            return getLocalLightCameraCullingDebug();
-        },
-        setLocalLightCameraCulling: function (options) {
-            return setLocalLightCameraCullingDebugOptions(options);
-        },
         getLocalLightBudgetDebug: function () {
             return getLocalLightBudgetDebug();
         },
@@ -40762,17 +40239,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         resetVisualSettings: function () {
             return resetVisualSettingsToDefault();
-        },
-        getLocalLightCameraCullingSettings: function () {
-            return {
-                enabled: localLightCameraCullingEnabled,
-                viewScale: localLightCameraCullingViewScale,
-                graceMs: localLightCameraCullingGraceMs,
-                smoothFadeEnabled: localLightCameraCullingSmoothFadeEnabled,
-                fadeInSpeed: localLightCameraCullingFadeInSpeed,
-                fadeOutSpeed: localLightCameraCullingFadeOutSpeed,
-                beamAwareEnabled: localLightCameraCullingBeamAwareEnabled
-            };
         },
         cleanDisabledLocalLights: function () {
             return cleanDisabledLocalLightPool();

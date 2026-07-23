@@ -1,18 +1,12 @@
-# Berryboy Art Gallery — Stage 12C66C1
+# Berryboy Art Gallery — Stage 12C66C2
 
-Wąski hotfix stabilizujący Etap 3 na bazie **12C66C**. Nie przebudowuje popupu, startupu, Edit Mode, zapisu, Inspect ani kolizji rzeźb.
+Wąska stabilizacja Stage **12C66C1** przed dalszym audytem Etapu 3. Zakres ograniczono do trzech zgłoszonych problemów — bez redesignu popupu, startupu, Edit Mode, zapisu, Inspect UI ani kolizji rzeźb.
 
 ## Poprawki
 
-- Floor cursor jest większy, jaśniejszy i ma ciemny outline, dzięki czemu pozostaje widoczny na jasnej i odbijającej podłodze.
-- Kliknięcie widocznego fragmentu podłogi uruchamia jeden krótki, wielokrotnego użytku ripple/pulse.
-- Ring i pulse nie przebijają przez ściany, obrazy ani rzeźby — pierwszy widoczny hit musi należeć do `floorMeshes`.
-- D-pad zachowuje prawą pozycję u publicznego obserwatora, ale przy zalogowanym edytorze odsuwa się od pływającego przycisku `EDIT MODE`.
-- Mobilny Viewer nie może ponownie podłączyć Babylon `FreeCameraTouchInput` po Inspect, recovery ani odświeżeniu viewportu.
-- Jedna aktywna ścieżka dotyku ma jednego właściciela; drugi palec nie nadpisuje przechwyconego gestu.
-- Prawdziwy joystick i tymczasowy hold-joystick nie mogą równocześnie sterować ruchem.
-- Po anulowaniu gestu, utracie focusu, `pagehide`, zmianie orientacji lub ukryciu karty zerowane są wszystkie wektory ruchu.
-- W mobilnym Viewerze kamera jest twardo utrzymywana na zapisanej wysokości chodzenia, poza świadomym Inspect/Custom Focus.
+- Floor cursor jest spłaszczony, podniesiony ponad powierzchnię i ma depth bias, dzięki czemu nie powinien być przecinany przez sąsiednie lub nakładające się segmenty podłogi.
+- Po rozpoczęciu podejścia Inspect kamera ma wyłączną kontrolę aż do końca animacji. Kliknięcie sceny, WASD, D-pad, joystick, touch-drag, Escape i przycisk Edit Mode nie mogą przerwać przejazdu.
+- Usunięto cały automatyczny system wygaszania Local Lights zależny od kadru kamery oraz strefy streamingu. Lampa respektuje wyłącznie zapisane `Enabled` i `Intensity`.
 
 ## Build i testy
 
@@ -20,6 +14,6 @@ Wąski hotfix stabilizujący Etap 3 na bazie **12C66C**. Nie przebudowuje popupu
 npm run check
 ```
 
-Polecenie buduje plik produkcyjny, generuje TXT login-disabled oraz uruchamia verifier i testy Etapu 1–3 wraz z testami hotfixu C1.
+Polecenie generuje produkcyjny plik minified, TXT z logowaniem wyłączonym i uruchamia verifier oraz testy Etapów 1–3.
 
-Manualne sprawdzenie na fizycznym Androidzie i iOS nadal jest obowiązkowe. Lista: `STAGE12C66C1_TEST_CHECKLIST.txt`.
+Manualne sprawdzenie renderowania floor cursora, pełnego przejazdu Inspect i Local Lights w realnej scenie nadal jest wymagane. Lista znajduje się w `STAGE12C66C2_TEST_CHECKLIST.txt`.
