@@ -88,7 +88,7 @@
   - rejestr Local Lights jest jednym zrodlem prawdy,
   - UI, helpery i cienie maja tylko odczytywac/zmieniac dane z rejestru,
   - nie dodajemy rownoleglych systemow dla nowych lamp.
-  - Stage 12C66C5: Unified Ground Collision / Sculpture Runtime Integrity.
+  - Stage 12C66C5A: Camera Height Restore — Unified Ground Collision zachowuje dokładny poziom oczu z C4; resolver chodzenia steruje X/Z i nie przelicza już Y z powierzchni segmentu podłogi.
 */
 
 
@@ -3317,7 +3317,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var viewerWallBlockRadius = 0.72;
     var viewerWallRayExtraDistance = 1.08;
     var viewerWallVisualStopDistance = 0.82;
-    // STAGE 12C66C5 — UNIFIED GROUND COLLISION
+    // STAGE 12C66C5A — UNIFIED GROUND COLLISION
     // Grounded movement has one authoritative resolver. Native Babylon collisions and
     // the old post-move rollback are intentionally removed from the active camera path.
     var galleryGroundCollisionRuntime = {
@@ -3477,10 +3477,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryGroundedCameraYAtPosition(position, fallbackY) {
-        var eyeHeight = getGalleryViewerEyeHeight();
-        var floorFallback = isFinite(Number(fallbackY)) ? Number(fallbackY) - eyeHeight : Number(position && position.y || 0) - eyeHeight;
-        var floorY = getGalleryFloorYAtPosition(position, floorFallback);
-        return Number(floorY) + eyeHeight;
+        // STAGE 12C66C5A — CAMERA HEIGHT RESTORE
+        // C4 walking kept the original scene eye level (-2.2) unchanged on flat gallery floors.
+        // C5 briefly recalculated Y from the picked floor surface on every movement step, which
+        // could select a lower floor layer and make the viewer feel unnaturally close to the ground.
+        // Ground collision owns X/Z only; normal Viewer/Edit walk keeps the accepted C4 baseline.
+        var stableWalkY = getGalleryDefaultWalkCameraY();
+        if (isFinite(Number(stableWalkY))) {
+            return Number(stableWalkY);
+        }
+        if (isFinite(Number(fallbackY))) {
+            return Number(fallbackY);
+        }
+        return position && isFinite(Number(position.y)) ? Number(position.y) : -2.2;
     }
 
     function getGalleryGroundCollisionBlock(from, candidate) {
@@ -12488,7 +12497,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var primarySculpture = null;
     var referenceSculpture = null;
 
-    // STAGE 12C66C5 — SCULPTURE RUNTIME INTEGRITY
+    // STAGE 12C66C5A — SCULPTURE RUNTIME INTEGRITY
     // One stable identity, one authoritative selection/runtime registry and one owned runtime hierarchy.
     var gallerySculptureCoreRuntime = {
         schema: "gallery-sculpture-core.v2",
@@ -13436,7 +13445,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66C5",
+                            stage: "12C66C5A",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -15747,7 +15756,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C5",
+        stage: "12C66C5A",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -40519,7 +40528,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return {
                 schema: galleryGroundCollisionRuntime.schema,
                 active: isViewerCollisionActive(),
-                stage: "12C66C5",
+                stage: "12C66C5A",
                 debugCollidersVisible: gallerySculptureCollisionDebugVisible,
                 nativeCollisionDisabled: !camera.checkCollisions && !scene.collisionsEnabled,
                 cameraCheckCollisions: !!camera.checkCollisions,

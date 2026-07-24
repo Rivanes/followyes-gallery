@@ -1,43 +1,27 @@
-# Berryboy Art Gallery — Stage 12C66C5
+# Berryboy Art Gallery — Stage 12C66C5A
 
-## Unified Ground Collision / Sculpture Runtime Integrity
+**Camera Height Restore / Unified Ground Collision**
 
-Stage 12C66C5 przebudowuje aktywny ruch po podłodze oraz lifecycle modeli rzeźb. Nie jest to warstwa flag nad C4: z aktywnej ścieżki usunięto konkurencyjne `moveWithCollisions()`, stary post-move rollback i bezpośrednią animację `camera.position` dla click-to-move.
+Baza: **Stage 12C66C5**. To jest wąska poprawka regresji wysokości kamery, bez przebudowy działającego systemu kolizji rzeźb.
 
-### Najważniejsze zmiany
+## Poprawka
 
-- jeden resolver `resolveGalleryGroundMovement()` dla Viewer walk, Edit walk, WASD, D-pada, joysticka, mobile hold-drag i click-to-move;
-- pełny ruch → slide X → slide Z → blokada, z jednym finalnym zapisem pozycji;
-- click-to-move wykonuje małe kroki przez ten sam resolver;
-- Edit Fly pozostaje świadomym wyjątkiem i jest jawnie logowany jako `intentional-fly-bypass`;
-- collider rzeźby należy do `slotId`, jest childem slotu i łączy bounds modelu z footprintem postumentu;
-- collider zachowuje lokalny cache podczas streamingu i aktualizuje world bounds po transformacji slotu;
-- loader przejmuje `rootNodes`, `transformNodes`, `meshes` i descendants GLB;
-- disposal usuwa całą konkretną hierarchię runtime’u, również node’y poza wrapperem;
-- drag ma stałego ownera od pointer-down do pointer-up;
-- async duplicate nie przejmuje nowszego selection;
-- kolejka streamingu modeli używa `slotId`, nie nazwy;
-- footprint postumentu jest zapisywany i odtwarzany.
+W C5 grounded resolver przeliczał `camera.position.y` z raycastu powierzchni podłogi przy każdym kroku. W scenie z wieloma segmentami lub warstwami podłogi ray mógł wskazać niższą powierzchnię, przez co kamera ustawiała się zbyt nisko.
 
-### Diagnostyka w konsoli
+C5A przywraca dokładne zachowanie C4:
 
-```js
-GalleryApp.setSculptureCollisionDebugVisible(true)
-GalleryApp.getViewerCollisionDebug()
-GalleryApp.getSculptureCoreDebug()
-GalleryApp.clearGroundCollisionMovementLog()
-```
+- standardowy Viewer walk i Edit walk zachowują bazową wysokość kamery zapisaną przy starcie sceny (`-2.2` w aktualnej konfiguracji);
+- unified collision rozwiązuje ruch po osiach X/Z;
+- WASD, D-pad, joystick, hold-drag i click-to-move korzystają dalej z jednego resolvera;
+- Edit Fly pozostaje świadomym wyjątkiem;
+- kolizje rzeźb, postumentów i ścian z C5 nie zostały cofnięte ani zdublowane.
 
-Wyłączenie podglądu:
-
-```js
-GalleryApp.setSculptureCollisionDebugVisible(false)
-```
-
-### Budowa i testy
+## Weryfikacja
 
 ```bash
 npm run check
 ```
 
-Automatyczne testy nie zastępują ręcznego testu WebGL na docelowej wystawie, prawdziwych GLB, Supabase i urządzeniach mobilnych. Procedura znajduje się w `STAGE12C66C5_TEST_CHECKLIST.txt`.
+Test regresji C5A sprawdza, że grounded movement zachowuje poziom oczu z C4 i nie wyprowadza już wysokości kamery z `getGalleryFloorYAtPosition()`.
+
+Pełne zachowanie wizualne należy potwierdzić na rzeczywistej scenie w Viewer Mode i zwykłym Edit walk.
