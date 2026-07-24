@@ -1,13 +1,13 @@
 {
-  "name": "berryboy-art-gallery-stage12c66c6b-avif-pipeline-migration-webp-removal",
-  "version": "0.11.66-c6b",
+  "name": "berryboy-art-gallery-stage12c66c6b1-existing-author-avif-reconciliation",
+  "version": "0.11.66-c6b1",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C6B / AVIF Pipeline, Migration and generated WebP removal",
+  "description": "Berryboy Art Gallery — Stage 12C66C6B1 / Existing Author AVIF Reconciliation",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c6b.mjs",
+    "build": "node tools/build-stage12c66c6b1.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && node --check src/workers/gallery-avif-encoder-worker.js",
-    "verify": "node tools/verify-stage12c66c6b.mjs",
+    "verify": "node tools/verify-stage12c66c6b1.mjs",
     "test:save-integrity": "node tools/test-stage12c66c6a1-save-integrity.mjs",
     "test:startup": "node tools/test-stage12c66c6a1-startup.mjs",
     "test:image-validation": "node tools/test-stage12c66c6a1-image-validation.mjs",
@@ -19,6 +19,7 @@
     "test:mobile-inspect-ui": "node tools/test-stage12c66c6a1-mobile-inspect-ui.mjs",
     "test:avif-pipeline": "node tools/test-stage12c66c6b-avif-pipeline.mjs",
     "test:migration-safety": "node tools/test-stage12c66c6b-migration-safety.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:migration-safety"
+    "test:author-reconciliation": "node tools/test-stage12c66c6b1-author-reconciliation.mjs",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:migration-safety && npm run test:author-reconciliation"
   }
 }

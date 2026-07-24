@@ -1,47 +1,27 @@
-# Berryboy Art Gallery — Stage 12C66C6B
+# Berryboy Art Gallery — Stage 12C66C6B1
 
-## AVIF Pipeline / Migration / WebP Removal
+## Existing Author AVIF Reconciliation
 
-Baza: Stage 12C66C6A1.
+Wąska poprawka Stage 12C66C6B. Odzyskuje już wygenerowane zestawy zdjęć autorów znajdujące się w Supabase Storage i przypisuje je do centralnej biblioteki `artworkAuthors`, bez ponownego kodowania AVIF.
 
-Ten etap przebudowuje generator wariantów obrazów i zdjęć autorów z WebP na AVIF. Warianty są kodowane dopiero po świadomym uruchomieniu narzędzia w panelu administratora. Viewer nie pobiera encodera AVIF podczas startu galerii.
+### Główna zmiana
 
-### Najważniejsze zasady
+Przycisk **RECONCILE / BUILD AUTHOR AVIF**, walidacja i finalizacja najpierw:
 
-- warianty: Desktop, Mobile i Preview w formacie AVIF;
-- artwork: 3072 / 2048 / 768 px;
-- author: 1280 / 768 / 384 px;
-- wersjonowane, niezmienne ścieżki `AVIFv1`;
-- upload z `upsert: false`;
-- każdy zestaw trzech wariantów jest atomowy;
-- plik po uploadzie jest ponownie pobierany i sprawdzany po sygnaturze AVIF;
-- mipmapy artworków są włączone także na telefonie;
-- anizotropia: cel 8 mobile / 16 desktop, ograniczona możliwościami GPU;
-- błąd dekodowania AVIF cofa dany obraz do oryginalnego źródła;
-- wygenerowane WebP są usuwane dopiero po walidacji i dwóch poprawnych zapisach galerii;
-- oryginalne JPG, PNG, AVIF lub WebP nie są usuwane przez migrację wariantów.
+1. skanują `main/authors/AVIFv1/Desktop`, `Mobile` i `Preview`;
+2. grupują pliki po wspólnym `variantSetId`;
+3. dopasowują je do oryginalnej ścieżki zdjęcia autora;
+4. sprawdzają podpis każdego pliku AVIF;
+5. aktualizują centralny rekord autora oraz wszystkie artworki i rzeźby tego autora;
+6. dopiero dla naprawdę brakujących zestawów pozwalają uruchomić ponowne kodowanie.
 
-## Panel IMAGE OPTIMIZATION
+Reconciliation nie kolejkuje ani nie usuwa starych WebP. Ich fizyczne usunięcie nadal odbywa się dopiero podczas zabezpieczonego **FINALIZE + REMOVE WEBP** po dwóch zapisach stanu.
 
-1. `TEST SELECTED ARTWORK AVIF`
-2. `AUDIT GENERATED WEBP`
-3. `BUILD MISSING ARTWORK AVIF`
-4. `FORCE REBUILD ARTWORK AVIF`
-5. `BUILD MISSING AUTHOR AVIF`
-6. `FORCE REBUILD AUTHOR AVIF`
-7. `VALIDATE AVIF MIGRATION`
-8. `FINALIZE + REMOVE WEBP`
+### Najprostszy test
 
-Nie używaj finalizacji przed wizualnym sprawdzeniem AVIF na PC i telefonie.
+1. Kliknij **VALIDATE AVIF MIGRATION**. Walidacja automatycznie spróbuje odzyskać istniejące AVIF autorów.
+2. Oczekiwany wynik: `Author AVIF: 16/16`, `Active WebP refs: 0`.
+3. Następnie kliknij **FINALIZE + REMOVE WEBP**.
+4. Po zakończeniu oczekiwane: `Storage WebP: 0`.
 
-## Budowanie i testy
-
-```bash
-npm run check
-```
-
-Wersja produkcyjna używa `src/Gallery_V0_11.min.js`.
-
-Wersja testowa bez logowania:
-
-`Gallery_V0_11_STAGE12C66C6B_AVIF_PIPELINE_MIGRATION_WEBP_REMOVAL_LOGIN_DISABLED.txt`
+Jeżeli jakiś autor nadal pozostaje niekompletny, użyj **RECONCILE / BUILD AUTHOR AVIF**. System najpierw odzyska istniejące zestawy, a ponowne kodowanie zaproponuje wyłącznie dla faktycznie brakujących zdjęć.
