@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6A1
+  Berryboy Art Gallery — Stage 12C66C6B
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
@@ -7,8 +7,8 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-const STAGE = "12C66C6A1";
-const ENGINE_CACHE_KEY = "stage12c66c6a1_inspect_transition_compact_mobile_20260724";
+const STAGE = "12C66C6B";
+const ENGINE_CACHE_KEY = "stage12c66c6b_avif_pipeline_migration_webp_removal_20260724";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
