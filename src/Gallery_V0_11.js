@@ -77,7 +77,7 @@
   - Stage 12C66B2R: Save Integrity Repair / Correct Startup Rebuild — wszystkie zmiany pozostają wersją roboczą do ręcznego Save, poprzedni opublikowany stan ma kopię awaryjną, stare pliki są usuwane dopiero po poprawnym zapisie, a upload obrazów ma limity pamięciowe.
   - Stage 12C66C: Desktop D-pad / Floor Cursor / Mobile Hold Movement / Tabbed Edit Workflow / Sticky Save / Sculpture Collision Repair — jeden wspólny system wejścia porusza kamerą bez równoległych ścieżek, edytor ma cztery sekcje i stale widoczny zapis, a collider proxy rzeźb działa także podczas zwykłego chodzenia w Edit Mode.
   - Stage 12C66C1: Input / HUD Polish Hotfix — czytelniejszy floor cursor z ripple po kliknięciu, bezkolizyjne pozycjonowanie D-pada przy przycisku Edit Mode oraz twarde odcięcie Babylon Touch Input i pionowego dryfu kamery w mobilnym Viewerze.
-  - Stage 12C66C2: Micro Stabilization — floor cursor jest renderowany ponad wszystkimi segmentami podłogi, przejazd Inspect ma nieprzerywalny lock do końca animacji, a automatyczne camera/zone light culling i fade Local Lights zostały całkowicie usunięte.
+  - Stage 12C66C3: Systemic Stabilization — miękki proceduralny marker podłogi niezależny od segmentów, centralny lock kamery TRANSITION, custom collision resolver dla rzeźb oraz trwałe odcięcie natywnego Babylon Touch Input na urządzeniach dotykowych.
   - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
@@ -674,6 +674,29 @@ export const createScene = function (engineArg, canvasArg) {
         }
     }
 
+    function isGalleryTouchCapableDevice() {
+        var touchPoints = 0;
+        var coarsePointer = false;
+        try { touchPoints = Number(navigator && navigator.maxTouchPoints) || 0; } catch (error) {}
+        try { coarsePointer = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (error) {}
+        return !!(touchPoints > 0 || coarsePointer || (galleryDeviceProfile && galleryDeviceProfile.useMobileViewerControls));
+    }
+
+    function disableGalleryBuiltInTouchCameraMovement() {
+        if (!camera || !camera.inputs) return;
+
+        var touchInput = camera.inputs.attached ? camera.inputs.attached.touch : null;
+        if (touchInput) {
+            ["touchAngularSensibility", "touchMoveSensibility"].forEach(function (propertyName) {
+                if (typeof touchInput[propertyName] === "number") touchInput[propertyName] = Number.MAX_SAFE_INTEGER;
+            });
+        }
+
+        if (typeof camera.inputs.removeByType === "function") {
+            try { camera.inputs.removeByType("FreeCameraTouchInput"); } catch (error) {}
+        }
+    }
+
     function clearGalleryBuiltInCameraMotionResidue() {
         if (!camera) {
             return;
@@ -692,15 +715,12 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function attachGalleryCameraControl() {
-        // Stage 12C66C2: mobile Viewer owns touch input itself.
-        // Any generic reattach (for example after Inspect) must not restore Babylon's
-        // FreeCameraTouchInput, because combining it with the custom joystick/drag path
-        // can move along the pitched camera vector and create a rare vertical flight.
+        // Stage 12C66C3: custom input owns every public touch gesture. A temporary
+        // desktop-looking viewport must never restore FreeCameraTouchInput.
         if (mobileViewerEnabled === true && editMode !== true) {
-            try {
-                camera.detachControl(canvas);
-            } catch (mobileDetachError) {}
+            try { camera.detachControl(canvas); } catch (mobileDetachError) {}
             disableGalleryBuiltInKeyboardCameraMovement();
+            disableGalleryBuiltInTouchCameraMovement();
             clearGalleryBuiltInCameraMotionResidue();
             return false;
         }
@@ -708,6 +728,10 @@ export const createScene = function (engineArg, canvasArg) {
         camera.attachControl(canvas, true);
         configureCameraPointerButtons();
         disableGalleryBuiltInKeyboardCameraMovement();
+        if (!editMode && isGalleryTouchCapableDevice()) {
+            disableGalleryBuiltInTouchCameraMovement();
+            clearGalleryBuiltInCameraMotionResidue();
+        }
         return true;
     }
 
@@ -768,6 +792,10 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function isDesktopViewerMiddleLookAllowed(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            return false;
+        }
+
         if (editMode) {
             return false;
         }
@@ -806,6 +834,13 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function beginDesktopViewerMiddleLook(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            if (event && event.preventDefault) event.preventDefault();
+            if (event && event.stopPropagation) event.stopPropagation();
+            clearGalleryInspectTransitionInput();
+            return false;
+        }
+
         if (!isDesktopViewerMiddleLookAllowed(event)) {
             return false;
         }
@@ -839,6 +874,12 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     function updateDesktopViewerMiddleLook(event) {
+        if (isGalleryInspectTransitionInteractionLocked()) {
+            endDesktopViewerMiddleLook(event);
+            clearGalleryInspectTransitionInput();
+            return false;
+        }
+
         if (!desktopViewerMiddleLookActive || !event) {
             return false;
         }
@@ -3436,6 +3477,106 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    function isViewerSculptureBlockActive() {
+        return isViewerCollisionActive() && viewerCollisionTargets.sculptures;
+    }
+
+    function isViewerCustomBlockActive() {
+        return isViewerWallBlockActive() || isViewerSculptureBlockActive();
+    }
+
+    function getViewerSculptureCollisionProxies() {
+        if (!isViewerSculptureBlockActive()) return [];
+        var result = [];
+        artSpheres.forEach(function (slot) {
+            if (!slot || !slot.metadata) return;
+            var proxy = slot.metadata.sculptureCollisionProxy;
+            if (!proxy || (proxy.isDisposed && proxy.isDisposed())) return;
+            if (proxy.isEnabled && !proxy.isEnabled()) return;
+            result.push(proxy);
+        });
+        return result;
+    }
+
+    function getViewerSculptureProxyBounds(proxy) {
+        if (!proxy || !proxy.getBoundingInfo) return null;
+        try {
+            proxy.computeWorldMatrix(true);
+            var box = proxy.getBoundingInfo().boundingBox;
+            return box && box.minimumWorld && box.maximumWorld
+                ? { minimum: box.minimumWorld, maximum: box.maximumWorld }
+                : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function isViewerSculptureHitBetweenPositions(fromPosition, toPosition) {
+        if (!isViewerSculptureBlockActive() || !fromPosition || !toPosition) return false;
+        var padding = Math.max(viewerCollisionRadius, 0.34) + 0.08;
+        return getViewerSculptureCollisionProxies().some(function (proxy) {
+            var bounds = getViewerSculptureProxyBounds(proxy);
+            if (!bounds) return false;
+
+            var minX = bounds.minimum.x - padding;
+            var maxX = bounds.maximum.x + padding;
+            var minZ = bounds.minimum.z - padding;
+            var maxZ = bounds.maximum.z + padding;
+            var fromInside = fromPosition.x >= minX && fromPosition.x <= maxX && fromPosition.z >= minZ && fromPosition.z <= maxZ;
+            var toInside = toPosition.x >= minX && toPosition.x <= maxX && toPosition.z >= minZ && toPosition.z <= maxZ;
+
+            // A focus transition or a restored state may briefly place the camera inside
+            // a proxy. Allow movement that reduces penetration so the viewer can escape,
+            // but block movement deeper into the sculpture footprint.
+            if (fromInside) {
+                if (!toInside) return false;
+                var fromDepth = Math.min(fromPosition.x - minX, maxX - fromPosition.x, fromPosition.z - minZ, maxZ - fromPosition.z);
+                var toDepth = Math.min(toPosition.x - minX, maxX - toPosition.x, toPosition.z - minZ, maxZ - toPosition.z);
+                return toDepth >= fromDepth - 0.0001;
+            }
+
+            return galleryExhibitSegmentIntersectsExpandedAabb2D(
+                fromPosition,
+                toPosition,
+                bounds.minimum,
+                bounds.maximum,
+                padding
+            );
+        });
+    }
+
+    function isViewerSculptureTooCloseAtPosition(position, fromPosition) {
+        if (!isViewerSculptureBlockActive() || !position) return false;
+        var padding = Math.max(viewerCollisionRadius, 0.34) + 0.08;
+        return getViewerSculptureCollisionProxies().some(function (proxy) {
+            var bounds = getViewerSculptureProxyBounds(proxy);
+            if (!bounds) return false;
+
+            var minX = bounds.minimum.x - padding;
+            var maxX = bounds.maximum.x + padding;
+            var minZ = bounds.minimum.z - padding;
+            var maxZ = bounds.maximum.z + padding;
+            var positionInside = position.x >= minX && position.x <= maxX && position.z >= minZ && position.z <= maxZ;
+            if (!positionInside) return false;
+
+            if (fromPosition) {
+                var fromInside = fromPosition.x >= minX && fromPosition.x <= maxX && fromPosition.z >= minZ && fromPosition.z <= maxZ;
+                if (fromInside) {
+                    var fromDepth = Math.min(fromPosition.x - minX, maxX - fromPosition.x, fromPosition.z - minZ, maxZ - fromPosition.z);
+                    var positionDepth = Math.min(position.x - minX, maxX - position.x, position.z - minZ, maxZ - position.z);
+                    return positionDepth >= fromDepth - 0.0001;
+                }
+            }
+
+            return true;
+        });
+    }
+
+    function isViewerObstacleHitBetweenPositions(fromPosition, toPosition) {
+        return isViewerWallHitBetweenPositions(fromPosition, toPosition) ||
+            isViewerSculptureHitBetweenPositions(fromPosition, toPosition);
+    }
+
     function getViewerHorizontalPerpendicular(direction) {
         return new BABYLON.Vector3(-direction.z, 0, direction.x);
     }
@@ -3614,31 +3755,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function isViewerCameraPositionSafeAgainstWalls(position) {
-        if (!viewerWallLastSafeCameraPosition) {
-            return true;
-        }
+        if (!viewerWallLastSafeCameraPosition) return true;
 
         var movementDirection = position.subtract(viewerWallLastSafeCameraPosition);
         movementDirection.y = 0;
 
-        if (
-            isViewerWallHitBetweenPositions(
-                viewerWallLastSafeCameraPosition,
-                position
-            )
-        ) {
-            return false;
-        }
-
-        if (isViewerWallTooCloseAtPosition(position, movementDirection)) {
-            return false;
-        }
-
+        if (isViewerObstacleHitBetweenPositions(viewerWallLastSafeCameraPosition, position)) return false;
+        if (isViewerWallTooCloseAtPosition(position, movementDirection)) return false;
+        if (isViewerSculptureTooCloseAtPosition(position, viewerWallLastSafeCameraPosition)) return false;
         return true;
     }
 
     function resolveViewerWallCollisionAfterMovement() {
-        if (!isViewerWallBlockActive()) {
+        if (!isViewerCustomBlockActive()) {
             viewerWallLastSafeCameraPosition = camera.position.clone();
             return;
         }
@@ -3670,13 +3799,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             currentPosition.z
         );
 
-        if (!isViewerWallHitBetweenPositions(viewerWallLastSafeCameraPosition, slideX)) {
+        if (isViewerCameraPositionSafeAgainstWalls(slideX)) {
             camera.position.copyFrom(slideX);
             viewerWallLastSafeCameraPosition = camera.position.clone();
             return;
         }
 
-        if (!isViewerWallHitBetweenPositions(viewerWallLastSafeCameraPosition, slideZ)) {
+        if (isViewerCameraPositionSafeAgainstWalls(slideZ)) {
             camera.position.copyFrom(slideZ);
             viewerWallLastSafeCameraPosition = camera.position.clone();
             return;
@@ -5496,9 +5625,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return camera.position.clone();
     }
 
-    // STAGE 12C66C2 — PERSISTENT LOCAL LIGHTS
-    // Automatyczne wygaszanie Local Lights zależne od kadru kamery lub aktywnej strefy
-    // zostało usunięte. Runtime respektuje wyłącznie zapisany stan Enabled i Intensity.
+    // STAGE 12C66C3 — PERSISTENT LOCAL LIGHTS
+    // Local Lights no longer react to camera direction, frustum or streaming zone.
+    // The saved/user-controlled Enabled and Intensity values are authoritative.
 
     // STAGE 12C43 - EDIT MODE PERFORMANCE OPTIMIZATION
     // Light culling, popup raycasts and editor UI sync are no longer allowed to do heavy work every frame.
@@ -5665,51 +5794,32 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryPerformanceDebugEnabled;
     };
 
-    // STAGE 12C66C2 — LOCAL LIGHT USER STATE IS AUTHORITATIVE
-    // Żadna rotacja kamery, frustum ani streaming zone nie może zmieniać intensywności lampy.
+    // STAGE 12C66C3 — LOCAL LIGHT USER STATE IS AUTHORITATIVE
     function getLocalLightUserEnabled(item) {
-        if (!item) {
-            return false;
-        }
-
-        if (item.userEnabled !== undefined) {
-            return !!item.userEnabled;
-        }
-
+        if (!item) return false;
+        if (item.userEnabled !== undefined) return !!item.userEnabled;
         if (item.light && item.light.isEnabled) {
             item.userEnabled = !!item.light.isEnabled();
             return item.userEnabled;
         }
-
         item.userEnabled = true;
         return true;
     }
 
     function getLocalLightUserIntensity(item) {
-        if (!item || !item.light) {
-            return 0;
-        }
-
-        if (item.userIntensity !== undefined) {
-            return Number(item.userIntensity) || 0;
-        }
-
+        if (!item || !item.light) return 0;
+        if (item.userIntensity !== undefined) return Number(item.userIntensity) || 0;
         item.userIntensity = Number(item.light.intensity) || 0;
         return item.userIntensity;
     }
 
     function applyLocalLightUserState(item) {
-        if (!item || !item.light) {
-            return false;
-        }
+        if (!item || !item.light) return false;
 
         var shouldEnable = !item.softDeleted && getLocalLightUserEnabled(item);
-
         if (item.light.setEnabled && item.light.isEnabled) {
             var currentlyEnabled = !!item.light.isEnabled();
-            if (currentlyEnabled !== shouldEnable) {
-                item.light.setEnabled(shouldEnable);
-            }
+            if (currentlyEnabled !== shouldEnable) item.light.setEnabled(shouldEnable);
         }
 
         item.light.intensity = shouldEnable ? getLocalLightUserIntensity(item) : 0;
@@ -5718,12 +5828,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function setLocalLightUserIntensity(item, value) {
-        if (!item || !item.light) {
-            return;
-        }
-
+        if (!item || !item.light) return;
         item.userIntensity = Math.max(0, Number(value) || 0);
         applyLocalLightUserState(item);
+    }
+
+    function updateAllLocalLightUserStates() {
+        (localLightItems || []).forEach(function (item) {
+            applyLocalLightUserState(item);
+        });
     }
 
     function getLocalLightBudgetDebug() {
@@ -12611,12 +12724,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryDesktopDpad = null;
     var galleryFloorCursorRing = null;
     var galleryFloorCursorRingMaterial = null;
-    var galleryFloorCursorPulseRing = null;
-    var galleryFloorCursorPulseMaterial = null;
     var galleryFloorCursorPulseStartedAt = 0;
     var galleryFloorCursorPulseDurationMs = 520;
     var galleryFloorCursorFramePending = false;
     var galleryFloorCursorLastEvent = null;
+    var galleryFloorCursorHoverVisible = false;
+    var galleryFloorCursorLastCameraPosition = null;
+    var galleryFloorCursorLastCameraRotation = null;
 
     function resetGalleryDesktopDpadState() {
         galleryDesktopDpadState.forward = false;
@@ -13072,7 +13186,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66C2",
+                            stage: "12C66C3",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -13648,7 +13762,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryZoneStreamingRuntime.lastReason = reason || "zone-change";
             sortGalleryStreamingQueue(galleryFastStartRuntime.deferredArtworkLoads, "artwork");
             sortGalleryStreamingQueue(galleryFastStartRuntime.deferredModelLoads, "slot");
-                return true;
+            return true;
         }
         return false;
     }
@@ -15382,7 +15496,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C2",
+        stage: "12C66C3",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -22864,7 +22978,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             if (key === "enabled") {
                 item.userEnabled = !!value;
-                        markLocalLightTargetItemCacheDirty(item, item.userEnabled ? "enabledTargetRefresh" : "disabledTargetClear");
+                markLocalLightTargetItemCacheDirty(item, item.userEnabled ? "enabledTargetRefresh" : "disabledTargetClear");
                 applyLocalLightUserState(item);
 
                 if (item.userEnabled) {
@@ -22881,9 +22995,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 updateLocalLightMarkerColor(item, color);
             } else if (key === "intensity") {
                 setLocalLightUserIntensity(item, value);
-                    } else if (key === "range") {
+            } else if (key === "range") {
                 item.light.range = Math.max(0.1, Number(value));
-                        needsGeometryUpdate = true;
+                needsGeometryUpdate = true;
             } else if (key === "spotAngle") {
                 if (item.type === "spot") {
                     item.light.angle = BABYLON.Tools.ToRadians(
@@ -28164,12 +28278,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (shouldEnable === mobileViewerEnabled) {
-            // Stage 12C66C2: heal any generic camera reattach that may have happened
-            // after Inspect, recovery or a viewport refresh. Mobile Viewer must never
-            // keep Babylon touch controls attached in parallel with custom input.
-            if (shouldEnable && !editMode) {
-                try { camera.detachControl(canvas); } catch (mobileRefreshDetachError) {}
+            if (!editMode && isGalleryTouchCapableDevice()) {
+                if (shouldEnable) {
+                    try { camera.detachControl(canvas); } catch (mobileRefreshDetachError) {}
+                }
                 disableGalleryBuiltInKeyboardCameraMovement();
+                disableGalleryBuiltInTouchCameraMovement();
                 clearGalleryBuiltInCameraMotionResidue();
             }
             setMobileViewerUiVisible(isMobileViewerActive());
@@ -28751,11 +28865,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function isGalleryInspectTransitionInteractionLocked() {
-        return !!(
-            galleryInspectRuntime &&
-            galleryInspectRuntime.opening &&
-            galleryInspectCameraRuntime.state === "TRANSITION"
-        );
+        return galleryInspectCameraRuntime.state === "TRANSITION";
     }
 
     function clearGalleryInspectTransitionInput() {
@@ -28765,6 +28875,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         resetMobileJoystick();
         resetMobileCanvasMoveGesture();
         if (mobileLookActive) endMobileCanvasLook(null, true);
+        if (desktopViewerMiddleLookActive) endDesktopViewerMiddleLook(null);
+        clearGalleryBuiltInCameraMotionResidue();
+    }
+
+    function isGalleryInspectSystemCloseReason(reason) {
+        return [
+            "safe-path-blocked",
+            "invalid-target",
+            "focus-start-failed",
+            "scene-dispose",
+            "runtime-error",
+            "startup-reset"
+        ].indexOf(String(reason || "")) !== -1;
     }
 
     function syncGalleryInspectCameraCollisionHandoff() {
@@ -28819,7 +28942,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         syncGalleryInspectCameraCollisionHandoff();
         restoreGalleryCameraAfterInspectTransition();
     }
-
 
     function updateGalleryDesktopDpadTurn(dt) {
         if (isGalleryInspectTransitionInteractionLocked()) {
@@ -29374,7 +29496,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             function setPressed(event, pressed) {
                 if (!isGalleryDesktopPointerNavigationAvailable()) return;
                 if (pressed && typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) return;
-                if (pressed && isGalleryInspectTransitionInteractionLocked()) return;
+                if (pressed && isGalleryInspectTransitionInteractionLocked()) {
+                    clearGalleryInspectTransitionInput();
+                    return;
+                }
                 if (event && event.cancelable) event.preventDefault();
                 if (event && event.stopPropagation) event.stopPropagation();
 
@@ -29416,9 +29541,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mesh.checkCollisions = false;
         mesh.receiveShadows = false;
         mesh.doNotSerialize = true;
-        mesh.renderOutline = true;
-        mesh.outlineColor = new BABYLON.Color3(0.07, 0.07, 0.07);
-        mesh.outlineWidth = 0.035;
+        mesh.alwaysSelectAsActiveMesh = true;
+        mesh.renderOutline = false;
+        mesh.renderingGroupId = 3;
         mesh.metadata = {
             displayType: displayType,
             ignoreLocalLightTargeting: true,
@@ -29426,89 +29551,123 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    function ensureGalleryFloorCursorShaderStore() {
+        BABYLON.Effect.ShadersStore.galleryFloorCursorVertexShader = [
+            "precision highp float;",
+            "attribute vec3 position;",
+            "attribute vec2 uv;",
+            "uniform mat4 worldViewProjection;",
+            "varying vec2 vUV;",
+            "void main(void) {",
+            "  vUV = uv;",
+            "  gl_Position = worldViewProjection * vec4(position, 1.0);",
+            "}"
+        ].join("\n");
+
+        BABYLON.Effect.ShadersStore.galleryFloorCursorFragmentShader = [
+            "precision highp float;",
+            "varying vec2 vUV;",
+            "uniform float baseAlpha;",
+            "uniform float pulseProgress;",
+            "float softRing(float radius, float halfWidth, float softness) {",
+            "  float radial = abs(length(vUV - vec2(0.5)) - radius);",
+            "  return 1.0 - smoothstep(halfWidth - softness, halfWidth + softness, radial);",
+            "}",
+            "void main(void) {",
+            "  float darkHalo = softRing(0.275, 0.041, 0.010) * baseAlpha * 0.56;",
+            "  float brightCore = softRing(0.275, 0.018, 0.008) * baseAlpha;",
+            "  float glow = softRing(0.275, 0.070, 0.016) * baseAlpha * 0.15;",
+            "  float pulse = 0.0;",
+            "  if (pulseProgress >= 0.0 && pulseProgress <= 1.0) {",
+            "    float eased = 1.0 - pow(1.0 - pulseProgress, 3.0);",
+            "    float pulseRadius = 0.275 + eased * 0.155;",
+            "    pulse = softRing(pulseRadius, 0.017, 0.010) * pow(1.0 - pulseProgress, 1.35) * 0.96;",
+            "  }",
+            "  float alpha = max(max(darkHalo, glow), max(brightCore, pulse));",
+            "  if (alpha < 0.003) discard;",
+            "  float brightShare = clamp(max(brightCore, pulse) / max(alpha, 0.001), 0.0, 1.0);",
+            "  vec3 color = mix(vec3(0.035, 0.040, 0.050), vec3(1.0, 1.0, 1.0), brightShare);",
+            "  gl_FragColor = vec4(color, alpha);",
+            "}"
+        ].join("\n");
+    }
+
     function getOrCreateGalleryFloorCursorRing() {
         if (galleryFloorCursorRing && !(galleryFloorCursorRing.isDisposed && galleryFloorCursorRing.isDisposed())) {
             return galleryFloorCursorRing;
         }
 
-        galleryFloorCursorRingMaterial = new BABYLON.StandardMaterial("GalleryFloorCursorRingMaterial", scene);
-        galleryFloorCursorRingMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
-        galleryFloorCursorRingMaterial.emissiveColor = new BABYLON.Color3(0.96, 0.96, 0.96);
-        galleryFloorCursorRingMaterial.specularColor = BABYLON.Color3.Black();
-        galleryFloorCursorRingMaterial.alpha = 0.94;
-        galleryFloorCursorRingMaterial.disableLighting = true;
-        galleryFloorCursorRingMaterial.disableDepthWrite = true;
+        ensureGalleryFloorCursorShaderStore();
+        galleryFloorCursorRingMaterial = new BABYLON.ShaderMaterial(
+            "GalleryFloorCursorSdfMaterial",
+            scene,
+            { vertex: "galleryFloorCursor", fragment: "galleryFloorCursor" },
+            {
+                attributes: ["position", "uv"],
+                uniforms: ["worldViewProjection", "baseAlpha", "pulseProgress"],
+                needAlphaBlending: true
+            }
+        );
         galleryFloorCursorRingMaterial.backFaceCulling = false;
-        galleryFloorCursorRingMaterial.zOffset = -4;
-        if (galleryFloorCursorRingMaterial.zOffsetUnits !== undefined) {
-            galleryFloorCursorRingMaterial.zOffsetUnits = -4;
+        galleryFloorCursorRingMaterial.disableDepthWrite = true;
+        galleryFloorCursorRingMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+        galleryFloorCursorRingMaterial.needAlphaBlending = function () { return true; };
+        if (BABYLON.Constants && BABYLON.Constants.ALWAYS !== undefined) {
+            galleryFloorCursorRingMaterial.depthFunction = BABYLON.Constants.ALWAYS;
+        } else if (BABYLON.Engine && BABYLON.Engine.ALWAYS !== undefined) {
+            galleryFloorCursorRingMaterial.depthFunction = BABYLON.Engine.ALWAYS;
         }
+        galleryFloorCursorRingMaterial.setFloat("baseAlpha", 0);
+        galleryFloorCursorRingMaterial.setFloat("pulseProgress", -1);
 
-        galleryFloorCursorRing = BABYLON.MeshBuilder.CreateTorus(
-            "GalleryFloorCursorRing",
-            { diameter: 0.64, thickness: 0.038, tessellation: 56 },
+        galleryFloorCursorRing = BABYLON.MeshBuilder.CreatePlane(
+            "GalleryFloorCursorSdfPlane",
+            { size: 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
             scene
         );
         galleryFloorCursorRing.material = galleryFloorCursorRingMaterial;
-        configureGalleryFloorIndicatorMesh(galleryFloorCursorRing, "floor-cursor-highlight");
+        galleryFloorCursorRing.rotationQuaternion = null;
+        galleryFloorCursorRing.rotation.x = Math.PI * 0.5;
+        configureGalleryFloorIndicatorMesh(galleryFloorCursorRing, "floor-cursor-sdf-overlay");
         galleryFloorCursorRing.setEnabled(false);
         return galleryFloorCursorRing;
     }
 
-    function getOrCreateGalleryFloorCursorPulseRing() {
-        if (galleryFloorCursorPulseRing && !(galleryFloorCursorPulseRing.isDisposed && galleryFloorCursorPulseRing.isDisposed())) {
-            return galleryFloorCursorPulseRing;
-        }
-
-        galleryFloorCursorPulseMaterial = new BABYLON.StandardMaterial("GalleryFloorCursorPulseMaterial", scene);
-        galleryFloorCursorPulseMaterial.diffuseColor = new BABYLON.Color3(1, 1, 1);
-        galleryFloorCursorPulseMaterial.emissiveColor = new BABYLON.Color3(1, 1, 1);
-        galleryFloorCursorPulseMaterial.specularColor = BABYLON.Color3.Black();
-        galleryFloorCursorPulseMaterial.alpha = 0;
-        galleryFloorCursorPulseMaterial.disableLighting = true;
-        galleryFloorCursorPulseMaterial.disableDepthWrite = true;
-        galleryFloorCursorPulseMaterial.backFaceCulling = false;
-        galleryFloorCursorPulseMaterial.zOffset = -4;
-        if (galleryFloorCursorPulseMaterial.zOffsetUnits !== undefined) {
-            galleryFloorCursorPulseMaterial.zOffsetUnits = -4;
-        }
-
-        galleryFloorCursorPulseRing = BABYLON.MeshBuilder.CreateTorus(
-            "GalleryFloorCursorPulseRing",
-            { diameter: 0.64, thickness: 0.032, tessellation: 56 },
-            scene
-        );
-        galleryFloorCursorPulseRing.material = galleryFloorCursorPulseMaterial;
-        configureGalleryFloorIndicatorMesh(galleryFloorCursorPulseRing, "floor-cursor-click-pulse");
-        galleryFloorCursorPulseRing.outlineWidth = 0.026;
-        galleryFloorCursorPulseRing.setEnabled(false);
-        return galleryFloorCursorPulseRing;
+    function setGalleryFloorCursorWorldPosition(point) {
+        if (!point) return false;
+        var ring = getOrCreateGalleryFloorCursorRing();
+        ring.position.copyFrom(point);
+        ring.position.y += 0.018;
+        ring.rotationQuaternion = null;
+        ring.rotation.x = Math.PI * 0.5;
+        ring.rotation.y = 0;
+        ring.rotation.z = 0;
+        ring.scaling.set(1, 1, 1);
+        ring.setEnabled(true);
+        galleryFloorCursorLastCameraPosition = camera && camera.position ? camera.position.clone() : null;
+        galleryFloorCursorLastCameraRotation = camera && camera.rotation ? camera.rotation.clone() : null;
+        return true;
     }
 
     function hideGalleryFloorCursorRing() {
-        if (galleryFloorCursorRing) galleryFloorCursorRing.setEnabled(false);
+        galleryFloorCursorHoverVisible = false;
+        if (galleryFloorCursorRingMaterial) galleryFloorCursorRingMaterial.setFloat("baseAlpha", 0);
+        if (!galleryFloorCursorPulseStartedAt && galleryFloorCursorRing) galleryFloorCursorRing.setEnabled(false);
     }
 
     function hideGalleryFloorCursorPulse() {
         galleryFloorCursorPulseStartedAt = 0;
-        if (galleryFloorCursorPulseRing) galleryFloorCursorPulseRing.setEnabled(false);
-        if (galleryFloorCursorPulseMaterial) galleryFloorCursorPulseMaterial.alpha = 0;
+        if (galleryFloorCursorRingMaterial) galleryFloorCursorRingMaterial.setFloat("pulseProgress", -1);
+        if (!galleryFloorCursorHoverVisible && galleryFloorCursorRing) galleryFloorCursorRing.setEnabled(false);
     }
 
     function pickGalleryFloorFromPointer(event) {
-        if (!event || !canvas || !canvas.getBoundingClientRect) {
-            return null;
-        }
-
+        if (!event || !canvas || !canvas.getBoundingClientRect) return null;
         var rect = canvas.getBoundingClientRect();
         var x = event.clientX - rect.left;
         var y = event.clientY - rect.top;
         var visiblePick = scene.pick(x, y, null, false, camera);
-
-        if (!visiblePick || !visiblePick.hit || !visiblePick.pickedMesh || floorMeshes.indexOf(visiblePick.pickedMesh) === -1) {
-            return null;
-        }
-
+        if (!visiblePick || !visiblePick.hit || !visiblePick.pickedMesh || floorMeshes.indexOf(visiblePick.pickedMesh) === -1) return null;
         return visiblePick;
     }
 
@@ -29521,43 +29680,32 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var pick = pickGalleryFloorFromPointer(event);
-        if (!pick || !pick.hit || !pick.pickedPoint) {
-            return false;
-        }
-
-        var pulse = getOrCreateGalleryFloorCursorPulseRing();
-        pulse.position.copyFrom(pick.pickedPoint);
-        pulse.position.y += 0.060;
-        pulse.rotationQuaternion = null;
-        pulse.rotation.copyFrom(BABYLON.Vector3.Zero());
-        pulse.scaling.set(0.82, 0.10, 0.82);
-        galleryFloorCursorPulseMaterial.alpha = 0.92;
+        if (!pick || !pick.pickedPoint) return false;
+        setGalleryFloorCursorWorldPosition(pick.pickedPoint);
         galleryFloorCursorPulseStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
-        pulse.setEnabled(true);
+        galleryFloorCursorRingMaterial.setFloat("pulseProgress", 0);
         return true;
     }
 
     function updateGalleryFloorCursorClickPulse() {
-        if (!galleryFloorCursorPulseStartedAt || !galleryFloorCursorPulseRing || !galleryFloorCursorPulseMaterial) {
-            return;
+        if (galleryFloorCursorPulseStartedAt && galleryFloorCursorRingMaterial) {
+            var now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+            var t = Math.max(0, Math.min(1, (now - galleryFloorCursorPulseStartedAt) / galleryFloorCursorPulseDurationMs));
+            galleryFloorCursorRingMaterial.setFloat("pulseProgress", t);
+            if (t >= 1) hideGalleryFloorCursorPulse();
         }
 
-        var now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
-        var t = Math.max(0, Math.min(1, (now - galleryFloorCursorPulseStartedAt) / galleryFloorCursorPulseDurationMs));
-        var eased = 1 - Math.pow(1 - t, 3);
-        var scale = 0.82 + eased * 0.78;
-        galleryFloorCursorPulseRing.scaling.set(scale, 0.10, scale);
-        galleryFloorCursorPulseMaterial.alpha = 0.92 * Math.pow(1 - t, 1.55);
-
-        if (t >= 1) {
-            hideGalleryFloorCursorPulse();
-        }
+        if (!galleryFloorCursorHoverVisible || !galleryFloorCursorLastEvent || !camera || !camera.position || !camera.rotation) return;
+        var cameraMoved = !galleryFloorCursorLastCameraPosition ||
+            camera.position.subtract(galleryFloorCursorLastCameraPosition).lengthSquared() > 0.000004 ||
+            !galleryFloorCursorLastCameraRotation ||
+            camera.rotation.subtract(galleryFloorCursorLastCameraRotation).lengthSquared() > 0.000004;
+        if (cameraMoved) updateGalleryFloorCursorRingFromPointer(galleryFloorCursorLastEvent);
     }
 
     function updateGalleryFloorCursorRingFromPointer(event) {
         galleryFloorCursorFramePending = false;
         event = event || galleryFloorCursorLastEvent;
-
         if (!event || !isGalleryDesktopPointerNavigationAvailable() ||
             (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
             desktopViewerMiddleLookActive || isDraggingArtwork || isDraggingSphere ||
@@ -29567,19 +29715,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var pick = pickGalleryFloorFromPointer(event);
-
-        if (!pick || !pick.hit || !pick.pickedPoint) {
+        if (!pick || !pick.pickedPoint) {
             hideGalleryFloorCursorRing();
             return;
         }
 
-        var ring = getOrCreateGalleryFloorCursorRing();
-        ring.position.copyFrom(pick.pickedPoint);
-        ring.position.y += 0.060;
-        ring.rotationQuaternion = null;
-        ring.rotation.copyFrom(BABYLON.Vector3.Zero());
-        ring.scaling.set(1, 0.10, 1);
-        ring.setEnabled(true);
+        galleryFloorCursorHoverVisible = true;
+        setGalleryFloorCursorWorldPosition(pick.pickedPoint);
+        galleryFloorCursorRingMaterial.setFloat("baseAlpha", 0.96);
     }
 
     function scheduleGalleryFloorCursorRingUpdate(event) {
@@ -37784,6 +37927,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function closeGalleryInspect(reason) {
+        reason = reason || "close";
+        if (isGalleryInspectTransitionInteractionLocked() && !isGalleryInspectSystemCloseReason(reason)) {
+            clearGalleryInspectTransitionInput();
+            return false;
+        }
+
         var wasOpening = galleryInspectRuntime.opening;
         galleryInspectRuntime.requestId += 1;
         releaseGalleryInspectCameraToWalk(reason || "close");

@@ -1,19 +1,30 @@
-# Berryboy Art Gallery — Stage 12C66C2
+# Berryboy Art Gallery — Stage 12C66C3
 
-Wąska stabilizacja Stage **12C66C1** przed dalszym audytem Etapu 3. Zakres ograniczono do trzech zgłoszonych problemów — bez redesignu popupu, startupu, Edit Mode, zapisu, Inspect UI ani kolizji rzeźb.
+Systemowa stabilizacja zgłoszeń po Etapie 3. Baza: **Stage 12C66C1**. Z C2 przeniesiono wyłącznie zweryfikowane usunięcie automatycznego wygaszania Local Lights.
 
-## Poprawki
+## Zakres
 
-- Floor cursor jest spłaszczony, podniesiony ponad powierzchnię i ma depth bias, dzięki czemu nie powinien być przecinany przez sąsiednie lub nakładające się segmenty podłogi.
-- Po rozpoczęciu podejścia Inspect kamera ma wyłączną kontrolę aż do końca animacji. Kliknięcie sceny, WASD, D-pad, joystick, touch-drag, Escape i przycisk Edit Mode nie mogą przerwać przejazdu.
-- Usunięto cały automatyczny system wygaszania Local Lights zależny od kadru kamery oraz strefy streamingu. Lampa respektuje wyłącznie zapisane `Enabled` i `Intensity`.
+- marker podłogi przebudowany z torusa 3D na jeden proceduralny plane/SDF;
+- miękkie krawędzie i wspólny shaderowy pulse po kliknięciu;
+- marker nadal pojawia się tylko wtedy, gdy pierwszy widoczny hit jest podłogą;
+- `TRANSITION` Inspect jest nadrzędnym właścicielem kamery;
+- capture-listener obrotu myszką, D-pad, WASD, mobile input, Escape i Edit Mode nie mogą przerwać przejazdu;
+- `closeGalleryInspect()` ma centralną blokadę wejścia użytkownika podczas przejazdu;
+- sculpture proxy zostały podłączone do customowego sweep/slide resolvera używanego przez ściany;
+- Viewer i zwykły Edit walk blokują rzeźby oraz strefę postumentu; świadomy `Space` fly pozostaje wyjątkiem;
+- publiczny Viewer na urządzeniu dotykowym nie może odzyskać `FreeCameraTouchInput`, także przy chwilowym desktopowym układzie viewportu;
+- Local Lights respektują wyłącznie zapisane `Enabled` i `Intensity` — bez camera/frustum/zone cullingu oraz bez fade.
 
-## Build i testy
+## Niezmienione systemy
+
+Oryginalny popup instruktażowy, startup, Save Integrity, cztery zakładki Edit Mode, sticky Save, Custom Focus, trasa Inspect i Mobile Inspect UI nie zostały przeprojektowane.
+
+## Weryfikacja
 
 ```bash
 npm run check
 ```
 
-Polecenie generuje produkcyjny plik minified, TXT z logowaniem wyłączonym i uruchamia verifier oraz testy Etapów 1–3.
+Testy automatyczne obejmują składnię, build, zapis/Storage, startup, hash zaakceptowanego popupu, shader markeru, centralny lock `TRANSITION`, blokadę natywnego touch inputu oraz matematyczny sweep sculpture proxy.
 
-Manualne sprawdzenie renderowania floor cursora, pełnego przejazdu Inspect i Local Lights w realnej scenie nadal jest wymagane. Lista znajduje się w `STAGE12C66C2_TEST_CHECKLIST.txt`.
+Pełny test WebGL na docelowej wystawie, prawdziwym Supabase i fizycznym Androidzie/iOS nadal wymaga wykonania checklisty manualnej.
