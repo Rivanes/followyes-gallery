@@ -1,18 +1,18 @@
 {
-  "name": "berryboy-art-gallery-stage12c66c4-sculpture-core-rebuild",
-  "version": "0.11.66-c4",
+  "name": "berryboy-art-gallery-stage12c66c5-unified-ground-collision",
+  "version": "0.11.66-c5",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C4 / Sculpture Core Rebuild",
+  "description": "Berryboy Art Gallery — Stage 12C66C5 / Unified Ground Collision and Sculpture Runtime Integrity",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c4.mjs",
+    "build": "node tools/build-stage12c66c5.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "verify": "node tools/verify-stage12c66c4.mjs",
-    "test:save-integrity": "node tools/test-stage12c66c4-save-integrity.mjs",
-    "test:startup": "node tools/test-stage12c66c4-startup.mjs",
-    "test:image-validation": "node tools/test-stage12c66c4-image-validation.mjs",
-    "test:stage3": "node tools/test-stage12c66c4-stage3.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:stage3 && npm run test:sculpture-core",
-    "test:sculpture-core": "node tools/test-stage12c66c4-sculpture-core.mjs"
+    "verify": "node tools/verify-stage12c66c5.mjs",
+    "test:save-integrity": "node tools/test-stage12c66c5-save-integrity.mjs",
+    "test:startup": "node tools/test-stage12c66c5-startup.mjs",
+    "test:image-validation": "node tools/test-stage12c66c5-image-validation.mjs",
+    "test:collision": "node tools/test-stage12c66c5-unified-collision.mjs",
+    "test:sculpture-core": "node tools/test-stage12c66c5-sculpture-core.mjs",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core"
   }
 }

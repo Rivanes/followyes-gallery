@@ -88,6 +88,7 @@
   - rejestr Local Lights jest jednym zrodlem prawdy,
   - UI, helpery i cienie maja tylko odczytywac/zmieniac dane z rejestru,
   - nie dodajemy rownoleglych systemow dla nowych lamp.
+  - Stage 12C66C5: Unified Ground Collision / Sculpture Runtime Integrity.
 */
 
 
@@ -3316,9 +3317,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var viewerWallBlockRadius = 0.72;
     var viewerWallRayExtraDistance = 1.08;
     var viewerWallVisualStopDistance = 0.82;
-    var viewerWallLastSafeCameraPosition = camera.position.clone();
+    // STAGE 12C66C5 — UNIFIED GROUND COLLISION
+    // Grounded movement has one authoritative resolver. Native Babylon collisions and
+    // the old post-move rollback are intentionally removed from the active camera path.
+    var galleryGroundCollisionRuntime = {
+        schema: "gallery-ground-collision.v1",
+        lastAcceptedPosition: camera.position.clone(),
+        lastResult: null,
+        movementLog: [],
+        maxLogEntries: 160,
+        clickToMove: {
+            active: false,
+            target: null,
+            speed: 0,
+            blockedFrames: 0,
+            startedAt: 0,
+            reason: "idle"
+        }
+    };
 
-    scene.collisionsEnabled = true;
+    scene.collisionsEnabled = false;
+    camera.checkCollisions = false;
     camera.ellipsoid = new BABYLON.Vector3(
         viewerCollisionRadius,
         viewerCollisionHeight,
@@ -3332,8 +3351,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function updateViewerCollisionMode() {
-        scene.collisionsEnabled = true;
-        camera.checkCollisions = isViewerCollisionActive();
+        // C5: Babylon's native collision solver is not allowed to compete with the
+        // gallery resolver. Meshes remain registered for ray/bounds queries only.
+        scene.collisionsEnabled = false;
+        camera.checkCollisions = false;
         refreshAllSculptureCollisionProxies();
     }
 
@@ -3381,18 +3402,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         mesh.metadata = mesh.metadata || {};
-
-        if (!isViewerCollisionTargetEnabled(type)) {
-            if (mesh.metadata.viewerCollisionType === type) {
-                mesh.metadata.viewerCollisionType = "";
-            }
-
-            mesh.checkCollisions = false;
-            return;
-        }
-
-        mesh.metadata.viewerCollisionType = type;
-        mesh.checkCollisions = true;
+        mesh.metadata.viewerCollisionType = isViewerCollisionTargetEnabled(type) ? type : "";
+        // C5 authoritative movement uses raycasts/AABB records, never mesh.checkCollisions.
+        mesh.checkCollisions = false;
     }
 
     function unregisterViewerCollisionMesh(mesh) {
@@ -3451,45 +3463,127 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
-    function moveCameraWithViewerCollisionIfActive(deltaVector) {
-        if (!deltaVector || deltaVector.lengthSquared() <= 0) return false;
+    function serializeGroundCollisionVector(vector) {
+        return vector ? { x: Number(vector.x), y: Number(vector.y), z: Number(vector.z) } : null;
+    }
+
+    function recordGalleryGroundMovement(result) {
+        galleryGroundCollisionRuntime.lastResult = result;
+        galleryGroundCollisionRuntime.movementLog.push(result);
+        if (galleryGroundCollisionRuntime.movementLog.length > galleryGroundCollisionRuntime.maxLogEntries) {
+            galleryGroundCollisionRuntime.movementLog.splice(0, galleryGroundCollisionRuntime.movementLog.length - galleryGroundCollisionRuntime.maxLogEntries);
+        }
+        return result;
+    }
+
+    function getGalleryGroundedCameraYAtPosition(position, fallbackY) {
+        var eyeHeight = getGalleryViewerEyeHeight();
+        var floorFallback = isFinite(Number(fallbackY)) ? Number(fallbackY) - eyeHeight : Number(position && position.y || 0) - eyeHeight;
+        var floorY = getGalleryFloorYAtPosition(position, floorFallback);
+        return Number(floorY) + eyeHeight;
+    }
+
+    function getGalleryGroundCollisionBlock(from, candidate) {
+        if (!candidate || !isMobileCameraPositionOnFloor(candidate)) {
+            return { type: "floor", name: "outside-floor", slotId: null };
+        }
+        if (isViewerWallHitBetweenPositions(from, candidate)) {
+            return { type: "wall", name: "wall-segment", slotId: null };
+        }
+        var movementDirection = candidate.subtract(from);
+        movementDirection.y = 0;
+        if (isViewerWallTooCloseAtPosition(candidate, movementDirection)) {
+            return { type: "wall", name: "wall-proximity", slotId: null };
+        }
+        var sculptureRecord = findViewerSculptureCollisionRecord(from, candidate) || findViewerSculptureTooCloseRecord(candidate, from);
+        if (sculptureRecord) {
+            return {
+                type: "sculpture",
+                name: sculptureRecord.slot ? sculptureRecord.slot.name : "sculpture",
+                slotId: sculptureRecord.slotId || null
+            };
+        }
+        return null;
+    }
+
+    function resolveGalleryGroundMovement(deltaVector, options) {
+        options = options || {};
+        var source = String(options.source || "unknown-ground-move");
         var from = camera.position.clone();
+        var requested = deltaVector ? deltaVector.clone() : BABYLON.Vector3.Zero();
+        requested.y = 0;
 
-        function candidateSafe(candidate) {
-            var movementDirection = candidate.subtract(from);
-            movementDirection.y = 0;
-            if (isViewerObstacleHitBetweenPositions(from, candidate)) return false;
-            if (isViewerWallTooCloseAtPosition(candidate, movementDirection)) return false;
-            if (isViewerSculptureTooCloseAtPosition(candidate, from)) return false;
-            return true;
+        var result = {
+            timestamp: Date.now(),
+            source: source,
+            mode: editMode ? "edit" : "viewer",
+            start: serializeGroundCollisionVector(from),
+            requestedDelta: serializeGroundCollisionVector(requested),
+            planned: null,
+            detectedCollider: null,
+            resolution: "none",
+            moved: false,
+            final: serializeGroundCollisionVector(from)
+        };
+
+        if (!requested || requested.lengthSquared() <= 0.0000001) {
+            return recordGalleryGroundMovement(result);
         }
 
-        if (isViewerCustomBlockActive()) {
-            var candidate = from.add(deltaVector);
-            var chosen = null;
-            if (candidateSafe(candidate)) {
-                chosen = candidate;
-            } else {
-                var slideX = new BABYLON.Vector3(candidate.x, candidate.y, from.z);
-                var slideZ = new BABYLON.Vector3(from.x, candidate.y, candidate.z);
-                if (candidateSafe(slideX)) chosen = slideX;
-                else if (candidateSafe(slideZ)) chosen = slideZ;
+        if (!isViewerCollisionActive()) {
+            camera.position.addInPlace(requested);
+            result.resolution = "intentional-fly-bypass";
+            result.moved = true;
+            result.final = serializeGroundCollisionVector(camera.position);
+            return recordGalleryGroundMovement(result);
+        }
+
+        function buildCandidate(x, z) {
+            var candidate = new BABYLON.Vector3(x, from.y, z);
+            candidate.y = getGalleryGroundedCameraYAtPosition(candidate, from.y);
+            return candidate;
+        }
+
+        var fullCandidate = buildCandidate(from.x + requested.x, from.z + requested.z);
+        result.planned = serializeGroundCollisionVector(fullCandidate);
+        var attempts = [
+            { name: "full", position: fullCandidate },
+            { name: "slide-x", position: buildCandidate(from.x + requested.x, from.z) },
+            { name: "slide-z", position: buildCandidate(from.x, from.z + requested.z) }
+        ];
+        var firstBlock = null;
+        var chosen = null;
+        var chosenName = "blocked";
+
+        for (var i = 0; i < attempts.length; i += 1) {
+            var attempt = attempts[i];
+            if (BABYLON.Vector3.DistanceSquared(from, attempt.position) <= 0.0000001) continue;
+            var block = getGalleryGroundCollisionBlock(from, attempt.position);
+            if (!block) {
+                chosen = attempt.position;
+                chosenName = attempt.name;
+                break;
             }
-            if (!chosen) return false;
-            var safeDelta = chosen.subtract(from);
-            if (isViewerCollisionActive() && camera.moveWithCollisions) camera.moveWithCollisions(safeDelta);
-            else camera.position.copyFrom(chosen);
-            if (!isViewerObstacleHitBetweenPositions(from, camera.position) && !isViewerSculptureTooCloseAtPosition(camera.position, from)) {
-                viewerWallLastSafeCameraPosition = camera.position.clone();
-                return true;
-            }
+            if (!firstBlock) firstBlock = block;
+        }
+
+        result.detectedCollider = firstBlock;
+        result.resolution = chosenName;
+        if (chosen) {
+            // One authoritative position write for grounded movement.
+            camera.position.copyFrom(chosen);
+            galleryGroundCollisionRuntime.lastAcceptedPosition = chosen.clone();
+            result.moved = true;
+        } else {
             camera.position.copyFrom(from);
-            return false;
+            viewerMovementVelocity.set(0, 0, 0);
         }
+        result.final = serializeGroundCollisionVector(camera.position);
+        return recordGalleryGroundMovement(result);
+    }
 
-        if (isViewerCollisionActive() && camera.moveWithCollisions) camera.moveWithCollisions(deltaVector);
-        else camera.position.addInPlace(deltaVector);
-        return true;
+    function moveViewerCameraWithUnifiedGroundCollision(deltaVector, source) {
+        return resolveGalleryGroundMovement(deltaVector, { source: source || "ground-move" }).moved;
     }
 
     // STAGE 9C - WALL RAYCAST BLOCKER
@@ -3524,75 +3618,81 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function getViewerSculptureProxyBounds(record) {
         if (!record) return null;
-        if (record.bounds && record.bounds.minimum && record.bounds.maximum) return record.bounds;
         var proxy = record.proxy || record;
-        if (!proxy || !proxy.getBoundingInfo) return null;
-        try {
-            proxy.computeWorldMatrix(true);
-            var box = proxy.getBoundingInfo().boundingBox;
-            return box && box.minimumWorld && box.maximumWorld ? { minimum: box.minimumWorld.clone(), maximum: box.maximumWorld.clone() } : null;
-        } catch (error) { return null; }
+        if (proxy && proxy.getBoundingInfo && (!proxy.isEnabled || proxy.isEnabled())) {
+            try {
+                proxy.computeWorldMatrix(true);
+                var box = proxy.getBoundingInfo().boundingBox;
+                if (box && box.minimumWorld && box.maximumWorld) {
+                    record.bounds = { minimum: box.minimumWorld.clone(), maximum: box.maximumWorld.clone() };
+                    return record.bounds;
+                }
+            } catch (error) {}
+        }
+        return record.bounds && record.bounds.minimum && record.bounds.maximum ? record.bounds : null;
     }
 
-    function isViewerSculptureHitBetweenPositions(fromPosition, toPosition) {
-        if (!isViewerSculptureBlockActive() || !fromPosition || !toPosition) return false;
+    function findViewerSculptureCollisionRecord(fromPosition, toPosition) {
+        if (!isViewerSculptureBlockActive() || !fromPosition || !toPosition) return null;
         var padding = Math.max(viewerCollisionRadius, 0.34) + 0.08;
-        return getViewerSculptureCollisionProxies().some(function (proxy) {
-            var bounds = getViewerSculptureProxyBounds(proxy);
-            if (!bounds) return false;
-
+        var proxies = getViewerSculptureCollisionProxies();
+        for (var i = 0; i < proxies.length; i += 1) {
+            var record = proxies[i];
+            var bounds = getViewerSculptureProxyBounds(record);
+            if (!bounds) continue;
             var minX = bounds.minimum.x - padding;
             var maxX = bounds.maximum.x + padding;
             var minZ = bounds.minimum.z - padding;
             var maxZ = bounds.maximum.z + padding;
             var fromInside = fromPosition.x >= minX && fromPosition.x <= maxX && fromPosition.z >= minZ && fromPosition.z <= maxZ;
             var toInside = toPosition.x >= minX && toPosition.x <= maxX && toPosition.z >= minZ && toPosition.z <= maxZ;
-
-            // A focus transition or a restored state may briefly place the camera inside
-            // a proxy. Allow movement that reduces penetration so the viewer can escape,
-            // but block movement deeper into the sculpture footprint.
             if (fromInside) {
-                if (!toInside) return false;
+                if (!toInside) continue;
                 var fromDepth = Math.min(fromPosition.x - minX, maxX - fromPosition.x, fromPosition.z - minZ, maxZ - fromPosition.z);
                 var toDepth = Math.min(toPosition.x - minX, maxX - toPosition.x, toPosition.z - minZ, maxZ - toPosition.z);
-                return toDepth >= fromDepth - 0.0001;
+                if (toDepth >= fromDepth - 0.0001) return record;
+                continue;
             }
-
-            return galleryExhibitSegmentIntersectsExpandedAabb2D(
-                fromPosition,
-                toPosition,
-                bounds.minimum,
-                bounds.maximum,
-                padding
-            );
-        });
+            if (galleryExhibitSegmentIntersectsExpandedAabb2D(fromPosition, toPosition, bounds.minimum, bounds.maximum, padding)) {
+                return record;
+            }
+        }
+        return null;
     }
 
-    function isViewerSculptureTooCloseAtPosition(position, fromPosition) {
-        if (!isViewerSculptureBlockActive() || !position) return false;
-        var padding = Math.max(viewerCollisionRadius, 0.34) + 0.08;
-        return getViewerSculptureCollisionProxies().some(function (proxy) {
-            var bounds = getViewerSculptureProxyBounds(proxy);
-            if (!bounds) return false;
+    function isViewerSculptureHitBetweenPositions(fromPosition, toPosition) {
+        return !!findViewerSculptureCollisionRecord(fromPosition, toPosition);
+    }
 
+    function findViewerSculptureTooCloseRecord(position, fromPosition) {
+        if (!isViewerSculptureBlockActive() || !position) return null;
+        var padding = Math.max(viewerCollisionRadius, 0.34) + 0.08;
+        var proxies = getViewerSculptureCollisionProxies();
+        for (var i = 0; i < proxies.length; i += 1) {
+            var record = proxies[i];
+            var bounds = getViewerSculptureProxyBounds(record);
+            if (!bounds) continue;
             var minX = bounds.minimum.x - padding;
             var maxX = bounds.maximum.x + padding;
             var minZ = bounds.minimum.z - padding;
             var maxZ = bounds.maximum.z + padding;
             var positionInside = position.x >= minX && position.x <= maxX && position.z >= minZ && position.z <= maxZ;
-            if (!positionInside) return false;
-
+            if (!positionInside) continue;
             if (fromPosition) {
                 var fromInside = fromPosition.x >= minX && fromPosition.x <= maxX && fromPosition.z >= minZ && fromPosition.z <= maxZ;
                 if (fromInside) {
                     var fromDepth = Math.min(fromPosition.x - minX, maxX - fromPosition.x, fromPosition.z - minZ, maxZ - fromPosition.z);
                     var positionDepth = Math.min(position.x - minX, maxX - position.x, position.z - minZ, maxZ - position.z);
-                    return positionDepth >= fromDepth - 0.0001;
+                    if (positionDepth < fromDepth - 0.0001) continue;
                 }
             }
+            return record;
+        }
+        return null;
+    }
 
-            return true;
-        });
+    function isViewerSculptureTooCloseAtPosition(position, fromPosition) {
+        return !!findViewerSculptureTooCloseRecord(position, fromPosition);
     }
 
     function isViewerObstacleHitBetweenPositions(fromPosition, toPosition) {
@@ -3777,97 +3877,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return false;
     }
 
-    function isViewerCameraPositionSafeAgainstWalls(position) {
-        if (!viewerWallLastSafeCameraPosition) return true;
-
-        var movementDirection = position.subtract(viewerWallLastSafeCameraPosition);
-        movementDirection.y = 0;
-
-        if (isViewerObstacleHitBetweenPositions(viewerWallLastSafeCameraPosition, position)) return false;
-        if (isViewerWallTooCloseAtPosition(position, movementDirection)) return false;
-        if (isViewerSculptureTooCloseAtPosition(position, viewerWallLastSafeCameraPosition)) return false;
-        return true;
-    }
-
-    function resolveViewerWallCollisionAfterMovement() {
-        if (!isViewerCustomBlockActive()) {
-            viewerWallLastSafeCameraPosition = camera.position.clone();
-            return;
-        }
-
-        if (!viewerWallLastSafeCameraPosition) {
-            viewerWallLastSafeCameraPosition = camera.position.clone();
-            return;
-        }
-
-        var currentPosition = camera.position.clone();
-
-        if (isViewerCameraPositionSafeAgainstWalls(currentPosition)) {
-            viewerWallLastSafeCameraPosition = currentPosition;
-            return;
-        }
-
-        // Sliding fallback: jeżeli pełny ruch przeciął ścianę,
-        // próbujemy zachować tylko X albo tylko Z. Dzięki temu chodzenie wzdłuż ściany
-        // nie zamienia się w całkowite zablokowanie ruchu.
-        var slideX = new BABYLON.Vector3(
-            currentPosition.x,
-            viewerWallLastSafeCameraPosition.y,
-            viewerWallLastSafeCameraPosition.z
-        );
-
-        var slideZ = new BABYLON.Vector3(
-            viewerWallLastSafeCameraPosition.x,
-            viewerWallLastSafeCameraPosition.y,
-            currentPosition.z
-        );
-
-        if (isViewerCameraPositionSafeAgainstWalls(slideX)) {
-            camera.position.copyFrom(slideX);
-            viewerWallLastSafeCameraPosition = camera.position.clone();
-            return;
-        }
-
-        if (isViewerCameraPositionSafeAgainstWalls(slideZ)) {
-            camera.position.copyFrom(slideZ);
-            viewerWallLastSafeCameraPosition = camera.position.clone();
-            return;
-        }
-
-        camera.position.copyFrom(viewerWallLastSafeCameraPosition);
-    }
 
 
-    var viewerWallCollisionLastObservedPosition = null;
 
-    function updateViewerWallCollisionIfCameraMoved() {
-        if (!camera || !camera.position) {
-            return;
-        }
-
-        if (isGalleryInspectCameraOwnedByInspect()) {
-            viewerWallCollisionLastObservedPosition = camera.position.clone();
-            return;
-        }
-
-        if (!viewerWallCollisionLastObservedPosition) {
-            viewerWallCollisionLastObservedPosition = camera.position.clone();
-            measureGalleryPerformanceMetric("wallCollisionMs", function () {
-                resolveViewerWallCollisionAfterMovement();
-            });
-            return;
-        }
-
-        if (camera.position.subtract(viewerWallCollisionLastObservedPosition).lengthSquared() < 0.000001) {
-            return;
-        }
-
-        viewerWallCollisionLastObservedPosition = camera.position.clone();
-
-        measureGalleryPerformanceMetric("wallCollisionMs", function () {
-            resolveViewerWallCollisionAfterMovement();
-        });
-    }
 
     updateViewerCollisionMode();
 
@@ -8220,6 +8232,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         viewPitchDegrees: 0
     };
     var gallerySculptureCollisionProxyMaterial = null;
+    var gallerySculptureCollisionDebugVisible = false;
 
     var artworkBoundsSafeMargin = 0.0;
     var artworkCollisionPadding = 0.0;
@@ -10087,8 +10100,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         gallerySculptureCollisionProxyMaterial = new BABYLON.StandardMaterial("SculptureCollisionProxy_Material", scene);
-        gallerySculptureCollisionProxyMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
-        gallerySculptureCollisionProxyMaterial.alpha = 0;
+        gallerySculptureCollisionProxyMaterial.diffuseColor = new BABYLON.Color3(0.05, 0.78, 1.0);
+        gallerySculptureCollisionProxyMaterial.emissiveColor = new BABYLON.Color3(0.02, 0.28, 0.38);
+        gallerySculptureCollisionProxyMaterial.alpha = gallerySculptureCollisionDebugVisible ? 0.28 : 0;
         gallerySculptureCollisionProxyMaterial.disableLighting = true;
         gallerySculptureCollisionProxyMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
 
@@ -10109,9 +10123,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         tagModel3dOwnerNode(proxy, slot);
         proxy.metadata.isSculptureCollisionProxy = true;
         proxy.metadata.displayType = "sculpture-collision-proxy";
+        proxy.parent = slot;
         proxy.isPickable = false;
         proxy.isVisible = true;
-        proxy.visibility = 0;
+        proxy.visibility = gallerySculptureCollisionDebugVisible ? 0.32 : 0;
         proxy.material = getSculptureCollisionProxyMaterial();
         proxy.checkCollisions = false;
         slot.metadata.sculptureCollisionProxy = proxy;
@@ -10141,90 +10156,135 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (slotId) delete gallerySculptureCoreRuntime.colliderRegistry[slotId];
     }
 
+
+    function getSculpturePedestalLocalBounds(slot) {
+        var footprint = slot && slot.metadata && slot.metadata.sculpturePedestalFootprint
+            ? slot.metadata.sculpturePedestalFootprint
+            : { width: 0.95, depth: 0.95, height: 1.1, centerY: 0.55 };
+        var width = Math.max(0.52, Number(footprint.width) || 0.95);
+        var depth = Math.max(0.52, Number(footprint.depth) || 0.95);
+        var height = Math.max(0.55, Number(footprint.height) || 1.1);
+        var centerY = isFinite(Number(footprint.centerY)) ? Number(footprint.centerY) : height * 0.5;
+        return {
+            minimum: new BABYLON.Vector3(-width * 0.5, centerY - height * 0.5, -depth * 0.5),
+            maximum: new BABYLON.Vector3(width * 0.5, centerY + height * 0.5, depth * 0.5)
+        };
+    }
+
+    function worldBoundsToSlotLocalBounds(slot, bounds) {
+        if (!slot || !bounds || !bounds.min || !bounds.max) return null;
+        try {
+            slot.computeWorldMatrix(true);
+            var inverse = slot.getWorldMatrix().clone();
+            inverse.invert();
+            var corners = [];
+            [bounds.min.x, bounds.max.x].forEach(function (x) {
+                [bounds.min.y, bounds.max.y].forEach(function (y) {
+                    [bounds.min.z, bounds.max.z].forEach(function (z) {
+                        corners.push(BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(x, y, z), inverse));
+                    });
+                });
+            });
+            var minimum = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+            var maximum = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+            corners.forEach(function (point) {
+                minimum.x = Math.min(minimum.x, point.x); minimum.y = Math.min(minimum.y, point.y); minimum.z = Math.min(minimum.z, point.z);
+                maximum.x = Math.max(maximum.x, point.x); maximum.y = Math.max(maximum.y, point.y); maximum.z = Math.max(maximum.z, point.z);
+            });
+            return { minimum: minimum, maximum: maximum };
+        } catch (error) { return null; }
+    }
+
+    function unionSculptureLocalBounds(a, b) {
+        if (!a) return b;
+        if (!b) return a;
+        return {
+            minimum: new BABYLON.Vector3(Math.min(a.minimum.x, b.minimum.x), Math.min(a.minimum.y, b.minimum.y), Math.min(a.minimum.z, b.minimum.z)),
+            maximum: new BABYLON.Vector3(Math.max(a.maximum.x, b.maximum.x), Math.max(a.maximum.y, b.maximum.y), Math.max(a.maximum.z, b.maximum.z))
+        };
+    }
+
     function refreshSculptureCollisionProxy(slot) {
-        if (!slot || !slot.metadata) {
-            return null;
-        }
-
-        var allMeshes = getModel3dSlotSelectionMeshes(slot).filter(function (mesh) {
-            return !!(mesh && !(mesh.isDisposed && mesh.isDisposed()));
-        });
-        var visibleMeshes = allMeshes.filter(function (mesh) {
-            return mesh.isVisible !== false && mesh.visibility !== 0;
-        });
-
-        // Empty placeholders stay editor-only and do not create an invisible public blocker.
-        if ((!slot.metadata.model3d && !hasLoadedModel3dRuntime(slot)) || !allMeshes.length || !viewerCollisionTargets.sculptures) {
+        if (!slot || !slot.metadata) return null;
+        var slotId = ensureModel3dSlotIdentity(slot);
+        var hasModelState = !!slot.metadata.model3d;
+        if (((!hasModelState && !hasLoadedModel3dRuntime(slot)) && !editMode) || !viewerCollisionTargets.sculptures) {
             disableSculptureCollisionProxy(slot);
             return null;
         }
 
-        var bounds = visibleMeshes.length
-            ? getCachedVisibleBoundsForGalleryObject(slot, visibleMeshes)
-            : cloneGalleryVisibleBounds(slot.metadata.sculptureCollisionBoundsCache);
-
-        if (!bounds && allMeshes.length) {
-            // Streaming/LOD may hide meshes. Temporarily read their bounds without changing final visibility.
-            var visibilityState = allMeshes.map(function (mesh) {
-                return { mesh: mesh, isVisible: mesh.isVisible, visibility: mesh.visibility };
-            });
-            visibilityState.forEach(function (entry) {
-                entry.mesh.isVisible = true;
-                entry.mesh.visibility = Math.max(0.001, Number(entry.visibility) || 0.001);
-            });
-            bounds = getVisibleBoundsFromMeshes(allMeshes);
-            visibilityState.forEach(function (entry) {
-                entry.mesh.isVisible = entry.isVisible;
-                entry.mesh.visibility = entry.visibility;
-            });
+        var runtimeMeshes = hasLoadedModel3dRuntime(slot)
+            ? (slot.metadata.model3dRuntime.meshes || []).filter(function (mesh) { return mesh && !(mesh.isDisposed && mesh.isDisposed()); })
+            : [];
+        var visibleRuntimeMeshes = runtimeMeshes.filter(function (mesh) { return mesh.isVisible !== false && mesh.visibility !== 0; });
+        var worldBounds = visibleRuntimeMeshes.length ? getCachedVisibleBoundsForGalleryObject(slot, visibleRuntimeMeshes) : null;
+        if (!worldBounds && runtimeMeshes.length) {
+            worldBounds = getVisibleBoundsFromMeshes(runtimeMeshes);
         }
 
-        if (!bounds) {
+        var modelLocalBounds = worldBounds ? worldBoundsToSlotLocalBounds(slot, worldBounds) : null;
+        if (modelLocalBounds) {
+            slot.metadata.sculptureModelCollisionLocalBoundsCache = {
+                minimum: serializeVector3(modelLocalBounds.minimum),
+                maximum: serializeVector3(modelLocalBounds.maximum),
+                generation: Number(slot.metadata.model3dLoadGeneration) || 0,
+                source: "runtime"
+            };
+        } else if (slot.metadata.sculptureModelCollisionLocalBoundsCache) {
+            var cached = slot.metadata.sculptureModelCollisionLocalBoundsCache;
+            modelLocalBounds = {
+                minimum: vectorFromState(cached.minimum, new BABYLON.Vector3(-0.475, 0, -0.475)),
+                maximum: vectorFromState(cached.maximum, new BABYLON.Vector3(0.475, 1.1, 0.475))
+            };
+        }
+
+        var pedestalLocalBounds = getSculpturePedestalLocalBounds(slot);
+        var combined = unionSculptureLocalBounds(modelLocalBounds, pedestalLocalBounds);
+        if (!combined) {
             disableSculptureCollisionProxy(slot);
             return null;
         }
+        var paddingXZ = 0.12;
+        combined.minimum.x -= paddingXZ; combined.minimum.z -= paddingXZ;
+        combined.maximum.x += paddingXZ; combined.maximum.z += paddingXZ;
+        combined.minimum.y = Math.min(combined.minimum.y, 0);
+        combined.maximum.y = Math.max(combined.maximum.y, combined.minimum.y + 0.62);
 
-        slot.metadata.sculptureCollisionBoundsCache = cloneGalleryVisibleBounds(bounds);
         var proxy = getOrCreateSculptureCollisionProxy(slot);
-
-        if (!proxy) {
-            return null;
-        }
-
-        // The proxy covers the visible sculpture and its floor footprint/pedestal zone.
-        var floorY = getSculptureFloorYAtSlot(slot);
-        var paddingXZ = 0.24;
-        var minY = Math.min(Number(bounds.min && bounds.min.y), Number(floorY));
-        var maxY = Math.max(Number(bounds.max && bounds.max.y), minY + 0.55);
-        var width = Math.max(bounds.size.x + paddingXZ, 0.52);
-        var height = Math.max(maxY - minY, 0.62);
-        var depth = Math.max(bounds.size.z + paddingXZ, 0.52);
-
+        if (!proxy) return null;
+        proxy.parent = slot;
         proxy.setEnabled(true);
-        proxy.position.copyFrom(bounds.center);
-        proxy.position.y = minY + height * 0.5;
-        proxy.scaling.copyFrom(new BABYLON.Vector3(width, height, depth));
+        proxy.position.copyFrom(combined.minimum.add(combined.maximum).scale(0.5));
+        proxy.scaling.copyFrom(combined.maximum.subtract(combined.minimum));
         proxy.rotation.copyFrom(BABYLON.Vector3.Zero());
         proxy.isVisible = true;
-        proxy.visibility = 0;
+        proxy.visibility = gallerySculptureCollisionDebugVisible ? 0.32 : 0;
         proxy.isPickable = false;
-        proxy.checkCollisions = !!viewerCollisionTargets.sculptures && isViewerCollisionActive();
+        proxy.checkCollisions = false;
         proxy.computeWorldMatrix(true);
         proxy.metadata.cachedForStreaming = true;
         proxy.metadata.includesPedestalFootprint = true;
+        proxy.metadata.model3dLoadGeneration = Number(slot.metadata.model3dLoadGeneration) || 0;
 
-        var slotId = ensureModel3dSlotIdentity(slot);
-        gallerySculptureCoreRuntime.colliderRegistry[slotId] = {
+        var box = proxy.getBoundingInfo().boundingBox;
+        var record = {
             slotId: slotId,
             slot: slot,
             proxy: proxy,
-            bounds: {
-                minimum: new BABYLON.Vector3(bounds.center.x - width * 0.5, minY, bounds.center.z - depth * 0.5),
-                maximum: new BABYLON.Vector3(bounds.center.x + width * 0.5, minY + height, bounds.center.z + depth * 0.5)
-            },
+            localBounds: { minimum: combined.minimum.clone(), maximum: combined.maximum.clone() },
+            bounds: { minimum: box.minimumWorld.clone(), maximum: box.maximumWorld.clone() },
+            loadGeneration: Number(slot.metadata.model3dLoadGeneration) || 0,
+            source: modelLocalBounds ? (runtimeMeshes.length ? "runtime+pedestal" : "cache+pedestal") : "pedestal",
+            active: true,
             updatedAt: Date.now()
         };
-
+        gallerySculptureCoreRuntime.colliderRegistry[slotId] = record;
+        slot.metadata.sculptureCollisionBoundsCache = {
+            minimum: serializeVector3(record.bounds.minimum),
+            maximum: serializeVector3(record.bounds.maximum),
+            source: record.source,
+            generation: record.loadGeneration
+        };
         return proxy;
     }
 
@@ -10233,6 +10293,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artSpheres.forEach(function (slot) {
             refreshSculptureCollisionProxy(slot);
         });
+    }
+
+    function setSculptureCollisionDebugVisible(enabled) {
+        gallerySculptureCollisionDebugVisible = enabled === true;
+        var material = getSculptureCollisionProxyMaterial();
+        if (material) material.alpha = gallerySculptureCollisionDebugVisible ? 0.28 : 0;
+        Object.keys(gallerySculptureCoreRuntime.colliderRegistry).forEach(function (slotId) {
+            var record = gallerySculptureCoreRuntime.colliderRegistry[slotId];
+            var proxy = record && record.proxy;
+            if (!proxy || (proxy.isDisposed && proxy.isDisposed())) return;
+            proxy.isVisible = true;
+            proxy.visibility = gallerySculptureCollisionDebugVisible ? 0.32 : 0;
+            proxy.showBoundingBox = gallerySculptureCollisionDebugVisible;
+        });
+        return gallerySculptureCollisionDebugVisible;
     }
 
     function getSculptureStableFocusDirection(slot) {
@@ -12403,6 +12478,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var selectedSphere = null;
     var isDraggingSphere = false;
+    var activeSculptureDragSlot = null;
 
     // STAGE 12C29 - SCULPTURE SELECTION PARITY WITH ARTWORKS
     // Rzezby/model slots maja teraz wlasny, czysty selection model analogiczny do artworkow.
@@ -12412,10 +12488,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var primarySculpture = null;
     var referenceSculpture = null;
 
-    // STAGE 12C66C4 — SCULPTURE CORE REBUILD
-    // One stable identity and one authoritative selection/runtime registry.
+    // STAGE 12C66C5 — SCULPTURE RUNTIME INTEGRITY
+    // One stable identity, one authoritative selection/runtime registry and one owned runtime hierarchy.
     var gallerySculptureCoreRuntime = {
-        schema: "gallery-sculpture-core.v1",
+        schema: "gallery-sculpture-core.v2",
         slotRegistry: Object.create(null),
         colliderRegistry: Object.create(null),
         selection: {
@@ -12425,7 +12501,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         idCounter: 0,
         loadDiscardCount: 0,
-        duplicatePlacementAttempts: 0
+        duplicatePlacementAttempts: 0,
+        selectionRevision: 0,
+        activeDragSlotId: null
     };
 
     function normalizeModel3dSlotId(value) {
@@ -12496,7 +12574,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var runtime = slot.metadata.model3dRuntime || null;
         if (runtime) {
             if (runtime.root) tagModel3dOwnerNode(runtime.root, slot);
-            (runtime.meshes || []).forEach(function (mesh) { tagModel3dOwnerNode(mesh, slot); });
+            (runtime.nodes || runtime.meshes || []).forEach(function (node) { tagModel3dOwnerNode(node, slot); });
         }
         var proxy = slot.metadata.sculptureCollisionProxy || null;
         if (proxy) tagModel3dOwnerNode(proxy, slot);
@@ -12539,6 +12617,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         gallerySculptureCoreRuntime.selection.referenceId = referenceSlot && unique.indexOf(referenceSlot) !== -1
             ? ensureModel3dSlotIdentity(referenceSlot)
             : (unique.length ? ensureModel3dSlotIdentity(unique[0]) : null);
+        gallerySculptureCoreRuntime.selectionRevision += 1;
         syncLegacySculptureSelectionAliases();
     }
 
@@ -13357,7 +13436,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66C4",
+                            stage: "12C66C5",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -14326,11 +14405,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     
     function queueGalleryFastStartModelLoad(slot, modelState) {
         if (!slot || !modelState) return false;
-        var key = slot.name || String(slot.uniqueId || galleryFastStartRuntime.deferredModelLoads.length);
+        var key = ensureModel3dSlotIdentity(slot);
         var existingIndex = galleryFastStartRuntime.deferredModelLoads.findIndex(function (entry) { return entry && entry.key === key; });
         var zoneId = getGalleryStreamingZoneIdForObject(slot);
         var entry = {
             key: key,
+            slotId: key,
             slot: slot,
             modelState: cloneGalleryFastStartState(modelState),
             zoneId: zoneId,
@@ -15667,7 +15747,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C4",
+        stage: "12C66C5",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -28955,31 +29035,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
-    function moveViewerCameraWithGroundedCollision(deltaVector) {
-        if (!deltaVector || deltaVector.lengthSquared() <= 0.0000001) {
-            return false;
-        }
+    function getViewerGroundMovementSource() {
+        if (isMobileViewerActive() && mobileJoystickActive) return "mobile-joystick";
+        if (isMobileViewerActive() && mobileCanvasMoveActive) return "mobile-hold-drag";
+        if (galleryDesktopDpadState.forward || galleryDesktopDpadState.backward) return "desktop-dpad";
+        return "viewer-wasd";
+    }
 
-        var beforeMove = camera.position.clone();
-        var candidatePosition = camera.position.add(deltaVector);
-
-        // STAGE 12C10:
-        // Viewer WASD/joystick can move only over the actual floor.
-        // This is no longer mobile-only, because desktop WASD could leave the map.
-        if (!editMode && !isMobileCameraPositionOnFloor(candidatePosition)) {
-            viewerMovementVelocity.set(0, 0, 0);
-            return false;
-        }
-
-        moveCameraWithViewerCollisionIfActive(deltaVector);
-
-        if (!editMode && !isMobileCameraPositionOnFloor(camera.position)) {
-            camera.position.copyFrom(beforeMove);
-            viewerMovementVelocity.set(0, 0, 0);
-            return false;
-        }
-
-        return true;
+    function moveViewerCameraWithGroundedCollision(deltaVector, source) {
+        if (!deltaVector || deltaVector.lengthSquared() <= 0.0000001) return false;
+        return moveViewerCameraWithUnifiedGroundCollision(deltaVector, source || getViewerGroundMovementSource());
     }
 
     function updateViewerMobileJoystickTurn(dt) {
@@ -29064,8 +29129,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function syncGalleryInspectCameraCollisionHandoff() {
         if (!camera || !camera.position) return;
-        viewerWallLastSafeCameraPosition = camera.position.clone();
-        viewerWallCollisionLastObservedPosition = camera.position.clone();
+        galleryGroundCollisionRuntime.lastAcceptedPosition = camera.position.clone();
     }
 
     function detachGalleryCameraForInspectTransition() {
@@ -29225,6 +29289,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (hasInput || mobileJoystickTurnActive || desktopDpadTurnActive || viewerMovementVelocity.length() > 0.035) {
             markGalleryViewerActivity("viewer-movement");
         }
+        if (hasInput || mobileJoystickTurnActive || desktopDpadTurnActive) stopGalleryClickToMove("manual-viewer-input");
         if ((hasInput || mobileJoystickTurnActive || desktopDpadTurnActive) && galleryInspectRuntime.active) {
             closeGalleryInspect("viewer-manual-movement");
         }
@@ -29287,11 +29352,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var step = getViewerMovementStepVisual(dt, hasInput, viewerMovementVelocity.length());
         var stopSettle = updateViewerMovementStopSettle(dt, hasInput, speedBeforeStop);
 
-        var visualOffset = new BABYLON.Vector3(
-            stopSettle.positionOffset.x,
-            step.height,
-            stopSettle.positionOffset.z
-        );
+        var visualOffset = new BABYLON.Vector3(0, step.height, 0);
 
         applyViewerMovementVisualOffsets(
             visualOffset,
@@ -30176,13 +30237,55 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+
+    function stopGalleryClickToMove(reason) {
+        galleryGroundCollisionRuntime.clickToMove.active = false;
+        galleryGroundCollisionRuntime.clickToMove.target = null;
+        galleryGroundCollisionRuntime.clickToMove.speed = 0;
+        galleryGroundCollisionRuntime.clickToMove.blockedFrames = 0;
+        galleryGroundCollisionRuntime.clickToMove.reason = reason || "stopped";
+    }
+
+    function startGalleryClickToMove(targetPoint) {
+        if (!targetPoint || editMode || isGalleryInspectCameraOwnedByInspect()) return false;
+        clearViewerWASDVisualOffsets();
+        try { scene.stopAnimation(camera); } catch (error) {}
+        var target = new BABYLON.Vector3(Number(targetPoint.x), camera.position.y, Number(targetPoint.z));
+        var distance = BABYLON.Vector3.Distance(camera.position, target);
+        galleryGroundCollisionRuntime.clickToMove.active = true;
+        galleryGroundCollisionRuntime.clickToMove.target = target;
+        galleryGroundCollisionRuntime.clickToMove.speed = Math.max(1.8, Math.min(5.5, distance / 2));
+        galleryGroundCollisionRuntime.clickToMove.blockedFrames = 0;
+        galleryGroundCollisionRuntime.clickToMove.startedAt = Date.now();
+        galleryGroundCollisionRuntime.clickToMove.reason = "floor-click";
+        return true;
+    }
+
+    function updateGalleryClickToMoveFrame() {
+        var runtime = galleryGroundCollisionRuntime.clickToMove;
+        if (!runtime.active || !runtime.target || editMode || isGalleryInspectCameraOwnedByInspect()) return;
+        clearViewerWASDVisualOffsets();
+        var delta = runtime.target.subtract(camera.position);
+        delta.y = 0;
+        var distance = delta.length();
+        if (distance <= 0.08) { stopGalleryClickToMove("arrived"); return; }
+        delta.normalize();
+        var dt = Math.min(0.05, Math.max(0.001, scene.getEngine().getDeltaTime() / 1000));
+        var step = delta.scale(Math.min(distance, runtime.speed * dt, 0.22));
+        var before = camera.position.clone();
+        var movement = resolveGalleryGroundMovement(step, { source: "click-to-move" });
+        var progress = BABYLON.Vector3.Distance(before, camera.position);
+        if (!movement.moved || progress <= 0.0001) runtime.blockedFrames += 1;
+        else runtime.blockedFrames = 0;
+        if (runtime.blockedFrames >= 8) stopGalleryClickToMove("blocked");
+    }
+
     function runGalleryFrameTick() {
         syncGalleryDesktopDpadVisibility();
         updateGalleryFloorCursorClickPulse();
         updateViewerWASDMovement();
-        updateViewerWallCollisionIfCameraMoved();
+        updateGalleryClickToMoveFrame();
         updateGalleryZoneStreamingRuntime(false);
-
         updateEditModeMovementFrame();
         maybeUpdateGalleryPerformanceDebugPanel(false);
     }
@@ -30300,24 +30403,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var model3dTransformSliderPreviewPending = false;
+    var model3dTransformSliderPreviewSlotId = null;
 
     function scheduleModel3dTransformSliderPreview() {
-        if (model3dTransformSliderPreviewPending) {
-            return;
-        }
-
+        var slot = getActiveModel3dSlot();
+        model3dTransformSliderPreviewSlotId = slot ? ensureModel3dSlotIdentity(slot) : null;
+        if (model3dTransformSliderPreviewPending) return;
         model3dTransformSliderPreviewPending = true;
-
         var runPreview = function () {
             model3dTransformSliderPreviewPending = false;
-            applyModel3dTransformSliderValues(false, true);
+            var targetSlot = getModel3dSlotById(model3dTransformSliderPreviewSlotId);
+            model3dTransformSliderPreviewSlotId = null;
+            if (!targetSlot) return;
+            var scaleValue = Number(model3dTransformScaleRow.input.value) / 100;
+            var rotationValue = Number(model3dTransformRotationRow.input.value);
+            setModel3dSlotTransformState(targetSlot, { scale: scaleValue, rotationDegrees: rotationValue }, false);
         };
-
-        if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(runPreview);
-        } else {
-            setTimeout(runPreview, 0);
-        }
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(runPreview);
+        else setTimeout(runPreview, 0);
     }
 
 
@@ -31062,6 +31165,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     });
 
 
+    function moveGalleryCameraInIntentionalFly(deltaVector, source) {
+        if (!deltaVector || deltaVector.lengthSquared() <= 0.0000001) return false;
+        var from = camera.position.clone();
+        camera.position.addInPlace(deltaVector);
+        recordGalleryGroundMovement({
+            timestamp: Date.now(),
+            source: source || "edit-fly",
+            mode: "edit",
+            start: serializeGroundCollisionVector(from),
+            requestedDelta: serializeGroundCollisionVector(deltaVector),
+            planned: serializeGroundCollisionVector(camera.position),
+            detectedCollider: null,
+            resolution: "intentional-fly-bypass",
+            moved: true,
+            final: serializeGroundCollisionVector(camera.position)
+        });
+        return true;
+    }
+
     function updateEditModeMovementFrame() {
 
         if (!editMode || isDraggingArtwork || isDraggingSphere) {
@@ -31138,9 +31260,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var editMoveDelta = moveDirection.scale(editMoveSpeed * delta);
 
             if (editMoveKeys.space) {
-                camera.position.addInPlace(editMoveDelta);
+                stopGalleryClickToMove("edit-fly");
+                moveGalleryCameraInIntentionalFly(editMoveDelta, "edit-fly");
             } else {
-                moveCameraWithViewerCollisionIfActive(editMoveDelta);
+                stopGalleryClickToMove("edit-movement");
+                moveViewerCameraWithUnifiedGroundCollision(editMoveDelta, galleryDesktopDpadState.forward || galleryDesktopDpadState.backward ? "edit-dpad" : "edit-wasd");
             }
         }
 
@@ -34126,28 +34250,36 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function disposeModel3dSlotRuntime(slot) {
-        if (!slot || !slot.metadata) {
-            return;
-        }
-
-        if (typeof clearModel3dSlotSelectionGlow === "function") {
-            clearModel3dSlotSelectionGlow(slot);
-        }
-
+        if (!slot || !slot.metadata) return;
+        if (typeof clearModel3dSlotSelectionGlow === "function") clearModel3dSlotSelectionGlow(slot);
         var runtime = slot.metadata.model3dRuntime;
+        if (!runtime) return;
 
-        if (runtime) {
-            if (runtime.root && runtime.root.dispose) {
-                runtime.root.dispose();
-            } else if (runtime.meshes && runtime.meshes.length) {
-                runtime.meshes.forEach(function (mesh) {
-                    if (mesh && mesh.dispose) {
-                        mesh.dispose();
-                    }
-                });
+        var nodes = [];
+        function addNode(node) {
+            if (!node || nodes.indexOf(node) !== -1) return;
+            nodes.push(node);
+            if (node.getDescendants) {
+                try { node.getDescendants(false).forEach(addNode); } catch (error) {}
             }
         }
+        (runtime.nodes || []).forEach(addNode);
+        (runtime.rootNodes || []).forEach(addNode);
+        (runtime.transformNodes || []).forEach(addNode);
+        (runtime.meshes || []).forEach(addNode);
+        addNode(runtime.root);
 
+        // Deepest nodes first catches imported nodes that escaped the wrapper hierarchy.
+        nodes.sort(function (a, b) {
+            function depth(node) { var d = 0; var current = node; while (current && current.parent && d < 128) { d += 1; current = current.parent; } return d; }
+            return depth(b) - depth(a);
+        });
+        nodes.forEach(function (node) {
+            if (!node || (node.isDisposed && node.isDisposed())) return;
+            try { if (node.dispose) node.dispose(true, false); } catch (error) {
+                try { if (node.dispose) node.dispose(); } catch (fallbackError) {}
+            }
+        });
         slot.metadata.model3dRuntime = null;
     }
 
@@ -34268,6 +34400,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return { url: highUrl, variant: "high", tier: tier };
     }
 
+
+    function collectGalleryModel3dRuntimeNodes(result) {
+        var nodes = [];
+        var meshes = [];
+        var transformNodes = [];
+        var rootNodes = [];
+        function addNode(node) {
+            if (!node || nodes.indexOf(node) !== -1) return;
+            nodes.push(node);
+            var className = node.getClassName ? String(node.getClassName()) : "";
+            if (/Mesh/.test(className) && meshes.indexOf(node) === -1) meshes.push(node);
+            else if (/TransformNode/.test(className) && transformNodes.indexOf(node) === -1) transformNodes.push(node);
+            if (node.getDescendants) {
+                try { node.getDescendants(false).forEach(addNode); } catch (error) {}
+            }
+        }
+        (result && result.rootNodes || []).forEach(function (node) { if (rootNodes.indexOf(node) === -1) rootNodes.push(node); addNode(node); });
+        (result && result.transformNodes || []).forEach(addNode);
+        (result && result.meshes || []).forEach(addNode);
+        var nodeSet = nodes.slice();
+        nodes.forEach(function (node) {
+            if (!node.parent || nodeSet.indexOf(node.parent) === -1) {
+                if (rootNodes.indexOf(node) === -1) rootNodes.push(node);
+            }
+        });
+        return { nodes: nodes, meshes: meshes, transformNodes: transformNodes, rootNodes: rootNodes };
+    }
+
     async function loadModel3dIntoSlot(slot, modelState) {
         var streamingTier = modelState && modelState._galleryStreamingTier ? modelState._galleryStreamingTier : null;
         modelState = normalizeModel3dState(modelState);
@@ -34285,20 +34445,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         root.parent = slot;
         tagModel3dOwnerNode(root, slot);
         root.metadata.isModel3dRuntimeRoot = true;
+        root.metadata.model3dLoadGeneration = generation;
         var pendingRuntime = {
-            root: root, meshes: [], loadedAt: null, loadGeneration: generation, slotId: slotId,
-            assetVariant: assetChoice.variant, assetUrl: assetChoice.url, requestedTier: assetChoice.tier
+            root: root,
+            rootNodes: [],
+            nodes: [root],
+            transformNodes: [root],
+            meshes: [],
+            loadedAt: null,
+            loadGeneration: generation,
+            slotId: slotId,
+            assetVariant: assetChoice.variant,
+            assetUrl: assetChoice.url,
+            requestedTier: assetChoice.tier
         };
         slot.metadata.model3dRuntime = pendingRuntime;
 
         function disposeLateResult(result) {
-            var roots = result && Array.isArray(result.rootNodes) ? result.rootNodes : [];
-            var meshes = result && Array.isArray(result.meshes) ? result.meshes : [];
-            roots.concat(meshes).forEach(function (node) {
-                if (!node || node === root) return;
-                try { if (!(node.isDisposed && node.isDisposed()) && node.dispose) node.dispose(); } catch (error) {}
+            var collected = collectGalleryModel3dRuntimeNodes(result);
+            collected.nodes.concat([root]).forEach(function (node) {
+                if (!node || (node.isDisposed && node.isDisposed())) return;
+                try { if (node.dispose) node.dispose(true, false); } catch (error) { try { node.dispose(); } catch (fallbackError) {} }
             });
-            try { if (!(root.isDisposed && root.isDisposed())) root.dispose(); } catch (error) {}
         }
 
         try {
@@ -34309,8 +34477,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 catch (cacheError) { console.warn("Model 3D cache fallback warning:", cacheError); }
             }
             if (cachedInstance && cachedInstance.meshes.length) {
-                (cachedInstance.roots || []).forEach(function (cachedRoot) { if (cachedRoot) cachedRoot.parent = root; });
-                result = { meshes: cachedInstance.meshes, rootNodes: cachedInstance.roots, fromAssetContainerCache: true };
+                result = {
+                    meshes: cachedInstance.meshes,
+                    rootNodes: cachedInstance.roots,
+                    transformNodes: cachedInstance.roots.reduce(function (list, node) {
+                        if (node && node.getDescendants) {
+                            try { return list.concat(node.getDescendants(false).filter(function (child) { return child && child.getClassName && /TransformNode/.test(child.getClassName()); })); } catch (error) {}
+                        }
+                        return list;
+                    }, []),
+                    fromAssetContainerCache: true
+                };
             } else {
                 result = await BABYLON.SceneLoader.ImportMeshAsync("", "", assetChoice.url, scene);
             }
@@ -34321,11 +34498,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return false;
             }
 
-            var loadedMeshes = (result && result.meshes ? result.meshes : []).filter(function (mesh) { return mesh && mesh.name !== "__root__"; });
-            loadedMeshes.forEach(function (mesh) {
-                if (!mesh.parent || mesh.parent.name === "__root__") mesh.parent = root;
-                markModel3dRuntimeMesh(mesh, slot);
+            var collected = collectGalleryModel3dRuntimeNodes(result);
+            collected.rootNodes.forEach(function (importedRoot) {
+                if (importedRoot && importedRoot !== root) importedRoot.parent = root;
             });
+            collected.nodes.forEach(function (node) {
+                if (!node || node === root) return;
+                tagModel3dOwnerNode(node, slot);
+                node.metadata = node.metadata || {};
+                node.metadata.model3dLoadGeneration = generation;
+            });
+            var loadedMeshes = collected.meshes.filter(function (mesh) {
+                return mesh && mesh.name !== "__root__" && (!mesh.getTotalVertices || mesh.getTotalVertices() > 0);
+            });
+            loadedMeshes.forEach(function (mesh) { markModel3dRuntimeMesh(mesh, slot); });
+
+            pendingRuntime.rootNodes = collected.rootNodes;
+            pendingRuntime.nodes = [root].concat(collected.nodes.filter(function (node) { return node !== root; }));
+            pendingRuntime.transformNodes = [root].concat(collected.transformNodes.filter(function (node) { return node !== root; }));
             pendingRuntime.meshes = loadedMeshes;
             pendingRuntime.loadedAt = new Date().toISOString();
             slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
@@ -34344,7 +34534,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshSculptureCollisionProxy(slot);
             refreshSculptureOutlines();
             configureGalleryModelRuntimeLod(slot);
-            galleryModel3dLastDebug = { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, meshCount: loadedMeshes.length, loadedAt: pendingRuntime.loadedAt };
+            galleryModel3dLastDebug = {
+                slot: slot.name,
+                slotId: slotId,
+                generation: generation,
+                modelUrl: modelState.modelUrl,
+                loadedUrl: assetChoice.url,
+                assetVariant: assetChoice.variant,
+                meshCount: loadedMeshes.length,
+                nodeCount: pendingRuntime.nodes.length,
+                transformNodeCount: pendingRuntime.transformNodes.length,
+                loadedAt: pendingRuntime.loadedAt
+            };
             if (galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
             else { refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); hydrateSavedLocalLightTargetsForAll("model3d-loaded"); }
             updateViewerModePlaceholderVisibility();
@@ -34667,6 +34868,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     async function duplicateSelectedModel3dSlot() {
         var sourceSlot = getActiveModel3dSlot();
         if (!sourceSlot) { notifyGalleryStatus("Zaznacz slot modelu 3D."); return null; }
+        var sourceSlotId = ensureModel3dSlotIdentity(sourceSlot);
+        var selectionRevisionAtStart = gallerySculptureCoreRuntime.selectionRevision;
         var index = getNextModel3dSlotIndex();
         var position = findModel3dDuplicatePlacement(sourceSlot);
         if (!position) {
@@ -34680,12 +34883,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         newSlot.metadata = newSlot.metadata || {};
         newSlot.metadata.isDynamicModelSlot = true;
         newSlot.metadata.sculptureTransform = Object.assign({}, getModel3dSlotTransformState(sourceSlot));
+        newSlot.metadata.sculpturePedestalFootprint = Object.assign({}, sourceSlot.metadata && sourceSlot.metadata.sculpturePedestalFootprint || {});
         applySculptureTransformToSlot(newSlot);
         var modelState = getModel3dState(sourceSlot);
         if (modelState) {
             var duplicateState = JSON.parse(JSON.stringify(modelState));
             duplicateState.sourceSlotName = sourceSlot.name;
-            duplicateState.sourceSlotId = ensureModel3dSlotIdentity(sourceSlot);
+            duplicateState.sourceSlotId = sourceSlotId;
             duplicateState.isDuplicate = true;
             duplicateState.assignedAt = new Date().toISOString();
             newSlot.metadata.model3dLoading = true;
@@ -34693,12 +34897,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             newSlot.metadata.model3dLoading = false;
             if (!loaded) {
                 deleteModel3dSlotRuntime(newSlot, { skipRememberDeleted: true, silent: true });
-                selectModel3dSlot(sourceSlot);
+                if (gallerySculptureCoreRuntime.selectionRevision === selectionRevisionAtStart && getActiveModel3dSlot() === sourceSlot) {
+                    selectModel3dSlot(sourceSlot);
+                }
                 notifyGalleryStatus("Nie udalo sie wczytac kopii modelu. Duplikat zostal wycofany.");
                 return null;
             }
         }
-        selectModel3dSlot(newSlot);
+        // Do not steal a newer user selection that happened while the GLB was loading.
+        if (gallerySculptureCoreRuntime.selectionRevision === selectionRevisionAtStart && getModel3dSlotById(sourceSlotId) === getActiveModel3dSlot()) {
+            selectModel3dSlot(newSlot);
+        }
         refreshSculptureCollisionProxy(newSlot);
         markGalleryDraftDirty("model3d-slot-duplicated");
         updateViewerModePlaceholderVisibility();
@@ -34985,6 +35194,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             rememberDeletedModel3dSlotName(slotName);
         }
 
+        if (activeSculptureDragSlot === slot) {
+            activeSculptureDragSlot = null;
+            gallerySculptureCoreRuntime.activeDragSlotId = null;
+            isDraggingSphere = false;
+        }
         removeModel3dSlotFromSelectionState(slot);
         nextModel3dSlotLoadGeneration(slot, "slot-delete");
         disposeModel3dSlotRuntime(slot);
@@ -35068,12 +35282,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             seenIds[slotId] = true;
             var runtime = slot.metadata && slot.metadata.model3dRuntime;
             var ownerMismatch = 0;
-            (runtime && runtime.meshes || []).forEach(function (mesh) {
-                if (getModel3dSlotFromPickedMesh(mesh) !== slot) ownerMismatch += 1;
+            var detachedNodeCount = 0;
+            (runtime && runtime.nodes || runtime && runtime.meshes || []).forEach(function (node) {
+                if (getModel3dSlotFromPickedMesh(node) !== slot) ownerMismatch += 1;
+                var current = node;
+                var reachesRoot = node === runtime.root;
+                var guard = 0;
+                while (current && current.parent && guard < 128) {
+                    current = current.parent;
+                    if (current === runtime.root) { reachesRoot = true; break; }
+                    guard += 1;
+                }
+                if (!reachesRoot) detachedNodeCount += 1;
             });
             if (ownerMismatch) issues.push("owner-mismatch:" + slotId + ":" + ownerMismatch);
+            if (detachedNodeCount) issues.push("detached-runtime-node:" + slotId + ":" + detachedNodeCount);
             var collision = gallerySculptureCoreRuntime.colliderRegistry[slotId] || null;
-            if (hasLoadedModel3dRuntime(slot) && !collision) issues.push("missing-collider:" + slotId);
+            var collisionBounds = collision ? getViewerSculptureProxyBounds(collision) : null;
+            if (slot.metadata && slot.metadata.model3d && !collision) issues.push("missing-collider:" + slotId);
             return {
                 slotId: slotId,
                 name: slot.name,
@@ -35081,17 +35307,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 loadGeneration: Number(slot.metadata.model3dLoadGeneration) || 0,
                 loading: !!slot.metadata.model3dLoading,
                 runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
+                runtimeNodeCount: runtime && runtime.nodes ? runtime.nodes.length : 0,
+                runtimeTransformNodeCount: runtime && runtime.transformNodes ? runtime.transformNodes.length : 0,
+                detachedRuntimeNodeCount: detachedNodeCount,
                 ownerMismatchCount: ownerMismatch,
                 hasColliderRecord: !!collision,
-                colliderBounds: collision && collision.bounds ? {
-                    minX: collision.bounds.minimum.x, maxX: collision.bounds.maximum.x,
-                    minZ: collision.bounds.minimum.z, maxZ: collision.bounds.maximum.z
+                colliderSource: collision ? collision.source : null,
+                colliderGeneration: collision ? collision.loadGeneration : null,
+                colliderActive: !!(collision && collision.proxy && (!collision.proxy.isEnabled || collision.proxy.isEnabled())),
+                colliderBounds: collisionBounds ? {
+                    minX: collisionBounds.minimum.x, maxX: collisionBounds.maximum.x,
+                    minY: collisionBounds.minimum.y, maxY: collisionBounds.maximum.y,
+                    minZ: collisionBounds.minimum.z, maxZ: collisionBounds.maximum.z
                 } : null
             };
         });
         return {
             schema: gallerySculptureCoreRuntime.schema,
             selection: JSON.parse(JSON.stringify(gallerySculptureCoreRuntime.selection)),
+            selectionRevision: gallerySculptureCoreRuntime.selectionRevision,
+            activeDragSlotId: gallerySculptureCoreRuntime.activeDragSlotId,
             loadDiscardCount: gallerySculptureCoreRuntime.loadDiscardCount,
             duplicatePlacementAttempts: gallerySculptureCoreRuntime.duplicatePlacementAttempts,
             issues: issues,
@@ -35167,6 +35402,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         pedestal.metadata = pedestal.metadata || {};
         pedestal.metadata.displayType = "pedestal";
         pedestal.metadata.sculptureTransform = pedestal.metadata.sculptureTransform || { scale: 1, rotationDegrees: 0 };
+        pedestal.metadata.sculpturePedestalFootprint = pedestal.metadata.sculpturePedestalFootprint || { width: 0.95, depth: 0.95, height: 1.1, centerY: 0.55 };
         pedestal.metadata.sculptureInfo = pedestal.metadata.sculptureInfo || null;
         pedestal.metadata.focusCamera = normalizeGalleryObjectFocusCameraState(pedestal.metadata.focusCamera);
         pedestal.metadata.isModel3dSlot = true;
@@ -38609,6 +38845,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
                 if (!evt.shiftKey) {
                     syncLegacySculptureSelectionAliases();
+                    activeSculptureDragSlot = clickedModel3dSlot;
+                    gallerySculptureCoreRuntime.activeDragSlotId = ensureModel3dSlotIdentity(clickedModel3dSlot);
                     isDraggingSphere = true;
                     dragMoved = false;
                     camera.detachControl(canvas);
@@ -38622,6 +38860,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     });
 
                     isDraggingSphere = false;
+                    activeSculptureDragSlot = null;
+                    gallerySculptureCoreRuntime.activeDragSlotId = null;
                     syncLegacySculptureSelectionAliases();
 
                     attachGalleryCameraControl();
@@ -38645,6 +38885,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ) {
                 closeGalleryInspect("editor-sculpture-floor-move");
                 syncLegacySculptureSelectionAliases();
+                activeSculptureDragSlot = activeModel3dSlot;
+                gallerySculptureCoreRuntime.activeDragSlotId = activeModel3dSlot ? ensureModel3dSlotIdentity(activeModel3dSlot) : null;
                 refreshSculptureOutlines();
                 isDraggingSphere = true;
                 dragMoved = false;
@@ -38704,20 +38946,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
                 resetViewerWASDMovementRuntime(true);
 
-                BABYLON.Animation.CreateAndStartAnimation(
-                    "cameraMove",
-                    camera,
-                    "position",
-                    60,
-                    120,
-                    camera.position.clone(),
-                    new BABYLON.Vector3(
-                        targetPoint.x,
-                        camera.position.y,
-                        targetPoint.z
-                    ),
-                    BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-                );
+                startGalleryClickToMove(targetPoint);
             }
         }
     };
@@ -38753,7 +38982,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         // PRZESUWANIE POSTUMENTU PO PODLODZE W TRYBIE EDYCJI
-        if (editMode && isDraggingSphere && selectedSphere) {
+        if (editMode && isDraggingSphere && activeSculptureDragSlot) {
 
             var pickFloor = scene.pick(
                 scene.pointerX,
@@ -38769,14 +38998,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
                 var floorPoint = pickFloor.pickedPoint;
 
-                selectedSphere.position.x = floorPoint.x;
-                selectedSphere.position.z = floorPoint.z;
+                activeSculptureDragSlot.position.x = floorPoint.x;
+                activeSculptureDragSlot.position.z = floorPoint.z;
 
                 // STAGE 12C27 CLEAN:
                 // Slot rzezby jest kotwica na podlodze. Przy dragowaniu po podlodze
                 // Y też bierzemy z trafionego floor segmentu, a model runtime dociagamy do podlogi.
-                selectedSphere.position.y = floorPoint.y;
-                scheduleSculptureDragPerformanceUpdate(selectedSphere);
+                activeSculptureDragSlot.position.y = floorPoint.y;
+                scheduleSculptureDragPerformanceUpdate(activeSculptureDragSlot);
             }
         }
     };
@@ -38824,16 +39053,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (editMode && isDraggingSphere) {
 
+            var releasedSculptureSlot = activeSculptureDragSlot;
             var sculptureWasMoved = !!dragMoved;
 
             // STAGE 12B:
             // Klik bez przeciagania nie robi focusu i nie kasuje zaznaczenia.
             // Ma działać jak zaznaczenie obrazu: slot zostaje aktywny w panelu.
-            if (!dragMoved && selectedSphere) {
-                selectModel3dSlot(selectedSphere);
+            if (!dragMoved && releasedSculptureSlot) {
+                selectModel3dSlot(releasedSculptureSlot);
             }
 
             isDraggingSphere = false;
+            activeSculptureDragSlot = null;
+            gallerySculptureCoreRuntime.activeDragSlotId = null;
             dragMoved = false;
 
             requestAllLocalSpotShadowRefresh(true);
@@ -39047,6 +39279,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         : getModel3dSlotTransformState(sphere),
                     sculptureInfo: sphere.metadata && sphere.metadata.sculptureInfo
                         ? normalizeSculptureInfo(sphere.metadata.sculptureInfo)
+                        : null,
+                    sculpturePedestalFootprint: sphere.metadata && sphere.metadata.sculpturePedestalFootprint
+                        ? Object.assign({}, sphere.metadata.sculpturePedestalFootprint)
                         : null,
                     focusCamera: getGalleryObjectFocusCameraState(sphere),
                     tourOrder: getGalleryExhibitTourOrder(sphere),
@@ -39354,6 +39589,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 sphere.metadata.sculptureInfo = normalizeSculptureInfo(
                     sphereState.sculptureInfo || sphereState.info || null
                 );
+                if (sphereState.sculpturePedestalFootprint) {
+                    sphere.metadata.sculpturePedestalFootprint = Object.assign({}, sphereState.sculpturePedestalFootprint);
+                }
 
                 setGalleryObjectFocusCameraState(
                     sphere,
@@ -40265,11 +40503,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 defaultFitMode: galleryArtworkDefaultFitMode
             };
         },
+        setSculptureCollisionDebugVisible: function (enabled) {
+            return setSculptureCollisionDebugVisible(enabled);
+        },
+        getSculptureCollisionDebugVisible: function () {
+            return gallerySculptureCollisionDebugVisible;
+        },
+        clearGroundCollisionMovementLog: function () {
+            galleryGroundCollisionRuntime.movementLog.length = 0;
+            galleryGroundCollisionRuntime.lastResult = null;
+            return true;
+        },
         getViewerCollisionDebug: function () {
             refreshViewerCollisionMeshes();
-
             return {
+                schema: galleryGroundCollisionRuntime.schema,
                 active: isViewerCollisionActive(),
+                stage: "12C66C5",
+                debugCollidersVisible: gallerySculptureCollisionDebugVisible,
+                nativeCollisionDisabled: !camera.checkCollisions && !scene.collisionsEnabled,
                 cameraCheckCollisions: !!camera.checkCollisions,
                 sceneCollisionsEnabled: !!scene.collisionsEnabled,
                 ellipsoid: camera.ellipsoid ? serializeVector3(camera.ellipsoid) : null,
@@ -40278,27 +40530,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 wallBlockRadius: viewerWallBlockRadius,
                 wallRayExtraDistance: viewerWallRayExtraDistance,
                 wallVisualStopDistance: viewerWallVisualStopDistance,
-                cameraMinZ: camera.minZ,
-                wallLastSafeCameraPosition: viewerWallLastSafeCameraPosition
-                    ? serializeVector3(viewerWallLastSafeCameraPosition)
-                    : null,
+                lastAcceptedPosition: galleryGroundCollisionRuntime.lastAcceptedPosition ? serializeVector3(galleryGroundCollisionRuntime.lastAcceptedPosition) : null,
+                lastResult: galleryGroundCollisionRuntime.lastResult,
+                movementLog: galleryGroundCollisionRuntime.movementLog.slice(),
+                clickToMove: {
+                    active: galleryGroundCollisionRuntime.clickToMove.active,
+                    target: galleryGroundCollisionRuntime.clickToMove.target ? serializeVector3(galleryGroundCollisionRuntime.clickToMove.target) : null,
+                    blockedFrames: galleryGroundCollisionRuntime.clickToMove.blockedFrames,
+                    reason: galleryGroundCollisionRuntime.clickToMove.reason
+                },
                 wallMeshes: wallMeshes.length,
                 floorMeshes: floorMeshes.length,
-                floorSegments: getLightingFloorSegmentMeshes().length,
-                ceilingMeshes: ceilingMeshes.length,
-                ceilingSegments: getLightingCeilingSegmentMeshes().length,
                 activeWallCollisionMeshes: getViewerWallCollisionMeshes().length,
-                propMeshes: propMeshes.length,
-                artworks: getActiveArtworks().length,
                 sculptures: artSpheres.length,
-                collisionMeshes: scene.meshes.filter(function (mesh) {
-                    return !!(mesh && mesh.checkCollisions);
-                }).map(function (mesh) {
+                sculptureColliders: getViewerSculptureCollisionProxies().map(function (record) {
+                    var bounds = getViewerSculptureProxyBounds(record);
                     return {
-                        name: mesh.name,
-                        type: mesh.metadata && mesh.metadata.viewerCollisionType
-                            ? mesh.metadata.viewerCollisionType
-                            : ""
+                        slotId: record.slotId,
+                        name: record.slot ? record.slot.name : "",
+                        source: record.source,
+                        generation: record.loadGeneration,
+                        active: !!(record.proxy && (!record.proxy.isEnabled || record.proxy.isEnabled())),
+                        bounds: bounds ? { minimum: serializeVector3(bounds.minimum), maximum: serializeVector3(bounds.maximum) } : null
                     };
                 })
             };
@@ -40595,7 +40848,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             refreshViewerCollisionMeshes();
             updateViewerCollisionMode();
-            viewerWallLastSafeCameraPosition = camera.position.clone();
+            galleryGroundCollisionRuntime.lastAcceptedPosition = camera.position.clone();
 
             return this.getViewerCollisionDebug();
         },

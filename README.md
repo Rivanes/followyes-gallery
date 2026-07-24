@@ -1,33 +1,43 @@
-# Berryboy Art Gallery — Stage 12C66C4
+# Berryboy Art Gallery — Stage 12C66C5
 
-**Sculpture Ownership / Selection / Runtime / Collision Rebuild**
+## Unified Ground Collision / Sculpture Runtime Integrity
 
-Baza: **Stage 12C66C3**. Zakres został ograniczony do rdzenia rzeźb/modeli 3D. Popup, startup, marker podłogi, Local Lights, Save Integrity, Inspect, Mobile UI i układ Edit Mode nie zostały przeprojektowane.
+Stage 12C66C5 przebudowuje aktywny ruch po podłodze oraz lifecycle modeli rzeźb. Nie jest to warstwa flag nad C4: z aktywnej ścieżki usunięto konkurencyjne `moveWithCollisions()`, stary post-move rollback i bezpośrednią animację `camera.position` dla click-to-move.
 
-## Najważniejsze zmiany
+### Najważniejsze zmiany
 
-- każdy slot rzeźby ma trwały `slotId`, zapisywany w `gallery_state`;
-- meshe GLB, placeholder, runtime root i collider wskazują ownera przez `slotId` oraz bezpośrednią referencję runtime;
-- nazwa `ArtSphere_*` jest tylko nazwą pomocniczą, a nie głównym kluczem ownera;
-- jeden autorytatywny selection state zarządza zaznaczeniem, primary i reference;
-- stare pola `selectedSphere`, `activeModel3dSlot`, `primarySculpture` itd. są synchronizowanymi aliasami kompatybilności;
-- dwuklik Inspect nie kasuje już aktywnego slotu używanego przez drag i transformacje;
-- usunięcie slotu czyści selection, runtime, collider i centralny rejestr;
-- każdy import GLB ma własną generację; spóźniony import jest odrzucany i usuwany;
-- starsza nieudana podmiana nie może przywrócić modelu ponad nowszą operację;
-- duplikowanie czeka na zakończenie ładowania modelu;
-- duplikat szuka wolnego miejsca na podstawie rzeczywistego footprintu, ścian i wszystkich rzeźb;
-- collider jest rejestrowany przez `slotId`, przechowuje stabilne world bounds i jest używany bezpośrednio przez wspólny resolver ruchu;
-- ruch Viewer/Edit walk sprawdza kolizję przed przesunięciem i obsługuje sliding X/Z;
-- drag, paste, duplicate i transform natychmiast ustawiają dirty state;
-- diagnostyka: `GalleryApp.getSculptureCoreDebug()`.
+- jeden resolver `resolveGalleryGroundMovement()` dla Viewer walk, Edit walk, WASD, D-pada, joysticka, mobile hold-drag i click-to-move;
+- pełny ruch → slide X → slide Z → blokada, z jednym finalnym zapisem pozycji;
+- click-to-move wykonuje małe kroki przez ten sam resolver;
+- Edit Fly pozostaje świadomym wyjątkiem i jest jawnie logowany jako `intentional-fly-bypass`;
+- collider rzeźby należy do `slotId`, jest childem slotu i łączy bounds modelu z footprintem postumentu;
+- collider zachowuje lokalny cache podczas streamingu i aktualizuje world bounds po transformacji slotu;
+- loader przejmuje `rootNodes`, `transformNodes`, `meshes` i descendants GLB;
+- disposal usuwa całą konkretną hierarchię runtime’u, również node’y poza wrapperem;
+- drag ma stałego ownera od pointer-down do pointer-up;
+- async duplicate nie przejmuje nowszego selection;
+- kolejka streamingu modeli używa `slotId`, nie nazwy;
+- footprint postumentu jest zapisywany i odtwarzany.
 
-## Weryfikacja
+### Diagnostyka w konsoli
+
+```js
+GalleryApp.setSculptureCollisionDebugVisible(true)
+GalleryApp.getViewerCollisionDebug()
+GalleryApp.getSculptureCoreDebug()
+GalleryApp.clearGroundCollisionMovementLog()
+```
+
+Wyłączenie podglądu:
+
+```js
+GalleryApp.setSculptureCollisionDebugVisible(false)
+```
+
+### Budowa i testy
 
 ```bash
 npm run check
 ```
 
-Automatyczne testy obejmują build, składnię, Save Integrity, startup, ochronę oryginalnego popupu, funkcje Etapu 3 oraz nowy kontrakt Sculpture Core.
-
-Test na rzeczywistych modelach GLB, prawdziwym Supabase i fizycznych urządzeniach nadal wymaga wykonania checklisty manualnej.
+Automatyczne testy nie zastępują ręcznego testu WebGL na docelowej wystawie, prawdziwych GLB, Supabase i urządzeniach mobilnych. Procedura znajduje się w `STAGE12C66C5_TEST_CHECKLIST.txt`.
