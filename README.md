@@ -1,23 +1,26 @@
-# Berryboy Art Gallery — Stage 12C66C3
+# Berryboy Art Gallery — Stage 12C66C4
 
-Systemowa stabilizacja zgłoszeń po Etapie 3. Baza: **Stage 12C66C1**. Z C2 przeniesiono wyłącznie zweryfikowane usunięcie automatycznego wygaszania Local Lights.
+**Sculpture Ownership / Selection / Runtime / Collision Rebuild**
 
-## Zakres
+Baza: **Stage 12C66C3**. Zakres został ograniczony do rdzenia rzeźb/modeli 3D. Popup, startup, marker podłogi, Local Lights, Save Integrity, Inspect, Mobile UI i układ Edit Mode nie zostały przeprojektowane.
 
-- marker podłogi przebudowany z torusa 3D na jeden proceduralny plane/SDF;
-- miękkie krawędzie i wspólny shaderowy pulse po kliknięciu;
-- marker nadal pojawia się tylko wtedy, gdy pierwszy widoczny hit jest podłogą;
-- `TRANSITION` Inspect jest nadrzędnym właścicielem kamery;
-- capture-listener obrotu myszką, D-pad, WASD, mobile input, Escape i Edit Mode nie mogą przerwać przejazdu;
-- `closeGalleryInspect()` ma centralną blokadę wejścia użytkownika podczas przejazdu;
-- sculpture proxy zostały podłączone do customowego sweep/slide resolvera używanego przez ściany;
-- Viewer i zwykły Edit walk blokują rzeźby oraz strefę postumentu; świadomy `Space` fly pozostaje wyjątkiem;
-- publiczny Viewer na urządzeniu dotykowym nie może odzyskać `FreeCameraTouchInput`, także przy chwilowym desktopowym układzie viewportu;
-- Local Lights respektują wyłącznie zapisane `Enabled` i `Intensity` — bez camera/frustum/zone cullingu oraz bez fade.
+## Najważniejsze zmiany
 
-## Niezmienione systemy
-
-Oryginalny popup instruktażowy, startup, Save Integrity, cztery zakładki Edit Mode, sticky Save, Custom Focus, trasa Inspect i Mobile Inspect UI nie zostały przeprojektowane.
+- każdy slot rzeźby ma trwały `slotId`, zapisywany w `gallery_state`;
+- meshe GLB, placeholder, runtime root i collider wskazują ownera przez `slotId` oraz bezpośrednią referencję runtime;
+- nazwa `ArtSphere_*` jest tylko nazwą pomocniczą, a nie głównym kluczem ownera;
+- jeden autorytatywny selection state zarządza zaznaczeniem, primary i reference;
+- stare pola `selectedSphere`, `activeModel3dSlot`, `primarySculpture` itd. są synchronizowanymi aliasami kompatybilności;
+- dwuklik Inspect nie kasuje już aktywnego slotu używanego przez drag i transformacje;
+- usunięcie slotu czyści selection, runtime, collider i centralny rejestr;
+- każdy import GLB ma własną generację; spóźniony import jest odrzucany i usuwany;
+- starsza nieudana podmiana nie może przywrócić modelu ponad nowszą operację;
+- duplikowanie czeka na zakończenie ładowania modelu;
+- duplikat szuka wolnego miejsca na podstawie rzeczywistego footprintu, ścian i wszystkich rzeźb;
+- collider jest rejestrowany przez `slotId`, przechowuje stabilne world bounds i jest używany bezpośrednio przez wspólny resolver ruchu;
+- ruch Viewer/Edit walk sprawdza kolizję przed przesunięciem i obsługuje sliding X/Z;
+- drag, paste, duplicate i transform natychmiast ustawiają dirty state;
+- diagnostyka: `GalleryApp.getSculptureCoreDebug()`.
 
 ## Weryfikacja
 
@@ -25,6 +28,6 @@ Oryginalny popup instruktażowy, startup, Save Integrity, cztery zakładki Edit 
 npm run check
 ```
 
-Testy automatyczne obejmują składnię, build, zapis/Storage, startup, hash zaakceptowanego popupu, shader markeru, centralny lock `TRANSITION`, blokadę natywnego touch inputu oraz matematyczny sweep sculpture proxy.
+Automatyczne testy obejmują build, składnię, Save Integrity, startup, ochronę oryginalnego popupu, funkcje Etapu 3 oraz nowy kontrakt Sculpture Core.
 
-Pełny test WebGL na docelowej wystawie, prawdziwym Supabase i fizycznym Androidzie/iOS nadal wymaga wykonania checklisty manualnej.
+Test na rzeczywistych modelach GLB, prawdziwym Supabase i fizycznych urządzeniach nadal wymaga wykonania checklisty manualnej.

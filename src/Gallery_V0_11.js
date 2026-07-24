@@ -78,6 +78,7 @@
   - Stage 12C66C: Desktop D-pad / Floor Cursor / Mobile Hold Movement / Tabbed Edit Workflow / Sticky Save / Sculpture Collision Repair — jeden wspólny system wejścia porusza kamerą bez równoległych ścieżek, edytor ma cztery sekcje i stale widoczny zapis, a collider proxy rzeźb działa także podczas zwykłego chodzenia w Edit Mode.
   - Stage 12C66C1: Input / HUD Polish Hotfix — czytelniejszy floor cursor z ripple po kliknięciu, bezkolizyjne pozycjonowanie D-pada przy przycisku Edit Mode oraz twarde odcięcie Babylon Touch Input i pionowego dryfu kamery w mobilnym Viewerze.
   - Stage 12C66C3: Systemic Stabilization — miękki proceduralny marker podłogi niezależny od segmentów, centralny lock kamery TRANSITION, custom collision resolver dla rzeźb oraz trwałe odcięcie natywnego Babylon Touch Input na urządzeniach dotykowych.
+  - Stage 12C66C4: Sculpture Core Rebuild — trwałe slotId, jeden selection state, generacyjne ładowanie modeli, bezkolizyjne duplikowanie oraz collider registry podłączony do wspólnego resolvera ruchu.
   - Stage 12C66A1: Viewer Grounded Keyboard Hotfix — usunięto wbudowany FreeCameraKeyboardMoveInput Babylon, który przy trzymaniu środkowego przycisku myszy i użyciu strzałek pozwalał obserwatorowi poruszać kamerą po osi Y.
   - Stage 12C62S1: Blend Target Coverage Clamp — Blend nie zawęża agresywnie targetowania; targety Spota liczone są po pełnym Angle, a Blend zostaje dla miękkości światła/helpera. Bez Hard Cut.
   - Stage 12C62S: Consolidated Production Cleanup / No Hard Cut — stabilizacja C62N1, bezpieczne mapowanie Blend, audyt budzetow swiatel/cieni, target cache dirty versions, static bounds cache i loading guards. Zero shader Hard Cut / Proof View / native bypass.
@@ -3451,16 +3452,43 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function moveCameraWithViewerCollisionIfActive(deltaVector) {
-        if (!deltaVector || deltaVector.lengthSquared() <= 0) {
-            return false;
-        }
+        if (!deltaVector || deltaVector.lengthSquared() <= 0) return false;
+        var from = camera.position.clone();
 
-        if (isViewerCollisionActive() && camera.moveWithCollisions) {
-            camera.moveWithCollisions(deltaVector);
+        function candidateSafe(candidate) {
+            var movementDirection = candidate.subtract(from);
+            movementDirection.y = 0;
+            if (isViewerObstacleHitBetweenPositions(from, candidate)) return false;
+            if (isViewerWallTooCloseAtPosition(candidate, movementDirection)) return false;
+            if (isViewerSculptureTooCloseAtPosition(candidate, from)) return false;
             return true;
         }
 
-        camera.position.addInPlace(deltaVector);
+        if (isViewerCustomBlockActive()) {
+            var candidate = from.add(deltaVector);
+            var chosen = null;
+            if (candidateSafe(candidate)) {
+                chosen = candidate;
+            } else {
+                var slideX = new BABYLON.Vector3(candidate.x, candidate.y, from.z);
+                var slideZ = new BABYLON.Vector3(from.x, candidate.y, candidate.z);
+                if (candidateSafe(slideX)) chosen = slideX;
+                else if (candidateSafe(slideZ)) chosen = slideZ;
+            }
+            if (!chosen) return false;
+            var safeDelta = chosen.subtract(from);
+            if (isViewerCollisionActive() && camera.moveWithCollisions) camera.moveWithCollisions(safeDelta);
+            else camera.position.copyFrom(chosen);
+            if (!isViewerObstacleHitBetweenPositions(from, camera.position) && !isViewerSculptureTooCloseAtPosition(camera.position, from)) {
+                viewerWallLastSafeCameraPosition = camera.position.clone();
+                return true;
+            }
+            camera.position.copyFrom(from);
+            return false;
+        }
+
+        if (isViewerCollisionActive() && camera.moveWithCollisions) camera.moveWithCollisions(deltaVector);
+        else camera.position.addInPlace(deltaVector);
         return true;
     }
 
@@ -3487,28 +3515,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function getViewerSculptureCollisionProxies() {
         if (!isViewerSculptureBlockActive()) return [];
-        var result = [];
-        artSpheres.forEach(function (slot) {
-            if (!slot || !slot.metadata) return;
-            var proxy = slot.metadata.sculptureCollisionProxy;
-            if (!proxy || (proxy.isDisposed && proxy.isDisposed())) return;
-            if (proxy.isEnabled && !proxy.isEnabled()) return;
-            result.push(proxy);
+        return Object.keys(gallerySculptureCoreRuntime.colliderRegistry).map(function (slotId) {
+            return gallerySculptureCoreRuntime.colliderRegistry[slotId];
+        }).filter(function (record) {
+            return !!(record && record.slot && artSpheres.indexOf(record.slot) !== -1 && record.bounds && !(record.slot.isDisposed && record.slot.isDisposed()));
         });
-        return result;
     }
 
-    function getViewerSculptureProxyBounds(proxy) {
+    function getViewerSculptureProxyBounds(record) {
+        if (!record) return null;
+        if (record.bounds && record.bounds.minimum && record.bounds.maximum) return record.bounds;
+        var proxy = record.proxy || record;
         if (!proxy || !proxy.getBoundingInfo) return null;
         try {
             proxy.computeWorldMatrix(true);
             var box = proxy.getBoundingInfo().boundingBox;
-            return box && box.minimumWorld && box.maximumWorld
-                ? { minimum: box.minimumWorld, maximum: box.maximumWorld }
-                : null;
-        } catch (error) {
-            return null;
-        }
+            return box && box.minimumWorld && box.maximumWorld ? { minimum: box.minimumWorld.clone(), maximum: box.maximumWorld.clone() } : null;
+        } catch (error) { return null; }
     }
 
     function isViewerSculptureHitBetweenPositions(fromPosition, toPosition) {
@@ -10073,26 +10096,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getOrCreateSculptureCollisionProxy(slot) {
-        if (!slot) {
-            return null;
-        }
-
+        if (!slot) return null;
         slot.metadata = slot.metadata || {};
-
+        var slotId = ensureModel3dSlotIdentity(slot);
         var proxy = slot.metadata.sculptureCollisionProxy || null;
-
         if (proxy && !(proxy.isDisposed && proxy.isDisposed())) {
+            tagModel3dOwnerNode(proxy, slot);
             return proxy;
         }
-
-        proxy = BABYLON.MeshBuilder.CreateBox(
-            slot.name + "_SculptureCollisionProxy",
-            { size: 1 },
-            scene
-        );
-
+        proxy = BABYLON.MeshBuilder.CreateBox(slot.name + "_SculptureCollisionProxy", { size: 1 }, scene);
         proxy.metadata = proxy.metadata || {};
-        proxy.metadata.model3dSlotName = slot.name;
+        tagModel3dOwnerNode(proxy, slot);
         proxy.metadata.isSculptureCollisionProxy = true;
         proxy.metadata.displayType = "sculpture-collision-proxy";
         proxy.isPickable = false;
@@ -10100,37 +10114,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         proxy.visibility = 0;
         proxy.material = getSculptureCollisionProxyMaterial();
         proxy.checkCollisions = false;
-
         slot.metadata.sculptureCollisionProxy = proxy;
-
+        gallerySculptureCoreRuntime.colliderRegistry[slotId] = gallerySculptureCoreRuntime.colliderRegistry[slotId] || { slotId: slotId, slot: slot, proxy: proxy, bounds: null };
+        gallerySculptureCoreRuntime.colliderRegistry[slotId].slot = slot;
+        gallerySculptureCoreRuntime.colliderRegistry[slotId].proxy = proxy;
         return proxy;
     }
 
     function disableSculptureCollisionProxy(slot) {
         var proxy = slot && slot.metadata ? slot.metadata.sculptureCollisionProxy : null;
-
-        if (!proxy || (proxy.isDisposed && proxy.isDisposed())) {
-            return;
+        var slotId = slot && slot.metadata ? normalizeModel3dSlotId(slot.metadata.model3dSlotId) : "";
+        if (proxy && !(proxy.isDisposed && proxy.isDisposed())) {
+            proxy.checkCollisions = false;
+            proxy.setEnabled(false);
         }
-
-        proxy.checkCollisions = false;
-        proxy.setEnabled(false);
+        if (slotId) delete gallerySculptureCoreRuntime.colliderRegistry[slotId];
     }
 
     function disposeSculptureCollisionProxy(slot) {
         var proxy = slot && slot.metadata ? slot.metadata.sculptureCollisionProxy : null;
-
-        if (!proxy) {
-            return;
+        var slotId = slot && slot.metadata ? normalizeModel3dSlotId(slot.metadata.model3dSlotId) : "";
+        if (proxy) {
+            try { proxy.dispose(); } catch (disposeError) {}
         }
-
-        try {
-            proxy.dispose();
-        } catch (disposeError) {}
-
-        if (slot.metadata) {
-            slot.metadata.sculptureCollisionProxy = null;
-        }
+        if (slot && slot.metadata) slot.metadata.sculptureCollisionProxy = null;
+        if (slotId) delete gallerySculptureCoreRuntime.colliderRegistry[slotId];
     }
 
     function refreshSculptureCollisionProxy(slot) {
@@ -10146,7 +10154,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         // Empty placeholders stay editor-only and do not create an invisible public blocker.
-        if (!allMeshes.length || !viewerCollisionTargets.sculptures) {
+        if ((!slot.metadata.model3d && !hasLoadedModel3dRuntime(slot)) || !allMeshes.length || !viewerCollisionTargets.sculptures) {
             disableSculptureCollisionProxy(slot);
             return null;
         }
@@ -10204,6 +10212,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         proxy.computeWorldMatrix(true);
         proxy.metadata.cachedForStreaming = true;
         proxy.metadata.includesPedestalFootprint = true;
+
+        var slotId = ensureModel3dSlotIdentity(slot);
+        gallerySculptureCoreRuntime.colliderRegistry[slotId] = {
+            slotId: slotId,
+            slot: slot,
+            proxy: proxy,
+            bounds: {
+                minimum: new BABYLON.Vector3(bounds.center.x - width * 0.5, minY, bounds.center.z - depth * 0.5),
+                maximum: new BABYLON.Vector3(bounds.center.x + width * 0.5, minY + height, bounds.center.z + depth * 0.5)
+            },
+            updatedAt: Date.now()
+        };
 
         return proxy;
     }
@@ -10748,6 +10768,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         scheduleGalleryInspectRefreshForTarget(slot, "sculpture-transform");
 
         if (shouldNotify) {
+            markGalleryDraftDirty("model3d-transform");
             notifyGalleryStatus("Zmieniono transformacje rzezby/modelu. Zapisz stan galerii, aby zachowac zmiane.");
         }
 
@@ -12390,6 +12411,156 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var selectedSculptures = [];
     var primarySculpture = null;
     var referenceSculpture = null;
+
+    // STAGE 12C66C4 — SCULPTURE CORE REBUILD
+    // One stable identity and one authoritative selection/runtime registry.
+    var gallerySculptureCoreRuntime = {
+        schema: "gallery-sculpture-core.v1",
+        slotRegistry: Object.create(null),
+        colliderRegistry: Object.create(null),
+        selection: {
+            selectedIds: [],
+            primaryId: null,
+            referenceId: null
+        },
+        idCounter: 0,
+        loadDiscardCount: 0,
+        duplicatePlacementAttempts: 0
+    };
+
+    function normalizeModel3dSlotId(value) {
+        var normalized = String(value || "")
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+        return normalized ? normalized.slice(0, 96) : "";
+    }
+
+    function createModel3dSlotId(preferredId) {
+        var preferred = normalizeModel3dSlotId(preferredId);
+        if (preferred && !gallerySculptureCoreRuntime.slotRegistry[preferred]) {
+            return preferred;
+        }
+        var id = "sculpture-" + Date.now().toString(36) + "-" + (++gallerySculptureCoreRuntime.idCounter).toString(36);
+        while (gallerySculptureCoreRuntime.slotRegistry[id]) {
+            id = "sculpture-" + Date.now().toString(36) + "-" + (++gallerySculptureCoreRuntime.idCounter).toString(36);
+        }
+        return id;
+    }
+
+    function getModel3dSlotById(slotId) {
+        var id = normalizeModel3dSlotId(slotId);
+        var slot = id ? gallerySculptureCoreRuntime.slotRegistry[id] || null : null;
+        if (!slot || (slot.isDisposed && slot.isDisposed()) || artSpheres.indexOf(slot) === -1) {
+            if (id) delete gallerySculptureCoreRuntime.slotRegistry[id];
+            return null;
+        }
+        return slot;
+    }
+
+    function tagModel3dOwnerNode(node, slot) {
+        if (!node || !slot) return node;
+        slot.metadata = slot.metadata || {};
+        var slotId = normalizeModel3dSlotId(slot.metadata.model3dSlotId);
+        if (!slotId) {
+            slotId = createModel3dSlotId();
+            slot.metadata.model3dSlotId = slotId;
+            gallerySculptureCoreRuntime.slotRegistry[slotId] = slot;
+        }
+        node.metadata = node.metadata || {};
+        node.metadata.model3dOwnerSlotId = slotId;
+        node.metadata.model3dSlotName = slot.name; // legacy/debug only
+        try { node._galleryModel3dOwnerSlot = slot; } catch (error) {}
+        return node;
+    }
+
+    function ensureModel3dSlotIdentity(slot, preferredId) {
+        if (!slot) return "";
+        slot.metadata = slot.metadata || {};
+        var currentId = normalizeModel3dSlotId(slot.metadata.model3dSlotId);
+        var requestedId = normalizeModel3dSlotId(preferredId);
+        var slotId = requestedId || currentId;
+        var collision = slotId && gallerySculptureCoreRuntime.slotRegistry[slotId] && gallerySculptureCoreRuntime.slotRegistry[slotId] !== slot;
+        if (collision) slotId = createModel3dSlotId();
+        if (!slotId) slotId = createModel3dSlotId("model3d-" + String(slot.name || "slot"));
+        if (currentId && currentId !== slotId && gallerySculptureCoreRuntime.slotRegistry[currentId] === slot) {
+            delete gallerySculptureCoreRuntime.slotRegistry[currentId];
+            delete gallerySculptureCoreRuntime.colliderRegistry[currentId];
+        }
+        slot.metadata.model3dSlotId = slotId;
+        gallerySculptureCoreRuntime.slotRegistry[slotId] = slot;
+        try { slot._galleryModel3dOwnerSlot = slot; } catch (error) {}
+
+        var placeholder = slot.metadata.placeholderMesh || slot.metadata.sculptureMesh || null;
+        if (placeholder) tagModel3dOwnerNode(placeholder, slot);
+        var runtime = slot.metadata.model3dRuntime || null;
+        if (runtime) {
+            if (runtime.root) tagModel3dOwnerNode(runtime.root, slot);
+            (runtime.meshes || []).forEach(function (mesh) { tagModel3dOwnerNode(mesh, slot); });
+        }
+        var proxy = slot.metadata.sculptureCollisionProxy || null;
+        if (proxy) tagModel3dOwnerNode(proxy, slot);
+        return slotId;
+    }
+
+    function unregisterModel3dSlotIdentity(slot) {
+        if (!slot || !slot.metadata) return;
+        var slotId = normalizeModel3dSlotId(slot.metadata.model3dSlotId);
+        if (slotId && gallerySculptureCoreRuntime.slotRegistry[slotId] === slot) {
+            delete gallerySculptureCoreRuntime.slotRegistry[slotId];
+        }
+        if (slotId) delete gallerySculptureCoreRuntime.colliderRegistry[slotId];
+    }
+
+    function syncLegacySculptureSelectionAliases() {
+        var state = gallerySculptureCoreRuntime.selection;
+        var ids = Array.isArray(state.selectedIds) ? state.selectedIds : [];
+        selectedSculptures = ids.map(getModel3dSlotById).filter(Boolean);
+        primarySculpture = getModel3dSlotById(state.primaryId) || selectedSculptures[selectedSculptures.length - 1] || null;
+        referenceSculpture = getModel3dSlotById(state.referenceId) || selectedSculptures[0] || null;
+        activeModel3dSlot = primarySculpture;
+        selectedSphere = primarySculpture;
+        state.selectedIds = selectedSculptures.map(function (slot) { return ensureModel3dSlotIdentity(slot); });
+        state.primaryId = primarySculpture ? ensureModel3dSlotIdentity(primarySculpture) : null;
+        state.referenceId = referenceSculpture ? ensureModel3dSlotIdentity(referenceSculpture) : null;
+    }
+
+    function setSculptureSelectionState(slots, primarySlot, referenceSlot) {
+        var unique = [];
+        (slots || []).forEach(function (slot) {
+            if (!slot || artSpheres.indexOf(slot) === -1 || unique.indexOf(slot) !== -1) return;
+            ensureModel3dSlotIdentity(slot);
+            unique.push(slot);
+        });
+        gallerySculptureCoreRuntime.selection.selectedIds = unique.map(function (slot) { return ensureModel3dSlotIdentity(slot); });
+        gallerySculptureCoreRuntime.selection.primaryId = primarySlot && unique.indexOf(primarySlot) !== -1
+            ? ensureModel3dSlotIdentity(primarySlot)
+            : (unique.length ? ensureModel3dSlotIdentity(unique[unique.length - 1]) : null);
+        gallerySculptureCoreRuntime.selection.referenceId = referenceSlot && unique.indexOf(referenceSlot) !== -1
+            ? ensureModel3dSlotIdentity(referenceSlot)
+            : (unique.length ? ensureModel3dSlotIdentity(unique[0]) : null);
+        syncLegacySculptureSelectionAliases();
+    }
+
+    function removeModel3dSlotFromSelectionState(slot) {
+        if (!slot) return;
+        var remaining = selectedSculptures.filter(function (candidate) { return candidate !== slot; });
+        var primary = primarySculpture === slot ? (remaining[remaining.length - 1] || null) : primarySculpture;
+        var reference = referenceSculpture === slot ? (remaining[0] || null) : referenceSculpture;
+        setSculptureSelectionState(remaining, primary, reference);
+    }
+
+    function nextModel3dSlotLoadGeneration(slot, reason) {
+        if (!slot) return 0;
+        slot.metadata = slot.metadata || {};
+        slot.metadata.model3dLoadGeneration = (Number(slot.metadata.model3dLoadGeneration) || 0) + 1;
+        slot.metadata.model3dLoadReason = reason || "model-load";
+        return slot.metadata.model3dLoadGeneration;
+    }
+
+    function isCurrentModel3dSlotLoad(slot, generation) {
+        return !!(slot && artSpheres.indexOf(slot) !== -1 && !(slot.isDisposed && slot.isDisposed()) && slot.metadata && Number(slot.metadata.model3dLoadGeneration) === Number(generation));
+    }
     var lastSculptureClickTime = 0;
     var lastSculptureClickSlot = null;
     var model3dSlotSelectionEdgesColor = new BABYLON.Color4(1, 1, 1, 1);
@@ -13186,7 +13357,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 try {
                     window.dispatchEvent(new CustomEvent("gallery-interaction-ready", {
                         detail: {
-                            stage: "12C66C3",
+                            stage: "12C66C4",
                             reason: reason || "interaction-ready",
                             readyAt: galleryFastStartRuntime.interactionReadyAt
                         }
@@ -15496,7 +15667,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C3",
+        stage: "12C66C4",
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
@@ -19842,11 +20013,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function applyModel3dTransformSliderValues(shouldNotify, isLiveInput) {
-        if (!selectedSphere && activeModel3dSlot) {
-            selectedSphere = activeModel3dSlot;
-        }
-
-        if (!selectedSphere) {
+        var transformSlot = getActiveModel3dSlot();
+        if (!transformSlot) {
             notifyGalleryStatus("Zaznacz rzezbe/model slot, aby zmienic skale lub rotacje.");
             return;
         }
@@ -19854,7 +20022,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var scaleValue = Number(model3dTransformScaleRow.input.value) / 100;
         var rotationValue = Number(model3dTransformRotationRow.input.value);
 
-        setModel3dSlotTransformState(selectedSphere, {
+        setModel3dSlotTransformState(transformSlot, {
             scale: scaleValue,
             rotationDegrees: rotationValue
         }, !!shouldNotify);
@@ -27809,7 +27977,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Rzezba dziala jak artwork: selection array + primary/reference + jeden owner slot.
     // ArtSphere_* jest tylko rootem/ownerem transformu. Widoczny cube albo GLB sa childami.
     function getActiveModel3dSlot() {
-        return primarySculpture || activeModel3dSlot || selectedSphere || null;
+        var primary = getModel3dSlotById(gallerySculptureCoreRuntime.selection.primaryId);
+        if (primary) return primary;
+        syncLegacySculptureSelectionAliases();
+        return primarySculpture || null;
     }
 
     function isModel3dSlot(slot) {
@@ -27857,7 +28028,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         placeholder.material = createModel3dSlotPlaceholderMaterial(slot, index);
         placeholder.isPickable = !!editMode;
         placeholder.metadata = placeholder.metadata || {};
-        placeholder.metadata.model3dSlotName = slot.name;
+        tagModel3dOwnerNode(placeholder, slot);
         placeholder.metadata.isModel3dPlaceholderMesh = true;
         placeholder.metadata.displayType = "sculpture-placeholder";
 
@@ -27937,6 +28108,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             scale: 1,
             rotationDegrees: 0
         };
+        ensureModel3dSlotIdentity(slot, slot.metadata.model3dSlotId);
 
         makeModel3dSlotRootInvisible(slot);
 
@@ -27948,7 +28120,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             slot.metadata.sculptureMesh = placeholder;
         } else {
             placeholder.metadata = placeholder.metadata || {};
-            placeholder.metadata.model3dSlotName = slot.name;
+            tagModel3dOwnerNode(placeholder, slot);
             placeholder.metadata.isModel3dPlaceholderMesh = true;
             placeholder.parent = slot;
             placeholder.position = new BABYLON.Vector3(0, 0.55, 0);
@@ -27970,7 +28142,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         setEditorOnlyMeshVisible(placeholder, shouldShow, shouldPick);
         placeholder.checkCollisions = false;
         placeholder.metadata = placeholder.metadata || {};
-        placeholder.metadata.model3dSlotName = slot.name;
+        tagModel3dOwnerNode(placeholder, slot);
         placeholder.metadata.isModel3dPlaceholderMesh = true;
 
         return shouldShow ? 0 : 1;
@@ -30306,9 +30478,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         event.preventDefault();
         event.stopPropagation();
 
-        if (duplicateSelectedModel3dSlot()) {
-            markGalleryDraftDirty("model3d-slot-duplicated");
-        }
+        duplicateSelectedModel3dSlot().catch(function (error) {
+            console.warn("Duplicate model slot error:", error);
+            notifyGalleryStatus("Nie udalo sie zduplikowac modelu.");
+        });
     };
 
     model3dCopyButton.onclick = function (event) {
@@ -33922,27 +34095,33 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getModel3dSlotFromPickedMesh(mesh) {
-        if (!mesh) {
-            return null;
-        }
-
+        if (!mesh) return null;
         if (artSpheres.indexOf(mesh) >= 0) {
+            ensureModel3dSlotIdentity(mesh);
             return mesh;
         }
 
         var current = mesh;
-
         while (current) {
-            if (
-                current.metadata &&
-                current.metadata.model3dSlotName
-            ) {
-                return getModel3dSlotByName(current.metadata.model3dSlotName);
+            var directOwner = null;
+            try { directOwner = current._galleryModel3dOwnerSlot || null; } catch (error) {}
+            if (directOwner && artSpheres.indexOf(directOwner) !== -1 && !(directOwner.isDisposed && directOwner.isDisposed())) {
+                return directOwner;
             }
-
+            if (current.metadata) {
+                var ownerById = getModel3dSlotById(current.metadata.model3dOwnerSlotId);
+                if (ownerById) return ownerById;
+                // Legacy states remain readable, but names are no longer the primary owner key.
+                if (current.metadata.model3dSlotName) {
+                    var ownerByName = getModel3dSlotByName(current.metadata.model3dSlotName);
+                    if (ownerByName) {
+                        tagModel3dOwnerNode(current, ownerByName);
+                        return ownerByName;
+                    }
+                }
+            }
             current = current.parent || null;
         }
-
         return null;
     }
 
@@ -33973,35 +34152,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function markModel3dRuntimeMesh(mesh, slot) {
-        if (!mesh || !slot) {
-            return;
-        }
-
-        mesh.metadata = mesh.metadata || {};
-        mesh.metadata.model3dSlotName = slot.name;
+        if (!mesh || !slot) return;
+        tagModel3dOwnerNode(mesh, slot);
         mesh.metadata.isModel3dRuntimeMesh = true;
         mesh.isPickable = true;
         mesh.checkCollisions = false;
-
-        if (mesh.isVisible !== undefined) {
-            mesh.isVisible = true;
-        }
-
-        if (mesh.visibility !== undefined) {
-            mesh.visibility = 1;
-        }
-
-        if (mesh.material) {
-            configureMaterialForCommonLighting(mesh.material);
-        }
-
+        if (mesh.isVisible !== undefined) mesh.isVisible = true;
+        if (mesh.visibility !== undefined) mesh.visibility = 1;
+        if (mesh.material) configureMaterialForCommonLighting(mesh.material);
         try {
-            registerCommonShadowMesh(mesh, {
-                global: true,
-                local: true,
-                receive: true,
-                cast: true
-            });
+            registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true });
         } catch (shadowError) {
             console.warn("Model 3D shadow register warning:", shadowError);
         }
@@ -34112,82 +34272,62 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var streamingTier = modelState && modelState._galleryStreamingTier ? modelState._galleryStreamingTier : null;
         modelState = normalizeModel3dState(modelState);
         if (modelState && streamingTier) modelState._galleryStreamingTier = streamingTier;
+        if (!slot || !modelState || !modelState.modelUrl || artSpheres.indexOf(slot) === -1) return false;
 
-        if (!slot || !modelState || !modelState.modelUrl) {
-            return false;
-        }
-
+        var slotId = ensureModel3dSlotIdentity(slot);
+        var generation = nextModel3dSlotLoadGeneration(slot, "load-model");
         var assetChoice = getGalleryModelStreamingAssetChoice(modelState, streamingTier || getGalleryStreamingTierForObject(slot));
         if (!assetChoice.url) return false;
-
-        slot.metadata = slot.metadata || {};
         slot.metadata.model3d = modelState;
-
         disposeModel3dSlotRuntime(slot);
 
-        var root = new BABYLON.TransformNode(slot.name + "_Model3DRoot", scene);
+        var root = new BABYLON.TransformNode(slot.name + "_Model3DRoot_" + generation, scene);
         root.parent = slot;
-        root.metadata = root.metadata || {};
-        root.metadata.model3dSlotName = slot.name;
+        tagModel3dOwnerNode(root, slot);
         root.metadata.isModel3dRuntimeRoot = true;
-
-        slot.metadata.model3dRuntime = {
-            root: root,
-            meshes: [],
-            loadedAt: new Date().toISOString(),
-            assetVariant: assetChoice.variant,
-            assetUrl: assetChoice.url,
-            requestedTier: assetChoice.tier
+        var pendingRuntime = {
+            root: root, meshes: [], loadedAt: null, loadGeneration: generation, slotId: slotId,
+            assetVariant: assetChoice.variant, assetUrl: assetChoice.url, requestedTier: assetChoice.tier
         };
+        slot.metadata.model3dRuntime = pendingRuntime;
+
+        function disposeLateResult(result) {
+            var roots = result && Array.isArray(result.rootNodes) ? result.rootNodes : [];
+            var meshes = result && Array.isArray(result.meshes) ? result.meshes : [];
+            roots.concat(meshes).forEach(function (node) {
+                if (!node || node === root) return;
+                try { if (!(node.isDisposed && node.isDisposed()) && node.dispose) node.dispose(); } catch (error) {}
+            });
+            try { if (!(root.isDisposed && root.isDisposed())) root.dispose(); } catch (error) {}
+        }
 
         try {
             var result = null;
             var cachedInstance = null;
-
             if (!galleryDeviceProfile.mobile) {
-                try {
-                    var cachedContainer = await getGalleryCachedModel3dContainer(assetChoice.url);
-                    cachedInstance = instantiateGalleryCachedModel3d(cachedContainer, slot);
-                } catch (cacheError) {
-                    console.warn("Model 3D cache fallback warning:", cacheError);
-                }
+                try { cachedInstance = instantiateGalleryCachedModel3d(await getGalleryCachedModel3dContainer(assetChoice.url), slot); }
+                catch (cacheError) { console.warn("Model 3D cache fallback warning:", cacheError); }
             }
-
             if (cachedInstance && cachedInstance.meshes.length) {
-                (cachedInstance.roots || []).forEach(function (cachedRoot) {
-                    if (cachedRoot) {
-                        cachedRoot.parent = root;
-                    }
-                });
-
-                result = {
-                    meshes: cachedInstance.meshes,
-                    rootNodes: cachedInstance.roots,
-                    fromAssetContainerCache: true
-                };
+                (cachedInstance.roots || []).forEach(function (cachedRoot) { if (cachedRoot) cachedRoot.parent = root; });
+                result = { meshes: cachedInstance.meshes, rootNodes: cachedInstance.roots, fromAssetContainerCache: true };
             } else {
-                result = await BABYLON.SceneLoader.ImportMeshAsync(
-                    "",
-                    "",
-                    assetChoice.url,
-                    scene
-                );
+                result = await BABYLON.SceneLoader.ImportMeshAsync("", "", assetChoice.url, scene);
             }
 
-            var loadedMeshes = (result && result.meshes ? result.meshes : []).filter(function (mesh) {
-                return mesh && mesh.name !== "__root__";
-            });
+            if (!isCurrentModel3dSlotLoad(slot, generation) || slot.metadata.model3dRuntime !== pendingRuntime) {
+                gallerySculptureCoreRuntime.loadDiscardCount += 1;
+                disposeLateResult(result);
+                return false;
+            }
 
+            var loadedMeshes = (result && result.meshes ? result.meshes : []).filter(function (mesh) { return mesh && mesh.name !== "__root__"; });
             loadedMeshes.forEach(function (mesh) {
-                // Zachowujemy wewnetrzna hierarchie GLB, a do naszego root podpijamy tylko top-level meshe.
-                if (!mesh.parent || mesh.parent.name === "__root__") {
-                    mesh.parent = root;
-                }
-
+                if (!mesh.parent || mesh.parent.name === "__root__") mesh.parent = root;
                 markModel3dRuntimeMesh(mesh, slot);
             });
-
-            slot.metadata.model3dRuntime.meshes = loadedMeshes;
+            pendingRuntime.meshes = loadedMeshes;
+            pendingRuntime.loadedAt = new Date().toISOString();
             slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
             slot.metadata.galleryStreaming.modelState = "loaded";
             slot.metadata.galleryStreaming.suspended = false;
@@ -34195,53 +34335,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             slot.metadata.galleryStreaming.currentLoadTier = modelState._galleryStreamingTier || getGalleryStreamingTierForObject(slot);
             slot.metadata.galleryStreaming.modelAssetVariant = assetChoice.variant;
             slot.metadata.galleryStreaming.modelAssetUrl = assetChoice.url;
-            if (assetChoice.variant === "low") galleryZoneStreamingRuntime.lowLodModelLoads += 1;
-            else galleryZoneStreamingRuntime.highLodModelLoads += 1;
+            if (assetChoice.variant === "low") galleryZoneStreamingRuntime.lowLodModelLoads += 1; else galleryZoneStreamingRuntime.highLodModelLoads += 1;
             setModel3dSlotTransformFromState(slot, modelState);
             applySculptureTransformToSlot(slot);
             applySculptureSlotVisualState(slot);
             snapModel3dSlotRuntimeToFloor(slot);
+            markGalleryObjectBoundsDirty(slot);
             refreshSculptureCollisionProxy(slot);
             refreshSculptureOutlines();
             configureGalleryModelRuntimeLod(slot);
-
-            galleryModel3dLastDebug = {
-                slot: slot.name,
-                modelUrl: modelState.modelUrl,
-                loadedUrl: assetChoice.url,
-                assetVariant: assetChoice.variant,
-                meshCount: loadedMeshes.length,
-                loadedAt: new Date().toISOString()
-            };
-
-            if (galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive) {
-                galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
-            } else {
-                refreshViewerCollisionMeshes();
-                refreshCommonLightingMaterialSupport();
-                hydrateSavedLocalLightTargetsForAll("model3d-loaded");
-            }
+            galleryModel3dLastDebug = { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, meshCount: loadedMeshes.length, loadedAt: pendingRuntime.loadedAt };
+            if (galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
+            else { refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); hydrateSavedLocalLightTargetsForAll("model3d-loaded"); }
             updateViewerModePlaceholderVisibility();
             updateModel3dSlotUi();
-
             return true;
         } catch (error) {
-            console.warn("3D model load failed:", {
-                slot: slot.name,
-                modelUrl: modelState.modelUrl,
-                loadedUrl: assetChoice.url,
-                assetVariant: assetChoice.variant,
-                error: error
-            });
-
+            if (!isCurrentModel3dSlotLoad(slot, generation)) {
+                gallerySculptureCoreRuntime.loadDiscardCount += 1;
+                try { if (!(root.isDisposed && root.isDisposed())) root.dispose(); } catch (disposeError) {}
+                return false;
+            }
+            console.warn("3D model load failed:", { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, error: error });
             disposeModel3dSlotRuntime(slot);
-            galleryModel3dLastDebug = {
-                slot: slot.name,
-                modelUrl: modelState.modelUrl,
-                loadedUrl: assetChoice.url,
-                assetVariant: assetChoice.variant,
-                error: error && error.message ? error.message : String(error)
-            };
+            galleryModel3dLastDebug = { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, error: error && error.message ? error.message : String(error) };
             notifyGalleryStatus("Nie udalo sie wczytac modelu 3D. Sprawdz URL/GLB i konsolę.");
             return false;
         }
@@ -34276,6 +34393,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         slot.metadata = slot.metadata || {};
+        nextModel3dSlotLoadGeneration(slot, "model-removed");
         disposeModel3dSlotRuntime(slot);
         slot.metadata.model3d = null;
         applySculptureSlotVisualState(slot);
@@ -34288,40 +34406,29 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     async function replaceModel3dStateInSlotSafely(slot, nextState, reason, options) {
         options = options || {};
-
-        if (!slot || !nextState) {
-            return false;
-        }
-
+        if (!slot || !nextState) return false;
+        slot.metadata = slot.metadata || {};
+        var replacementToken = "replace-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+        slot.metadata.model3dReplacementToken = replacementToken;
         var previousState = cloneGalleryStateForIntegrity(getModel3dState(slot));
         var loaded = false;
-
+        var replacementGeneration = null;
         try {
-            loaded = await applyModel3dStateToSlot(slot, nextState);
-        } catch (replacementError) {
-            console.warn("3D model replacement error:", replacementError);
-            loaded = false;
-        }
+            var replacementPromise = applyModel3dStateToSlot(slot, nextState);
+            replacementGeneration = Number(slot.metadata.model3dLoadGeneration) || null;
+            loaded = await replacementPromise;
+        } catch (replacementError) { console.warn("3D model replacement error:", replacementError); loaded = false; }
 
+        // A newer replace/paste/restore/streaming load owns the slot now. Never restore an older state over it.
+        if (!slot.metadata || slot.metadata.model3dReplacementToken !== replacementToken) return false;
+        if (replacementGeneration !== null && Number(slot.metadata.model3dLoadGeneration) !== replacementGeneration) return false;
         if (loaded) {
-            queueReplacedGalleryModelStateForCleanup(
-                previousState,
-                nextState,
-                reason || "model3d-replaced"
-            );
+            queueReplacedGalleryModelStateForCleanup(previousState, nextState, reason || "model3d-replaced");
             return true;
         }
-
-        if (options.cleanupFailedNextState) {
-            queueGalleryModelStateForCleanup(nextState, options.cleanupReason || "failed-model3d-upload");
-        }
-
+        if (options.cleanupFailedNextState) queueGalleryModelStateForCleanup(nextState, options.cleanupReason || "failed-model3d-upload");
         var restored = await restoreModel3dSlotAfterFailedReplacement(slot, previousState);
-
-        if (!restored) {
-            console.warn("Previous 3D model state could not be restored after failed replacement.");
-        }
-
+        if (!restored) console.warn("Previous 3D model state could not be restored after failed replacement.");
         return false;
     }
 
@@ -34331,6 +34438,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         slot.metadata = slot.metadata || {};
+        nextModel3dSlotLoadGeneration(slot, "model-removed");
         disposeModel3dSlotRuntime(slot);
         slot.metadata.model3d = null;
 
@@ -34486,6 +34594,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
 
         if (applied) {
+            markGalleryDraftDirty("model3d-pasted");
             notifyGalleryStatus("Model przypisany do slotu bez ponownego uploadu.");
         } else {
             notifyGalleryStatus("Nie udalo sie przypisac modelu ze schowka. Poprzedni model zostal przywrocony.");
@@ -34494,44 +34603,108 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return applied;
     }
 
-    function duplicateSelectedModel3dSlot() {
-        if (!selectedSphere) {
-            notifyGalleryStatus("Zaznacz slot modelu 3D.");
-            return null;
+    function getModel3dSlotFootprint(slot) {
+        if (!slot) return { width: 1.0, depth: 1.0 };
+        refreshSculptureCollisionProxy(slot);
+        var slotId = ensureModel3dSlotIdentity(slot);
+        var record = gallerySculptureCoreRuntime.colliderRegistry[slotId];
+        if (record && record.bounds) {
+            return {
+                width: Math.max(0.8, record.bounds.maximum.x - record.bounds.minimum.x),
+                depth: Math.max(0.8, record.bounds.maximum.z - record.bounds.minimum.z)
+            };
         }
+        return { width: 1.0, depth: 1.0 };
+    }
 
+    function isModel3dDuplicatePlacementFree(position, footprint, sourceSlot) {
+        if (!position || !footprint) return false;
+        var margin = 0.28;
+        var minX = position.x - footprint.width * 0.5 - margin;
+        var maxX = position.x + footprint.width * 0.5 + margin;
+        var minZ = position.z - footprint.depth * 0.5 - margin;
+        var maxZ = position.z + footprint.depth * 0.5 + margin;
+        var centerProbe = new BABYLON.Vector3(position.x, camera.position.y, position.z);
+        if (!isMobileCameraPositionOnFloor(centerProbe)) return false;
+
+        var sculptureBlocked = Object.keys(gallerySculptureCoreRuntime.colliderRegistry).some(function (slotId) {
+            var record = gallerySculptureCoreRuntime.colliderRegistry[slotId];
+            if (!record || !record.bounds || artSpheres.indexOf(record.slot) === -1) return false;
+            return !(maxX < record.bounds.minimum.x || minX > record.bounds.maximum.x || maxZ < record.bounds.minimum.z || minZ > record.bounds.maximum.z);
+        });
+        if (sculptureBlocked) return false;
+
+        return !wallMeshes.some(function (wall) {
+            if (!wall || !wall.getBoundingInfo || !canUseViewerCollisionMesh(wall)) return false;
+            try {
+                wall.computeWorldMatrix(true);
+                var box = wall.getBoundingInfo().boundingBox;
+                return box && !(maxX < box.minimumWorld.x || minX > box.maximumWorld.x || maxZ < box.minimumWorld.z || minZ > box.maximumWorld.z);
+            } catch (error) { return false; }
+        });
+    }
+
+    function findModel3dDuplicatePlacement(sourceSlot) {
+        refreshAllSculptureCollisionProxies();
+        var footprint = getModel3dSlotFootprint(sourceSlot);
+        var clearanceX = footprint.width + 0.45;
+        var clearanceZ = footprint.depth + 0.45;
+        var directions = [
+            [1,0], [-1,0], [0,1], [0,-1], [1,1], [-1,1], [1,-1], [-1,-1]
+        ];
+        for (var ring = 1; ring <= 4; ring += 1) {
+            for (var i = 0; i < directions.length; i += 1) {
+                gallerySculptureCoreRuntime.duplicatePlacementAttempts += 1;
+                var candidate = sourceSlot.position.clone();
+                candidate.x += directions[i][0] * clearanceX * ring;
+                candidate.z += directions[i][1] * clearanceZ * ring;
+                if (isModel3dDuplicatePlacementFree(candidate, footprint, sourceSlot)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    async function duplicateSelectedModel3dSlot() {
+        var sourceSlot = getActiveModel3dSlot();
+        if (!sourceSlot) { notifyGalleryStatus("Zaznacz slot modelu 3D."); return null; }
         var index = getNextModel3dSlotIndex();
-        var position = selectedSphere.position.clone().add(new BABYLON.Vector3(1.4, 0, 0));
-        var newSlot = createPedestalDisplay(position, index);
-
-        if (!newSlot) {
-            notifyGalleryStatus("Nie udalo sie utworzyc kopii slotu.");
+        var position = findModel3dDuplicatePlacement(sourceSlot);
+        if (!position) {
+            notifyGalleryStatus("Brak bezpiecznego miejsca na kopie modelu. Przesun rzezby i sproboj ponownie.");
             return null;
         }
-
-        newSlot.rotation.copyFrom(selectedSphere.rotation);
-        newSlot.scaling.copyFrom(selectedSphere.scaling);
+        var newSlot = createPedestalDisplay(position, index, { slotId: createModel3dSlotId(), name: "ArtSphere_" + index });
+        if (!newSlot) { notifyGalleryStatus("Nie udalo sie utworzyc kopii slotu."); return null; }
+        newSlot.rotation.copyFrom(sourceSlot.rotation);
+        newSlot.scaling.copyFrom(sourceSlot.scaling);
         newSlot.metadata = newSlot.metadata || {};
         newSlot.metadata.isDynamicModelSlot = true;
-        newSlot.metadata.sculptureTransform = Object.assign({}, getModel3dSlotTransformState(selectedSphere));
+        newSlot.metadata.sculptureTransform = Object.assign({}, getModel3dSlotTransformState(sourceSlot));
         applySculptureTransformToSlot(newSlot);
-
-        var modelState = getModel3dState(selectedSphere);
-
+        var modelState = getModel3dState(sourceSlot);
         if (modelState) {
             var duplicateState = JSON.parse(JSON.stringify(modelState));
-            duplicateState.sourceSlotName = selectedSphere.name;
+            duplicateState.sourceSlotName = sourceSlot.name;
+            duplicateState.sourceSlotId = ensureModel3dSlotIdentity(sourceSlot);
             duplicateState.isDuplicate = true;
             duplicateState.assignedAt = new Date().toISOString();
-            applyModel3dStateToSlot(newSlot, duplicateState);
+            newSlot.metadata.model3dLoading = true;
+            var loaded = await applyModel3dStateToSlot(newSlot, duplicateState);
+            newSlot.metadata.model3dLoading = false;
+            if (!loaded) {
+                deleteModel3dSlotRuntime(newSlot, { skipRememberDeleted: true, silent: true });
+                selectModel3dSlot(sourceSlot);
+                notifyGalleryStatus("Nie udalo sie wczytac kopii modelu. Duplikat zostal wycofany.");
+                return null;
+            }
         }
-
         selectModel3dSlot(newSlot);
+        refreshSculptureCollisionProxy(newSlot);
+        markGalleryDraftDirty("model3d-slot-duplicated");
         updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
         updateEditHelpStatus();
-        notifyGalleryStatus("Slot modelu zduplikowany bez ponownego uploadu.");
-
+        notifyGalleryStatus("Slot modelu zduplikowany w wolnym miejscu bez ponownego uploadu.");
         return newSlot;
     }
 
@@ -34687,46 +34860,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function selectModel3dSlot(slot, addToSelection) {
-        if (editMode && typeof setGalleryEditorPrimaryTab === "function") {
-            setGalleryEditorPrimaryTab("exhibits");
-        }
-        if (!slot) {
-            return false;
-        }
-
+        if (editMode && typeof setGalleryEditorPrimaryTab === "function") setGalleryEditorPrimaryTab("exhibits");
+        if (!slot || artSpheres.indexOf(slot) === -1) return false;
         ensureModel3dSlotUnifiedStructure(slot, artSpheres.indexOf(slot));
+        ensureModel3dSlotIdentity(slot);
         clearLocalLightSelection();
         deselectArtwork();
         clearWallColorSelection();
 
+        var next = selectedSculptures.slice();
+        var nextPrimary = primarySculpture;
         if (addToSelection) {
-            var existingIndex = selectedSculptures.indexOf(slot);
-
+            var existingIndex = next.indexOf(slot);
             if (existingIndex >= 0) {
-                selectedSculptures.splice(existingIndex, 1);
-
-                if (primarySculpture === slot) {
-                    primarySculpture = selectedSculptures.length > 0
-                        ? selectedSculptures[selectedSculptures.length - 1]
-                        : null;
-                }
+                next.splice(existingIndex, 1);
+                if (nextPrimary === slot) nextPrimary = next[next.length - 1] || null;
             } else {
-                selectedSculptures.push(slot);
-                primarySculpture = slot;
+                next.push(slot);
+                nextPrimary = slot;
             }
         } else {
-            selectedSculptures = [slot];
-            primarySculpture = slot;
+            next = [slot];
+            nextPrimary = slot;
         }
-
-        referenceSculpture = selectedSculptures.length > 0 ? selectedSculptures[0] : null;
-        activeModel3dSlot = primarySculpture;
-        selectedSphere = primarySculpture;
-
-        selectedSculptures.forEach(function (selectedSlot) {
-            applySculptureSlotVisualState(selectedSlot);
-        });
-
+        setSculptureSelectionState(next, nextPrimary, next[0] || null);
+        selectedSculptures.forEach(applySculptureSlotVisualState);
         refreshSculptureOutlines();
         updateModel3dSlotUi();
         updateModel3dTransformUi();
@@ -34734,25 +34892,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateFocusCameraUi();
         updateGalleryTourOrderUi();
         updateEditHelpStatus();
-
         return true;
     }
 
     function clearModel3dSlotSelection(skipUiUpdate) {
-        selectedSculptures.forEach(function (slot) {
-            clearModel3dSlotSelectionGlow(slot);
-        });
-
-        selectedSculptures = [];
-        primarySculpture = null;
-        referenceSculpture = null;
-        activeModel3dSlot = null;
-        selectedSphere = null;
+        selectedSculptures.forEach(clearModel3dSlotSelectionGlow);
+        setSculptureSelectionState([], null, null);
         isDraggingSphere = false;
         lastSculptureClickTime = 0;
         lastSculptureClickSlot = null;
         refreshSculptureOutlines();
-
         if (!skipUiUpdate) {
             updateModel3dSlotUi();
             updateModel3dTransformUi();
@@ -34781,7 +34930,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function getDefaultModel3dSlotAddPosition() {
         if (activeModel3dSlot && activeModel3dSlot.position) {
-            return activeModel3dSlot.position.clone().add(new BABYLON.Vector3(1.4, 0, 0));
+            return findModel3dDuplicatePlacement(activeModel3dSlot) || activeModel3dSlot.position.clone().add(new BABYLON.Vector3(2.4, 0, 0));
         }
 
         var forward = camera.getDirection(new BABYLON.Vector3(0, 0, 1));
@@ -34836,16 +34985,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             rememberDeletedModel3dSlotName(slotName);
         }
 
-        if (activeModel3dSlot === slot) {
-            setModel3dSlotSelected(slot, false);
-            activeModel3dSlot = null;
-        }
-
-        if (selectedSphere === slot) {
-            selectedSphere = null;
-        }
-
+        removeModel3dSlotFromSelectionState(slot);
+        nextModel3dSlotLoadGeneration(slot, "slot-delete");
         disposeModel3dSlotRuntime(slot);
+        disposeSculptureCollisionProxy(slot);
 
         var placeholderToDispose = slot.metadata && (slot.metadata.placeholderMesh || slot.metadata.sculptureMesh);
 
@@ -34867,6 +35010,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artSpheres = artSpheres.filter(function (candidate) {
             return candidate !== slot;
         });
+        unregisterModel3dSlotIdentity(slot);
 
         try {
             slot.dispose();
@@ -34915,12 +35059,53 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return deletedSomething;
     }
 
+    function getSculptureCoreInvariantDebug() {
+        var seenIds = Object.create(null);
+        var issues = [];
+        var slots = artSpheres.map(function (slot) {
+            var slotId = ensureModel3dSlotIdentity(slot);
+            if (seenIds[slotId]) issues.push("duplicate-slot-id:" + slotId);
+            seenIds[slotId] = true;
+            var runtime = slot.metadata && slot.metadata.model3dRuntime;
+            var ownerMismatch = 0;
+            (runtime && runtime.meshes || []).forEach(function (mesh) {
+                if (getModel3dSlotFromPickedMesh(mesh) !== slot) ownerMismatch += 1;
+            });
+            if (ownerMismatch) issues.push("owner-mismatch:" + slotId + ":" + ownerMismatch);
+            var collision = gallerySculptureCoreRuntime.colliderRegistry[slotId] || null;
+            if (hasLoadedModel3dRuntime(slot) && !collision) issues.push("missing-collider:" + slotId);
+            return {
+                slotId: slotId,
+                name: slot.name,
+                selected: gallerySculptureCoreRuntime.selection.selectedIds.indexOf(slotId) !== -1,
+                loadGeneration: Number(slot.metadata.model3dLoadGeneration) || 0,
+                loading: !!slot.metadata.model3dLoading,
+                runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
+                ownerMismatchCount: ownerMismatch,
+                hasColliderRecord: !!collision,
+                colliderBounds: collision && collision.bounds ? {
+                    minX: collision.bounds.minimum.x, maxX: collision.bounds.maximum.x,
+                    minZ: collision.bounds.minimum.z, maxZ: collision.bounds.maximum.z
+                } : null
+            };
+        });
+        return {
+            schema: gallerySculptureCoreRuntime.schema,
+            selection: JSON.parse(JSON.stringify(gallerySculptureCoreRuntime.selection)),
+            loadDiscardCount: gallerySculptureCoreRuntime.loadDiscardCount,
+            duplicatePlacementAttempts: gallerySculptureCoreRuntime.duplicatePlacementAttempts,
+            issues: issues,
+            slots: slots
+        };
+    }
+
     function getModel3dSlotDebug() {
         return artSpheres.map(function (slot, index) {
             var modelState = getModel3dState(slot);
             var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
 
             return {
+                slotId: slot ? ensureModel3dSlotIdentity(slot) : null,
                 name: slot ? slot.name : null,
                 index: index,
                 selected: selectedSculptures.indexOf(slot) !== -1,
@@ -34972,44 +35157,32 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
-    function createPedestalDisplay(position, index) {
-
-        // STAGE 12C29:
-        // ArtSphere_* jest od teraz czystym ownerem/slotem, nie ukrytym cube meshem.
-        // Widoczny placeholder cube i GLB model sa dziecmi tego ownera.
-        var pedestal = new BABYLON.TransformNode(
-            "ArtSphere_" + index,
-            scene
-        );
-
+    function createPedestalDisplay(position, index, options) {
+        options = options || {};
+        var slotName = options.name || ("ArtSphere_" + index);
+        var pedestal = new BABYLON.TransformNode(slotName, scene);
         pedestal.position = position.clone();
         pedestal.rotation = BABYLON.Vector3.Zero();
         pedestal.scaling = new BABYLON.Vector3(1, 1, 1);
         pedestal.metadata = pedestal.metadata || {};
         pedestal.metadata.displayType = "pedestal";
-        pedestal.metadata.sculptureTransform = pedestal.metadata.sculptureTransform || {
-            scale: 1,
-            rotationDegrees: 0
-        };
+        pedestal.metadata.sculptureTransform = pedestal.metadata.sculptureTransform || { scale: 1, rotationDegrees: 0 };
         pedestal.metadata.sculptureInfo = pedestal.metadata.sculptureInfo || null;
         pedestal.metadata.focusCamera = normalizeGalleryObjectFocusCameraState(pedestal.metadata.focusCamera);
         pedestal.metadata.isModel3dSlot = true;
         pedestal.metadata.model3d = pedestal.metadata.model3d || null;
         pedestal.metadata.model3dRuntime = pedestal.metadata.model3dRuntime || null;
-
+        ensureModel3dSlotIdentity(pedestal, options.slotId || ("model3d-" + slotName));
         forgetDeletedModel3dSlotName(pedestal.name);
         artSpheres.push(pedestal);
+        // Re-register now that the slot is part of the authoritative collection.
+        ensureModel3dSlotIdentity(pedestal, pedestal.metadata.model3dSlotId);
         markGalleryObjectsDirty("sculptureSlotAdded");
         ensureModel3dSlotUnifiedStructure(pedestal, index);
-
         createPedestalLight(pedestal, index);
         refreshArtworkLightExclusions();
         refreshAllCommonLocalLightTargets();
-
-        if (typeof updateViewerModePlaceholderVisibility === "function") {
-            updateViewerModePlaceholderVisibility();
-        }
-
+        if (typeof updateViewerModePlaceholderVisibility === "function") updateViewerModePlaceholderVisibility();
         return pedestal;
     }
 
@@ -38435,7 +38608,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 selectModel3dSlot(clickedModel3dSlot, evt.shiftKey);
 
                 if (!evt.shiftKey) {
-                    selectedSphere = clickedModel3dSlot;
+                    syncLegacySculptureSelectionAliases();
                     isDraggingSphere = true;
                     dragMoved = false;
                     camera.detachControl(canvas);
@@ -38449,7 +38622,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     });
 
                     isDraggingSphere = false;
-                    selectedSphere = null;
+                    syncLegacySculptureSelectionAliases();
 
                     attachGalleryCameraControl();
 
@@ -38471,7 +38644,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 floorMeshes.includes(pickResult.pickedMesh)
             ) {
                 closeGalleryInspect("editor-sculpture-floor-move");
-                selectedSphere = activeModel3dSlot;
+                syncLegacySculptureSelectionAliases();
                 refreshSculptureOutlines();
                 isDraggingSphere = true;
                 dragMoved = false;
@@ -38651,6 +38824,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (editMode && isDraggingSphere) {
 
+            var sculptureWasMoved = !!dragMoved;
+
             // STAGE 12B:
             // Klik bez przeciagania nie robi focusu i nie kasuje zaznaczenia.
             // Ma działać jak zaznaczenie obrazu: slot zostaje aktywny w panelu.
@@ -38666,6 +38841,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateModel3dSlotUi();
             updateModel3dTransformUi();
             scheduleGalleryExhibitTourRebuild("sculpture-moved", { recalculateAutoOrder: true, delayMs: 90 });
+            if (sculptureWasMoved) markGalleryDraftDirty("model3d-slot-moved");
 
             attachGalleryCameraControl();
         }
@@ -38857,6 +39033,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }),
             spheres: artSpheres.map(function (sphere, index) {
                 return {
+                    slotId: ensureModel3dSlotIdentity(sphere),
                     name: sphere.name,
                     index: index,
                     position: vectorToState(sphere.position),
@@ -39105,7 +39282,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (Array.isArray(editorState.spheres)) {
             editorState.spheres.forEach(function (sphereState) {
-                if (!sphereState || getSphereByName(sphereState.name)) {
+                if (!sphereState || getModel3dSlotById(sphereState.slotId) || getSphereByName(sphereState.name)) {
                     return;
                 }
 
@@ -39118,11 +39295,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         ? vectorFromState(sphereState.position, new BABYLON.Vector3(0, -3, 0))
                         : new BABYLON.Vector3(0, -3, 0);
 
-                    var createdSlot = createPedestalDisplay(slotPosition, slotIndex);
-
-                    if (createdSlot && sphereState.name) {
-                        createdSlot.name = sphereState.name;
-                    }
+                    var createdSlot = createPedestalDisplay(slotPosition, slotIndex, {
+                        name: sphereState.name || ("ArtSphere_" + slotIndex),
+                        slotId: sphereState.slotId || null
+                    });
 
                     if (createdSlot) {
                         createdSlot.metadata = createdSlot.metadata || {};
@@ -39137,7 +39313,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     return;
                 }
 
-                var sphere = getSphereByName(sphereState.name);
+                var sphere = getModel3dSlotById(sphereState.slotId) || getSphereByName(sphereState.name);
 
                 if (!sphere && sphereState.index !== undefined) {
                     sphere = artSpheres[Number(sphereState.index)] || null;
@@ -39166,6 +39342,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 }
 
                 sphere.metadata = sphere.metadata || {};
+                ensureModel3dSlotIdentity(sphere, sphereState.slotId || sphere.metadata.model3dSlotId);
                 sphere.metadata.sculptureTransform = sphereState.sculptureTransform
                     ? {
                         scale: clampSculptureTransformScale(sphereState.sculptureTransform.scale),
@@ -39197,7 +39374,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 sphere.metadata.isDynamicModelSlot = !!sphereState.isDynamicModelSlot;
 
                 if (sphereState.model3d) {
-                    applyModel3dStateToSlot(sphere, sphereState.model3d);
+                    sphere.metadata.model3dLoading = true;
+                    Promise.resolve(applyModel3dStateToSlot(sphere, sphereState.model3d)).finally(function () {
+                        if (sphere && sphere.metadata) sphere.metadata.model3dLoading = false;
+                    });
                 } else {
                     removeModel3dFromSlot(sphere);
                 }
@@ -39892,6 +40072,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         copySelectedModel3dToClipboard: copySelectedModel3dToClipboard,
         pasteModel3dFromClipboardToSelectedSlot: pasteModel3dFromClipboardToSelectedSlot,
         getModel3dSlotDebug: getModel3dSlotDebug,
+        getSculptureCoreDebug: getSculptureCoreInvariantDebug,
+        selectModel3dSlotById: function (slotId) { return selectModel3dSlot(getModel3dSlotById(slotId)); },
         selectModel3dSlot: function (slotNameOrIndex) {
             var slot = typeof slotNameOrIndex === "number"
                 ? artSpheres[slotNameOrIndex]
