@@ -1,27 +1,38 @@
-# Berryboy Art Gallery — Stage 12C66C5A
+# Berryboy Art Gallery — Stage 12C66C6A
 
-**Camera Height Restore / Unified Ground Collision**
+**Mobile Quality Foundation / Artwork Always Visible**
 
-Baza: **Stage 12C66C5**. To jest wąska poprawka regresji wysokości kamery, bez przebudowy działającego systemu kolizji rzeźb.
+Baza: **Stage 12C66C5A**.
 
-## Poprawka
+C6A nie jest jeszcze etapem AVIF ani pełnego podnoszenia jakości sceny. Ten etap stabilizuje fundament obrazów i mobilnej rozdzielczości, aby kolejne zmiany jakości nie działały na błędnym lifecycle'u.
 
-W C5 grounded resolver przeliczał `camera.position.y` z raycastu powierzchni podłogi przy każdym kroku. W scenie z wieloma segmentami lub warstwami podłogi ray mógł wskazać niższą powierzchnię, przez co kamera ustawiała się zbyt nisko.
+## Główne zmiany
 
-C5A przywraca dokładne zachowanie C4:
+- przypisany artwork nie jest już usuwany z ramy przez mobilny budżet tekstur;
+- strefy `critical / nearby / deferred` ustalają tylko kolejność ładowania obrazów;
+- kolejka Preview obejmuje również obrazy `deferred`, więc wszystkie przypisane obrazy są hydratujące w tle;
+- pełny wariant obrazu nie wymaga wejścia do bieżącej strefy i zwykły ruch widza nie blokuje upgrade'u;
+- każdy artwork posiada trwałe `artworkId` zapisywane w stanie galerii;
+- każdy load tekstury posiada generację; stary callback nie może nadpisać podmienionego albo usuniętego obrazu;
+- podmiana tekstury jest atomowa: poprzedni poprawny obraz pozostaje widoczny do zakończenia nowego loadu;
+- usunięcie/podmiana obrazu czyści kolejki Preview i Full;
+- jeden właściciel zapisuje `engine.setHardwareScalingLevel()`;
+- dodano Mobile Quality Inspector z rozmiarem bufora, efektywnym DPR, stanem każdej tekstury, kolejkami, cieniami i LOD.
 
-- standardowy Viewer walk i Edit walk zachowują bazową wysokość kamery zapisaną przy starcie sceny (`-2.2` w aktualnej konfiguracji);
-- unified collision rozwiązuje ruch po osiach X/Z;
-- WASD, D-pad, joystick, hold-drag i click-to-move korzystają dalej z jednego resolvera;
-- Edit Fly pozostaje świadomym wyjątkiem;
-- kolizje rzeźb, postumentów i ścian z C5 nie zostały cofnięte ani zdublowane.
+## Świadomie niezmienione w C6A
 
-## Weryfikacja
+- format WebP i jego parametry;
+- AVIF oraz usuwanie starych wariantów WebP — planowane w C6B;
+- mipmapy, anizotropia i docelowe rozdzielczości artworków;
+- pełna rekonstrukcja jakości cieni, świateł, post-processingu i LOD — planowana w C6C;
+- startup, oryginalny popup, Inspect/Custom Focus, Local Lights i kolizje C5A.
+
+## Weryfikacja automatyczna
 
 ```bash
 npm run check
 ```
 
-Test regresji C5A sprawdza, że grounded movement zachowuje poziom oczu z C4 i nie wyprowadza już wysokości kamery z `getGalleryFloorYAtPosition()`.
+Testy obejmują build, składnię, kontrakty architektoniczne, Save Integrity, startup, obrazy, unified collision, lifecycle rzeźb, stabilne `artworkId`, generacje kolejek oraz rzeczywistą symulację asynchronicznej podmiany A → B ze spóźnionym callbackiem A.
 
-Pełne zachowanie wizualne należy potwierdzić na rzeczywistej scenie w Viewer Mode i zwykłym Edit walk.
+Pełne zachowanie wizualne i pamięciowe należy potwierdzić na prawdziwym telefonie z rzeczywistym stanem Supabase.

@@ -1,18 +1,20 @@
 {
-  "name": "berryboy-art-gallery-stage12c66c5a-unified-ground-collision",
-  "version": "0.11.66-c5a",
+  "name": "berryboy-art-gallery-stage12c66c6a-mobile-quality-foundation",
+  "version": "0.11.66-c6a",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C5A / Unified Ground Collision and Sculpture Runtime Integrity",
+  "description": "Berryboy Art Gallery — Stage 12C66C6A / Mobile Quality Foundation and Artwork Always Visible",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c5a.mjs",
+    "build": "node tools/build-stage12c66c6a.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "verify": "node tools/verify-stage12c66c5a.mjs",
-    "test:save-integrity": "node tools/test-stage12c66c5a-save-integrity.mjs",
-    "test:startup": "node tools/test-stage12c66c5a-startup.mjs",
-    "test:image-validation": "node tools/test-stage12c66c5a-image-validation.mjs",
-    "test:collision": "node tools/test-stage12c66c5a-unified-collision.mjs",
-    "test:sculpture-core": "node tools/test-stage12c66c5a-sculpture-core.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core"
+    "verify": "node tools/verify-stage12c66c6a.mjs",
+    "test:save-integrity": "node tools/test-stage12c66c6a-save-integrity.mjs",
+    "test:startup": "node tools/test-stage12c66c6a-startup.mjs",
+    "test:image-validation": "node tools/test-stage12c66c6a-image-validation.mjs",
+    "test:collision": "node tools/test-stage12c66c6a-unified-collision.mjs",
+    "test:sculpture-core": "node tools/test-stage12c66c6a-sculpture-core.mjs",
+    "test:artwork-lifecycle": "node tools/test-stage12c66c6a-artwork-lifecycle.mjs",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap",
+    "test:artwork-async-swap": "node tools/test-stage12c66c6a-artwork-async-swap.mjs"
   }
 }
