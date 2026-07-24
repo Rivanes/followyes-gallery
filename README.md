@@ -1,38 +1,40 @@
-# Berryboy Art Gallery — Stage 12C66C6A
+# Berryboy Art Gallery — Stage 12C66C6A1
 
-**Mobile Quality Foundation / Artwork Always Visible**
+## Inspect Transition Isolation / Compact Mobile Inspect UI
 
-Baza: **Stage 12C66C5A**.
+Baza: Stage 12C66C6A — Mobile Quality Foundation / Artwork Always Visible.
 
-C6A nie jest jeszcze etapem AVIF ani pełnego podnoszenia jakości sceny. Ten etap stabilizuje fundament obrazów i mobilnej rozdzielczości, aby kolejne zmiany jakości nie działały na błędnym lifecycle'u.
+Ten etap izoluje przejazd kamery Inspect od asynchronicznych upgrade'ów tekstur i przebudowuje mobilny komponent Inspect bez zmiany desktopowego UI, kolizji, startupu, Local Lights ani Supabase.
 
-## Główne zmiany
+### Najważniejsze zmiany
 
-- przypisany artwork nie jest już usuwany z ramy przez mobilny budżet tekstur;
-- strefy `critical / nearby / deferred` ustalają tylko kolejność ładowania obrazów;
-- kolejka Preview obejmuje również obrazy `deferred`, więc wszystkie przypisane obrazy są hydratujące w tle;
-- pełny wariant obrazu nie wymaga wejścia do bieżącej strefy i zwykły ruch widza nie blokuje upgrade'u;
-- każdy artwork posiada trwałe `artworkId` zapisywane w stanie galerii;
-- każdy load tekstury posiada generację; stary callback nie może nadpisać podmienionego albo usuniętego obrazu;
-- podmiana tekstury jest atomowa: poprzedni poprawny obraz pozostaje widoczny do zakończenia nowego loadu;
-- usunięcie/podmiana obrazu czyści kolejki Preview i Full;
-- jeden właściciel zapisuje `engine.setHardwareScalingLevel()`;
-- dodano Mobile Quality Inspector z rozmiarem bufora, efektywnym DPR, stanem każdej tekstury, kolejkami, cieniami i LOD.
+- Preview → Full jest operacją texture-only: nie zmienia geometrii, transformacji, bounds ani targetów światła obrazu.
+- Full Texture nie dostaje priorytetu przed zakończeniem ruchu kamery.
+- Upgrade pełnych tekstur pauzuje podczas TRANSITION, ruchu, joysticka, hold-drag, look i aktywnego dragu.
+- TRANSITION posiada transitionId, watchdog 9 s oraz kontrolowany recovery do WALK.
+- Joystick ma jednego właściciela widoczności i pozostaje ukryty w TRANSITION oraz INSPECT, również po VisualViewport/orientation refresh.
+- Mobilny popup jest niższą kapsułą z wystającym avatarem oraz dwiema okrągłymi strzałkami bez widocznych etykiet Previous/Next.
+- Mobilny safe-frame nie rezerwuje miejsca na ukryty joystick i korzysta z dolnej safe-area.
 
-## Świadomie niezmienione w C6A
-
-- format WebP i jego parametry;
-- AVIF oraz usuwanie starych wariantów WebP — planowane w C6B;
-- mipmapy, anizotropia i docelowe rozdzielczości artworków;
-- pełna rekonstrukcja jakości cieni, świateł, post-processingu i LOD — planowana w C6C;
-- startup, oryginalny popup, Inspect/Custom Focus, Local Lights i kolizje C5A.
-
-## Weryfikacja automatyczna
+### Uruchomienie testów
 
 ```bash
 npm run check
 ```
 
-Testy obejmują build, składnię, kontrakty architektoniczne, Save Integrity, startup, obrazy, unified collision, lifecycle rzeźb, stabilne `artworkId`, generacje kolejek oraz rzeczywistą symulację asynchronicznej podmiany A → B ze spóźnionym callbackiem A.
+### Diagnostyka runtime
 
-Pełne zachowanie wizualne i pamięciowe należy potwierdzić na prawdziwym telefonie z rzeczywistym stanem Supabase.
+```js
+BerryboyArtGalleryInspect.getDebug()
+GalleryApp.getMobileQualityInspector()
+```
+
+Awaryjne zamknięcie Inspect:
+
+```js
+BerryboyArtGalleryInspect.close()
+```
+
+Plik login-disabled:
+
+`Gallery_V0_11_STAGE12C66C6A1_INSPECT_TRANSITION_COMPACT_MOBILE_LOGIN_DISABLED.txt`

@@ -1,20 +1,22 @@
 {
-  "name": "berryboy-art-gallery-stage12c66c6a-mobile-quality-foundation",
-  "version": "0.11.66-c6a",
+  "name": "berryboy-art-gallery-stage12c66c6a1-inspect-transition-compact-mobile",
+  "version": "0.11.66-c6a1",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C6A / Mobile Quality Foundation and Artwork Always Visible",
+  "description": "Berryboy Art Gallery — Stage 12C66C6A1 / Inspect Transition Isolation and Compact Mobile Inspect UI",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c6a.mjs",
+    "build": "node tools/build-stage12c66c6a1.mjs",
     "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js",
-    "verify": "node tools/verify-stage12c66c6a.mjs",
-    "test:save-integrity": "node tools/test-stage12c66c6a-save-integrity.mjs",
-    "test:startup": "node tools/test-stage12c66c6a-startup.mjs",
-    "test:image-validation": "node tools/test-stage12c66c6a-image-validation.mjs",
-    "test:collision": "node tools/test-stage12c66c6a-unified-collision.mjs",
-    "test:sculpture-core": "node tools/test-stage12c66c6a-sculpture-core.mjs",
-    "test:artwork-lifecycle": "node tools/test-stage12c66c6a-artwork-lifecycle.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap",
-    "test:artwork-async-swap": "node tools/test-stage12c66c6a-artwork-async-swap.mjs"
+    "verify": "node tools/verify-stage12c66c6a1.mjs",
+    "test:save-integrity": "node tools/test-stage12c66c6a1-save-integrity.mjs",
+    "test:startup": "node tools/test-stage12c66c6a1-startup.mjs",
+    "test:image-validation": "node tools/test-stage12c66c6a1-image-validation.mjs",
+    "test:collision": "node tools/test-stage12c66c6a1-unified-collision.mjs",
+    "test:sculpture-core": "node tools/test-stage12c66c6a1-sculpture-core.mjs",
+    "test:artwork-lifecycle": "node tools/test-stage12c66c6a1-artwork-lifecycle.mjs",
+    "test:artwork-async-swap": "node tools/test-stage12c66c6a1-artwork-async-swap.mjs",
+    "test:inspect-isolation": "node tools/test-stage12c66c6a1-inspect-isolation.mjs",
+    "test:mobile-inspect-ui": "node tools/test-stage12c66c6a1-mobile-inspect-ui.mjs",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui"
   }
 }

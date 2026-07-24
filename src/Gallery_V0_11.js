@@ -90,6 +90,7 @@
   - nie dodajemy rownoleglych systemow dla nowych lamp.
   - Stage 12C66C5A: Camera Height Restore — Unified Ground Collision zachowuje dokładny poziom oczu z C4; resolver chodzenia steruje X/Z i nie przelicza już Y z powierzchni segmentu podłogi.
   - Stage 12C66C6A: Mobile Quality Foundation / Artwork Always Visible — artworki mają trwałe artworkId i generacyjny lifecycle tekstur, stare callbacki nie mogą nadpisać replace/delete, strefy ustalają wyłącznie priorytet, a przypisane obrazy nie są usuwane z ram przez budżet mobilny.
+  - Stage 12C66C6A1: Inspect Transition Isolation / Compact Mobile Inspect UI — pełne tekstury nie przebudowują celu podczas przejazdu, TRANSITION ma watchdog i bezpieczny recovery, joystick ma jednego właściciela widoczności i znika przed kompozycją Inspect, a mobilny popup używa kompaktowej kapsuły z okrągłymi strzałkami bez etykiet.
 */
 
 
@@ -11388,6 +11389,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         configureMeshMaterialForMainShadows(artwork);
     }
 
+    function recordArtworkTextureDimensionsWithoutGeometry(artwork, texture, fitMode) {
+        if (!artwork || !texture) return;
+        var baseSize = texture.getBaseSize ? texture.getBaseSize() : null;
+        if (!baseSize || !baseSize.width || !baseSize.height) return;
+        artwork.metadata = artwork.metadata || {};
+        artwork.metadata.artworkImage = artwork.metadata.artworkImage || {};
+        artwork.metadata.artworkImage.fitMode = fitMode || galleryArtworkDefaultFitMode;
+        artwork.metadata.artworkImage.aspectRatio = baseSize.width / baseSize.height;
+        artwork.metadata.artworkImage.width = baseSize.width;
+        artwork.metadata.artworkImage.height = baseSize.height;
+        artwork.metadata.artworkImage.transform = getArtworkTransformState(artwork);
+    }
+
     function fitArtworkImagePlaneToTexture(artwork, texture, fitMode) {
         if (!artwork || !texture) {
             return;
@@ -11471,9 +11485,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
         if (!normalizedState.imageUrl) normalizedState.imageUrl = imageUrl;
 
+        var textureOnlyUpgrade = !!normalizedState._galleryTextureOnlyUpgrade;
+        delete normalizedState._galleryTextureOnlyUpgrade;
         artwork.metadata.artworkImage = normalizedState;
         applyArtworkImageBaseMaterial(artwork);
-        if (normalizedState.transform) setArtworkTransformState(artwork, normalizedState.transform);
+        if (normalizedState.transform && !textureOnlyUpgrade) setArtworkTransformState(artwork, normalizedState.transform);
 
         var imagePlane = getArtworkImagePlane(artwork);
         var previousMaterial = artwork.metadata.imageMaterial || null;
@@ -11527,18 +11543,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     return;
                 }
                 try {
-                    fitArtworkImagePlaneToTexture(artwork, texture, normalizedState.fitMode || galleryArtworkDefaultFitMode);
+                    if (textureOnlyUpgrade) {
+                        recordArtworkTextureDimensionsWithoutGeometry(artwork, texture, normalizedState.fitMode || galleryArtworkDefaultFitMode);
+                    } else {
+                        fitArtworkImagePlaneToTexture(artwork, texture, normalizedState.fitMode || galleryArtworkDefaultFitMode);
+                    }
                     imagePlane.material = imageMaterial;
                     imagePlane.setEnabled(true);
                     artwork.metadata.imageMaterial = imageMaterial;
                     if (previousMaterial && previousMaterial !== imageMaterial) disposeArtworkImageMaterialInstance(previousMaterial);
                     else if (previousPlaneMaterial && previousPlaneMaterial !== imageMaterial && previousPlaneMaterial !== artwork.material) disposeArtworkImageMaterialInstance(previousPlaneMaterial);
                     galleryArtworkCoreRuntime.atomicSwaps += 1;
-                    syncDetachedArtworkImagePlane(artwork);
-                    artwork.computeWorldMatrix(true);
-                    updateArtworkLight(artwork);
+                    if (!textureOnlyUpgrade) {
+                        syncDetachedArtworkImagePlane(artwork);
+                        artwork.computeWorldMatrix(true);
+                        updateArtworkLight(artwork);
+                        updateArtworkTransformUi();
+                    }
                     updateArtworkImageUi();
-                    updateArtworkTransformUi();
                     artwork.metadata.galleryStreaming.textureState = normalizedState._galleryFastStartPreferPreview ? "preview" : "full";
                     artwork.metadata.galleryStreaming.textureUrl = imageUrl;
                     artwork.metadata.galleryStreaming.textureGeneration = loadGeneration;
@@ -11577,7 +11599,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     fallbackState._galleryDisableKtx2 = true;
                     fallbackState._galleryKtx2FallbackAttempted = true;
                     fallbackState._galleryArtworkOnLoadSettled = normalizedState._galleryArtworkOnLoadSettled;
-                    setTimeout(function () { applyArtworkImageStateSafely(artwork, fallbackState, "12C66C6A KTX2 fallback"); }, 0);
+                    fallbackState._galleryTextureOnlyUpgrade = textureOnlyUpgrade;
+                    setTimeout(function () { applyArtworkImageStateSafely(artwork, fallbackState, "12C66C6A1 KTX2 fallback"); }, 0);
                     finishStartupArtworkTextureLoad(true, { reason: "ktx2-fallback", generation: loadGeneration, artworkId: artworkId });
                     settled = true;
                     return;
@@ -11616,9 +11639,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } else {
             imagePlane.setEnabled(true);
         }
-        syncDetachedArtworkImagePlane(artwork);
-        refreshCommonLightingMaterialSupport();
-        updateArtworkLight(artwork);
+        if (!textureOnlyUpgrade) {
+            syncDetachedArtworkImagePlane(artwork);
+            refreshCommonLightingMaterialSupport();
+            updateArtworkLight(artwork);
+        }
         updateArtworkImageUi();
         return true;
     }
@@ -14872,8 +14897,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function isGalleryViewerBusyForFullArtworkUpgrade() {
         if (!galleryFastStartRuntime.viewerReady || !galleryFastStartRuntime.interactionReady) return true;
+        if (!editMode && !viewerIntroOverlayMovementUnlocked) return true;
         if (galleryFastStartRuntime.backgroundDrainActive) return true;
         if (typeof document !== "undefined" && document.hidden) return true;
+        if (typeof isGalleryInspectCameraTransitionActive === "function" && isGalleryInspectCameraTransitionActive()) return true;
+        if (galleryInspectRuntime && galleryInspectRuntime.opening) return true;
+        if (isDraggingArtwork || isDraggingSphere) return true;
+        if (desktopViewerMiddleLookActive || mobileLookActive) return true;
+        if (mobileJoystickActive || mobileCanvasMoveActive) return true;
+        if (editMoveKeys && (editMoveKeys.w || editMoveKeys.a || editMoveKeys.s || editMoveKeys.d || editMoveKeys.space)) return true;
+        if (viewerMovementVelocity && viewerMovementVelocity.length && viewerMovementVelocity.length() > 0.035) return true;
+        if (viewerMoveKeys && (viewerMoveKeys.w || viewerMoveKeys.a || viewerMoveKeys.s || viewerMoveKeys.d)) return true;
+        if (Date.now() - (galleryFastStartRuntime.lastViewerActivityAt || 0) < galleryFastStartRuntime.fullArtworkIdleDelayMs) return true;
         return false;
     }
 
@@ -14916,6 +14951,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var fullState = cloneGalleryFastStartState(entry.imageState);
         fullState._galleryFastStartForceImmediate = true;
         fullState._galleryFastStartPreferPreview = false;
+        // Stage 12C66C6A1: a Preview -> Full upgrade swaps only the texture/material.
+        // The artwork geometry and the Inspect target stay frozen for the whole transition.
+        fullState._galleryTextureOnlyUpgrade = true;
         fullState._galleryStreamingTier = getGalleryStreamingTierForObject(entry.artwork);
         fullState._galleryArtworkOnLoadSettled = function () {
             galleryFastStartRuntime.backgroundDrainActive = false;
@@ -14928,9 +14966,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return;
             }
             try {
-                applyArtworkImageStateSafely(entry.artwork, fullState, "12C66C6A full artwork background");
+                applyArtworkImageStateSafely(entry.artwork, fullState, "12C66C6A1 full artwork background");
             } catch (error) {
-                console.warn("12C66C6A full artwork hydration warning:", error);
+                console.warn("12C66C6A1 full artwork hydration warning:", error);
                 galleryFastStartRuntime.backgroundDrainActive = false;
                 scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-error", 180);
             }
@@ -19042,21 +19080,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             pointer-events: none !important;
         }
 
-        /* STAGE 12C65D — ONE FINAL MOBILE INSPECT COMPONENT.
-           The popup owns avatar, content and navigation. JavaScript only supplies measured
-           safe-frame insets from the real joystick and gallery viewport. */
+        /* STAGE 12C66C6A1 — COMPACT MOBILE INSPECT CAPSULE.
+           The joystick is hidden before camera composition. The popup therefore docks at the
+           real bottom safe-area and mirrors the desktop language: protruding avatar, compact
+           information body and two circular icon-only navigation buttons. */
         @media (max-width: 768px), (pointer: coarse) {
             #galleryArtworkInfoPopup.gallery-artwork-info-popup {
-                --gallery-inspect-avatar-size: 76px;
-                --gallery-inspect-avatar-left: 0px;
-                --gallery-inspect-avatar-top: 0px;
-                left: max(var(--gallery-mobile-inspect-left, 14px), env(safe-area-inset-left)) !important;
-                right: max(var(--gallery-mobile-inspect-right, 14px), env(safe-area-inset-right)) !important;
-                bottom: max(var(--gallery-mobile-inspect-bottom, 14px), env(safe-area-inset-bottom)) !important;
+                --gallery-inspect-avatar-size: 68px;
+                --gallery-inspect-navigation-size: 44px;
+                left: max(var(--gallery-mobile-inspect-left, 32px), calc(env(safe-area-inset-left) + 28px)) !important;
+                right: max(var(--gallery-mobile-inspect-right, 12px), env(safe-area-inset-right)) !important;
+                bottom: max(var(--gallery-mobile-inspect-bottom, 10px), env(safe-area-inset-bottom)) !important;
                 width: auto !important;
                 max-width: none !important;
-                max-height: var(--gallery-mobile-inspect-max-height, min(46vh, 360px)) !important;
-                transform: translateY(12px) !important;
+                max-height: var(--gallery-mobile-inspect-max-height, min(34vh, 210px)) !important;
+                transform: translateY(10px) !important;
             }
 
             #galleryArtworkInfoPopup.gallery-artwork-info-popup.is-visible {
@@ -19064,43 +19102,36 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
-                display: grid !important;
-                grid-template-columns: var(--gallery-inspect-avatar-size) minmax(0, 1fr) !important;
-                grid-template-rows: minmax(var(--gallery-inspect-avatar-size), auto) auto !important;
-                align-items: center !important;
-                column-gap: 13px !important;
-                row-gap: 12px !important;
-                min-height: 0 !important;
+                position: relative !important;
+                display: block !important;
+                min-height: 94px !important;
                 max-height: inherit !important;
-                padding: 14px !important;
-                border-radius: 20px !important;
-                overflow: hidden !important;
+                padding: 14px 114px 14px 58px !important;
+                border-radius: 23px !important;
+                overflow: visible !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-avatar {
-                position: relative !important;
-                left: auto !important;
-                top: auto !important;
-                grid-column: 1 !important;
-                grid-row: 1 !important;
-                align-self: start !important;
+                position: absolute !important;
+                left: -24px !important;
+                top: 50% !important;
                 width: var(--gallery-inspect-avatar-size) !important;
                 height: var(--gallery-inspect-avatar-size) !important;
+                transform: translateY(-50%) !important;
                 border-width: 1.5px !important;
                 box-shadow:
-                    0 11px 26px rgba(0, 0, 0, 0.34),
+                    0 12px 28px rgba(0, 0, 0, 0.36),
                     inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-author-photo-placeholder {
-                font-size: 23px !important;
+                font-size: 21px !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-content {
-                grid-column: 2 !important;
-                grid-row: 1 !important;
-                min-height: var(--gallery-inspect-avatar-size) !important;
-                max-height: calc(var(--gallery-mobile-inspect-max-height, 360px) - 88px) !important;
+                min-width: 0 !important;
+                min-height: 66px !important;
+                max-height: calc(var(--gallery-mobile-inspect-max-height, 210px) - 28px) !important;
                 justify-content: center !important;
                 overflow: hidden !important;
             }
@@ -19108,44 +19139,45 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             #galleryArtworkInfoPopup .gallery-artwork-info-author-name {
                 margin-bottom: 3px !important;
                 font-size: 10.5px !important;
-                line-height: 1.25 !important;
+                line-height: 1.22 !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-title {
-                font-size: 16px !important;
-                line-height: 1.18 !important;
+                font-size: 17px !important;
+                line-height: 1.16 !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-description {
-                margin-top: 6px !important;
-                max-height: min(88px, calc(var(--gallery-mobile-inspect-max-height, 360px) - 150px)) !important;
+                margin-top: 5px !important;
+                max-height: 54px !important;
                 padding-right: 3px !important;
-                font-size: 12px !important;
-                line-height: 1.42 !important;
+                font-size: 11.5px !important;
+                line-height: 1.38 !important;
                 overscroll-behavior: contain !important;
                 -webkit-overflow-scrolling: touch !important;
             }
 
             #galleryArtworkInfoPopup .gallery-artwork-info-empty {
-                font-size: 12px !important;
+                font-size: 11.5px !important;
             }
 
             #galleryInspectNavigation {
-                --gallery-inspect-navigation-size: 46px;
-                position: relative !important;
-                inset: auto !important;
-                grid-column: 1 / -1 !important;
-                grid-row: 2 !important;
-                display: grid !important;
-                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
-                gap: 9px !important;
-                min-height: 0 !important;
+                position: absolute !important;
+                left: auto !important;
+                right: 12px !important;
+                top: 50% !important;
+                bottom: auto !important;
+                width: auto !important;
+                height: var(--gallery-inspect-navigation-size) !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 7px !important;
+                transform: translateY(-50%) !important;
                 opacity: 0;
                 visibility: hidden;
             }
 
             #galleryInspectNavigation.is-visible {
-                min-height: var(--gallery-inspect-navigation-size) !important;
                 opacity: 1;
                 visibility: visible;
             }
@@ -19155,17 +19187,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 top: auto !important;
                 left: auto !important;
                 right: auto !important;
-                width: 100% !important;
+                width: var(--gallery-inspect-navigation-size) !important;
                 height: var(--gallery-inspect-navigation-size) !important;
-                min-width: 0 !important;
-                padding: 0 14px !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                gap: 9px !important;
-                border-radius: 14px !important;
+                min-width: var(--gallery-inspect-navigation-size) !important;
+                padding: 0 !important;
+                display: grid !important;
+                place-items: center !important;
+                border-radius: 50% !important;
                 background: rgba(255, 255, 255, 0.075) !important;
-                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+                box-shadow:
+                    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+                    0 8px 18px rgba(0, 0, 0, 0.18) !important;
                 transform: none !important;
             }
 
@@ -19175,67 +19207,77 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             .gallery-inspect-navigation-button.is-hidden {
-                display: flex !important;
+                display: grid !important;
                 opacity: 0 !important;
                 visibility: hidden !important;
                 pointer-events: none !important;
             }
 
             .gallery-inspect-navigation-button:disabled:not(.is-hidden) {
-                display: flex !important;
-                opacity: 0.48 !important;
+                display: grid !important;
+                opacity: 0.46 !important;
                 visibility: visible !important;
                 pointer-events: none !important;
             }
 
             .gallery-inspect-navigation-icon {
-                width: 13px !important;
-                height: 13px !important;
-                flex: 0 0 auto !important;
-                border-width: 2.5px 2.5px 0 0 !important;
+                width: 14px !important;
+                height: 14px !important;
+                border-width: 3px 3px 0 0 !important;
             }
 
             .gallery-inspect-navigation-label {
-                display: block !important;
-                min-width: 0 !important;
+                position: absolute !important;
+                width: 1px !important;
+                height: 1px !important;
+                padding: 0 !important;
+                margin: -1px !important;
                 overflow: hidden !important;
-                color: rgba(247, 243, 234, 0.86) !important;
-                font-size: 11px !important;
-                line-height: 1 !important;
-                font-weight: 730 !important;
-                letter-spacing: 0.015em !important;
-                text-overflow: ellipsis !important;
+                clip: rect(0, 0, 0, 0) !important;
                 white-space: nowrap !important;
+                border: 0 !important;
             }
 
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] {
-                --gallery-inspect-avatar-size: 62px;
-            }
+        }
 
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-popup-inner {
-                grid-template-columns: var(--gallery-inspect-avatar-size) minmax(0, 1fr) !important;
-                column-gap: 11px !important;
-                row-gap: 9px !important;
-                padding: 11px !important;
-                border-radius: 17px !important;
-            }
-
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-content {
-                min-height: var(--gallery-inspect-avatar-size) !important;
-            }
-
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-artwork-info-description {
-                max-height: 52px !important;
-            }
-
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] #galleryInspectNavigation {
+        @media (max-width: 380px) {
+            #galleryArtworkInfoPopup.gallery-artwork-info-popup {
+                --gallery-inspect-avatar-size: 64px;
                 --gallery-inspect-navigation-size: 40px;
-                gap: 7px !important;
             }
 
-            #galleryArtworkInfoPopup[data-mobile-safe-frame-mode="side"] .gallery-inspect-navigation-button {
-                padding: 0 10px !important;
-                border-radius: 12px !important;
+            #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
+                min-height: 88px !important;
+                padding: 12px 100px 12px 54px !important;
+                border-radius: 21px !important;
+            }
+
+            #galleryArtworkInfoPopup .gallery-artwork-info-avatar {
+                left: -22px !important;
+            }
+
+            #galleryInspectNavigation {
+                right: 10px !important;
+                gap: 6px !important;
+            }
+        }
+
+        @media (max-width: 768px) and (orientation: landscape) and (max-height: 600px),
+               (pointer: coarse) and (orientation: landscape) and (max-height: 600px) {
+            #galleryArtworkInfoPopup.gallery-artwork-info-popup {
+                left: 50% !important;
+                right: auto !important;
+                width: min(520px, calc(100% - 76px)) !important;
+                max-height: min(42vh, 150px) !important;
+                transform: translate(-50%, 10px) !important;
+            }
+
+            #galleryArtworkInfoPopup.gallery-artwork-info-popup.is-visible {
+                transform: translate(-50%, 0) !important;
+            }
+
+            #galleryArtworkInfoPopup .gallery-artwork-info-description {
+                max-height: 36px !important;
             }
         }
 
@@ -28871,20 +28913,65 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return mobileViewerEnabled && !editMode;
     }
 
-    function setMobileViewerUiVisible(isVisible) {
-        if (!mobileViewerControls) {
-            return;
-        }
+    var mobileViewerUiRequestedVisible = false;
 
-        mobileViewerControls.style.display = isVisible ? "block" : "none";
+    function isGalleryInspectSuppressingMobileViewerControls() {
+        var inspectActive = !!(galleryInspectRuntime && (galleryInspectRuntime.active || galleryInspectRuntime.opening));
+        var inspectOwnsCamera = !!(
+            galleryInspectCameraRuntime &&
+            (galleryInspectCameraRuntime.state === "TRANSITION" || galleryInspectCameraRuntime.state === "INSPECT")
+        );
+        return inspectActive || inspectOwnsCamera;
+    }
+
+    function shouldShowMobileViewerControls() {
+        return !!(
+            mobileViewerUiRequestedVisible &&
+            isMobileViewerActive() &&
+            !isGalleryInspectSuppressingMobileViewerControls()
+        );
+    }
+
+    function syncMobileViewerUiVisibility(reason) {
+        if (!mobileViewerControls) return false;
+        var shouldShow = shouldShowMobileViewerControls();
+        var wasVisible = mobileViewerControls.style.display !== "none";
+        if (!shouldShow && wasVisible) {
+            resetMobileJoystick();
+            resetMobileCanvasMoveGesture();
+        }
+        mobileViewerControls.style.display = shouldShow ? "block" : "none";
+        mobileViewerControls.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+        mobileViewerControls.setAttribute("data-visibility-reason", reason || "sync");
+        if (document.body) {
+            document.body.classList.toggle("gallery-mobile-inspect-controls-hidden", !shouldShow && isGalleryInspectSuppressingMobileViewerControls());
+        }
+        if (galleryInspectRuntime && galleryInspectRuntime.active && typeof updateGalleryMobileInspectSafeFrame === "function") {
+            updateGalleryMobileInspectSafeFrame(reason || "mobile-controls-sync");
+        }
+        return shouldShow;
+    }
+
+    function setMobileViewerUiVisible(isVisible) {
+        mobileViewerUiRequestedVisible = !!isVisible;
+        return syncMobileViewerUiVisibility(isVisible ? "requested-visible" : "requested-hidden");
     }
 
 
     function resetMobileJoystick() {
+        var capturedPointerId = mobileJoystickPointerId;
         mobileJoystickActive = false;
         mobileJoystickPointerId = null;
         mobileJoystickVector.x = 0;
         mobileJoystickVector.y = 0;
+
+        if (mobileJoystickBase && capturedPointerId !== null && capturedPointerId !== undefined && mobileJoystickBase.releasePointerCapture) {
+            try {
+                if (!mobileJoystickBase.hasPointerCapture || mobileJoystickBase.hasPointerCapture(capturedPointerId)) {
+                    mobileJoystickBase.releasePointerCapture(capturedPointerId);
+                }
+            } catch (error) {}
+        }
 
         if (mobileJoystickKnob) {
             mobileJoystickKnob.style.transform = "translate(-50%, -50%)";
@@ -29380,12 +29467,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // TRANSITION -> only the Inspect transition controller owns the camera.
     // INSPECT    -> camera rests at the exact focus transform until manual input returns to WALK.
     var galleryInspectCameraRuntime = {
+        stage: "12C66C6A1",
         state: "WALK",
         transitionId: 0,
         reason: "initial",
         controlsDetached: false,
         startedAt: 0,
-        completedAt: 0
+        completedAt: 0,
+        watchdogTimer: null,
+        watchdogTransitionId: 0,
+        watchdogMs: 9000,
+        watchdogArmedAt: 0,
+        lastRecovery: null
     };
 
     function isGalleryInspectCameraTransitionActive() {
@@ -29416,10 +29509,47 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             "safe-path-blocked",
             "invalid-target",
             "focus-start-failed",
+            "transition-watchdog",
+            "transition-error",
+            "debug-close",
             "scene-dispose",
             "runtime-error",
             "startup-reset"
         ].indexOf(String(reason || "")) !== -1;
+    }
+
+    function clearGalleryInspectTransitionWatchdog() {
+        if (galleryInspectCameraRuntime.watchdogTimer) {
+            clearTimeout(galleryInspectCameraRuntime.watchdogTimer);
+            galleryInspectCameraRuntime.watchdogTimer = null;
+        }
+        galleryInspectCameraRuntime.watchdogTransitionId = 0;
+        galleryInspectCameraRuntime.watchdogArmedAt = 0;
+    }
+
+    function recoverGalleryInspectTransition(reason, transitionId) {
+        if (galleryInspectCameraRuntime.state !== "TRANSITION") return false;
+        if (transitionId && galleryInspectCameraRuntime.transitionId !== transitionId) return false;
+        galleryInspectCameraRuntime.lastRecovery = {
+            reason: reason || "transition-watchdog",
+            transitionId: galleryInspectCameraRuntime.transitionId,
+            recoveredAt: Date.now()
+        };
+        try { stopViewerSafeFocusRuntimeAnimation(); } catch (error) {}
+        try { scene.stopAnimation(camera); } catch (error) {}
+        clearGalleryInspectTransitionInput();
+        closeGalleryInspect(reason || "transition-watchdog");
+        return true;
+    }
+
+    function armGalleryInspectTransitionWatchdog(transitionId) {
+        clearGalleryInspectTransitionWatchdog();
+        galleryInspectCameraRuntime.watchdogTransitionId = transitionId;
+        galleryInspectCameraRuntime.watchdogArmedAt = Date.now();
+        galleryInspectCameraRuntime.watchdogTimer = setTimeout(function () {
+            galleryInspectCameraRuntime.watchdogTimer = null;
+            recoverGalleryInspectTransition("transition-watchdog", transitionId);
+        }, Math.max(3000, Number(galleryInspectCameraRuntime.watchdogMs) || 9000));
     }
 
     function syncGalleryInspectCameraCollisionHandoff() {
@@ -29445,33 +29575,43 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function beginGalleryInspectCameraTransition(reason) {
         markGalleryViewerActivity(reason || "inspect-transition");
+        clearGalleryInspectTransitionWatchdog();
         stopViewerSafeFocusRuntimeAnimation();
         try { scene.stopAnimation(camera); } catch (error) {}
         try { endDesktopViewerMiddleLook(null); } catch (error) {}
-        try { endMobileCanvasLook(null); } catch (error) {}
-        resetViewerWASDMovementRuntime(true);
-        if (typeof clearEditMoveKeys === "function") clearEditMoveKeys();
+        try { endMobileCanvasLook(null, true); } catch (error) {}
+        clearGalleryInspectTransitionInput();
         detachGalleryCameraForInspectTransition();
         galleryInspectCameraRuntime.state = "TRANSITION";
         galleryInspectCameraRuntime.transitionId += 1;
         galleryInspectCameraRuntime.reason = reason || "inspect-transition";
         galleryInspectCameraRuntime.startedAt = Date.now();
+        galleryInspectCameraRuntime.completedAt = 0;
+        syncMobileViewerUiVisibility("inspect-transition-begin");
+        updateGalleryMobileInspectSafeFrame("inspect-transition-begin");
+        armGalleryInspectTransitionWatchdog(galleryInspectCameraRuntime.transitionId);
         return galleryInspectCameraRuntime.transitionId;
     }
 
-    function completeGalleryInspectCameraTransition() {
+    function completeGalleryInspectCameraTransition(expectedTransitionId) {
+        if (expectedTransitionId && galleryInspectCameraRuntime.transitionId !== expectedTransitionId) return false;
+        clearGalleryInspectTransitionWatchdog();
         galleryInspectCameraRuntime.state = "INSPECT";
         galleryInspectCameraRuntime.completedAt = Date.now();
         syncGalleryInspectCameraCollisionHandoff();
         restoreGalleryCameraAfterInspectTransition();
+        syncMobileViewerUiVisibility("inspect-transition-complete");
+        return true;
     }
 
     function releaseGalleryInspectCameraToWalk(reason) {
+        clearGalleryInspectTransitionWatchdog();
         stopViewerSafeFocusRuntimeAnimation();
         galleryInspectCameraRuntime.state = "WALK";
         galleryInspectCameraRuntime.reason = reason || "walk";
         syncGalleryInspectCameraCollisionHandoff();
         restoreGalleryCameraAfterInspectTransition();
+        syncMobileViewerUiVisibility("inspect-release-walk");
     }
 
     function updateGalleryDesktopDpadTurn(dt) {
@@ -37734,7 +37874,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Viewer and Edit share one camera ownership state machine, one safe-frame runtime and one pathfinder.
     // Navigation order belongs to artworks/sculptures (metadata.tourOrder); generated path points are read-only.
     var galleryInspectRuntime = {
-        stage: "12C64Q",
+        stage: "12C66C6A1",
         active: false,
         opening: false,
         editPreview: false,
@@ -37909,9 +38049,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function updateGalleryMobileInspectSafeFrame(reason) {
-        if (!artworkInfoPopup) {
-            return galleryMobileInspectSafeFrameRuntime;
-        }
+        if (!artworkInfoPopup) return galleryMobileInspectSafeFrameRuntime;
 
         var mobile = getArtworkInfoPopupMobileMode();
         if (!mobile) {
@@ -37921,92 +38059,45 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 "--gallery-mobile-inspect-right",
                 "--gallery-mobile-inspect-bottom",
                 "--gallery-mobile-inspect-max-height"
-            ].forEach(function (name) {
-                artworkInfoPopup.style.removeProperty(name);
-            });
+            ].forEach(function (name) { artworkInfoPopup.style.removeProperty(name); });
             galleryMobileInspectSafeFrameRuntime.mode = "desktop";
             galleryMobileInspectSafeFrameRuntime.signature = "desktop";
+            galleryMobileInspectSafeFrameRuntime.joystickVisible = false;
             galleryMobileInspectSafeFrameRuntime.lastReason = reason || "desktop";
             return galleryMobileInspectSafeFrameRuntime;
         }
 
         var root = getGalleryUiRoot();
         var rootRect = null;
-        var joystick = document.getElementById("mobileJoystickBase");
-        var joystickRect = null;
+        try { rootRect = root && root.getBoundingClientRect ? root.getBoundingClientRect() : null; } catch (error) {}
+        if (!rootRect || rootRect.width <= 1 || rootRect.height <= 1) return galleryMobileInspectSafeFrameRuntime;
 
-        try {
-            rootRect = root && root.getBoundingClientRect ? root.getBoundingClientRect() : null;
-            joystickRect = isGalleryInspectLayoutElementVisible(joystick)
-                ? joystick.getBoundingClientRect()
-                : null;
-        } catch (error) {}
-
-        if (!rootRect || rootRect.width <= 1 || rootRect.height <= 1) {
-            return galleryMobileInspectSafeFrameRuntime;
-        }
-
-        var edge = rootRect.width <= 380 ? 10 : 14;
-        var gap = rootRect.width <= 380 ? 10 : 14;
-        var left = edge;
-        var right = edge;
-        var bottom = edge;
-        var mode = "bottom";
-        var joystickVisible = !!(
-            joystickRect &&
-            joystickRect.right > rootRect.left &&
-            joystickRect.left < rootRect.right &&
-            joystickRect.bottom > rootRect.top &&
-            joystickRect.top < rootRect.bottom
-        );
-
-        if (joystickVisible) {
-            var joystickRight = Math.max(0, joystickRect.right - rootRect.left);
-            var joystickTopReserve = Math.max(0, rootRect.bottom - joystickRect.top);
-            var landscape = rootRect.width > rootRect.height;
-            var sideLeft = joystickRight + gap;
-            var sideAvailable = rootRect.width - sideLeft - edge;
-
-            if (landscape && rootRect.height <= 600 && sideAvailable >= 300) {
-                mode = "side";
-                left = sideLeft;
-                bottom = edge;
-            } else {
-                mode = "above-joystick";
-                bottom = joystickTopReserve + gap;
-            }
-        }
-
+        // The joystick is intentionally not part of the Inspect safe-frame. Its visibility owner
+        // hides it before this function runs, so the popup can use the real bottom safe-area.
+        var narrow = rootRect.width <= 380;
+        var left = narrow ? 30 : 34;
+        var right = narrow ? 10 : 12;
+        var bottom = rootRect.height <= 430 ? 8 : 10;
         var topGap = rootRect.height <= 430 ? 8 : 14;
-        var maxHeight = Math.max(148, rootRect.height - bottom - topGap);
-        var signature = [
-            mode,
-            Math.round(left),
-            Math.round(right),
-            Math.round(bottom),
-            Math.round(maxHeight),
-            joystickVisible ? 1 : 0
-        ].join(":");
+        var maxHeight = Math.max(96, Math.min(220, rootRect.height - bottom - topGap));
+        var mode = "compact-bottom";
+        var signature = [mode, Math.round(left), Math.round(right), Math.round(bottom), Math.round(maxHeight)].join(":");
 
         galleryMobileInspectSafeFrameRuntime.mode = mode;
         galleryMobileInspectSafeFrameRuntime.bottom = bottom;
         galleryMobileInspectSafeFrameRuntime.left = left;
         galleryMobileInspectSafeFrameRuntime.right = right;
         galleryMobileInspectSafeFrameRuntime.maxHeight = maxHeight;
-        galleryMobileInspectSafeFrameRuntime.joystickVisible = joystickVisible;
+        galleryMobileInspectSafeFrameRuntime.joystickVisible = false;
         galleryMobileInspectSafeFrameRuntime.lastReason = reason || "refresh";
 
-        if (signature === galleryMobileInspectSafeFrameRuntime.signature) {
-            return galleryMobileInspectSafeFrameRuntime;
-        }
-
+        if (signature === galleryMobileInspectSafeFrameRuntime.signature) return galleryMobileInspectSafeFrameRuntime;
         galleryMobileInspectSafeFrameRuntime.signature = signature;
         artworkInfoPopup.setAttribute("data-mobile-safe-frame-mode", mode);
         artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-left", left.toFixed(1) + "px");
         artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-right", right.toFixed(1) + "px");
         artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-bottom", bottom.toFixed(1) + "px");
         artworkInfoPopup.style.setProperty("--gallery-mobile-inspect-max-height", maxHeight.toFixed(1) + "px");
-
         return galleryMobileInspectSafeFrameRuntime;
     }
 
@@ -38680,6 +38771,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             document.body.classList.remove("gallery-inspect-active");
             document.body.classList.remove("gallery-edit-inspect-preview");
         }
+        syncMobileViewerUiVisibility("inspect-closed");
+        updateGalleryMobileInspectSafeFrame("inspect-closed");
 
         return true;
     }
@@ -38713,15 +38806,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryInspectRuntime.type = resolved.type;
         galleryInspectRuntime.openedAt = Date.now();
         galleryInspectRuntime.lastReason = options.reason || (editPreview ? "edit-double-click" : "viewer-click");
-        if (resolved.type === "artwork") prioritizeArtworkFullTexture(resolved.object, "inspect-target");
 
-        if (!options.immediate) {
-            beginGalleryInspectCameraTransition(galleryInspectRuntime.lastReason);
-        }
+        var transitionId = null;
+        if (!options.immediate) transitionId = beginGalleryInspectCameraTransition(galleryInspectRuntime.lastReason);
+        else syncMobileViewerUiVisibility("inspect-immediate-open");
 
-        if (!preservePopup) {
-            hideArtworkInfoPopup();
-        }
+        if (!preservePopup) hideArtworkInfoPopup();
 
         updateArtworkInfoPopupContent(resolved.object);
         currentArtworkInfoPopupMesh = resolved.object;
@@ -38733,55 +38823,59 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             document.body.classList.toggle("gallery-edit-inspect-preview", editPreview);
         }
 
+        updateGalleryMobileInspectSafeFrame("inspect-content-ready");
         updateGalleryInspectExhibitNavigation(resolved.object, resolved.type, preservePopup);
 
         var startFocus = function () {
-            if (galleryInspectRuntime.requestId !== requestId || !galleryInspectRuntime.active) {
-                return;
-            }
+            if (galleryInspectRuntime.requestId !== requestId || !galleryInspectRuntime.active) return;
+            try {
+                var focusStarted = focusCameraOnObject(resolved.object, {
+                    inspectMode: true,
+                    immediate: !!options.immediate,
+                    skipSafePath: !!options.skipSafePath,
+                    sourceObject: sourceInspectObject,
+                    reason: options.reason || "inspect-open",
+                    onPathBlocked: function (details) {
+                        if (galleryInspectRuntime.requestId !== requestId) return;
+                        galleryInspectRuntime.opening = false;
+                        galleryExhibitTourRuntime.lastPathFailure = details || galleryExhibitTourRuntime.lastPathFailure;
+                        notifyGalleryStatus("No collision-safe route to this exhibit. Check the generated path in Edit Mode.");
+                        closeGalleryInspect("safe-path-blocked");
+                    },
+                    onComplete: function () {
+                        if (
+                            galleryInspectRuntime.requestId !== requestId ||
+                            !galleryInspectRuntime.active ||
+                            galleryInspectRuntime.target !== resolved.object
+                        ) return;
 
-            var focusStarted = focusCameraOnObject(resolved.object, {
-                inspectMode: true,
-                immediate: !!options.immediate,
-                skipSafePath: !!options.skipSafePath,
-                sourceObject: sourceInspectObject,
-                reason: options.reason || "inspect-open",
-                onPathBlocked: function (details) {
-                    if (galleryInspectRuntime.requestId !== requestId) return;
-                    galleryInspectRuntime.opening = false;
-                    galleryExhibitTourRuntime.lastPathFailure = details || galleryExhibitTourRuntime.lastPathFailure;
-                    notifyGalleryStatus("No collision-safe route to this exhibit. Check the generated path in Edit Mode.");
-                    closeGalleryInspect("safe-path-blocked");
-                },
-                onComplete: function () {
-                    if (
-                        galleryInspectRuntime.requestId !== requestId ||
-                        !galleryInspectRuntime.active ||
-                        galleryInspectRuntime.target !== resolved.object
-                    ) {
-                        return;
+                        galleryInspectRuntime.opening = false;
+                        if (!completeGalleryInspectCameraTransition(transitionId)) {
+                            recoverGalleryInspectTransition("transition-error", transitionId);
+                            return;
+                        }
+                        showArtworkInfoPopup(resolved.object);
+                        updateGalleryInspectExhibitNavigation(resolved.object, resolved.type, true);
+                        if (resolved.type === "artwork") {
+                            prioritizeArtworkFullTexture(resolved.object, "inspect-settled");
+                        }
+
+                        if (typeof options.onComplete === "function") options.onComplete(resolved);
                     }
-
+                });
+                if (focusStarted === false) {
                     galleryInspectRuntime.opening = false;
-                    completeGalleryInspectCameraTransition();
-                    showArtworkInfoPopup(resolved.object);
-                    updateGalleryInspectExhibitNavigation(resolved.object, resolved.type, true);
-
-                    if (typeof options.onComplete === "function") {
-                        options.onComplete(resolved);
-                    }
+                    closeGalleryInspect("focus-start-failed");
                 }
-            });
-            if (focusStarted === false) {
+            } catch (error) {
+                console.error("Inspect transition failed:", error);
                 galleryInspectRuntime.opening = false;
-                if (galleryInspectRuntime.active) releaseGalleryInspectCameraToWalk("focus-start-failed");
+                closeGalleryInspect("transition-error");
             }
         };
 
         if (typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(function () {
-                requestAnimationFrame(startFocus);
-            });
+            requestAnimationFrame(function () { requestAnimationFrame(startFocus); });
         } else {
             setTimeout(startFocus, 0);
         }
@@ -38934,7 +39028,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 cameraOwnership: {
                     state: galleryInspectCameraRuntime.state,
                     reason: galleryInspectCameraRuntime.reason,
-                    transitionId: galleryInspectCameraRuntime.transitionId
+                    transitionId: galleryInspectCameraRuntime.transitionId,
+                    startedAt: galleryInspectCameraRuntime.startedAt,
+                    completedAt: galleryInspectCameraRuntime.completedAt,
+                    watchdogArmed: !!galleryInspectCameraRuntime.watchdogTimer,
+                    watchdogTransitionId: galleryInspectCameraRuntime.watchdogTransitionId,
+                    watchdogArmedAt: galleryInspectCameraRuntime.watchdogArmedAt,
+                    lastRecovery: galleryInspectCameraRuntime.lastRecovery
+                },
+                mobileControls: {
+                    requestedVisible: mobileViewerUiRequestedVisible,
+                    actualVisible: !!(mobileViewerControls && mobileViewerControls.style.display !== "none"),
+                    suppressedByInspect: isGalleryInspectSuppressingMobileViewerControls()
                 },
                 navigation: {
                     sequence: galleryInspectRuntime.navigationSequence.map(function (artwork) {
