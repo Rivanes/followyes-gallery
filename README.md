@@ -1,39 +1,47 @@
-# Berryboy Art Gallery — Stage 12C66C6C
+# Berryboy Art Gallery — Stage 12C66C6C1
 
-## Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity
+## Canonical Visual State / Mobile Lighting & Reflection Parity
 
-Stage 12C66C6C zamyka serię C6 na bazie potwierdzonego Stage 12C66C6B1.
+Baza: **Stage 12C66C6C — Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity**.
 
-Najważniejsze zmiany:
+Ten etap naprawia regresję, w której mobilny profil jakości wielokrotnie mnożył zapisane ustawienia odbić przez `reflectionScale`. W efekcie podłoga, ściany i sufit mogły otrzymywać tylko kilka procent kanonicznej odpowiedzi środowiskowej, a mobilny runtime mógł później trafić do `gallery_state`.
 
-- jeden atomowy pipeline dla uploadu, podmiany, importu URL, usuwania artworków oraz zdjęć autorów;
-- aktywny stan zmienia się dopiero po utworzeniu i zweryfikowaniu kompletnego zestawu Original + Desktop/Mobile/Preview AVIF;
-- błąd zapisu przywraca poprzedni obraz lub zdjęcie autora;
-- spóźniona operacja nie może nadpisać nowszego uploadu;
-- poprzednie pliki trafiają do cleanupu dopiero po potwierdzonym zapisie stanu;
-- jednorazowy kokpit migracyjny C6B został usunięty z aktywnego UI;
-- zostały dwa narzędzia: **REPAIR MEDIA** oraz **AUDIT & CLEAN MEDIA**;
-- cleanup ponownie skanuje stan tuż przed usunięciem i kasuje tylko przecięcie plików wcześniej pokazanych oraz nadal nieużywanych;
-- mobilna jakość została rozdzielona na domeny: render, cienie, światła, post-processing oraz streaming;
-- poprawiono semantykę `hardwareScalingLevel` i dodano jeden właściciel rozdzielczości renderowania;
-- artwork pozostaje w pełnej jakości Mobile AVIF i nie jest degradowany przez chwilowy spadek FPS;
-- aktywne `null LOD` zostało usunięte, a propsy otrzymały ochronę frustum i czas łaski;
-- aktualnie widoczne artworki mogą ukończyć Preview → Full także podczas ciągłego spaceru, bez naruszania izolacji przejścia Inspect.
+### Główne zmiany
 
-## Uruchomienie kontroli
+- `normalizeVisualSettings()` jest ponownie czystym sanitizerem danych.
+- `visualCurrentSettings` przechowuje wyłącznie stan kanoniczny, wspólny dla PC i mobile.
+- `deriveRuntimeVisualSettings()` tworzy jednorazową reprezentację runtime dla bieżącego profilu.
+- Profile High/Balanced/Safe mogą ograniczać Bloom, SSAO i Vignette, ale nie skalują odbić ani `environmentIntensity` materiałów.
+- Przełączanie Safe → Balanced → High → Safe nie kumuluje mnożników.
+- Snapshot, localStorage i Supabase zapisują tylko ustawienia kanoniczne.
+- Messenger i inne embedded browsers nie startują w Safe wyłącznie z powodu nazwy przeglądarki; startują od Balanced, chyba że urządzenie ma realny sygnał low-memory/low-CPU.
+- `adaptToDeviceRatio` w bootstrapie jest wyłączone; mobilny DPR i render buffer mają jednego właściciela w silniku galerii.
+- VisualViewport jest normalizowany w `index.html` do jednego zdarzenia `gallery-mobile-viewport-change`.
+
+### Diagnostyka
+
+```js
+GalleryApp.getCanonicalVisualStateDebug()
+GalleryApp.getVisualSettings()
+GalleryApp.getVisualRuntimeSettings()
+GalleryApp.getVisualReflectionDebug()
+GalleryApp.getMobileQuality()
+GalleryApp.setMobileQualityInspectorVisible(true)
+```
+
+W poprawnym stanie wartości `canonical` i `runtime` dla:
+
+- `reflectionStrength`,
+- `floorReflectionStrength`,
+- `wallReflectionStrength`,
+- `ceilingReflectionStrength`
+
+muszą być identyczne niezależnie od profilu mobilnego.
+
+### Uruchomienie testów
 
 ```bash
 npm run check
 ```
 
-## Najważniejsza diagnostyka runtime
-
-```js
-GalleryApp.getAtomicMediaDebug()
-GalleryApp.auditMedia()
-GalleryApp.repairMedia()
-GalleryApp.getMobileQuality()
-GalleryApp.getMobileQualityInspector()
-```
-
-Pełna ocena wizualnej zgodności PC i mobile wymaga testu na rzeczywistych telefonach. Testy automatyczne w paczce sprawdzają architekturę, kolejność commitów, rollback, zabezpieczenia cleanupu, profile jakości i regresje zamrożonych systemów.
+Testy automatyczne nie zastępują porównania tego samego kadru na PC i telefonie.

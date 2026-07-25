@@ -94,6 +94,7 @@
   - Stage 12C66C6B: AVIF Pipeline / Migration / WebP Removal — warianty obrazów i zdjęć autorów są kodowane do wersjonowanego AVIF w leniwie ładowanym Web Workerze, migracja jest atomowa, a wygenerowane WebP są usuwane dopiero po podwójnym bezpiecznym zapisie i audycie Storage.
   - Stage 12C66C6B1: Existing Author AVIF Reconciliation — istniejące kompletne zestawy zdjęć autorów w AVIFv1 są odzyskiwane z denormalizowanych danych lub Storage, weryfikowane i przypisywane do centralnej biblioteki autorów przed walidacją/finalizacją, bez ponownego kodowania i bez przedwczesnego usuwania WebP.
   - Stage 12C66C6C: Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity — upload, replace i import URL commitują wyłącznie kompletne zestawy AVIF, panel migracyjny zastępują dwa narzędzia naprawcze, a jakość mobilna jest sterowana niezależnymi domenami renderu, cieni, świateł, efektów i streamingu.
+  - Stage 12C66C6C1: Canonical Visual State / Mobile Lighting & Reflection Parity — ustawienia zapisywane w gallery_state są kanoniczne i niezależne od urządzenia, profile mobilne tylko raz wyprowadzają runtime post-process, odbicia i environment response pozostają zgodne z PC, Messenger startuje od Balanced, a DPR/resize ma jednego właściciela.
 */
 
 
@@ -176,7 +177,7 @@ export const createScene = function (engineArg, canvasArg) {
             mainShadowFilteringQuality: "high",
             localSpotShadowMapSize: 512,
             localMaxActiveSpotShadows: 2,
-            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: true, reflectionScale: 0.88 },
+            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: true, preserveCanonicalReflections: true },
             streaming: { models: 14, modelGraceMs: 42000, modelCullDistance: 96, propCullDistance: 88, propsAlwaysVisible: true },
             materialBudgets: { helper: 1, floor: 6, ceiling: 7, wall: 10, prop: 5, sculpture: 8, artwork: 10, high: 10, default: 6 },
             downshiftFps: 39,
@@ -193,7 +194,7 @@ export const createScene = function (engineArg, canvasArg) {
             mainShadowFilteringQuality: "medium",
             localSpotShadowMapSize: 512,
             localMaxActiveSpotShadows: 2,
-            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: false, reflectionScale: 0.68 },
+            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: false, preserveCanonicalReflections: true },
             streaming: { models: 9, modelGraceMs: 32000, modelCullDistance: 78, propCullDistance: 68, propsAlwaysVisible: false },
             materialBudgets: { helper: 1, floor: 5, ceiling: 6, wall: 8, prop: 4, sculpture: 7, artwork: 9, high: 9, default: 5 },
             downshiftFps: 33,
@@ -210,7 +211,7 @@ export const createScene = function (engineArg, canvasArg) {
             mainShadowFilteringQuality: "low",
             localSpotShadowMapSize: 384,
             localMaxActiveSpotShadows: 1,
-            postProcessing: { fxaa: true, bloom: false, vignette: false, ssao: false, reflectionScale: 0.44 },
+            postProcessing: { fxaa: true, bloom: false, vignette: false, ssao: false, preserveCanonicalReflections: true },
             streaming: { models: 5, modelGraceMs: 24000, modelCullDistance: 64, propCullDistance: 54, propsAlwaysVisible: false },
             materialBudgets: { helper: 1, floor: 4, ceiling: 5, wall: 6, prop: 3, sculpture: 5, artwork: 8, high: 7, default: 4 },
             downshiftFps: 27,
@@ -234,12 +235,13 @@ export const createScene = function (engineArg, canvasArg) {
         if (mode && mode !== "auto" && galleryMobileQualityProfileDefinitions[mode]) {
             return mode;
         }
-        if (deviceInfo.embeddedBrowser || deviceInfo.lowMemory || deviceInfo.lowCpu) {
+        if (deviceInfo.lowMemory || deviceInfo.lowCpu) {
             return "safe";
         }
 
+        // Embedded browsers such as Messenger are no longer degraded to Safe by name alone.
+        // They start at Balanced and may move to Safe only after sustained runtime evidence.
         // AUTO never grants High from User Agent, iOS status, core count or deviceMemory alone.
-        // Every regular phone starts at native-like Balanced and earns High only after sustained FPS evidence.
         return "balanced";
     }
 
@@ -277,7 +279,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C66C6C",
+            stage: "12C66C6C1",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -417,8 +419,8 @@ export const createScene = function (engineArg, canvasArg) {
     // STAGE 12C66C6A — ONE AUTHORITATIVE MOBILE RENDER-RESOLUTION OWNER
     // Profiles and AUTO may request a level, but only this runtime writes engine hardware scaling.
     var galleryMobileRenderResolutionRuntime = {
-        stage: "12C66C6C",
-        schema: "gallery-mobile-render-resolution.v2",
+        stage: "12C66C6C1",
+        schema: "gallery-mobile-render-resolution.v3",
         owner: "applyGalleryRenderResolution",
         applyCount: 0,
         currentLevel: null,
@@ -432,8 +434,8 @@ export const createScene = function (engineArg, canvasArg) {
     };
 
     var galleryMobileQualityDomainRuntime = {
-        stage: "12C66C6C",
-        schema: "gallery-mobile-quality-domains.v1",
+        stage: "12C66C6C1",
+        schema: "gallery-mobile-quality-domains.v2",
         currentProfile: galleryDeviceProfile.currentQualityProfile,
         domains: {},
         protectedUntil: 0,
@@ -604,17 +606,13 @@ export const createScene = function (engineArg, canvasArg) {
         if (!isGalleryDeviceProfileMobile() || typeof window === "undefined") return;
         var previous = window.__berryboyMobileQualityViewportHandler;
         if (previous) {
-            try { window.removeEventListener("resize", previous); } catch (error) {}
-            try { window.removeEventListener("orientationchange", previous); } catch (error) {}
             try { window.removeEventListener("gallery-mobile-viewport-change", previous); } catch (error) {}
-            try { if (window.visualViewport) window.visualViewport.removeEventListener("resize", previous); } catch (error) {}
         }
+        // index.html owns VisualViewport/window observation and emits one normalized event.
+        // The engine listens only to that event, so DPR and resize cannot race through parallel paths.
         var handler = function () { scheduleGalleryMobileRenderResolutionRefresh("visual-viewport-change"); };
         window.__berryboyMobileQualityViewportHandler = handler;
-        window.addEventListener("resize", handler, { passive: true });
-        window.addEventListener("orientationchange", handler, { passive: true });
         window.addEventListener("gallery-mobile-viewport-change", handler, { passive: true });
-        if (window.visualViewport) window.visualViewport.addEventListener("resize", handler, { passive: true });
     }
 
     installGalleryMobileRenderResolutionViewportOwner();
@@ -1334,7 +1332,22 @@ export const createScene = function (engineArg, canvasArg) {
     var visualSsaoPipeline = null;
     var visualSsaoAttached = false;
     var visualControlRefs = {};
+    // STAGE 12C66C6C1 — canonical settings are the only values eligible for controls, localStorage and gallery_state.
+    // visualRuntimeSettings is a derived, disposable device representation and is never serialized.
     var visualCurrentSettings = null;
+    var visualRuntimeSettings = null;
+    var visualCanonicalRuntime = {
+        stage: "12C66C6C1",
+        schema: "gallery-canonical-visual-state.v1",
+        canonicalApplyCount: 0,
+        runtimeApplyCount: 0,
+        currentProfile: galleryDeviceProfile.currentQualityProfile || "desktop",
+        lastCanonicalSignature: null,
+        lastRuntimeSignature: null,
+        lastApplyReason: "initial",
+        lastAppliedAt: 0,
+        history: []
+    };
     var visualActivePresetName = "Custom";
     var visualApplyLock = false;
 
@@ -1791,11 +1804,8 @@ return visualRenderingPipeline;
             settings || {}
         );
 
-        // STAGE 12C23 - Visual Settings state sanitizer.
-        // These values used to be part of Visual Settings in older stages,
-        // but now belong only to MAIN LIGHTS or were removed entirely.
-        // They are deleted before apply/save so old gallery_state/localStorage
-        // cannot reintroduce dead controls or mixed responsibilities.
+        // Canonical sanitizer only. Device/profile transforms are forbidden here because
+        // this function is used by controls, localStorage, gallery_state and Save Integrity.
         [
             "environment" + "Intensity",
             "ambient" + "Strength",
@@ -1807,85 +1817,106 @@ return visualRenderingPipeline;
             }
         });
 
-        if (isGalleryDeviceProfileMobile()) {
-            var mobileProfile = getGalleryMobileQualityProfileDefinition(
-                galleryAdaptiveMobileQualityRuntime && galleryAdaptiveMobileQualityRuntime.currentProfileName || galleryDeviceProfile.currentQualityProfile
-            );
-            var postDomain = mobileProfile.postProcessing || {};
-            normalized.fxaaEnabled = postDomain.fxaa !== false;
-            normalized.ssaoEnabled = !!normalized.ssaoEnabled && !!postDomain.ssao;
-            normalized.bloomEnabled = !!normalized.bloomEnabled && !!postDomain.bloom;
-            normalized.vignetteEnabled = !!normalized.vignetteEnabled && !!postDomain.vignette;
-            var reflectionScale = Math.max(0, Math.min(1, Number(postDomain.reflectionScale) || 0));
-            normalized.reflectionStrength = Math.max(0, (Number(normalized.reflectionStrength) || 0) * reflectionScale);
-            normalized.floorReflectionStrength = Math.max(0, (Number(normalized.floorReflectionStrength) || 0) * reflectionScale);
-            normalized.wallReflectionStrength = Math.max(0, (Number(normalized.wallReflectionStrength) || 0) * reflectionScale);
-            normalized.ceilingReflectionStrength = Math.max(0, (Number(normalized.ceilingReflectionStrength) || 0) * reflectionScale);
-            if (!normalized.ssaoEnabled) normalized.ssaoStrength = 0;
-            if (!normalized.bloomEnabled) normalized.bloomIntensity = 0;
+        function finiteNumber(value, fallback, minimum, maximum) {
+            var number = Number(value);
+            if (!isFinite(number)) number = Number(fallback);
+            if (minimum !== undefined) number = Math.max(minimum, number);
+            if (maximum !== undefined) number = Math.min(maximum, number);
+            return number;
         }
+
+        normalized.preset = String(normalized.preset || "Custom");
+        normalized.exposure = finiteNumber(normalized.exposure, visualDefaultSettings.exposure, 0.05, 4);
+        normalized.contrast = finiteNumber(normalized.contrast, visualDefaultSettings.contrast, 0.1, 4);
+        normalized.bloomEnabled = !!normalized.bloomEnabled;
+        normalized.bloomIntensity = finiteNumber(normalized.bloomIntensity, visualDefaultSettings.bloomIntensity, 0, 2);
+        normalized.bloomThreshold = finiteNumber(normalized.bloomThreshold, visualDefaultSettings.bloomThreshold, 0, 4);
+        normalized.vignetteEnabled = !!normalized.vignetteEnabled;
+        normalized.vignetteWeight = finiteNumber(normalized.vignetteWeight, visualDefaultSettings.vignetteWeight, 0, 2);
+        normalized.ssaoEnabled = !!normalized.ssaoEnabled;
+        normalized.ssaoStrength = finiteNumber(normalized.ssaoStrength, visualDefaultSettings.ssaoStrength, 0, 2);
+        normalized.ssaoRadius = finiteNumber(normalized.ssaoRadius, visualDefaultSettings.ssaoRadius, 0.05, 8);
+        normalized.ssaoArea = finiteNumber(normalized.ssaoArea, visualDefaultSettings.ssaoArea, 0.05, 6);
+        normalized.ssaoBase = finiteNumber(normalized.ssaoBase, visualDefaultSettings.ssaoBase, 0, 0.35);
+        normalized.imageProcessingEnabled = normalized.imageProcessingEnabled !== false;
+        normalized.toneMappingEnabled = normalized.toneMappingEnabled !== false;
+        normalized.fxaaEnabled = normalized.fxaaEnabled !== false;
+        normalized.reflectionEnabled = normalized.reflectionEnabled !== false;
+        normalized.reflectionStrength = finiteNumber(normalized.reflectionStrength, visualDefaultSettings.reflectionStrength, 0, 4);
+        normalized.floorReflectionStrength = finiteNumber(normalized.floorReflectionStrength, visualDefaultSettings.floorReflectionStrength, 0, 4);
+        normalized.wallReflectionStrength = finiteNumber(normalized.wallReflectionStrength, visualDefaultSettings.wallReflectionStrength, 0, 4);
+        normalized.ceilingReflectionStrength = finiteNumber(normalized.ceilingReflectionStrength, visualDefaultSettings.ceilingReflectionStrength, 0, 4);
+        normalized.floorRoughness = finiteNumber(normalized.floorRoughness, visualDefaultSettings.floorRoughness, 0.02, 1);
+        normalized.wallRoughness = finiteNumber(normalized.wallRoughness, visualDefaultSettings.wallRoughness, 0.02, 1);
+        normalized.ceilingRoughness = finiteNumber(normalized.ceilingRoughness, visualDefaultSettings.ceilingRoughness, 0.02, 1);
 
         return normalized;
     }
 
-    function readVisualSettingsFromScene() {
-        var pipeline = ensureVisualRenderingPipeline();
-        var stored = normalizeVisualSettings(visualCurrentSettings || {});
+    function deriveRuntimeVisualSettings(canonicalSettings, profileName) {
+        var canonical = normalizeVisualSettings(canonicalSettings);
+        var runtime = Object.assign({}, canonical);
+        var resolvedProfile = profileName || (
+            galleryAdaptiveMobileQualityRuntime && galleryAdaptiveMobileQualityRuntime.currentProfileName
+        ) || galleryDeviceProfile.currentQualityProfile || "balanced";
 
-        return normalizeVisualSettings(Object.assign(
+        if (isGalleryDeviceProfileMobile()) {
+            var mobileProfile = getGalleryMobileQualityProfileDefinition(resolvedProfile);
+            var postDomain = mobileProfile.postProcessing || {};
+
+            // Only genuinely optional post-process passes are gated per device profile.
+            // Canonical reflection strengths and material environment response remain identical to PC.
+            runtime.fxaaEnabled = !!canonical.fxaaEnabled && postDomain.fxaa !== false;
+            runtime.ssaoEnabled = !!canonical.ssaoEnabled && !!postDomain.ssao;
+            runtime.bloomEnabled = !!canonical.bloomEnabled && !!postDomain.bloom;
+            runtime.vignetteEnabled = !!canonical.vignetteEnabled && !!postDomain.vignette;
+        }
+
+        return runtime;
+    }
+
+    function readVisualRuntimeSettingsFromScene() {
+        return Object.assign(
             {},
-            stored,
-            {
-                preset: visualActivePresetName || stored.preset || "Custom",
+            visualRuntimeSettings || deriveRuntimeVisualSettings(visualCurrentSettings || visualDefaultSettings)
+        );
+    }
 
-                exposure: scene.imageProcessingConfiguration.exposure,
-                contrast: scene.imageProcessingConfiguration.contrast,
-bloomEnabled: pipeline ? !!pipeline.bloomEnabled : !!stored.bloomEnabled,
-                bloomIntensity: pipeline && pipeline.bloomWeight !== undefined
-                    ? Number(pipeline.bloomWeight)
-                    : stored.bloomIntensity,
-                bloomThreshold: pipeline && pipeline.bloomThreshold !== undefined
-                    ? Number(pipeline.bloomThreshold)
-                    : stored.bloomThreshold,
+    function getCanonicalVisualStateDebug() {
+        var canonical = normalizeVisualSettings(visualCurrentSettings || visualDefaultSettings);
+        var runtime = readVisualRuntimeSettingsFromScene();
+        return {
+            stage: visualCanonicalRuntime.stage,
+            schema: visualCanonicalRuntime.schema,
+            profile: galleryDeviceProfile.currentQualityProfile || "desktop",
+            canonical: canonical,
+            runtime: runtime,
+            reflectionParity: {
+                canonicalGlobal: canonical.reflectionStrength,
+                runtimeGlobal: runtime.reflectionStrength,
+                canonicalFloor: canonical.floorReflectionStrength,
+                runtimeFloor: runtime.floorReflectionStrength,
+                canonicalWall: canonical.wallReflectionStrength,
+                runtimeWall: runtime.wallReflectionStrength,
+                canonicalCeiling: canonical.ceilingReflectionStrength,
+                runtimeCeiling: runtime.ceilingReflectionStrength
+            },
+            counters: {
+                canonicalApplyCount: visualCanonicalRuntime.canonicalApplyCount,
+                runtimeApplyCount: visualCanonicalRuntime.runtimeApplyCount
+            },
+            lastCanonicalSignature: visualCanonicalRuntime.lastCanonicalSignature,
+            lastRuntimeSignature: visualCanonicalRuntime.lastRuntimeSignature,
+            lastApplyReason: visualCanonicalRuntime.lastApplyReason,
+            lastAppliedAt: visualCanonicalRuntime.lastAppliedAt,
+            history: visualCanonicalRuntime.history.slice(-12)
+        };
+    }
 
-                vignetteEnabled: !!scene.imageProcessingConfiguration.vignetteEnabled,
-                vignetteWeight: scene.imageProcessingConfiguration.vignetteWeight !== undefined
-                    ? Number(scene.imageProcessingConfiguration.vignetteWeight)
-                    : stored.vignetteWeight,
-
-                fxaaEnabled: pipeline && pipeline.fxaaEnabled !== undefined
-                    ? !!pipeline.fxaaEnabled
-                    : stored.fxaaEnabled,
-
-                ssaoEnabled: !!visualSsaoAttached,
-                ssaoStrength: visualSsaoPipeline && visualSsaoPipeline.totalStrength !== undefined
-                    ? Number(visualSsaoPipeline.totalStrength)
-                    : stored.ssaoStrength,
-                ssaoRadius: visualSsaoPipeline && visualSsaoPipeline.radius !== undefined
-                    ? Number(visualSsaoPipeline.radius)
-                    : stored.ssaoRadius,
-                ssaoArea: visualSsaoPipeline && visualSsaoPipeline.area !== undefined
-                    ? Number(visualSsaoPipeline.area)
-                    : stored.ssaoArea,
-                ssaoBase: visualSsaoPipeline && visualSsaoPipeline.base !== undefined
-                    ? Number(visualSsaoPipeline.base)
-                    : stored.ssaoBase,
-
-                reflectionEnabled: stored.reflectionEnabled,
-                reflectionStrength: stored.reflectionStrength,
-                floorReflectionStrength: stored.floorReflectionStrength,
-                wallReflectionStrength: stored.wallReflectionStrength,
-                ceilingReflectionStrength: stored.ceilingReflectionStrength,
-                floorRoughness: stored.floorRoughness,
-                wallRoughness: stored.wallRoughness,
-                ceilingRoughness: stored.ceilingRoughness,
-
-                imageProcessingEnabled: pipeline && pipeline.imageProcessingEnabled !== undefined
-                    ? !!pipeline.imageProcessingEnabled
-                    : stored.imageProcessingEnabled,
-                toneMappingEnabled: !!scene.imageProcessingConfiguration.toneMappingEnabled
-            }
-        ));
+    function readVisualSettingsFromScene() {
+        // Public/editor reads are canonical by design. Runtime-gated Bloom/SSAO state must never
+        // leak back into controls, localStorage or gallery_state.
+        return normalizeVisualSettings(visualCurrentSettings || visualDefaultSettings);
     }
 
     function persistCurrentVisualSettings() {
@@ -2064,59 +2095,70 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
-    function applyVisualSettings(settings, shouldSyncControls, skipPersist) {
-        settings = normalizeVisualSettings(settings);
+    function applyVisualSettings(settings, shouldSyncControls, skipPersist, options) {
+        options = options || {};
+        var canonicalSettings = normalizeVisualSettings(settings);
+        var runtimeSettings = deriveRuntimeVisualSettings(
+            canonicalSettings,
+            options.profileName || galleryDeviceProfile.currentQualityProfile
+        );
 
         var previousVisualApplyLock = visualApplyLock;
         visualApplyLock = !!skipPersist;
 
-        visualActivePresetName = settings.preset || "Custom";
-        visualCurrentSettings = normalizeVisualSettings(settings);
+        visualActivePresetName = canonicalSettings.preset || "Custom";
+        visualCurrentSettings = Object.assign({}, canonicalSettings);
+        visualRuntimeSettings = Object.assign({}, runtimeSettings);
+        visualCanonicalRuntime.currentProfile = galleryDeviceProfile.currentQualityProfile || "desktop";
+        visualCanonicalRuntime.canonicalApplyCount += 1;
 
-        var visualSettingsSignature = getVisualSettingsSignature(settings);
+        var canonicalSignature = getVisualSettingsSignature(canonicalSettings);
+        var runtimeSignature = getVisualSettingsSignature(runtimeSettings) + "|profile=" + visualCanonicalRuntime.currentProfile;
+        visualCanonicalRuntime.lastCanonicalSignature = canonicalSignature;
+        visualCanonicalRuntime.lastRuntimeSignature = runtimeSignature;
+        visualCanonicalRuntime.lastApplyReason = options.reason || (skipPersist ? "runtime-reapply" : "canonical-apply");
+        visualCanonicalRuntime.lastAppliedAt = Date.now();
 
-        if (visualLastAppliedSettingsSignature === visualSettingsSignature) {
+        if (visualLastAppliedSettingsSignature === runtimeSignature) {
             if (shouldSyncControls) {
-                scheduleVisualControlsSync(settings);
+                scheduleVisualControlsSync(canonicalSettings);
             }
 
             if (!skipPersist) {
                 persistCurrentVisualSettings();
             }
 
+            visualApplyLock = previousVisualApplyLock;
             return readVisualSettingsFromScene();
         }
 
         try {
-            scene.imageProcessingConfiguration.toneMappingEnabled = !!settings.toneMappingEnabled;
+            scene.imageProcessingConfiguration.toneMappingEnabled = !!runtimeSettings.toneMappingEnabled;
             scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-
-            // STAGE 12C45:
-            // Exposure / Contrast are owned by Visual Settings, not Main Light.
-            scene.imageProcessingConfiguration.exposure = Number(settings.exposure);
-            scene.imageProcessingConfiguration.contrast = Number(settings.contrast);
+            scene.imageProcessingConfiguration.exposure = Number(runtimeSettings.exposure);
+            scene.imageProcessingConfiguration.contrast = Number(runtimeSettings.contrast);
 
             var pipeline = ensureVisualRenderingPipeline();
 
             if (pipeline) {
                 if (pipeline.imageProcessingEnabled !== undefined) {
-                    pipeline.imageProcessingEnabled = !!settings.imageProcessingEnabled;
+                    pipeline.imageProcessingEnabled = !!runtimeSettings.imageProcessingEnabled;
                 }
 
                 if (pipeline.fxaaEnabled !== undefined) {
-                    pipeline.fxaaEnabled = !!settings.fxaaEnabled;
+                    pipeline.fxaaEnabled = !!runtimeSettings.fxaaEnabled;
                 }
 
                 if (pipeline.bloomEnabled !== undefined) {
-                    pipeline.bloomEnabled = !!settings.bloomEnabled;
+                    pipeline.bloomEnabled = !!runtimeSettings.bloomEnabled;
                 }
 
                 if (pipeline.bloomWeight !== undefined) {
-                    pipeline.bloomWeight = Number(settings.bloomIntensity);
+                    pipeline.bloomWeight = Number(runtimeSettings.bloomIntensity);
                 }
 
                 if (pipeline.bloomThreshold !== undefined) {
-                    pipeline.bloomThreshold = Number(settings.bloomThreshold);
+                    pipeline.bloomThreshold = Number(runtimeSettings.bloomThreshold);
                 }
 
                 if (pipeline.bloomKernel !== undefined) {
@@ -2124,17 +2166,32 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 }
             }
 
-            applyVisualSsaoSettings(settings);
-            applyVisualReflectionSettings(settings);
+            applyVisualSsaoSettings(runtimeSettings);
+            applyVisualReflectionSettings(runtimeSettings);
 
-            scene.imageProcessingConfiguration.vignetteEnabled = !!settings.vignetteEnabled;
-            scene.imageProcessingConfiguration.vignetteWeight = Number(settings.vignetteWeight);
+            scene.imageProcessingConfiguration.vignetteEnabled = !!runtimeSettings.vignetteEnabled;
+            scene.imageProcessingConfiguration.vignetteWeight = Number(runtimeSettings.vignetteWeight);
             scene.imageProcessingConfiguration.vignetteColor = new BABYLON.Color4(0, 0, 0, 1);
 
-            visualLastAppliedSettingsSignature = visualSettingsSignature;
+            visualLastAppliedSettingsSignature = runtimeSignature;
+            visualCanonicalRuntime.runtimeApplyCount += 1;
+            visualCanonicalRuntime.history.push({
+                profile: visualCanonicalRuntime.currentProfile,
+                reason: visualCanonicalRuntime.lastApplyReason,
+                canonicalSignature: canonicalSignature,
+                runtimeSignature: runtimeSignature,
+                reflections: {
+                    global: runtimeSettings.reflectionStrength,
+                    floor: runtimeSettings.floorReflectionStrength,
+                    wall: runtimeSettings.wallReflectionStrength,
+                    ceiling: runtimeSettings.ceilingReflectionStrength
+                },
+                at: Date.now()
+            });
+            if (visualCanonicalRuntime.history.length > 24) visualCanonicalRuntime.history.shift();
 
             if (shouldSyncControls) {
-                scheduleVisualControlsSync(settings);
+                scheduleVisualControlsSync(canonicalSettings);
             }
         } catch (error) {
             console.warn("Visual Settings apply warning:", error);
@@ -2224,9 +2281,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function createVisualSettingsSnapshot() {
-        var snapshot = normalizeVisualSettings(readVisualSettingsFromScene());
-        snapshot.preset = visualActivePresetName || "Custom";
-        return normalizeVisualSettings(snapshot);
+        var snapshot = normalizeVisualSettings(visualCurrentSettings || visualDefaultSettings);
+        snapshot.preset = visualActivePresetName || snapshot.preset || "Custom";
+        return snapshot;
     }
 
     function updateVisualPresetButtons(activePresetName) {
@@ -6242,9 +6299,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         // Re-apply the saved visual look through the active mobile domain. This preserves the PC look
         // where the profile allows it instead of hard-disabling every effect on every phone.
         try {
-            var savedVisual = visualCurrentSettings || readSavedVisualSettings() || visualDefaultSettings;
+            var savedVisual = normalizeVisualSettings(visualCurrentSettings || readSavedVisualSettings() || visualDefaultSettings);
             visualLastAppliedSettingsSignature = null;
-            applyVisualSettings(savedVisual, false, true);
+            applyVisualSettings(savedVisual, false, true, {
+                profileName: profileName,
+                reason: "mobile-profile-" + profileName
+            });
         } catch (visualQualityError) {
             galleryDeviceProfile.notes.push("mobile-domain-visual-error: " + (visualQualityError.message || visualQualityError));
         }
@@ -6436,7 +6496,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C66C6C",
+            stage: "12C66C6C1",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
@@ -6459,7 +6519,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     // STAGE 12C66C6A — MOBILE QUALITY INSPECTOR (debug only; hidden by default)
     var galleryMobileQualityInspectorRuntime = {
-        stage: "12C66C6C",
+        stage: "12C66C6C1",
         schema: "gallery-mobile-quality-inspector.v1",
         visible: false,
         element: null,
@@ -6513,7 +6573,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mainShadowSize = map && map.getSize ? map.getSize().width : null;
         } catch (error) {}
         var snapshot = {
-            stage: "12C66C6C",
+            stage: "12C66C6C1",
             capturedAt: Date.now(),
             mobile: isGalleryDeviceProfileMobile(),
             profile: galleryDeviceProfile.currentQualityProfile,
@@ -6560,7 +6620,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 bloom: !!(visualRenderingPipeline && visualRenderingPipeline.bloomEnabled),
                 vignette: !!(scene && scene.imageProcessingConfiguration && scene.imageProcessingConfiguration.vignetteEnabled),
                 ssao: !!visualSsaoAttached,
-                reflectionStrength: visualCurrentSettings ? visualCurrentSettings.reflectionStrength : null
+                canonicalReflectionStrength: visualCurrentSettings ? visualCurrentSettings.reflectionStrength : null,
+                runtimeReflectionStrength: visualRuntimeSettings ? visualRuntimeSettings.reflectionStrength : null,
+                canonicalFloorReflectionStrength: visualCurrentSettings ? visualCurrentSettings.floorReflectionStrength : null,
+                runtimeFloorReflectionStrength: visualRuntimeSettings ? visualRuntimeSettings.floorReflectionStrength : null
             },
             runtime: {
                 artworkCore: Object.assign({}, galleryArtworkCoreRuntime, { registrySize: Object.keys(galleryArtworkCoreRuntime.registry).length, registry: undefined }),
@@ -6584,13 +6647,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         var snapshot = getGalleryMobileQualityInspectorSnapshot();
         galleryMobileQualityInspectorRuntime.element.textContent = [
-            "C6C MOBILE QUALITY PARITY",
+            "C6C1 CANONICAL VISUAL / MOBILE PARITY",
             "FPS " + snapshot.fps + " | " + snapshot.profile + " | HSL " + snapshot.resolution.hardwareScalingLevel,
             "CSS " + Math.round(snapshot.resolution.cssWidth) + "x" + Math.round(snapshot.resolution.cssHeight) + " | RENDER " + snapshot.resolution.renderWidth + "x" + snapshot.resolution.renderHeight,
             "DPR " + snapshot.resolution.devicePixelRatio + " | effective " + snapshot.resolution.effectiveDprX + " | " + snapshot.resolution.renderMegapixels + " MP",
             "ART assigned " + snapshot.artworks.assigned + " | blank " + snapshot.artworks.blankAssignedFrames + " | preview " + snapshot.artworks.preview + " | full " + snapshot.artworks.full,
             "QUEUES preview " + snapshot.artworks.queuePreview + " | full " + snapshot.artworks.queueFull + " | models " + snapshot.models.queued,
-            "SHADOW main " + snapshot.shadows.mainMapSize + " | local " + snapshot.shadows.localSpotMapSize + " x" + snapshot.shadows.localActiveBudget
+            "SHADOW main " + snapshot.shadows.mainMapSize + " | local " + snapshot.shadows.localSpotMapSize + " x" + snapshot.shadows.localActiveBudget,
+            "REFLECT canonical/runtime " + snapshot.postProcessing.canonicalReflectionStrength + "/" + snapshot.postProcessing.runtimeReflectionStrength + " | floor " + snapshot.postProcessing.canonicalFloorReflectionStrength + "/" + snapshot.postProcessing.runtimeFloorReflectionStrength
         ].join("\n");
     }
 
@@ -12852,7 +12916,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var verifyFiles = options.verifyFiles !== false;
         var scan = options.storageScan || await scanGalleryExistingAuthorAvifStorage();
         var report = {
-            stage: "12C66C6C",
+            stage: "12C66C6C1",
             total: 0,
             alreadyComplete: 0,
             reconciled: 0,
@@ -17073,7 +17137,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var galleryAvifMigrationRuntime = {
         schema: "gallery-atomic-avif-media.v2",
-        stage: "12C66C6C",
+        stage: "12C66C6C1",
         worker: null,
         workerReady: false,
         workerFailed: false,
@@ -17092,7 +17156,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     var galleryAtomicMediaRuntime = {
-        stage: "12C66C6C",
+        stage: "12C66C6C1",
         schema: "gallery-atomic-media-lifecycle.v1",
         autoSaveEnabled: true,
         operationCounter: 0,
@@ -20497,7 +20561,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
         var report = {
             ok: true,
-            stage: "12C66C6C",
+            stage: "12C66C6C1",
             storageTotal: storage.total,
             activeProtected: Object.keys(activeRefs).length,
             backupProtected: Object.keys(backupRefs).length,
@@ -30155,7 +30219,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // TRANSITION -> only the Inspect transition controller owns the camera.
     // INSPECT    -> camera rests at the exact focus transform until manual input returns to WALK.
     var galleryInspectCameraRuntime = {
-        stage: "12C66C6C",
+        stage: "12C66C6C1",
         state: "WALK",
         transitionId: 0,
         reason: "initial",
@@ -38568,7 +38632,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Viewer and Edit share one camera ownership state machine, one safe-frame runtime and one pathfinder.
     // Navigation order belongs to artworks/sculptures (metadata.tourOrder); generated path points are read-only.
     var galleryInspectRuntime = {
-        stage: "12C66C6C",
+        stage: "12C66C6C1",
         active: false,
         opening: false,
         editPreview: false,
@@ -41898,6 +41962,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getVisualSettings: function () {
             return readVisualSettingsFromScene();
         },
+        getVisualRuntimeSettings: function () {
+            return readVisualRuntimeSettingsFromScene();
+        },
+        getCanonicalVisualStateDebug: function () {
+            return getCanonicalVisualStateDebug();
+        },
         sanitizeVisualSettings: function (settings) {
             return normalizeVisualSettings(settings || readVisualSettingsFromScene());
         },
@@ -41922,7 +41992,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             };
         },
         getVisualReflectionDebug: function () {
-            return applyVisualReflectionSettings(readVisualSettingsFromScene());
+            var canonical = readVisualSettingsFromScene();
+            var runtime = readVisualRuntimeSettingsFromScene();
+            return {
+                canonical: {
+                    enabled: canonical.reflectionEnabled,
+                    global: canonical.reflectionStrength,
+                    floor: canonical.floorReflectionStrength,
+                    wall: canonical.wallReflectionStrength,
+                    ceiling: canonical.ceilingReflectionStrength
+                },
+                runtime: {
+                    enabled: runtime.reflectionEnabled,
+                    global: runtime.reflectionStrength,
+                    floor: runtime.floorReflectionStrength,
+                    wall: runtime.wallReflectionStrength,
+                    ceiling: runtime.ceilingReflectionStrength
+                },
+                floorMaterials: getUniqueVisualMaterialsFromMeshes(floorMeshes).length,
+                wallMaterials: getUniqueVisualMaterialsFromMeshes(wallMeshes).length,
+                ceilingMaterials: getUniqueVisualMaterialsFromMeshes(ceilingMeshes).length
+            };
         },
         getVisualPresets: function () {
             return visualQualityPresets.map(function (preset) {

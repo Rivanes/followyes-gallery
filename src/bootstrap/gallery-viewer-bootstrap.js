@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6C
+  Berryboy Art Gallery — Stage 12C66C6C1
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
@@ -7,8 +7,8 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-const STAGE = "12C66C6C";
-const ENGINE_CACHE_KEY = "stage12c66c6c_atomic_avif_mobile_quality_parity_20260724";
+const STAGE = "12C66C6C1";
+const ENGINE_CACHE_KEY = "stage12c66c6c1_canonical_visual_mobile_lighting_parity_20260725";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -383,6 +383,18 @@ function waitForInteractionReady(timeoutMs) {
 }
 
 function installResizeRuntime(engine) {
+  // Stage C6C1: mobile DPR and resize are owned by Gallery_V0_11 through the
+  // normalized gallery-mobile-viewport-change event. Bootstrap owns desktop resize only.
+  let mobileOwner = false;
+  try {
+    const viewportState = window.BerryboyMobileViewport && window.BerryboyMobileViewport.read
+      ? window.BerryboyMobileViewport.read()
+      : null;
+    mobileOwner = !!(viewportState && viewportState.mobile);
+  } catch (error) {}
+
+  if (mobileOwner) return;
+
   let resizeFrame = 0;
   function scheduleEngineResize() {
     if (resizeFrame) return;
@@ -394,8 +406,6 @@ function installResizeRuntime(engine) {
 
   window.addEventListener("resize", scheduleEngineResize, { passive: true });
   window.addEventListener("orientationchange", scheduleEngineResize, { passive: true });
-  window.addEventListener("gallery-mobile-viewport-change", scheduleEngineResize, { passive: true });
-  if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleEngineResize, { passive: true });
   scheduleEngineResize();
 }
 
@@ -421,7 +431,7 @@ async function startGalleryRuntime() {
       antialias: true,
       powerPreference: "high-performance",
       failIfMajorPerformanceCaveat: false,
-      adaptToDeviceRatio: true
+      adaptToDeviceRatio: false
     });
     activeEngine = engine;
 
