@@ -49,4 +49,4 @@ assert(chooseProfile({embeddedBrowser:true,lowMemory:false,lowCpu:false},'auto')
 assert(chooseProfile({embeddedBrowser:true,lowMemory:true,lowCpu:false},'auto')==='safe','Actual low-memory device is not Safe');
 assert(chooseProfile({embeddedBrowser:false,lowMemory:false,lowCpu:false},'high')==='high','Manual profile override failed');
 
-console.log('Stage 12C66C6C1 canonical visual-state tests passed.');
+console.log('Stage 12C66C6C2 canonical visual-state tests passed.');

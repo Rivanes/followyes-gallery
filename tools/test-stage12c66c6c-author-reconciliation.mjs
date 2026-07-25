@@ -24,7 +24,7 @@ function extractFunction(text, name) {
   throw new Error(`Unterminated function ${name}`);
 }
 
-assert(source.includes('stage: "12C66C6C1"'), 'C6C1 stage identity missing');
+assert(source.includes('stage: "12C66C6C2"'), 'C6C2 stage identity missing');
 assert(source.includes('REPAIR MEDIA') && !source.includes('RECONCILE / BUILD AUTHOR AVIF'), 'Reconciliation was not folded into the two-tool recovery flow');
 const prefixes = extractFunction(source, 'getGalleryAuthorAvifStoragePrefixes');
 assert(prefixes.includes('/authors/') && prefixes.includes('Desktop') && prefixes.includes('Mobile') && prefixes.includes('Preview'), 'Author AVIF folders incomplete');

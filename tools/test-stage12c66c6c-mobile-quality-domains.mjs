@@ -36,8 +36,9 @@ assert(priority.includes('isGalleryArtworkEntryVisibleForPriority')&&priority.in
 const fullDrain=extractFunction(source,'drainGalleryFastStartFullArtworkQueue');
 assert(fullDrain.includes('priorityOverride')&&fullDrain.includes('aVisible'),'Full artwork queue is not visibility-prioritized');
 const budget=extractFunction(source,'maintainGalleryStreamingMemoryBudget');
-assert(budget.includes('artwork textures are permanent residents once assigned'),'Artwork quality can still be evicted');
-assert(source.includes('stage: "12C66C6C1"') && source.includes('schema: "gallery-mobile-quality-inspector.v1"'),'C6C quality diagnostics missing');
+assert(budget.includes('enforceGalleryArtworkResidencyBudget'),'Tiered artwork residency is not connected to the mobile budget');
+assert(budget.includes('imagePlane.setEnabled(true)'),'Assigned artwork can become an empty frame');
+assert(source.includes('stage: "12C66C6C2"') && source.includes('schema: "gallery-mobile-quality-inspector.v2"'),'C6C2 quality diagnostics missing');
 
 // Execute the render-resolution math for a representative 390x844 DPR-3 phone.
 const calcFactory=new Function('getGalleryMobileQualityProfileDefinition','getGalleryCanvasCssMetrics','window','galleryDeviceProfile',`${calc}; return calculateGalleryMobileRenderResolution;`);
@@ -52,4 +53,4 @@ assert(highResult.hardwareScalingLevel < balancedResult.hardwareScalingLevel && 
 assert(highResult.effectiveDpr >= 1.65 && balancedResult.effectiveDpr >= 1.4 && safeResult.effectiveDpr >= 1.15,'Mobile effective-DPR floors are too low');
 assert(highResult.predictedMegapixels <= 3.35+0.05 && balancedResult.predictedMegapixels <= 2.55+0.05 && safeResult.predictedMegapixels <= 1.85+0.05,'Megapixel caps are exceeded');
 
-console.log('Stage 12C66C6C1 mobile quality-domain tests passed.');
+console.log('Stage 12C66C6C2 mobile quality-domain tests passed.');
