@@ -93,6 +93,7 @@
   - Stage 12C66C6A1: Inspect Transition Isolation / Compact Mobile Inspect UI — pełne tekstury nie przebudowują celu podczas przejazdu, TRANSITION ma watchdog i bezpieczny recovery, joystick ma jednego właściciela widoczności i znika przed kompozycją Inspect, a mobilny popup używa kompaktowej kapsuły z okrągłymi strzałkami bez etykiet.
   - Stage 12C66C6B: AVIF Pipeline / Migration / WebP Removal — warianty obrazów i zdjęć autorów są kodowane do wersjonowanego AVIF w leniwie ładowanym Web Workerze, migracja jest atomowa, a wygenerowane WebP są usuwane dopiero po podwójnym bezpiecznym zapisie i audycie Storage.
   - Stage 12C66C6B1: Existing Author AVIF Reconciliation — istniejące kompletne zestawy zdjęć autorów w AVIFv1 są odzyskiwane z denormalizowanych danych lub Storage, weryfikowane i przypisywane do centralnej biblioteki autorów przed walidacją/finalizacją, bez ponownego kodowania i bez przedwczesnego usuwania WebP.
+  - Stage 12C66C6C: Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity — upload, replace i import URL commitują wyłącznie kompletne zestawy AVIF, panel migracyjny zastępują dwa narzędzia naprawcze, a jakość mobilna jest sterowana niezależnymi domenami renderu, cieni, świateł, efektów i streamingu.
 */
 
 
@@ -161,81 +162,59 @@ export const createScene = function (engineArg, canvasArg) {
     }
 
     // STAGE 12C65B1 — ADAPTIVE QUALITY STABILIZATION / CORRECT DOWNSHIFT
-    // One profile owns mobile asset choice, controls, render resolution, light budgets and shadow budgets.
-    // Desktop stays on its existing production values. Mobile can use HIGH / BALANCED / SAFE and an AUTO
-    // controller with hysteresis; resolution changes are applied only while the viewer is idle.
+    // Stage C6C separates mobile quality into independent render, artwork, shadows, lights, post-processing and streaming domains.
+    // Artwork quality remains fixed; AUTO changes a complete domain profile only after sustained evidence and never during protected work.
     var galleryMobileQualityProfileDefinitions = {
         high: {
             name: "high",
             label: "High",
-            initialHardwareScalingLevel: 0.96,
-            minHardwareScalingLevel: 0.94,
-            maxHardwareScalingLevel: 1.08,
+            initialHardwareScalingLevel: 0.58,
+            minHardwareScalingLevel: 0.50,
+            maxHardwareScalingLevel: 0.72,
+            render: { targetEffectiveDpr: 1.72, minEffectiveDpr: 1.42, maxMegapixels: 3.35 },
             mainShadowMapSize: 1024,
             mainShadowFilteringQuality: "high",
             localSpotShadowMapSize: 512,
             localMaxActiveSpotShadows: 2,
-            materialBudgets: {
-                helper: 1,
-                floor: 5,
-                ceiling: 6,
-                wall: 9,
-                prop: 3,
-                sculpture: 6,
-                artwork: 9,
-                high: 9,
-                default: 5
-            },
-            downshiftFps: 42,
-            upshiftFps: 56
+            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: true, reflectionScale: 0.88 },
+            streaming: { models: 14, modelGraceMs: 42000, modelCullDistance: 96, propCullDistance: 88, propsAlwaysVisible: true },
+            materialBudgets: { helper: 1, floor: 6, ceiling: 7, wall: 10, prop: 5, sculpture: 8, artwork: 10, high: 10, default: 6 },
+            downshiftFps: 39,
+            upshiftFps: 55
         },
         balanced: {
             name: "balanced",
             label: "Balanced",
-            initialHardwareScalingLevel: 1.00,
-            minHardwareScalingLevel: 1.00,
-            maxHardwareScalingLevel: 1.22,
-            mainShadowMapSize: 512,
+            initialHardwareScalingLevel: 0.68,
+            minHardwareScalingLevel: 0.58,
+            maxHardwareScalingLevel: 0.82,
+            render: { targetEffectiveDpr: 1.48, minEffectiveDpr: 1.24, maxMegapixels: 2.55 },
+            mainShadowMapSize: 768,
             mainShadowFilteringQuality: "medium",
             localSpotShadowMapSize: 512,
-            localMaxActiveSpotShadows: 1,
-            materialBudgets: {
-                helper: 1,
-                floor: 4,
-                ceiling: 5,
-                wall: 7,
-                prop: 3,
-                sculpture: 5,
-                artwork: 7,
-                high: 7,
-                default: 4
-            },
-            downshiftFps: 36,
-            upshiftFps: 53
+            localMaxActiveSpotShadows: 2,
+            postProcessing: { fxaa: true, bloom: true, vignette: true, ssao: false, reflectionScale: 0.68 },
+            streaming: { models: 9, modelGraceMs: 32000, modelCullDistance: 78, propCullDistance: 68, propsAlwaysVisible: false },
+            materialBudgets: { helper: 1, floor: 5, ceiling: 6, wall: 8, prop: 4, sculpture: 7, artwork: 9, high: 9, default: 5 },
+            downshiftFps: 33,
+            upshiftFps: 51
         },
         safe: {
             name: "safe",
             label: "Safe",
-            initialHardwareScalingLevel: 1.18,
-            minHardwareScalingLevel: 1.08,
-            maxHardwareScalingLevel: 1.38,
+            initialHardwareScalingLevel: 0.82,
+            minHardwareScalingLevel: 0.72,
+            maxHardwareScalingLevel: 0.98,
+            render: { targetEffectiveDpr: 1.22, minEffectiveDpr: 1.05, maxMegapixels: 1.85 },
             mainShadowMapSize: 512,
             mainShadowFilteringQuality: "low",
-            localSpotShadowMapSize: 256,
+            localSpotShadowMapSize: 384,
             localMaxActiveSpotShadows: 1,
-            materialBudgets: {
-                helper: 1,
-                floor: 3,
-                ceiling: 4,
-                wall: 5,
-                prop: 2,
-                sculpture: 4,
-                artwork: 5,
-                high: 5,
-                default: 3
-            },
-            downshiftFps: 30,
-            upshiftFps: 48
+            postProcessing: { fxaa: true, bloom: false, vignette: false, ssao: false, reflectionScale: 0.44 },
+            streaming: { models: 5, modelGraceMs: 24000, modelCullDistance: 64, propCullDistance: 54, propsAlwaysVisible: false },
+            materialBudgets: { helper: 1, floor: 4, ceiling: 5, wall: 6, prop: 3, sculpture: 5, artwork: 8, high: 7, default: 4 },
+            downshiftFps: 27,
+            upshiftFps: 46
         }
     };
 
@@ -298,7 +277,7 @@ export const createScene = function (engineArg, canvasArg) {
         var qualityDefinition = getGalleryMobileQualityProfileDefinition(initialQualityProfile);
 
         return {
-            stage: "12C65E",
+            stage: "12C66C6C",
             mobile: mobile,
             mobileAgent: !!mobileAgent,
             narrowTouch: !!narrowTouch,
@@ -438,16 +417,64 @@ export const createScene = function (engineArg, canvasArg) {
     // STAGE 12C66C6A — ONE AUTHORITATIVE MOBILE RENDER-RESOLUTION OWNER
     // Profiles and AUTO may request a level, but only this runtime writes engine hardware scaling.
     var galleryMobileRenderResolutionRuntime = {
-        stage: "12C66C6A",
-        schema: "gallery-mobile-render-resolution.v1",
+        stage: "12C66C6C",
+        schema: "gallery-mobile-render-resolution.v2",
         owner: "applyGalleryRenderResolution",
         applyCount: 0,
         currentLevel: null,
         lastRequestedLevel: null,
+        targetEffectiveDpr: null,
+        effectiveDpr: null,
+        maxMegapixels: null,
         lastReason: "initial",
         lastAppliedAt: 0,
         history: []
     };
+
+    var galleryMobileQualityDomainRuntime = {
+        stage: "12C66C6C",
+        schema: "gallery-mobile-quality-domains.v1",
+        currentProfile: galleryDeviceProfile.currentQualityProfile,
+        domains: {},
+        protectedUntil: 0,
+        lastProtectionReason: "initial",
+        lastAppliedAt: 0,
+        history: []
+    };
+
+    function protectGalleryAdaptiveQuality(reason, durationMs) {
+        galleryMobileQualityDomainRuntime.protectedUntil = Math.max(
+            galleryMobileQualityDomainRuntime.protectedUntil,
+            Date.now() + Math.max(500, Number(durationMs) || 2500)
+        );
+        galleryMobileQualityDomainRuntime.lastProtectionReason = reason || "quality-protected";
+    }
+
+    function calculateGalleryMobileRenderResolution(profileName) {
+        var profile = getGalleryMobileQualityProfileDefinition(profileName);
+        var renderDomain = profile.render || {};
+        var css = getGalleryCanvasCssMetrics();
+        var cssPixels = Math.max(1, Number(css.width) || 1) * Math.max(1, Number(css.height) || 1);
+        var deviceDpr = Math.max(1, Math.min(4, Number(window.devicePixelRatio || galleryDeviceProfile.devicePixelRatio || 1)));
+        var maxMegapixels = Math.max(0.75, Number(renderDomain.maxMegapixels) || 2.2);
+        var maxDprByPixels = Math.sqrt(maxMegapixels * 1000000 / cssPixels);
+        var desiredDpr = Math.min(deviceDpr, Number(renderDomain.targetEffectiveDpr) || 1.4, maxDprByPixels);
+        var minimumDpr = Math.min(deviceDpr, Number(renderDomain.minEffectiveDpr) || 1.05, maxDprByPixels);
+        var effectiveDpr = Math.max(minimumDpr, desiredDpr);
+        effectiveDpr = Math.max(0.75, Math.min(deviceDpr, effectiveDpr));
+        // Babylon hardwareScalingLevel is a CSS-pixel divisor: 0.5 renders at 2x CSS pixels.
+        // It is not a multiplier of devicePixelRatio, so effective DPR is exactly 1 / level.
+        var hardwareScalingLevel = 1 / effectiveDpr;
+        hardwareScalingLevel = Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, hardwareScalingLevel));
+        return {
+            hardwareScalingLevel: Math.round(hardwareScalingLevel * 100) / 100,
+            deviceDpr: deviceDpr,
+            targetEffectiveDpr: Number(renderDomain.targetEffectiveDpr) || 1.4,
+            effectiveDpr: Math.round((1 / hardwareScalingLevel) * 100) / 100,
+            maxMegapixels: maxMegapixels,
+            predictedMegapixels: Math.round(cssPixels * Math.pow(1 / hardwareScalingLevel, 2) / 10000) / 100
+        };
+    }
 
     function getGalleryCanvasCssMetrics() {
         var rect = null;
@@ -474,6 +501,7 @@ export const createScene = function (engineArg, canvasArg) {
             engine.setHardwareScalingLevel(nextLevel);
             if (engine.resize) engine.resize();
             galleryMobileRenderResolutionRuntime.currentLevel = nextLevel;
+            galleryMobileRenderResolutionRuntime.effectiveDpr = Math.round((1 / nextLevel) * 100) / 100;
             galleryMobileRenderResolutionRuntime.applyCount += 1;
             galleryMobileRenderResolutionRuntime.lastAppliedAt = Date.now();
             galleryMobileRenderResolutionRuntime.history.push({ level: nextLevel, reason: reason || "render-resolution", at: Date.now() });
@@ -517,8 +545,13 @@ export const createScene = function (engineArg, canvasArg) {
                 galleryDeviceProfile.engineHardwareScalingBefore = engine.getHardwareScalingLevel();
             }
 
+            var baselineResolution = isGalleryDeviceProfileMobile()
+                ? calculateGalleryMobileRenderResolution(galleryDeviceProfile.currentQualityProfile)
+                : { hardwareScalingLevel: 1 };
+            galleryMobileRenderResolutionRuntime.targetEffectiveDpr = baselineResolution.targetEffectiveDpr || 1;
+            galleryMobileRenderResolutionRuntime.maxMegapixels = baselineResolution.maxMegapixels || null;
             applyGalleryRenderResolution(
-                galleryDeviceProfile.initialHardwareScalingLevel || 1,
+                baselineResolution.hardwareScalingLevel || 1,
                 reason || "createScene-start",
                 { force: true }
             );
@@ -541,6 +574,50 @@ export const createScene = function (engineArg, canvasArg) {
 
         return galleryDeviceProfile;
     }
+
+    var galleryMobileRenderResolutionRefreshTimer = null;
+
+    function refreshGalleryMobileRenderResolution(reason) {
+        if (!isGalleryDeviceProfileMobile()) return false;
+        var profileName = galleryAdaptiveMobileQualityRuntime.currentProfileName || galleryDeviceProfile.currentQualityProfile || "balanced";
+        var resolution = calculateGalleryMobileRenderResolution(profileName);
+        galleryMobileRenderResolutionRuntime.targetEffectiveDpr = resolution.targetEffectiveDpr;
+        galleryMobileRenderResolutionRuntime.maxMegapixels = resolution.maxMegapixels;
+        protectGalleryAdaptiveQuality(reason || "viewport-resolution-refresh", 3000);
+        return applyGalleryRenderResolution(
+            resolution.hardwareScalingLevel,
+            reason || "viewport-resolution-refresh",
+            { force: false }
+        );
+    }
+
+    function scheduleGalleryMobileRenderResolutionRefresh(reason) {
+        if (!isGalleryDeviceProfileMobile()) return;
+        if (galleryMobileRenderResolutionRefreshTimer) clearTimeout(galleryMobileRenderResolutionRefreshTimer);
+        galleryMobileRenderResolutionRefreshTimer = setTimeout(function () {
+            galleryMobileRenderResolutionRefreshTimer = null;
+            refreshGalleryMobileRenderResolution(reason || "viewport-change");
+        }, 180);
+    }
+
+    function installGalleryMobileRenderResolutionViewportOwner() {
+        if (!isGalleryDeviceProfileMobile() || typeof window === "undefined") return;
+        var previous = window.__berryboyMobileQualityViewportHandler;
+        if (previous) {
+            try { window.removeEventListener("resize", previous); } catch (error) {}
+            try { window.removeEventListener("orientationchange", previous); } catch (error) {}
+            try { window.removeEventListener("gallery-mobile-viewport-change", previous); } catch (error) {}
+            try { if (window.visualViewport) window.visualViewport.removeEventListener("resize", previous); } catch (error) {}
+        }
+        var handler = function () { scheduleGalleryMobileRenderResolutionRefresh("visual-viewport-change"); };
+        window.__berryboyMobileQualityViewportHandler = handler;
+        window.addEventListener("resize", handler, { passive: true });
+        window.addEventListener("orientationchange", handler, { passive: true });
+        window.addEventListener("gallery-mobile-viewport-change", handler, { passive: true });
+        if (window.visualViewport) window.visualViewport.addEventListener("resize", handler, { passive: true });
+    }
+
+    installGalleryMobileRenderResolutionViewportOwner();
 
     // Props remain deferred by the single startup gate, but this queue is no longer mobile-specific.
     var galleryStartupDeferredOptionalAssetImports = [];
@@ -1731,16 +1808,21 @@ return visualRenderingPipeline;
         });
 
         if (isGalleryDeviceProfileMobile()) {
-            normalized.ssaoEnabled = false;
-            normalized.bloomEnabled = false;
-            normalized.vignetteEnabled = false;
-            normalized.fxaaEnabled = true;
-            normalized.reflectionStrength = Math.min(Number(normalized.reflectionStrength) || 0, 0.28);
-            normalized.floorReflectionStrength = Math.min(Number(normalized.floorReflectionStrength) || 0, 0.35);
-            normalized.wallReflectionStrength = Math.min(Number(normalized.wallReflectionStrength) || 0, 0.12);
-            normalized.ceilingReflectionStrength = Math.min(Number(normalized.ceilingReflectionStrength) || 0, 0.10);
-            normalized.ssaoStrength = 0;
-            normalized.bloomIntensity = 0;
+            var mobileProfile = getGalleryMobileQualityProfileDefinition(
+                galleryAdaptiveMobileQualityRuntime && galleryAdaptiveMobileQualityRuntime.currentProfileName || galleryDeviceProfile.currentQualityProfile
+            );
+            var postDomain = mobileProfile.postProcessing || {};
+            normalized.fxaaEnabled = postDomain.fxaa !== false;
+            normalized.ssaoEnabled = !!normalized.ssaoEnabled && !!postDomain.ssao;
+            normalized.bloomEnabled = !!normalized.bloomEnabled && !!postDomain.bloom;
+            normalized.vignetteEnabled = !!normalized.vignetteEnabled && !!postDomain.vignette;
+            var reflectionScale = Math.max(0, Math.min(1, Number(postDomain.reflectionScale) || 0));
+            normalized.reflectionStrength = Math.max(0, (Number(normalized.reflectionStrength) || 0) * reflectionScale);
+            normalized.floorReflectionStrength = Math.max(0, (Number(normalized.floorReflectionStrength) || 0) * reflectionScale);
+            normalized.wallReflectionStrength = Math.max(0, (Number(normalized.wallReflectionStrength) || 0) * reflectionScale);
+            normalized.ceilingReflectionStrength = Math.max(0, (Number(normalized.ceilingReflectionStrength) || 0) * reflectionScale);
+            if (!normalized.ssaoEnabled) normalized.ssaoStrength = 0;
+            if (!normalized.bloomEnabled) normalized.bloomIntensity = 0;
         }
 
         return normalized;
@@ -6117,11 +6199,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryDeviceProfile.localSpotShadowMapSize = profile.localSpotShadowMapSize;
         galleryDeviceProfile.localMaxActiveSpotShadows = profile.localMaxActiveSpotShadows;
 
+        galleryMobileQualityDomainRuntime.currentProfile = profileName;
+        galleryMobileQualityDomainRuntime.domains = {
+            render: cloneGalleryStateForIntegrity(profile.render || {}),
+            shadows: { mainMapSize: profile.mainShadowMapSize, localMapSize: profile.localSpotShadowMapSize, localBudget: profile.localMaxActiveSpotShadows },
+            lights: cloneGalleryStateForIntegrity(profile.materialBudgets || {}),
+            postProcessing: cloneGalleryStateForIntegrity(profile.postProcessing || {}),
+            streaming: cloneGalleryStateForIntegrity(profile.streaming || {})
+        };
+        galleryMobileQualityDomainRuntime.lastAppliedAt = Date.now();
+
         localSpotShadowMapSize = profile.localSpotShadowMapSize;
         localMaxActiveSpotShadows = profile.localMaxActiveSpotShadows;
         localSpotShadowBudgetDebugStats.shadowMapSize = localSpotShadowMapSize;
         localSpotShadowBudgetDebugStats.maxActiveSpotShadows = localMaxActiveSpotShadows;
-
         commonLightingMaterialBudgets = Object.assign({}, profile.materialBudgets);
         commonLightingMaxSimultaneousLights = commonLightingMaterialBudgets.default || commonLightingMaxSimultaneousLights;
 
@@ -6129,58 +6220,49 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mainShadowGenerator.filteringQuality = getGalleryShadowFilteringQuality(profileName);
             resizeGalleryShadowMapSafely(mainShadowGenerator, profile.mainShadowMapSize, "main-" + profileName);
         }
-
         localLightItems.forEach(function (item) {
             if (item && item.localShadowGenerator) {
                 resizeGalleryShadowMapSafely(item.localShadowGenerator, profile.localSpotShadowMapSize, "local-" + profileName);
                 configureShadowGeneratorForLocalSpot(item.localShadowGenerator);
             }
         });
-
         scheduleCommonLightingMaterialSupport("mobile-quality-" + profileName);
         refreshAllLocalSpotShadows(true);
-
-        // Stage 12C65E: quality changes also own the streaming memory budget.
-        // The call is guarded because profile functions are declared before the zone runtime is initialized.
         if (typeof refreshGalleryStreamingBudgetsFromQuality === "function") {
             refreshGalleryStreamingBudgetsFromQuality(profileName, reason || "quality-profile");
         }
 
-        var currentLevel = engine && engine.getHardwareScalingLevel
-            ? Number(engine.getHardwareScalingLevel())
-            : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
+        var resolution = calculateGalleryMobileRenderResolution(profileName);
         var requestedLevel = Number(options.targetHardwareScalingLevel);
-        var hasRequestedLevel = isFinite(requestedLevel) && requestedLevel > 0;
-        var targetLevel = hasRequestedLevel
-            ? requestedLevel
-            : (options.resetResolution
-                ? profile.initialHardwareScalingLevel
-                : Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, currentLevel || profile.initialHardwareScalingLevel)));
+        var targetLevel = isFinite(requestedLevel) && requestedLevel > 0 ? requestedLevel : resolution.hardwareScalingLevel;
+        galleryMobileRenderResolutionRuntime.targetEffectiveDpr = resolution.targetEffectiveDpr;
+        galleryMobileRenderResolutionRuntime.maxMegapixels = resolution.maxMegapixels;
         applyGalleryHardwareScalingLevel(targetLevel, reason || "quality-profile");
+
+        // Re-apply the saved visual look through the active mobile domain. This preserves the PC look
+        // where the profile allows it instead of hard-disabling every effect on every phone.
+        try {
+            var savedVisual = visualCurrentSettings || readSavedVisualSettings() || visualDefaultSettings;
+            visualLastAppliedSettingsSignature = null;
+            applyVisualSettings(savedVisual, false, true);
+        } catch (visualQualityError) {
+            galleryDeviceProfile.notes.push("mobile-domain-visual-error: " + (visualQualityError.message || visualQualityError));
+        }
 
         galleryAdaptiveMobileQualityRuntime.lowWindows = 0;
         galleryAdaptiveMobileQualityRuntime.highWindows = 0;
         galleryAdaptiveMobileQualityRuntime.pendingDirection = null;
         galleryAdaptiveMobileQualityRuntime.lastChangeAt = Date.now();
-        galleryAdaptiveMobileQualityRuntime.cooldownUntil = Date.now() + 5000;
-        galleryAdaptiveMobileQualityRuntime.history.push({
-            type: "profile",
-            from: previousProfileName,
-            to: profileName,
-            reason: reason || "quality-profile",
-            at: Date.now()
-        });
+        galleryAdaptiveMobileQualityRuntime.cooldownUntil = Date.now() + 12000;
+        galleryAdaptiveMobileQualityRuntime.history.push({ type: "profile", from: previousProfileName, to: profileName, reason: reason || "quality-profile", at: Date.now() });
+        galleryMobileQualityDomainRuntime.history.push({ profile: profileName, reason: reason || "quality-profile", at: Date.now(), resolution: resolution });
         if (galleryAdaptiveMobileQualityRuntime.history.length > 24) galleryAdaptiveMobileQualityRuntime.history.shift();
+        if (galleryMobileQualityDomainRuntime.history.length > 24) galleryMobileQualityDomainRuntime.history.shift();
 
         try {
-            if (document && document.documentElement) {
-                document.documentElement.setAttribute("data-gallery-mobile-quality", profileName);
-            }
-            window.dispatchEvent(new CustomEvent("gallery-mobile-quality-change", {
-                detail: getGalleryAdaptiveMobileQualityDebug()
-            }));
+            if (document && document.documentElement) document.documentElement.setAttribute("data-gallery-mobile-quality", profileName);
+            window.dispatchEvent(new CustomEvent("gallery-mobile-quality-change", { detail: getGalleryAdaptiveMobileQualityDebug() }));
         } catch (eventError) {}
-
         return true;
     }
 
@@ -6192,25 +6274,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return order[Math.max(0, index - 1)];
     }
 
-    function getGalleryProfileTransitionHardwareScalingLevel(profileName, direction, currentLevel) {
-        var profile = getGalleryMobileQualityProfileDefinition(profileName);
-        var safeCurrentLevel = Number(currentLevel);
-        if (!isFinite(safeCurrentLevel) || safeCurrentLevel <= 0) {
-            safeCurrentLevel = profile.initialHardwareScalingLevel;
-        }
-
-        var targetLevel = profile.initialHardwareScalingLevel;
-        if (direction === "down") {
-            // A quality downshift must never sharpen the image. Higher scaling level means fewer rendered pixels.
-            targetLevel = Math.max(safeCurrentLevel, profile.initialHardwareScalingLevel);
-        } else if (direction === "up") {
-            // A quality upshift must never reduce resolution. Lower scaling level means more rendered pixels.
-            targetLevel = Math.min(safeCurrentLevel, profile.initialHardwareScalingLevel);
-        }
-
-        return Math.max(profile.minHardwareScalingLevel, Math.min(profile.maxHardwareScalingLevel, targetLevel));
-    }
-
+    
     function getGalleryAdaptiveQualityAssetWorkState() {
         var pendingArtworkTextures = 0;
         var pendingVisibleTextures = 0;
@@ -6256,43 +6320,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (isGalleryInspectCameraTransitionActive && isGalleryInspectCameraTransitionActive()) return false;
         if (typeof document !== "undefined" && document.hidden) return false;
         if (getGalleryAdaptiveQualityAssetWorkState().busy) return false;
+        if (Date.now() < galleryMobileQualityDomainRuntime.protectedUntil) return false;
         if (galleryFastStartRuntime && galleryFastStartRuntime.lastViewerActivityAt) {
-            if (Date.now() - galleryFastStartRuntime.lastViewerActivityAt < 650) return false;
+            if (Date.now() - galleryFastStartRuntime.lastViewerActivityAt < 1200) return false;
         }
         return true;
     }
 
     function applyGalleryAdaptiveQualityDirection(direction, reason) {
         if (!isGalleryDeviceProfileMobile()) return false;
-        var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
-        var currentLevel = engine && engine.getHardwareScalingLevel
-            ? Number(engine.getHardwareScalingLevel())
-            : galleryAdaptiveMobileQualityRuntime.currentHardwareScalingLevel;
-        var nextLevel = currentLevel;
-
-        if (direction === "down") {
-            nextLevel = Math.min(profile.maxHardwareScalingLevel, currentLevel + 0.08);
-            if (nextLevel <= currentLevel + 0.015 && galleryDeviceProfile.qualityMode === "auto") {
-                var lowerProfile = getGalleryNextQualityProfile("down");
-                if (lowerProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
-                    return applyGalleryMobileQualityProfile(lowerProfile, reason || "auto-profile-down", {
-                        targetHardwareScalingLevel: getGalleryProfileTransitionHardwareScalingLevel(lowerProfile, "down", currentLevel)
-                    });
-                }
-            }
-        } else {
-            nextLevel = Math.max(profile.minHardwareScalingLevel, currentLevel - 0.06);
-            if (nextLevel >= currentLevel - 0.015 && galleryDeviceProfile.qualityMode === "auto") {
-                var higherProfile = getGalleryNextQualityProfile("up");
-                if (higherProfile !== galleryAdaptiveMobileQualityRuntime.currentProfileName) {
-                    return applyGalleryMobileQualityProfile(higherProfile, reason || "auto-profile-up", {
-                        targetHardwareScalingLevel: getGalleryProfileTransitionHardwareScalingLevel(higherProfile, "up", currentLevel)
-                    });
-                }
-            }
-        }
-
-        return applyGalleryHardwareScalingLevel(nextLevel, reason || ("adaptive-" + direction));
+        if (galleryDeviceProfile.qualityMode !== "auto") return false;
+        var nextProfile = getGalleryNextQualityProfile(direction);
+        if (nextProfile === galleryAdaptiveMobileQualityRuntime.currentProfileName) return false;
+        return applyGalleryMobileQualityProfile(nextProfile, reason || ("auto-profile-" + direction), { resetResolution: true });
     }
 
     function resetGalleryAdaptiveQualitySample(now) {
@@ -6308,7 +6348,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryAdaptiveMobileQualityRuntime.started = true;
         galleryAdaptiveMobileQualityRuntime.startReason = reason || "interaction-ready";
         galleryAdaptiveMobileQualityRuntime.startedAt = Date.now();
-        galleryAdaptiveMobileQualityRuntime.warmupUntil = Date.now() + 3000;
+        galleryAdaptiveMobileQualityRuntime.warmupUntil = Date.now() + 6500;
         resetGalleryAdaptiveQualitySample(performance.now());
         return true;
     }
@@ -6340,7 +6380,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (frameMs > 24) galleryAdaptiveMobileQualityRuntime.sampleSlowFrames += 1;
         galleryAdaptiveMobileQualityRuntime.sampleWorstFrameMs = Math.max(galleryAdaptiveMobileQualityRuntime.sampleWorstFrameMs, frameMs);
 
-        if (galleryAdaptiveMobileQualityRuntime.sampleElapsedMs < 1800) return;
+        if (galleryAdaptiveMobileQualityRuntime.sampleElapsedMs < 3600) return;
 
         var averageFrameMs = galleryAdaptiveMobileQualityRuntime.sampleElapsedMs / Math.max(1, galleryAdaptiveMobileQualityRuntime.sampleFrameCount);
         var averageFps = 1000 / Math.max(1, averageFrameMs);
@@ -6360,9 +6400,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryAdaptiveMobileQualityRuntime.highWindows = Math.max(0, galleryAdaptiveMobileQualityRuntime.highWindows - 1);
         }
 
-        if (galleryAdaptiveMobileQualityRuntime.lowWindows >= 2) {
+        if (galleryAdaptiveMobileQualityRuntime.lowWindows >= 3) {
             galleryAdaptiveMobileQualityRuntime.pendingDirection = "down";
-        } else if (galleryAdaptiveMobileQualityRuntime.highWindows >= 4) {
+        } else if (galleryAdaptiveMobileQualityRuntime.highWindows >= 6) {
             galleryAdaptiveMobileQualityRuntime.pendingDirection = "up";
         }
 
@@ -6396,7 +6436,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryAdaptiveMobileQualityDebug() {
         var profile = getGalleryMobileQualityProfileDefinition(galleryAdaptiveMobileQualityRuntime.currentProfileName);
         return {
-            stage: "12C65E",
+            stage: "12C66C6C",
             mobile: isGalleryDeviceProfileMobile(),
             mode: galleryDeviceProfile.qualityMode,
             profile: galleryAdaptiveMobileQualityRuntime.currentProfileName,
@@ -6419,7 +6459,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     // STAGE 12C66C6A — MOBILE QUALITY INSPECTOR (debug only; hidden by default)
     var galleryMobileQualityInspectorRuntime = {
-        stage: "12C66C6A",
+        stage: "12C66C6C",
         schema: "gallery-mobile-quality-inspector.v1",
         visible: false,
         element: null,
@@ -6473,7 +6513,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mainShadowSize = map && map.getSize ? map.getSize().width : null;
         } catch (error) {}
         var snapshot = {
-            stage: "12C66C6A",
+            stage: "12C66C6C",
             capturedAt: Date.now(),
             mobile: isGalleryDeviceProfileMobile(),
             profile: galleryDeviceProfile.currentQualityProfile,
@@ -6514,9 +6554,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 configuredNullLodMeshes: galleryZoneStreamingRuntime.modelLodConfigured,
                 configuredPropLodMeshes: galleryZoneStreamingRuntime.propLodConfigured
             },
+            qualityDomains: cloneGalleryStateForIntegrity(galleryMobileQualityDomainRuntime.domains || {}),
+            postProcessing: {
+                fxaa: !!(visualRenderingPipeline && visualRenderingPipeline.fxaaEnabled),
+                bloom: !!(visualRenderingPipeline && visualRenderingPipeline.bloomEnabled),
+                vignette: !!(scene && scene.imageProcessingConfiguration && scene.imageProcessingConfiguration.vignetteEnabled),
+                ssao: !!visualSsaoAttached,
+                reflectionStrength: visualCurrentSettings ? visualCurrentSettings.reflectionStrength : null
+            },
             runtime: {
                 artworkCore: Object.assign({}, galleryArtworkCoreRuntime, { registrySize: Object.keys(galleryArtworkCoreRuntime.registry).length, registry: undefined }),
                 renderResolution: JSON.parse(JSON.stringify(galleryMobileRenderResolutionRuntime)),
+                qualityDomains: JSON.parse(JSON.stringify(galleryMobileQualityDomainRuntime)),
                 adaptiveQuality: getGalleryAdaptiveMobileQualityDebug()
             }
         };
@@ -6535,7 +6584,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         var snapshot = getGalleryMobileQualityInspectorSnapshot();
         galleryMobileQualityInspectorRuntime.element.textContent = [
-            "C6A MOBILE QUALITY",
+            "C6C MOBILE QUALITY PARITY",
             "FPS " + snapshot.fps + " | " + snapshot.profile + " | HSL " + snapshot.resolution.hardwareScalingLevel,
             "CSS " + Math.round(snapshot.resolution.cssWidth) + "x" + Math.round(snapshot.resolution.cssHeight) + " | RENDER " + snapshot.resolution.renderWidth + "x" + snapshot.resolution.renderHeight,
             "DPR " + snapshot.resolution.devicePixelRatio + " | effective " + snapshot.resolution.effectiveDprX + " | " + snapshot.resolution.renderMegapixels + " MP",
@@ -9185,7 +9234,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             worker.postMessage({
                 type: "encode",
                 id: requestId,
-                moduleUrl: galleryAvifEncoderModuleUrl,
+                moduleUrl: new URL(galleryAvifEncoderModuleUrl, document.baseURI).href,
                 width: imageData.width,
                 height: imageData.height,
                 pixelBuffer: pixelBuffer,
@@ -11899,100 +11948,36 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function uploadArtworkImageToSupabase(artwork, file) {
-        if (!artwork || !file) {
-            notifyGalleryStatus("Zaznacz jeden obraz i wybierz plik.");
-            return false;
-        }
-
-        if (!galleryArtworkUploadEnabled) {
-            notifyGalleryStatus("Upload obrazow jest wylaczony w tej wersji.");
-            return false;
-        }
-
+        if (!artwork || !file) { notifyGalleryStatus("Zaznacz jeden obraz i wybierz plik."); return false; }
+        if (!galleryArtworkUploadEnabled) { notifyGalleryStatus("Upload obrazow jest wylaczony w tej wersji."); return false; }
         var client = window.gallerySupabase;
+        if (!client || !client.storage) { notifyGalleryStatus("Supabase Storage nie jest skonfigurowany."); return false; }
+        if (galleryEditorLoginEnabled && !editorAuthenticated) { notifyGalleryStatus("Zaloguj sie jako edytor, aby wgrac obraz."); return false; }
+        if (!file.type || file.type.indexOf("image/") !== 0) { notifyGalleryStatus("Wybierz plik obrazu."); return false; }
+        var validation = await validateGalleryImageUploadFile(file, "artwork");
+        if (!validation.ok) { notifyGalleryStatus(validation.message); return false; }
 
-        if (!client || !client.storage) {
-            notifyGalleryStatus("Supabase Storage nie jest skonfigurowany.");
-            return false;
-        }
-
-        if (galleryEditorLoginEnabled && !editorAuthenticated) {
-            notifyGalleryStatus("Zaloguj sie jako edytor, aby wgrac obraz.");
-            return false;
-        }
-
-        if (!file.type || file.type.indexOf("image/") !== 0) {
-            notifyGalleryStatus("Wybierz plik obrazu.");
-            return false;
-        }
-
-        var artworkImageValidation = await validateGalleryImageUploadFile(file, "artwork");
-
-        if (!artworkImageValidation.ok) {
-            notifyGalleryStatus(artworkImageValidation.message);
-            return false;
-        }
-
-        var previousImageState = getArtworkImageState(artwork);
+        var artworkId = ensureArtworkIdentity(artwork);
+        var operation = beginGalleryAtomicMediaOperation("artwork:" + artworkId, "artwork-upload");
+        var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
         var storagePath = createArtworkStoragePath(artwork, file);
-        notifyGalleryStatus("Wgrywam obraz i kompresuje warianty...");
-
-        var uploadResponse = await client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .upload(storagePath, file, {
-                cacheControl: "3600",
-                upsert: false,
-                contentType: file.type
-            });
-
-        if (uploadResponse.error) {
-            var uploadErrorMessage = uploadResponse.error.message ||
-                uploadResponse.error.error_description ||
-                uploadResponse.error.name ||
-                "Nieznany blad Supabase Storage";
-
-            console.warn("Artwork upload error:", {
-                bucket: galleryArtworkStorageBucket,
-                path: storagePath,
-                mimeType: file.type,
-                size: file.size,
-                error: uploadResponse.error
-            });
-
-            notifyGalleryStatus("Upload nieudany: " + uploadErrorMessage);
-            return false;
-        }
-
-        registerGalleryPendingDraftUpload(galleryArtworkStorageBucket, storagePath, "artwork-original");
-
-        var publicUrlResponse = client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .getPublicUrl(storagePath);
-
-        var publicUrl = publicUrlResponse &&
-            publicUrlResponse.data &&
-            publicUrlResponse.data.publicUrl
-                ? publicUrlResponse.data.publicUrl
-                : "";
-
-        var variantState = {};
+        var uploadedState = null;
+        notifyGalleryStatus("Wgrywam oryginal i tworze kompletny zestaw AVIF...");
 
         try {
-            variantState = await createAndUploadArtworkImageVariants(
-                artwork,
-                file,
-                storagePath,
-                client
-            );
-        } catch (variantBuildError) {
-            console.warn("Artwork image variants warning:", variantBuildError);
-            notifyGalleryStatus("Wgrano oryginal, ale warianty AVIF nie powstaly. Sprawdz konsole.");
-        }
+            var uploadResponse = await client.storage.from(galleryArtworkStorageBucket).upload(storagePath, file, {
+                cacheControl: "3600", upsert: false, contentType: file.type
+            });
+            if (uploadResponse.error) throw uploadResponse.error;
+            registerGalleryPendingDraftUpload(galleryArtworkStorageBucket, storagePath, "artwork-original");
+            var publicUrlResponse = client.storage.from(galleryArtworkStorageBucket).getPublicUrl(storagePath);
+            var publicUrl = publicUrlResponse && publicUrlResponse.data ? publicUrlResponse.data.publicUrl || "" : "";
+            if (!publicUrl) throw new Error("Supabase did not return a public URL for the original artwork.");
 
-        var uploadedImageState = Object.assign(
-            {
+            var variantState = await createAndUploadArtworkImageVariants(artwork, file, storagePath, client, {
+                assetKind: "artwork", assetName: artwork.name, operationId: operation.id
+            });
+            uploadedState = Object.assign({
                 imagePath: storagePath,
                 imageUrl: publicUrl,
                 imageUrlOriginal: publicUrl,
@@ -12001,59 +11986,63 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 size: file.size || null,
                 mimeType: file.type || null,
                 fitMode: galleryArtworkDefaultFitMode,
-                uploadedAt: new Date().toISOString()
-            },
-            variantState || {}
-        );
-
-        var displayedNow = applyArtworkImageStateSafely(
-            artwork,
-            uploadedImageState,
-            "after artwork upload"
-        );
-
-        // Stage 8T2:
-        // Upload do Storage nie moze byc traktowany jako nieudany tylko dlatego,
-        // ze lokalne nalozenie tekstury rzucilo wyjatek. Metadata zostaje zapamietana,
-        // zeby Save State mial imagePath/imageUrl.
-        if (!displayedNow) {
-            notifyGalleryStatus("Wgrano plik, ale tekstura nie wskoczyla od razu. Zapisz stan lub sprobuj APPLY URL.");
-        }
-
-        // Ponawiamy probe wyswietlenia po chwili, ale bez rzucania bledem do upload catch.
-        setTimeout(function () {
-            try {
-                if (
-                    artwork &&
-                    artwork.metadata &&
-                    artwork.metadata.artworkImage &&
-                    artwork.metadata.artworkImage.imagePath === storagePath
-                ) {
-                    applyArtworkImageStateSafely(
-                        artwork,
-                        uploadedImageState,
-                        "delayed artwork upload retry"
-                    );
-                }
-            } catch (delayedApplyError) {
-                console.warn("Delayed artwork image apply warning:", delayedApplyError);
+                uploadedAt: new Date().toISOString(),
+                atomicMediaOperationId: operation.id
+            }, variantState || {});
+            if (!isGalleryAvifVariantComplete(uploadedState, "image")) throw new Error("Atomic artwork upload produced an incomplete AVIF set.");
+            if (!isGalleryAtomicMediaOperationCurrent(operation)) {
+                galleryAtomicMediaRuntime.staleDiscarded += 1;
+                queueGalleryArtworkStateForCleanup(uploadedState, "stale-atomic-artwork-upload");
+                return false;
             }
-        }, 850);
 
-        var previousDeleteState = getArtworkStorageDeleteState(previousImageState);
+            if (!applyArtworkImageStateSafely(artwork, uploadedState, "atomic artwork commit")) {
+                throw new Error("The complete AVIF set could not be applied to the artwork.");
+            }
+            var saveResult = await persistGalleryAtomicMediaCommit("atomic-artwork-upload");
+            if (!saveResult.ok) {
+                if (previousImageState) applyArtworkImageStateSafely(artwork, previousImageState, "atomic artwork rollback");
+                else removeArtworkImageFromMesh(artwork, true);
+                queueGalleryArtworkStateForCleanup(uploadedState, "atomic-artwork-save-rollback");
+                throw new Error("Gallery save failed; the previous artwork was restored.");
+            }
 
-        if (
-            previousDeleteState &&
-            (previousDeleteState.imagePaths || [previousDeleteState.imagePath]).some(function (previousPath) {
-                return !!previousPath && previousPath !== storagePath;
-            })
-        ) {
-            queueGalleryArtworkStateForCleanup(previousImageState, "artwork-image-replaced");
+            if (previousImageState) {
+                queueReplacedGalleryArtworkStateForCleanup(previousImageState, uploadedState, "atomic-artwork-replaced");
+                await saveGalleryStateToSupabase();
+            }
+            finishGalleryAtomicMediaOperation(operation, true, { artworkId: artworkId, variantSetId: uploadedState.imageVariantSetId });
+            notifyGalleryStatus("Obraz zapisany atomowo z kompletem AVIF. Poprzedni zestaw zostal przekazany do bezpiecznego cleanupu.");
+            return true;
+        } catch (error) {
+            if (uploadedState) queueGalleryArtworkStateForCleanup(uploadedState, "failed-atomic-artwork-upload");
+            else queueGalleryStorageCleanupPaths(galleryArtworkStorageBucket, [storagePath], "failed-artwork-original", "atomic-upload-failed");
+            finishGalleryAtomicMediaOperation(operation, false, { error: error && error.message ? error.message : String(error) });
+            console.warn("Atomic artwork upload failed:", error);
+            notifyGalleryStatus("Upload zatrzymany bez zmiany obrazu: " + (error && error.message ? error.message : error));
+            return false;
         }
+    }
 
-        markGalleryDraftDirty("artwork-image-uploaded");
-        notifyGalleryStatus("Wgrano obraz i warianty AVIF. Poprzednie pliki zostana usuniete dopiero po bezpiecznym zapisie galerii.");
-        return true;
+
+    async function importArtworkImageUrlToSupabase(artwork, imageUrl) {
+        imageUrl = String(imageUrl || "").trim();
+        if (!artwork || !imageUrl) return false;
+        notifyGalleryStatus("Pobieram URL i przepuszczam obraz przez atomowy pipeline AVIF...");
+        try {
+            var response = await fetch(imageUrl, { mode: "cors", cache: "no-store" });
+            if (!response.ok) throw new Error("Remote image returned HTTP " + response.status + ".");
+            var blob = await response.blob();
+            if (!blob.type || blob.type.indexOf("image/") !== 0) throw new Error("Remote URL is not an image.");
+            var extension = blob.type === "image/png" ? ".png" : (blob.type === "image/webp" ? ".webp" : (blob.type === "image/avif" ? ".avif" : ".jpg"));
+            var fileName = "imported-artwork-" + Date.now() + extension;
+            var file = typeof File === "function" ? new File([blob], fileName, { type: blob.type }) : Object.assign(blob, { name: fileName });
+            return await uploadArtworkImageToSupabase(artwork, file);
+        } catch (error) {
+            console.warn("Artwork URL import failed:", error);
+            notifyGalleryStatus("Import URL nieudany. Serwer musi pozwalac na CORS: " + (error.message || error));
+            return false;
+        }
     }
 
     function getArtworkStoragePathFromPublicUrl(publicUrl, bucketName) {
@@ -12599,65 +12588,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return /\.webp(?:$|[?#])/i.test(String(value || ""));
     }
 
-    function getGalleryActiveGeneratedWebpReferences() {
-        var rows = [];
-        var seen = Object.create(null);
-        function add(type, name, variant, path, url, key) {
-            if (!isGalleryWebpPathOrUrl(path) && !isGalleryWebpPathOrUrl(url)) return;
-            var signature = String(path || url || key || "");
-            if (seen[signature]) return;
-            seen[signature] = true;
-            rows.push({ type: type, name: name || "", variant: variant || "", path: path || "", url: url || "", key: key || "" });
-        }
-
-        getActiveArtworks().forEach(function (artwork) {
-            var state = getArtworkImageState(artwork) || {};
-            ["Web", "Mobile", "Preview"].forEach(function (suffix) {
-                add("artwork", artwork.name, suffix.toLowerCase(), state["imagePath" + suffix], state["imageUrl" + suffix], "artworkImage." + suffix);
-            });
-        });
-        artworkAuthors.forEach(function (author) {
-            var normalized = normalizeAuthorRecord(author);
-            ["Web", "Mobile", "Preview"].forEach(function (suffix) {
-                add("author", normalized.name, suffix.toLowerCase(), normalized["photoPath" + suffix], normalized["photoUrl" + suffix], "authorPhoto." + suffix);
-            });
-        });
-
-        // Serialized state also contains denormalized author data inside artwork/sculpture info.
-        // Scan it so finalization cannot delete a WebP still referenced outside the central author library.
-        function visit(value, trail) {
-            if (!value || typeof value !== "object") return;
-            if (Array.isArray(value)) {
-                value.forEach(function (item, index) { visit(item, trail + "[" + index + "]"); });
-                return;
-            }
-            Object.keys(value).forEach(function (key) {
-                var child = value[key];
-                var childTrail = trail ? trail + "." + key : key;
-                if (typeof child === "string" && /(?:image|photo)(?:Path|Url)(?:Web|Mobile|Preview)$/i.test(key) && isGalleryWebpPathOrUrl(child)) {
-                    add("serialized-state", trail, key, /Path/i.test(key) ? child : "", /Url/i.test(key) ? child : "", childTrail);
-                } else if (child && typeof child === "object") {
-                    visit(child, childTrail);
-                }
-            });
-        }
-        try { visit(serializeGalleryState(), "state"); } catch (error) {}
-        return rows;
-    }
-
-    function getGalleryOriginalWebpSourceCount() {
-        var count = 0;
-        getActiveArtworks().forEach(function (artwork) {
-            var state = getArtworkImageState(artwork) || {};
-            if (isGalleryWebpPathOrUrl(state.imagePath) || isGalleryWebpPathOrUrl(getArtworkOriginalImageUrlFromState(state))) count += 1;
-        });
-        artworkAuthors.forEach(function (author) {
-            var normalized = normalizeAuthorRecord(author);
-            if (isGalleryWebpPathOrUrl(normalized.photoPath) || isGalleryWebpPathOrUrl(getOriginalAuthorPhotoUrlFromInfo(normalized))) count += 1;
-        });
-        return count;
-    }
-
+    
+    
     function getGalleryLegacyGeneratedWebpPrefixes() {
         var root = String(galleryArtworkStoragePrefix || "main").replace(/^\/+|\/+$/g, "");
         var prefixes = [];
@@ -12920,7 +12852,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var verifyFiles = options.verifyFiles !== false;
         var scan = options.storageScan || await scanGalleryExistingAuthorAvifStorage();
         var report = {
-            stage: "12C66C6B1",
+            stage: "12C66C6C",
             total: 0,
             alreadyComplete: 0,
             reconciled: 0,
@@ -13033,163 +12965,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return report;
     }
 
-    async function scanGalleryLegacyGeneratedWebpStorage() {
-        var bucket = galleryArtworkStorageBucket;
-        var prefixes = getGalleryLegacyGeneratedWebpPrefixes();
-        var files = [];
-        for (var i = 0; i < prefixes.length; i++) {
-            var folderFiles = await listGalleryStorageFilesRecursively(bucket, prefixes[i], 0);
-            folderFiles.forEach(function (entry) {
-                if (entry && isGalleryLegacyGeneratedWebpPath(entry.path)) files.push(entry);
-            });
-        }
-        var seen = Object.create(null);
-        files = files.filter(function (entry) {
-            if (!entry || !entry.path || seen[entry.path]) return false;
-            seen[entry.path] = true;
-            return true;
-        });
-        var report = { ok: true, bucket: bucket, prefixes: prefixes, total: files.length, files: files, scannedAt: Date.now() };
-        galleryAvifMigrationRuntime.lastStorageAudit = report;
-        return report;
-    }
-
-    async function validateGalleryAvifMigration(options) {
-        options = options || {};
-        var authorReconciliation = null;
-        if (options.reconcileExistingAuthorAvif) {
-            authorReconciliation = await reconcileExistingAuthorAvifVariants({
-                verifyFiles: options.verifyReconciledFiles !== false
-            });
-        }
-        var artworkRows = [];
-        getActiveArtworks().forEach(function (artwork) {
-            var state = getArtworkImageState(artwork);
-            if (!state || !getArtworkOriginalImageUrlFromState(state)) return;
-            artworkRows.push({
-                name: artwork.name,
-                artworkId: ensureArtworkIdentity(artwork),
-                complete: isGalleryAvifVariantComplete(state, "image"),
-                variantSetId: state.imageVariantSetId || ""
-            });
-        });
-        var authorRows = [];
-        artworkAuthors.forEach(function (author) {
-            var normalized = normalizeAuthorRecord(author);
-            if (!getOriginalAuthorPhotoUrlFromInfo(normalized)) return;
-            authorRows.push({
-                id: normalized.id,
-                name: normalized.name,
-                complete: isGalleryAvifVariantComplete(normalized, "photo"),
-                variantSetId: normalized.photoVariantSetId || ""
-            });
-        });
-        var activeWebp = getGalleryActiveGeneratedWebpReferences();
-        var pendingWebpDeletes = gallerySaveIntegrityRuntime.pendingStorageDeletes.filter(function (entry) {
-            return entry && isGalleryWebpPathOrUrl(entry.path);
-        });
-        var storageAudit = options.scanStorage ? await scanGalleryLegacyGeneratedWebpStorage() : galleryAvifMigrationRuntime.lastStorageAudit;
-        var report = {
-            schema: galleryAvifMigrationRuntime.schema,
-            stage: "12C66C6B1",
-            artworks: {
-                total: artworkRows.length,
-                complete: artworkRows.filter(function (row) { return row.complete; }).length,
-                missing: artworkRows.filter(function (row) { return !row.complete; })
-            },
-            authors: {
-                total: authorRows.length,
-                complete: authorRows.filter(function (row) { return row.complete; }).length,
-                missing: authorRows.filter(function (row) { return !row.complete; })
-            },
-            activeGeneratedWebpReferences: activeWebp,
-            activeGeneratedWebpCount: activeWebp.length,
-            originalWebpSourcesPreserved: getGalleryOriginalWebpSourceCount(),
-            pendingGeneratedWebpDeletes: pendingWebpDeletes.length,
-            storageGeneratedWebpCount: storageAudit ? storageAudit.total : null,
-            authorReconciliation: authorReconciliation,
-            readyForFinalization: artworkRows.every(function (row) { return row.complete; }) &&
-                authorRows.every(function (row) { return row.complete; }) &&
-                activeWebp.length === 0,
-            checkedAt: Date.now()
-        };
-        galleryAvifMigrationRuntime.lastValidation = report;
-        return report;
-    }
-
-    async function removeGalleryLegacyGeneratedWebpFiles(scanReport) {
-        scanReport = scanReport || await scanGalleryLegacyGeneratedWebpStorage();
-        var activeReferences = getGalleryActiveGeneratedWebpReferences();
-        if (activeReferences.length) throw new Error("Active gallery state still references generated WebP variants.");
-        var paths = (scanReport.files || []).map(function (entry) { return entry.path; }).filter(isGalleryLegacyGeneratedWebpPath);
-        var client = window.gallerySupabase;
-        if (!client || !client.storage) throw new Error("Supabase Storage is not configured.");
-        var removed = 0;
-        for (var i = 0; i < paths.length; i += 100) {
-            var batch = paths.slice(i, i + 100);
-            var response = await client.storage.from(galleryArtworkStorageBucket).remove(batch);
-            if (response.error) throw response.error;
-            removed += batch.length;
-        }
-        if (paths.length) {
-            var removedLookup = Object.create(null);
-            paths.forEach(function (path) { removedLookup[galleryArtworkStorageBucket + "|" + path] = true; });
-            gallerySaveIntegrityRuntime.pendingStorageDeletes = gallerySaveIntegrityRuntime.pendingStorageDeletes.filter(function (entry) {
-                return !(entry && removedLookup[String(entry.bucket || "") + "|" + String(entry.path || "")]);
-            });
-            persistGalleryPendingStorageCleanupQueue();
-        }
-        galleryAvifMigrationRuntime.removedWebpFiles += removed;
-        return { ok: true, removed: removed, paths: paths };
-    }
-
-    async function finalizeGalleryAvifMigrationAndRemoveWebp(options) {
-        options = options || {};
-        var validation = await validateGalleryAvifMigration({ scanStorage: true, reconcileExistingAuthorAvif: true });
-        if (!validation.readyForFinalization) {
-            throw new Error("AVIF migration is incomplete. Rebuild all missing artwork and author variants before finalization.");
-        }
-        if (!options.skipConfirm && typeof window !== "undefined" && window.confirm) {
-            var accepted = window.confirm(
-                "Finalize AVIF migration? The gallery will be saved twice to rotate the recovery backup, then " +
-                validation.storageGeneratedWebpCount + " generated WebP file(s) will be removed. Original source files are preserved."
-            );
-            if (!accepted) return { ok: false, cancelled: true };
-        }
-
-        notifyGalleryStatus("AVIF migration: publishing AVIF state (1/2)...");
-        var firstSave = await saveGalleryStateToSupabase();
-        if (!firstSave) throw new Error("First AVIF publication save failed. No direct WebP cleanup was performed.");
-
-        notifyGalleryStatus("AVIF migration: rotating recovery backup (2/2)...");
-        var secondSave = await saveGalleryStateToSupabase();
-        if (!secondSave) throw new Error("Backup rotation save failed. Generated WebP files remain protected.");
-
-        notifyGalleryStatus("AVIF migration: removing generated WebP variants...");
-        var beforeCleanup = await scanGalleryLegacyGeneratedWebpStorage();
-        var removal = await removeGalleryLegacyGeneratedWebpFiles(beforeCleanup);
-        var afterCleanup = await scanGalleryLegacyGeneratedWebpStorage();
-        var finalValidation = await validateGalleryAvifMigration({ scanStorage: false });
-        var result = {
-            ok: afterCleanup.total === 0 && finalValidation.activeGeneratedWebpCount === 0,
-            firstSave: !!firstSave,
-            secondSave: !!secondSave,
-            removed: removal.removed,
-            remainingGeneratedWebp: afterCleanup.total,
-            originalWebpSourcesPreserved: finalValidation.originalWebpSourcesPreserved,
-            completedAt: Date.now()
-        };
-        galleryAvifMigrationRuntime.lastFinalize = result;
-        if (!result.ok) throw new Error("Generated WebP cleanup finished with remaining files: " + afterCleanup.total);
-        notifyGalleryStatus("AVIF migration complete. Generated WebP variants removed: " + removal.removed + ". Original source files preserved.");
-        return result;
-    }
-
+    
+    
+    
+    
     function getGalleryAvifMigrationDebug() {
         return {
             schema: galleryAvifMigrationRuntime.schema,
             stage: galleryAvifMigrationRuntime.stage,
             moduleUrl: galleryAvifEncoderModuleUrl,
+            fallbackModuleUrl: galleryAvifEncoderFallbackModuleUrl,
             workerPath: galleryAvifEncoderWorkerPath,
             settings: {
                 artwork: getGalleryImageVariantSettingsSnapshot(galleryArtworkImageVariantSettings),
@@ -13206,11 +12991,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             decodeFallbacks: galleryAvifMigrationRuntime.decodeFallbacks || 0,
             lastDecodeError: galleryAvifMigrationRuntime.lastDecodeError || "",
             lastOperation: galleryAvifMigrationRuntime.lastOperation,
-            lastValidation: galleryAvifMigrationRuntime.lastValidation,
-            lastStorageAudit: galleryAvifMigrationRuntime.lastStorageAudit,
             lastAuthorReconciliation: galleryAvifMigrationRuntime.lastAuthorReconciliation,
-            lastAuthorAvifStorageScan: galleryAvifMigrationRuntime.lastAuthorAvifStorageScan || null,
-            lastFinalize: galleryAvifMigrationRuntime.lastFinalize
+            lastAuthorAvifStorageScan: galleryAvifMigrationRuntime.lastAuthorAvifStorageScan || null
         };
     }
 
@@ -13696,21 +13478,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function removeArtworkImageWithStorageDelete(artwork) {
-        if (!artwork) {
-            return false;
-        }
-
-        var imageState = getArtworkImageState(artwork);
-        queueGalleryArtworkStateForCleanup(imageState, "artwork-image-removed");
-
+        if (!artwork) return false;
+        var previousState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
+        if (!previousState) return removeArtworkImageFromMesh(artwork, true);
+        var operation = beginGalleryAtomicMediaOperation("artwork:" + ensureArtworkIdentity(artwork), "artwork-remove");
         var removedFromMesh = removeArtworkImageFromMesh(artwork, true);
         updateArtworkTransformUi();
-
-        if (removedFromMesh) {
-            markGalleryDraftDirty("artwork-image-removed");
+        if (!removedFromMesh) {
+            finishGalleryAtomicMediaOperation(operation, false, { reason: "remove-failed" });
+            return false;
         }
-
-        return removedFromMesh;
+        try {
+            var saveResult = await persistGalleryAtomicMediaCommit("atomic-artwork-remove");
+            if (!saveResult.ok) {
+                applyArtworkImageStateSafely(artwork, previousState, "atomic artwork remove rollback");
+                throw new Error("Gallery save failed; the artwork image was restored.");
+            }
+            queueGalleryArtworkStateForCleanup(previousState, "atomic-artwork-image-removed");
+            var cleanupSave = await saveGalleryStateToSupabase();
+            finishGalleryAtomicMediaOperation(operation, true, { cleanupQueued: true, cleanupSaved: !!cleanupSave });
+            notifyGalleryStatus(cleanupSave
+                ? "Obraz usuniety i zapisany. Poprzedni zestaw trafil do bezpiecznego cleanupu."
+                : "Obraz usuniety i zapisany. Cleanup pozostaje bezpiecznie oczekujacy do kolejnego zapisu.");
+            return true;
+        } catch (error) {
+            finishGalleryAtomicMediaOperation(operation, false, { error: error && error.message ? error.message : String(error) });
+            notifyGalleryStatus("Usuwanie obrazu zatrzymane: " + (error && error.message ? error.message : error));
+            return false;
+        }
     }
 
     var selectedArtwork = null;
@@ -14904,6 +14699,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         lastViewerActivityAt: 0,
         lastViewerActivityReason: null,
         fullArtworkIdleDelayMs: 1800,
+        lastPriorityFullUpgradeAt: 0,
+        priorityFullUpgradeMinimumAgeMs: 3500,
+        priorityFullUpgradeCooldownMs: 1600,
         directLightTargetRestores: 0,
         unresolvedSavedLightTargets: 0,
         fallbackLightRetargets: 0,
@@ -14965,9 +14763,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getGalleryStreamingBudgetForProfile(profileName) {
         var name = String(profileName || galleryDeviceProfile.currentQualityProfile || "balanced").toLowerCase();
         if (!galleryDeviceProfile.mobile) return { models: 24, modelGraceMs: 60000 };
-        if (name === "safe") return { models: 3, modelGraceMs: 14000 };
-        if (name === "high") return { models: 7, modelGraceMs: 24000 };
-        return { models: 5, modelGraceMs: 18000 };
+        var profile = getGalleryMobileQualityProfileDefinition(name);
+        var streaming = profile.streaming || {};
+        return {
+            models: Math.max(3, Number(streaming.models) || 8),
+            modelGraceMs: Math.max(18000, Number(streaming.modelGraceMs) || 30000)
+        };
     }
 
     function refreshGalleryStreamingBudgetsFromQuality(profileName, reason) {
@@ -15322,25 +15123,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryModelLodCullDistance() {
-        if (!galleryDeviceProfile.mobile) return 90;
-        if (galleryDeviceProfile.currentQualityProfile === "safe") return 28;
-        if (galleryDeviceProfile.currentQualityProfile === "high") return 52;
-        return 38;
+        if (!galleryDeviceProfile.mobile) return 120;
+        var profile = getGalleryMobileQualityProfileDefinition(galleryDeviceProfile.currentQualityProfile);
+        return Math.max(54, Number(profile.streaming && profile.streaming.modelCullDistance) || 78);
     }
 
     function configureGalleryModelRuntimeLod(slot) {
         var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
         if (!runtime || runtime.lodConfigured) return false;
-        var distance = Math.max(12, Number(slot.metadata.model3d && slot.metadata.model3d.lodCullDistance) || getGalleryModelLodCullDistance());
+        var distance = Math.max(24, Number(slot.metadata.model3d && slot.metadata.model3d.lodCullDistance) || getGalleryModelLodCullDistance());
         (runtime.meshes || []).forEach(function (mesh) {
-            if (!mesh || !mesh.addLODLevel || mesh.metadata && mesh.metadata.galleryLodConfigured) return;
-            try {
-                mesh.addLODLevel(distance, null);
-                mesh.metadata = mesh.metadata || {};
-                mesh.metadata.galleryLodConfigured = true;
-                mesh.metadata.galleryLodCullDistance = distance;
-                galleryZoneStreamingRuntime.modelLodConfigured += 1;
-            } catch (error) {}
+            if (!mesh) return;
+            mesh.metadata = mesh.metadata || {};
+            // C6C: important sculpture geometry never transitions directly to null LOD.
+            // Heavy runtime unloading remains owned by the zone/memory system, which preserves its collider.
+            mesh.metadata.galleryLodConfigured = true;
+            mesh.metadata.galleryLodCullDistance = distance;
+            mesh.metadata.galleryNullLodDisabled = true;
+            galleryZoneStreamingRuntime.modelLodConfigured += 1;
         });
         runtime.lodConfigured = true;
         runtime.lodCullDistance = distance;
@@ -15348,14 +15148,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function configureGalleryPropStreamingLod(mesh) {
-        if (!mesh || !mesh.addLODLevel || mesh.metadata && mesh.metadata.galleryLodConfigured) return false;
+        if (!mesh || mesh.metadata && mesh.metadata.galleryLodConfigured) return false;
         try {
-            var distance = galleryDeviceProfile.mobile ? (galleryDeviceProfile.currentQualityProfile === "safe" ? 34 : 48) : 110;
-            mesh.addLODLevel(distance, null);
+            var profile = getGalleryMobileQualityProfileDefinition(galleryDeviceProfile.currentQualityProfile);
+            var distance = galleryDeviceProfile.mobile
+                ? Math.max(42, Number(profile.streaming && profile.streaming.propCullDistance) || 68)
+                : 130;
             mesh.metadata = mesh.metadata || {};
             mesh.metadata.galleryLodConfigured = true;
             mesh.metadata.galleryLodCullDistance = distance;
+            mesh.metadata.galleryNullLodDisabled = true;
             mesh.metadata.galleryStreamingZoneId = getGalleryStreamingZoneIdForObject(mesh);
+            mesh.metadata.galleryLastVisibleAt = Date.now();
             galleryZoneStreamingRuntime.propLodConfigured += 1;
             return true;
         } catch (error) {
@@ -15363,13 +15167,41 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+
+    function getGalleryActiveCameraFrustumPlanes() {
+        try {
+            if (BABYLON && BABYLON.Frustum && BABYLON.Frustum.GetPlanes && camera && camera.getTransformationMatrix) {
+                return BABYLON.Frustum.GetPlanes(camera.getTransformationMatrix());
+            }
+        } catch (error) {}
+        return scene && scene.frustumPlanes ? scene.frustumPlanes : (scene && scene._frustumPlanes ? scene._frustumPlanes : null);
+    }
+
+    function isGalleryPropProtectedByView(mesh) {
+        if (!mesh || !camera) return false;
+        try {
+            var planes = getGalleryActiveCameraFrustumPlanes();
+            if (mesh.isInFrustum && planes) return !!mesh.isInFrustum(planes);
+        } catch (error) {}
+        try {
+            var position = mesh.getAbsolutePosition ? mesh.getAbsolutePosition() : mesh.position;
+            return !!(position && camera.position && BABYLON.Vector3.Distance(position, camera.position) < 26);
+        } catch (distanceError) {}
+        return false;
+    }
     function updateGalleryPropZoneActivation() {
+        var now = Date.now();
+        var profile = getGalleryMobileQualityProfileDefinition(galleryDeviceProfile.currentQualityProfile);
+        var alwaysVisible = !!(profile.streaming && profile.streaming.propsAlwaysVisible);
         (propMeshes || []).forEach(function (mesh) {
             if (!mesh || mesh.name === "__root__") return;
             configureGalleryPropStreamingLod(mesh);
             var zoneId = getGalleryStreamingZoneIdForObject(mesh);
-            var active = !galleryDeviceProfile.mobile || isGalleryStreamingZoneActive(zoneId);
-            if (mesh.setEnabled) mesh.setEnabled(active);
+            var protectedByView = isGalleryPropProtectedByView(mesh);
+            if (protectedByView) mesh.metadata.galleryLastVisibleAt = now;
+            var visibleGrace = now - Number(mesh.metadata.galleryLastVisibleAt || 0) < 2800;
+            var active = !galleryDeviceProfile.mobile || alwaysVisible || isGalleryStreamingZoneActive(zoneId) || protectedByView || visibleGrace;
+            if (mesh.setEnabled && mesh.isEnabled && mesh.isEnabled() !== active) mesh.setEnabled(active);
         });
     }
 
@@ -15802,6 +15634,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return false;
     }
 
+    function isGalleryArtworkEntryVisibleForPriority(entry) {
+        var artwork = entry && entry.artwork;
+        if (!artwork || isArtworkDeleted(artwork)) return false;
+        var plane = artwork.metadata && artwork.metadata.imagePlane;
+        try {
+            var planes = getGalleryActiveCameraFrustumPlanes();
+            if (plane && plane.isInFrustum && planes && plane.isInFrustum(planes)) return true;
+        } catch (error) {}
+        try {
+            var position = artwork.getAbsolutePosition ? artwork.getAbsolutePosition() : artwork.position;
+            return !!(position && camera && camera.position && BABYLON.Vector3.Distance(position, camera.position) < 18);
+        } catch (distanceError) {}
+        return false;
+    }
+
+    function canGalleryPriorityFullArtworkBypassMovement(entry) {
+        if (!entry || !isGalleryArtworkEntryVisibleForPriority(entry)) return false;
+        if (entry.tier !== "critical" && !entry.inspectPriority) return false;
+        if (typeof document !== "undefined" && document.hidden) return false;
+        if (typeof isGalleryInspectCameraTransitionActive === "function" && isGalleryInspectCameraTransitionActive()) return false;
+        if (galleryInspectRuntime && galleryInspectRuntime.opening) return false;
+        if (isDraggingArtwork || isDraggingSphere || desktopViewerMiddleLookActive || mobileLookActive) return false;
+        var now = Date.now();
+        if (now - Number(entry.queuedAt || now) < galleryFastStartRuntime.priorityFullUpgradeMinimumAgeMs && !entry.inspectPriority) return false;
+        if (now - Number(galleryFastStartRuntime.lastPriorityFullUpgradeAt || 0) < galleryFastStartRuntime.priorityFullUpgradeCooldownMs) return false;
+        return true;
+    }
+
     function scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason, delayMs) {
         if (!galleryFastStartRuntime || galleryFastStartRuntime.deferredFullArtworkLoads.length === 0) return;
         if (!galleryFastStartRuntime.interactionReady) return;
@@ -15818,10 +15678,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-viewer", 300);
             return;
         }
-        if (galleryFastStartRuntime.backgroundDrainActive || isGalleryViewerBusyForFullArtworkUpgrade()) {
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-queue", 180);
-            return;
-        }
         refreshGalleryCurrentStreamingZone(reason || "full-artwork-priority", false);
         galleryFastStartRuntime.deferredFullArtworkLoads = galleryFastStartRuntime.deferredFullArtworkLoads.filter(isGalleryArtworkQueueEntryCurrent);
         galleryFastStartRuntime.deferredFullArtworkLoads.forEach(function (entry) {
@@ -15829,14 +15685,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
         galleryFastStartRuntime.deferredFullArtworkLoads.sort(function (a, b) {
             if (!!a.inspectPriority !== !!b.inspectPriority) return a.inspectPriority ? -1 : 1;
+            var aVisible = isGalleryArtworkEntryVisibleForPriority(a);
+            var bVisible = isGalleryArtworkEntryVisibleForPriority(b);
+            if (aVisible !== bVisible) return aVisible ? -1 : 1;
             var tierDelta = getGalleryStreamingTierRank(a.tier) - getGalleryStreamingTierRank(b.tier);
             if (tierDelta) return tierDelta;
             var distanceDelta = Number(a.distanceToCamera || 0) - Number(b.distanceToCamera || 0);
             if (distanceDelta) return distanceDelta;
             return Number(a.queuedAt || 0) - Number(b.queuedAt || 0);
         });
-        var entry = galleryFastStartRuntime.deferredFullArtworkLoads.shift();
+        var entry = galleryFastStartRuntime.deferredFullArtworkLoads[0];
         if (!entry) return;
+        var priorityOverride = canGalleryPriorityFullArtworkBypassMovement(entry);
+        if (galleryFastStartRuntime.backgroundDrainActive || (isGalleryViewerBusyForFullArtworkUpgrade() && !priorityOverride)) {
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-queue", priorityOverride ? 100 : 180);
+            return;
+        }
+        galleryFastStartRuntime.deferredFullArtworkLoads.shift();
+        if (priorityOverride) galleryFastStartRuntime.lastPriorityFullUpgradeAt = Date.now();
         galleryFastStartRuntime.backgroundDrainActive = true;
         var fullState = cloneGalleryFastStartState(entry.imageState);
         fullState._galleryFastStartForceImmediate = true;
@@ -17149,7 +17015,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Inaczej po reloadzie domyślne rzeźby wróciłyby mimo usunięcia.
     var deletedModel3dSlotNames = [];
 
-    // STAGE 12C66C6B1 - EXISTING AUTHOR AVIF RECONCILIATION
+    // STAGE 12C66C6C - ATOMIC AVIF MEDIA LIFECYCLE
     // Warianty są generowane wyłącznie na żądanie edytora w leniwie ładowanym Web Workerze.
     // Runtime galerii nigdy nie koduje obrazów podczas startu, chodzenia ani Inspect.
     var galleryArtworkImageVariantsEnabled = true;
@@ -17157,7 +17023,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryArtworkImageVariantExtension = "avif";
     var galleryArtworkImageVariantSchema = "berryboy-avif-v1";
     var galleryArtworkImageVariantFolder = "AVIFv1";
-    var galleryAvifEncoderModuleUrl = "https://esm.sh/@jsquash/avif@2.1.1?bundle";
+    var galleryAvifEncoderModuleUrl = "src/vendor/gallery-avif-encoder.mjs";
+    var galleryAvifEncoderFallbackModuleUrl = "https://esm.sh/@jsquash/avif@2.1.1?bundle";
     var galleryAvifEncoderWorkerPath = "src/workers/gallery-avif-encoder-worker.js";
     var galleryArtworkImageVariantSettings = {
         web: {
@@ -17205,8 +17072,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     var galleryAvifMigrationRuntime = {
-        schema: "gallery-avif-migration.v1",
-        stage: "12C66C6B1",
+        schema: "gallery-atomic-avif-media.v2",
+        stage: "12C66C6C",
         worker: null,
         workerReady: false,
         workerFailed: false,
@@ -17218,16 +17085,78 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         uploadedVariants: 0,
         verifiedVariants: 0,
         failedVariants: 0,
-        queuedWebpDeletes: 0,
-        removedWebpFiles: 0,
         decodeFallbacks: 0,
         lastDecodeError: "",
         lastOperation: null,
-        lastValidation: null,
-        lastStorageAudit: null,
-        lastAuthorReconciliation: null,
-        lastFinalize: null
+        lastAuthorReconciliation: null
     };
+
+    var galleryAtomicMediaRuntime = {
+        stage: "12C66C6C",
+        schema: "gallery-atomic-media-lifecycle.v1",
+        autoSaveEnabled: true,
+        operationCounter: 0,
+        activeByOwner: Object.create(null),
+        completed: 0,
+        failed: 0,
+        staleDiscarded: 0,
+        lastOperation: null,
+        lastRepair: null,
+        lastAudit: null
+    };
+
+    function beginGalleryAtomicMediaOperation(ownerKey, type) {
+        ownerKey = String(ownerKey || "media");
+        var operation = {
+            id: "media-" + Date.now().toString(36) + "-" + (++galleryAtomicMediaRuntime.operationCounter).toString(36),
+            ownerKey: ownerKey,
+            type: type || "media-update",
+            startedAt: Date.now(),
+            status: "running"
+        };
+        galleryAtomicMediaRuntime.activeByOwner[ownerKey] = operation;
+        galleryAtomicMediaRuntime.lastOperation = operation;
+        protectGalleryAdaptiveQuality("atomic-media-" + operation.type, 12000);
+        return operation;
+    }
+
+    function isGalleryAtomicMediaOperationCurrent(operation) {
+        return !!(operation && galleryAtomicMediaRuntime.activeByOwner[operation.ownerKey] === operation);
+    }
+
+    function finishGalleryAtomicMediaOperation(operation, ok, details) {
+        if (!operation) return;
+        if (galleryAtomicMediaRuntime.activeByOwner[operation.ownerKey] === operation) delete galleryAtomicMediaRuntime.activeByOwner[operation.ownerKey];
+        operation.status = ok ? "complete" : "failed";
+        operation.finishedAt = Date.now();
+        operation.details = details || null;
+        if (ok) galleryAtomicMediaRuntime.completed += 1;
+        else galleryAtomicMediaRuntime.failed += 1;
+        galleryAtomicMediaRuntime.lastOperation = operation;
+    }
+
+    async function persistGalleryAtomicMediaCommit(reason) {
+        markGalleryDraftDirty(reason || "atomic-media-commit");
+        if (!galleryAtomicMediaRuntime.autoSaveEnabled) return { ok: true, saved: false };
+        var firstSave = await saveGalleryStateToSupabase();
+        return { ok: !!firstSave, saved: !!firstSave };
+    }
+
+    function getGalleryAtomicMediaDebug() {
+        return {
+            stage: galleryAtomicMediaRuntime.stage,
+            schema: galleryAtomicMediaRuntime.schema,
+            autoSaveEnabled: galleryAtomicMediaRuntime.autoSaveEnabled,
+            activeOwners: Object.keys(galleryAtomicMediaRuntime.activeByOwner),
+            completed: galleryAtomicMediaRuntime.completed,
+            failed: galleryAtomicMediaRuntime.failed,
+            staleDiscarded: galleryAtomicMediaRuntime.staleDiscarded,
+            lastOperation: cloneGalleryStateForIntegrity(galleryAtomicMediaRuntime.lastOperation),
+            lastRepair: cloneGalleryStateForIntegrity(galleryAtomicMediaRuntime.lastRepair),
+            lastAudit: cloneGalleryStateForIntegrity(galleryAtomicMediaRuntime.lastAudit)
+        };
+    }
+
 
     var oldEditorStyle = document.getElementById("galleryEditorStyle");
 
@@ -20493,7 +20422,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var artworkImageApplyUrlButton = document.createElement("button");
     artworkImageApplyUrlButton.type = "button";
     artworkImageApplyUrlButton.className = "gallery-editor-action-button";
-    artworkImageApplyUrlButton.innerText = "APPLY URL";
+    artworkImageApplyUrlButton.innerText = "IMPORT & OPTIMIZE URL";
 
     var artworkImageRemoveButton = document.createElement("button");
     artworkImageRemoveButton.type = "button";
@@ -20502,7 +20431,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var artworkImageNote = document.createElement("p");
     artworkImageNote.className = "gallery-artwork-image-note";
-    artworkImageNote.innerText = "Upload creates Original/Desktop/Mobile/Preview files in Supabase Storage. Mobile loads the smaller variant.";
+    artworkImageNote.innerText = "Upload and URL import create one verified Original + Desktop/Mobile/Preview AVIF set and save it automatically.";
 
     artworkImageActions.appendChild(artworkImageUploadButton);
     artworkImageActions.appendChild(artworkImageApplyUrlButton);
@@ -20516,27 +20445,147 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     artworkImageSectionData.section.appendChild(artworkImageNote);
     editorScroll.appendChild(artworkImageSectionData.section);
 
-    // STAGE 12C66C6B - AVIF PIPELINE / MIGRATION / WEBP REMOVAL UI
-    var imageOptimizationSectionData = createEditorSection("IMAGE OPTIMIZATION");
 
-    var imageOptimizationNote = document.createElement("p");
-    imageOptimizationNote.className = "gallery-artwork-image-note";
-    imageOptimizationNote.innerText = "Build immutable AVIF Desktop/Mobile/Preview variants. Existing author AVIF sets are reconciled from Storage before any re-encoding. Finalization publishes AVIF twice for backup safety, then removes generated WebP variants. Original source files are never removed by migration cleanup.";
-
-    var imageOptimizationSettings = document.createElement("div");
-    imageOptimizationSettings.className = "gallery-artwork-image-status";
-    imageOptimizationSettings.innerHTML = "AVIF V1 — Artwork: <strong>3072 / 2048 / 768 px</strong> — Author: <strong>1280 / 768 / 384 px</strong>";
-
-    var imageOptimizationStatus = document.createElement("div");
-    imageOptimizationStatus.className = "gallery-artwork-image-status";
-    imageOptimizationStatus.innerHTML = "Migration: <strong>not validated</strong>";
-
-    function createImageOptimizationActionRow() {
-        var row = document.createElement("div");
-        row.className = "gallery-artwork-image-actions is-two";
-        return row;
+    async function scanGalleryManagedMediaStorage() {
+        var prefixes = [
+            galleryArtworkStoragePrefix + "/artworks/Original",
+            galleryArtworkStoragePrefix + "/artworks/" + galleryArtworkImageVariantFolder,
+            galleryArtworkStoragePrefix + "/authors/Original",
+            galleryArtworkStoragePrefix + "/authors/" + galleryArtworkImageVariantFolder,
+            galleryArtworkStoragePrefix + "/artworks/Desktop",
+            galleryArtworkStoragePrefix + "/artworks/Mobile",
+            galleryArtworkStoragePrefix + "/artworks/Preview",
+            galleryArtworkStoragePrefix + "/authors/Desktop",
+            galleryArtworkStoragePrefix + "/authors/Mobile",
+            galleryArtworkStoragePrefix + "/authors/Preview"
+        ];
+        var files = [];
+        for (var i = 0; i < prefixes.length; i++) {
+            var listed = await listGalleryStorageFilesRecursively(galleryArtworkStorageBucket, prefixes[i], 0);
+            files = files.concat(listed || []);
+        }
+        var seen = Object.create(null);
+        files = files.filter(function (entry) {
+            if (!entry || !entry.path || seen[entry.path]) return false;
+            seen[entry.path] = true;
+            return true;
+        });
+        return { bucket: galleryArtworkStorageBucket, prefixes: prefixes, files: files, total: files.length, scannedAt: Date.now() };
     }
 
+    async function auditGalleryManagedMedia(options) {
+        options = options || {};
+        var currentState = serializeGalleryState();
+        var backupPayload = readGalleryPreviousStateBackup();
+        var backupState = backupPayload && backupPayload.state ? backupPayload.state : null;
+        var activeRefs = collectGalleryStateStorageReferences(currentState);
+        var backupRefs = collectGalleryStateStorageReferences(backupState);
+        restoreGalleryPendingDraftUploads();
+        var protectedRefs = Object.assign({}, activeRefs, backupRefs);
+        gallerySaveIntegrityRuntime.pendingDraftUploads.forEach(function (entry) {
+            if (entry && entry.bucket && entry.path) protectedRefs[entry.bucket + "|" + entry.path] = true;
+        });
+        var storage = await scanGalleryManagedMediaStorage();
+        var graceMs = Math.max(60 * 60 * 1000, Number(options.graceMs) || 24 * 60 * 60 * 1000);
+        var now = Date.now();
+        var unused = storage.files.filter(function (entry) {
+            var key = galleryArtworkStorageBucket + "|" + entry.path;
+            if (protectedRefs[key]) return false;
+            var timestamp = Date.parse(entry.updated_at || entry.created_at || entry.lastModified || "") || 0;
+            if (timestamp && now - timestamp < graceMs) return false;
+            return true;
+        });
+        var report = {
+            ok: true,
+            stage: "12C66C6C",
+            storageTotal: storage.total,
+            activeProtected: Object.keys(activeRefs).length,
+            backupProtected: Object.keys(backupRefs).length,
+            pendingUploadProtected: gallerySaveIntegrityRuntime.pendingDraftUploads.length,
+            unusedCount: unused.length,
+            unused: unused,
+            generatedWebpCount: unused.filter(function (entry) { return isGalleryLegacyGeneratedWebpPath(entry.path); }).length,
+            scannedAt: Date.now()
+        };
+        galleryAtomicMediaRuntime.lastAudit = report;
+        return report;
+    }
+
+    async function cleanGalleryManagedMedia(report) {
+        if (Object.keys(galleryAtomicMediaRuntime.activeByOwner).length) {
+            throw new Error("Media cleanup is blocked while an upload, replace or removal operation is active.");
+        }
+
+        // Never delete from a stale audit. Re-scan active state, recovery backup,
+        // pending uploads and Storage immediately before the destructive step.
+        var freshReport = await auditGalleryManagedMedia();
+        var freshPaths = Object.create(null);
+        (freshReport.unused || []).forEach(function (entry) {
+            if (entry && entry.path) freshPaths[entry.path] = true;
+        });
+
+        // When the UI supplied a previously displayed audit, delete only the
+        // intersection: a path must have been shown to the editor and must still
+        // be unused now. A newly discovered candidate requires another review.
+        var reviewedPaths = report && Array.isArray(report.unused)
+            ? report.unused.map(function (entry) { return entry && entry.path ? entry.path : ""; }).filter(Boolean)
+            : Object.keys(freshPaths);
+        var paths = reviewedPaths.filter(function (path) { return !!freshPaths[path]; });
+        if (!paths.length) {
+            var emptyResult = { ok: true, removed: 0, remaining: freshReport.unusedCount || 0, completedAt: Date.now(), rescanned: true };
+            galleryAtomicMediaRuntime.lastAudit = Object.assign({}, freshReport, { cleanup: emptyResult });
+            return emptyResult;
+        }
+
+        var client = window.gallerySupabase;
+        if (!client || !client.storage) throw new Error("Supabase Storage is not configured.");
+        var removed = 0;
+        for (var i = 0; i < paths.length; i += 100) {
+            var batch = paths.slice(i, i + 100);
+            var response = await client.storage.from(galleryArtworkStorageBucket).remove(batch);
+            if (response.error) throw response.error;
+            removed += batch.length;
+        }
+        var result = {
+            ok: true,
+            removed: removed,
+            remaining: Math.max(0, (freshReport.unusedCount || 0) - removed),
+            completedAt: Date.now(),
+            rescanned: true
+        };
+        galleryAtomicMediaRuntime.lastAudit = Object.assign({}, freshReport, { cleanup: result });
+        return result;
+    }
+
+    async function repairGalleryManagedMedia() {
+        var authorReconciliation = await reconcileExistingAuthorAvifVariants({ verifyFiles: true });
+        var artworkResult = await rebuildAllArtworkImageVariants({ force: false });
+        var authorResult = await rebuildAllAuthorPhotoVariants({ force: false });
+        var changed = (authorReconciliation.reconciled || 0) + (artworkResult.rebuilt || 0) + (authorResult.rebuilt || 0);
+        var saveOk = true;
+        if (changed > 0) saveOk = !!(await saveGalleryStateToSupabase());
+        var result = {
+            ok: saveOk && artworkResult.failed === 0 && authorResult.failed === 0,
+            reconciledAuthors: authorReconciliation.reconciled || 0,
+            rebuiltArtworks: artworkResult.rebuilt || 0,
+            failedArtworks: artworkResult.failed || 0,
+            rebuiltAuthors: authorResult.rebuilt || 0,
+            failedAuthors: authorResult.failed || 0,
+            saved: saveOk,
+            completedAt: Date.now()
+        };
+        galleryAtomicMediaRuntime.lastRepair = result;
+        return result;
+    }
+
+    // STAGE 12C66C6C - AUTOMATIC MEDIA LIFECYCLE / TWO RECOVERY TOOLS
+    var imageOptimizationSectionData = createEditorSection("MEDIA HEALTH");
+    var imageOptimizationNote = document.createElement("p");
+    imageOptimizationNote.className = "gallery-artwork-image-note";
+    imageOptimizationNote.innerText = "Uploads and replacements create verified AVIF sets automatically. These tools are only for recovery and safe cleanup.";
+    var imageOptimizationStatus = document.createElement("div");
+    imageOptimizationStatus.className = "gallery-artwork-image-status";
+    imageOptimizationStatus.innerHTML = "Media lifecycle: <strong>automatic</strong>";
     function createImageOptimizationButton(label, primary, danger) {
         var button = document.createElement("button");
         button.type = "button";
@@ -20544,51 +20593,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         button.innerText = label;
         return button;
     }
-
-    var imageOptimizationTestActions = createImageOptimizationActionRow();
-    var imageOptimizationTestSelectedButton = createImageOptimizationButton("TEST SELECTED ARTWORK AVIF", false, false);
-    var imageOptimizationAuditButton = createImageOptimizationButton("AUDIT GENERATED WEBP", false, false);
-    imageOptimizationTestActions.appendChild(imageOptimizationTestSelectedButton);
-    imageOptimizationTestActions.appendChild(imageOptimizationAuditButton);
-
-    var imageOptimizationArtworkActions = createImageOptimizationActionRow();
-    var imageOptimizationArtworkButton = createImageOptimizationButton("BUILD MISSING ARTWORK AVIF", true, false);
-    var imageOptimizationArtworkForceButton = createImageOptimizationButton("FORCE REBUILD ARTWORK AVIF", false, false);
-    imageOptimizationArtworkActions.appendChild(imageOptimizationArtworkButton);
-    imageOptimizationArtworkActions.appendChild(imageOptimizationArtworkForceButton);
-
-    var imageOptimizationAuthorActions = createImageOptimizationActionRow();
-    var imageOptimizationAuthorButton = createImageOptimizationButton("RECONCILE / BUILD AUTHOR AVIF", true, false);
-    var imageOptimizationAuthorForceButton = createImageOptimizationButton("FORCE REBUILD AUTHOR AVIF", false, false);
-    imageOptimizationAuthorActions.appendChild(imageOptimizationAuthorButton);
-    imageOptimizationAuthorActions.appendChild(imageOptimizationAuthorForceButton);
-
-    var imageOptimizationMigrationActions = createImageOptimizationActionRow();
-    var imageOptimizationValidateButton = createImageOptimizationButton("VALIDATE AVIF MIGRATION", false, false);
-    var imageOptimizationFinalizeButton = createImageOptimizationButton("FINALIZE + REMOVE WEBP", false, true);
-    imageOptimizationMigrationActions.appendChild(imageOptimizationValidateButton);
-    imageOptimizationMigrationActions.appendChild(imageOptimizationFinalizeButton);
-
-    var imageOptimizationButtons = [
-        imageOptimizationTestSelectedButton,
-        imageOptimizationAuditButton,
-        imageOptimizationArtworkButton,
-        imageOptimizationArtworkForceButton,
-        imageOptimizationAuthorButton,
-        imageOptimizationAuthorForceButton,
-        imageOptimizationValidateButton,
-        imageOptimizationFinalizeButton
-    ];
-
+    var imageOptimizationActions = document.createElement("div");
+    imageOptimizationActions.className = "gallery-artwork-image-actions is-two";
+    var imageOptimizationRepairButton = createImageOptimizationButton("REPAIR MEDIA", true, false);
+    var imageOptimizationAuditCleanButton = createImageOptimizationButton("AUDIT & CLEAN MEDIA", false, false);
+    imageOptimizationActions.appendChild(imageOptimizationRepairButton);
+    imageOptimizationActions.appendChild(imageOptimizationAuditCleanButton);
+    var imageOptimizationButtons = [imageOptimizationRepairButton, imageOptimizationAuditCleanButton];
     imageOptimizationSectionData.section.appendChild(imageOptimizationNote);
-    imageOptimizationSectionData.section.appendChild(imageOptimizationSettings);
     imageOptimizationSectionData.section.appendChild(imageOptimizationStatus);
-    imageOptimizationSectionData.section.appendChild(imageOptimizationTestActions);
-    imageOptimizationSectionData.section.appendChild(imageOptimizationArtworkActions);
-    imageOptimizationSectionData.section.appendChild(imageOptimizationAuthorActions);
-    imageOptimizationSectionData.section.appendChild(imageOptimizationMigrationActions);
+    imageOptimizationSectionData.section.appendChild(imageOptimizationActions);
     editorScroll.appendChild(imageOptimizationSectionData.section);
-
     // STAGE 12A - 3D MODEL SLOT UI
     var model3dSectionData = createEditorSection("3D MODEL SLOT");
     model3dSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
@@ -21010,176 +21025,150 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return author;
     }
 
-    async function uploadAuthorPhotoForSculpture(slot, file) {
-        if (!slot || !file) {
-            notifyGalleryStatus("Select one sculpture and choose an author photo.");
-            return false;
+
+    function applyAuthorPhotoInfoToOwner(ownerKind, owner, authorRecord, fallbackInfo) {
+        if (ownerKind === "sculpture") {
+            if (authorRecord) syncSculptureInfoWithAuthor(owner, authorRecord); else setSculptureInfoState(owner, fallbackInfo);
+            updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(fallbackInfo));
+            updateSculptureAuthorFoundUi(authorRecord);
+        } else {
+            if (authorRecord) syncArtworkInfoWithAuthor(owner, authorRecord); else setArtworkInfoState(owner, fallbackInfo);
+            updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(fallbackInfo));
+            updateAuthorFoundUi(authorRecord);
         }
+        updateArtworkInfoPopupContent(owner);
+    }
 
-        if (!galleryArtworkUploadEnabled) {
-            notifyGalleryStatus("Upload is disabled in this version.");
-            return false;
-        }
-
-        var client = window.gallerySupabase;
-
-        if (!client || !client.storage) {
-            notifyGalleryStatus("Supabase Storage is not configured.");
-            return false;
-        }
-
-        if (galleryEditorLoginEnabled && !editorAuthenticated) {
-            notifyGalleryStatus("Log in as editor to upload author photo.");
-            return false;
-        }
-
-        if (!file.type || file.type.indexOf("image/") !== 0) {
-            notifyGalleryStatus("Choose an image file.");
-            return false;
-        }
-
-        var sculptureAuthorImageValidation = await validateGalleryImageUploadFile(file, "author");
-
-        if (!sculptureAuthorImageValidation.ok) {
-            notifyGalleryStatus(sculptureAuthorImageValidation.message);
-            return false;
-        }
-
-        var authorNameForUpload = sculptureInfoAuthorInput
-            ? sculptureInfoAuthorInput.value.trim()
-            : "";
-
-        if (!authorNameForUpload) {
-            notifyGalleryStatus("Type author name before uploading photo.");
-            return false;
-        }
-
-        var previousInfo = normalizeSculptureInfo(getSculptureInfoState(slot));
-        var info = normalizeSculptureInfo(previousInfo);
-        var storagePath = createAuthorPhotoStoragePath(slot, file);
-
-        notifyGalleryStatus("Uploading author photo and creating AVIF variants...");
-
-        var uploadResponse = await client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .upload(storagePath, file, {
-                cacheControl: "3600",
-                upsert: false,
-                contentType: file.type
-            });
-
-        if (uploadResponse.error) {
-            var message = uploadResponse.error.message || "Unknown upload error";
-            console.warn("Sculpture author photo upload error:", uploadResponse.error);
-            notifyGalleryStatus("Author photo upload failed: " + message);
-            return false;
-        }
-
-        registerGalleryPendingDraftUpload(galleryArtworkStorageBucket, storagePath, "sculpture-author-original");
-
-        var publicUrlResponse = client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .getPublicUrl(storagePath);
-
-        info.authorPhotoUrl = publicUrlResponse &&
-            publicUrlResponse.data &&
-            publicUrlResponse.data.publicUrl
-                ? publicUrlResponse.data.publicUrl
-                : "";
-
-        var authorVariantState = {};
-
+    async function clearGalleryOwnerInfoAtomically(ownerKind, owner) {
+        if (!owner) return false;
+        var isSculpture = ownerKind === "sculpture";
+        var previousInfo = cloneGalleryStateForIntegrity(isSculpture ? getSculptureInfoState(owner) : getArtworkInfoState(owner));
+        if (!previousInfo) return true;
+        var ownerId = isSculpture ? ensureModel3dSlotIdentity(owner) : ensureArtworkIdentity(owner);
+        var operation = beginGalleryAtomicMediaOperation(ownerKind + "-info:" + ownerId, ownerKind + "-info-clear");
+        if (isSculpture) setSculptureInfoState(owner, null); else setArtworkInfoState(owner, null);
         try {
-            authorVariantState = await createAndUploadAuthorPhotoVariants(
-                file,
-                storagePath,
-                client
-            );
-        } catch (authorVariantError) {
-            console.warn("Sculpture author photo variants warning:", authorVariantError);
-            notifyGalleryStatus("Author photo uploaded, but AVIF variants failed. Check console.");
+            var saveResult = await persistGalleryAtomicMediaCommit("atomic-" + ownerKind + "-info-clear");
+            if (!saveResult.ok) {
+                if (isSculpture) setSculptureInfoState(owner, previousInfo); else setArtworkInfoState(owner, previousInfo);
+                throw new Error("Gallery save failed; the previous information was restored.");
+            }
+            if (previousInfo.authorId) await cleanupUnusedAuthorPhotoIfNeeded(previousInfo.authorId, owner);
+            else queueGalleryAuthorPhotoForCleanup(previousInfo, ownerKind + "-info-cleared");
+            var cleanupSave = await saveGalleryStateToSupabase();
+            finishGalleryAtomicMediaOperation(operation, true, { cleanupSaved: !!cleanupSave });
+            return true;
+        } catch (error) {
+            finishGalleryAtomicMediaOperation(operation, false, { error: error && error.message ? error.message : String(error) });
+            notifyGalleryStatus("Clear zatrzymany: " + (error && error.message ? error.message : error));
+            return false;
+        } finally {
+            if (isSculpture) {
+                updateSculptureInfoUi();
+                updateArtworkInfoPopupContent(owner);
+            } else {
+                updateArtworkInfoUi();
+                updateArtworkInfoPopupContent(owner);
+            }
         }
+    }
 
-        info = Object.assign(
-            info,
-            {
-                authorPhotoUrl: info.authorPhotoUrl,
-                authorPhotoUrlOriginal: info.authorPhotoUrl,
+    async function uploadAuthorPhotoAtomically(ownerKind, owner, file, authorName) {
+        if (!owner || !file || !authorName) return false;
+        var client = window.gallerySupabase;
+        if (!client || !client.storage) { notifyGalleryStatus("Supabase Storage is not configured."); return false; }
+        var validation = await validateGalleryImageUploadFile(file, "author");
+        if (!validation.ok) { notifyGalleryStatus(validation.message); return false; }
+        var authorId = getAuthorIdFromName(authorName);
+        var previousInfo = cloneGalleryStateForIntegrity(ownerKind === "sculpture" ? getSculptureInfoState(owner) : getArtworkInfoState(owner));
+        var previousAuthor = cloneGalleryStateForIntegrity(getAuthorById(authorId));
+        var operation = beginGalleryAtomicMediaOperation("author:" + authorId, ownerKind + "-author-upload");
+        var storagePath = createAuthorPhotoStoragePath(owner, file);
+        var nextInfo = null;
+        notifyGalleryStatus("Wgrywam zdjecie autora i tworze kompletny zestaw AVIF...");
+        try {
+            var uploadResponse = await client.storage.from(galleryArtworkStorageBucket).upload(storagePath, file, {
+                cacheControl: "3600", upsert: false, contentType: file.type
+            });
+            if (uploadResponse.error) throw uploadResponse.error;
+            registerGalleryPendingDraftUpload(galleryArtworkStorageBucket, storagePath, ownerKind + "-author-original");
+            var publicUrlResponse = client.storage.from(galleryArtworkStorageBucket).getPublicUrl(storagePath);
+            var publicUrl = publicUrlResponse && publicUrlResponse.data ? publicUrlResponse.data.publicUrl || "" : "";
+            if (!publicUrl) throw new Error("Supabase did not return an author photo URL.");
+            var variantState = await createAndUploadAuthorPhotoVariants(file, storagePath, client, { operationId: operation.id });
+            nextInfo = Object.assign(normalizeArtworkInfo(previousInfo || {}), {
+                authorName: authorName,
+                authorId: authorId,
+                authorPhotoUrl: publicUrl,
+                authorPhotoUrlOriginal: publicUrl,
                 authorPhotoPath: storagePath,
                 authorPhotoBucket: galleryArtworkStorageBucket,
                 authorPhotoOriginalName: file.name || "",
                 authorPhotoMimeType: file.type || "",
                 authorPhotoSize: file.size || 0,
                 authorPhotoUploadedAt: new Date().toISOString(),
-                authorName: authorNameForUpload,
-                authorId: getAuthorIdFromName(authorNameForUpload)
-            },
-            authorVariantState || {}
-        );
-
-        var authorRecord = upsertAuthorRecord({
-            id: info.authorId,
-            name: info.authorName,
-            photoUrl: info.authorPhotoUrl,
-            photoUrlOriginal: info.authorPhotoUrlOriginal,
-            photoUrlWeb: info.authorPhotoUrlWeb,
-            photoUrlMobile: info.authorPhotoUrlMobile,
-            photoUrlPreview: info.authorPhotoUrlPreview,
-            photoPath: info.authorPhotoPath,
-            photoPathWeb: info.authorPhotoPathWeb,
-            photoPathMobile: info.authorPhotoPathMobile,
-            photoPathPreview: info.authorPhotoPathPreview,
-            photoBucket: info.authorPhotoBucket,
-            photoOriginalName: info.authorPhotoOriginalName,
-            photoMimeType: info.authorPhotoMimeType,
-            photoMimeTypeWeb: info.authorPhotoMimeTypeWeb,
-            photoMimeTypeMobile: info.authorPhotoMimeTypeMobile,
-            photoMimeTypePreview: info.authorPhotoMimeTypePreview,
-            photoSize: info.authorPhotoSize,
-            photoSizeWeb: info.authorPhotoSizeWeb,
-            photoSizeMobile: info.authorPhotoSizeMobile,
-            photoSizePreview: info.authorPhotoSizePreview,
-            photoWidthWeb: info.authorPhotoWidthWeb,
-            photoHeightWeb: info.authorPhotoHeightWeb,
-            photoWidthMobile: info.authorPhotoWidthMobile,
-            photoHeightMobile: info.authorPhotoHeightMobile,
-            photoWidthPreview: info.authorPhotoWidthPreview,
-            photoHeightPreview: info.authorPhotoHeightPreview,
-            photoUploadedAt: info.authorPhotoUploadedAt,
-            photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt,
-            photoVariantsRebuiltAt: info.authorPhotoVariantsRebuiltAt,
-            photoVariantSchema: info.authorPhotoVariantSchema,
-            photoVariantFormat: info.authorPhotoVariantFormat,
-            photoVariantSetId: info.authorPhotoVariantSetId,
-            photoVariantEncoder: info.authorPhotoVariantEncoder,
-            photoVariantSettings: info.authorPhotoVariantSettings
-        }, { replacePhotoState: true });
-
-        if (authorRecord) {
-            syncSculptureInfoWithAuthor(slot, authorRecord);
-        } else {
-            setSculptureInfoState(slot, info);
+                atomicMediaOperationId: operation.id
+            }, variantState || {});
+            if (!isGalleryAvifVariantComplete(nextInfo, "authorPhoto")) throw new Error("Atomic author upload produced an incomplete AVIF set.");
+            if (!isGalleryAtomicMediaOperationCurrent(operation)) {
+                galleryAtomicMediaRuntime.staleDiscarded += 1;
+                queueGalleryAuthorPhotoForCleanup(nextInfo, "stale-atomic-author-upload");
+                return false;
+            }
+            var authorRecord = upsertAuthorRecord({
+                id: authorId, name: authorName,
+                photoUrl: nextInfo.authorPhotoUrl, photoUrlOriginal: nextInfo.authorPhotoUrlOriginal,
+                photoUrlWeb: nextInfo.authorPhotoUrlWeb, photoUrlMobile: nextInfo.authorPhotoUrlMobile, photoUrlPreview: nextInfo.authorPhotoUrlPreview,
+                photoPath: nextInfo.authorPhotoPath, photoPathWeb: nextInfo.authorPhotoPathWeb, photoPathMobile: nextInfo.authorPhotoPathMobile, photoPathPreview: nextInfo.authorPhotoPathPreview,
+                photoBucket: nextInfo.authorPhotoBucket, photoOriginalName: nextInfo.authorPhotoOriginalName,
+                photoMimeType: nextInfo.authorPhotoMimeType, photoMimeTypeWeb: nextInfo.authorPhotoMimeTypeWeb, photoMimeTypeMobile: nextInfo.authorPhotoMimeTypeMobile, photoMimeTypePreview: nextInfo.authorPhotoMimeTypePreview,
+                photoSize: nextInfo.authorPhotoSize, photoSizeWeb: nextInfo.authorPhotoSizeWeb, photoSizeMobile: nextInfo.authorPhotoSizeMobile, photoSizePreview: nextInfo.authorPhotoSizePreview,
+                photoWidthWeb: nextInfo.authorPhotoWidthWeb, photoHeightWeb: nextInfo.authorPhotoHeightWeb,
+                photoWidthMobile: nextInfo.authorPhotoWidthMobile, photoHeightMobile: nextInfo.authorPhotoHeightMobile,
+                photoWidthPreview: nextInfo.authorPhotoWidthPreview, photoHeightPreview: nextInfo.authorPhotoHeightPreview,
+                photoUploadedAt: nextInfo.authorPhotoUploadedAt, photoVariantsGeneratedAt: nextInfo.authorPhotoVariantsGeneratedAt,
+                photoVariantSchema: nextInfo.authorPhotoVariantSchema, photoVariantFormat: nextInfo.authorPhotoVariantFormat,
+                photoVariantSetId: nextInfo.authorPhotoVariantSetId, photoVariantEncoder: nextInfo.authorPhotoVariantEncoder,
+                photoVariantSettings: nextInfo.authorPhotoVariantSettings
+            }, { replacePhotoState: true });
+            applyAuthorPhotoInfoToOwner(ownerKind, owner, authorRecord, nextInfo);
+            var saveResult = await persistGalleryAtomicMediaCommit("atomic-author-photo-upload");
+            if (!saveResult.ok) {
+                if (previousAuthor) upsertAuthorRecord(previousAuthor, { replacePhotoState: true });
+                else artworkAuthors = artworkAuthors.filter(function (item) { return !(item && item.id === authorId); });
+                if (ownerKind === "sculpture") setSculptureInfoState(owner, previousInfo); else setArtworkInfoState(owner, previousInfo);
+                queueGalleryAuthorPhotoForCleanup(nextInfo, "atomic-author-save-rollback");
+                throw new Error("Gallery save failed; the previous author photo was restored.");
+            }
+            if (previousInfo) {
+                queueGalleryAuthorPhotoForCleanup(previousInfo, "atomic-author-photo-replaced");
+                await saveGalleryStateToSupabase();
+            }
+            finishGalleryAtomicMediaOperation(operation, true, { authorId: authorId, variantSetId: nextInfo.authorPhotoVariantSetId });
+            notifyGalleryStatus("Zdjecie autora zapisane atomowo z kompletem AVIF.");
+            return true;
+        } catch (error) {
+            if (nextInfo) queueGalleryAuthorPhotoForCleanup(nextInfo, "failed-atomic-author-upload");
+            else queueGalleryStorageCleanupPaths(galleryArtworkStorageBucket, [storagePath], "failed-author-original", "atomic-upload-failed");
+            finishGalleryAtomicMediaOperation(operation, false, { error: error && error.message ? error.message : String(error) });
+            console.warn("Atomic author photo upload failed:", error);
+            notifyGalleryStatus("Zdjecie autora nie zostalo zmienione: " + (error.message || error));
+            return false;
         }
+    }
 
+    async function uploadAuthorPhotoForSculpture(slot, file) {
+        if (!slot || !file) { notifyGalleryStatus("Select one sculpture/model slot and choose an author photo."); return false; }
+        if (!galleryArtworkUploadEnabled) { notifyGalleryStatus("Upload is disabled in this version."); return false; }
+        if (galleryEditorLoginEnabled && !editorAuthenticated) { notifyGalleryStatus("Log in as editor to upload author photo."); return false; }
+        var authorName = sculptureInfoAuthorInput ? sculptureInfoAuthorInput.value.trim() : "";
+        if (!authorName) { notifyGalleryStatus("Type author name before uploading photo."); return false; }
+        var result = await uploadAuthorPhotoAtomically("sculpture", slot, file, authorName);
         if (sculptureInfoAuthorPhotoInput) {
-            sculptureInfoAuthorPhotoInput.value = info.authorPhotoUrlOriginal || info.authorPhotoUrl;
+            var info = getSculptureInfoState(slot);
+            sculptureInfoAuthorPhotoInput.value = info && (info.authorPhotoUrlOriginal || info.authorPhotoUrl) || "";
         }
-
-        updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
-        updateArtworkInfoPopupContent(slot);
-        updateSculptureAuthorFoundUi(authorRecord);
-
-        if (getAuthorPhotoPathsForDelete(previousInfo).some(function (previousPath) {
-            return !!previousPath && previousPath !== storagePath;
-        })) {
-            queueGalleryAuthorPhotoForCleanup(previousInfo, "sculpture-author-photo-replaced");
-        }
-
-        markGalleryDraftDirty("sculpture-author-photo-uploaded");
-        notifyGalleryStatus("Author photo uploaded with AVIF variants. Previous files will be removed after a successful gallery save.");
-        return true;
+        return result;
     }
 
     function applySculptureInfoFromUi() {
@@ -21194,40 +21183,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var currentInfo = normalizeSculptureInfo(previousInfoForCleanup);
         var previousPhotoUrl = currentInfo.authorPhotoUrl;
 
-        currentInfo.authorPhotoUrl = sculptureInfoAuthorPhotoInput.value.trim();
+        var requestedAuthorPhotoUrl = sculptureInfoAuthorPhotoInput.value.trim();
+        currentInfo.authorPhotoUrl = previousPhotoUrl;
+        if (requestedAuthorPhotoUrl !== previousPhotoUrl) {
+            sculptureInfoAuthorPhotoInput.value = currentInfo.authorPhotoUrlOriginal || previousPhotoUrl || "";
+            notifyGalleryStatus("Direct author-photo URL changes are disabled. Use UPLOAD PHOTO so AVIF remains complete.");
+        }
         currentInfo.authorName = sculptureInfoAuthorInput.value.trim();
         currentInfo.authorId = getAuthorIdFromName(currentInfo.authorName);
         currentInfo.title = sculptureInfoTitleInput.value.trim();
         currentInfo.description = sculptureInfoDescriptionInput.value.trim();
 
-        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
-            currentInfo.authorPhotoUrlOriginal = currentInfo.authorPhotoUrl;
-            currentInfo.authorPhotoUrlWeb = "";
-            currentInfo.authorPhotoUrlMobile = "";
-            currentInfo.authorPhotoUrlPreview = "";
-            currentInfo.authorPhotoPath = "";
-            currentInfo.authorPhotoPathWeb = "";
-            currentInfo.authorPhotoPathMobile = "";
-            currentInfo.authorPhotoPathPreview = "";
-            currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
-            currentInfo.authorPhotoOriginalName = "";
-            currentInfo.authorPhotoMimeType = "";
-            currentInfo.authorPhotoMimeTypeWeb = "";
-            currentInfo.authorPhotoMimeTypeMobile = "";
-            currentInfo.authorPhotoMimeTypePreview = "";
-            currentInfo.authorPhotoSize = 0;
-            currentInfo.authorPhotoSizeWeb = 0;
-            currentInfo.authorPhotoSizeMobile = 0;
-            currentInfo.authorPhotoSizePreview = 0;
-            currentInfo.authorPhotoUploadedAt = "";
-            currentInfo.authorPhotoVariantsGeneratedAt = "";
-            currentInfo.authorPhotoVariantsRebuiltAt = "";
-            currentInfo.authorPhotoVariantSchema = "";
-            currentInfo.authorPhotoVariantFormat = "";
-            currentInfo.authorPhotoVariantSetId = "";
-            currentInfo.authorPhotoVariantEncoder = "";
-            currentInfo.authorPhotoVariantSettings = null;
-        }
 
         if (currentInfo.authorId) {
             var existingAuthor = getAuthorById(currentInfo.authorId);
@@ -21269,13 +21235,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setSculptureInfoState(slot, currentInfo);
         }
 
-        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
-            queueGalleryAuthorPhotoForCleanup(
-                previousInfoForCleanup,
-                "sculpture-author-photo-manual-url-replaced"
-            );
-        }
-
         updateSculptureInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(slot);
         updateSculptureAuthorFoundUi(getAuthorById(currentInfo.authorId));
@@ -21299,19 +21258,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var previousInfo = cloneGalleryStateForIntegrity(getSculptureInfoState(slot));
-        setSculptureInfoState(slot, null);
-
-        if (previousInfo && previousInfo.authorId) {
-            await cleanupUnusedAuthorPhotoIfNeeded(previousInfo.authorId, slot);
-        } else {
-            queueGalleryAuthorPhotoForCleanup(previousInfo, "sculpture-info-cleared");
-        }
-
-        markGalleryDraftDirty("sculpture-info-cleared");
-        updateSculptureInfoUi();
-        updateArtworkInfoPopupContent(slot);
-        notifyGalleryStatus("Sculpture info cleared. Save state to keep the change.");
+        var cleared = await clearGalleryOwnerInfoAtomically("sculpture", slot);
+        if (cleared) notifyGalleryStatus("Sculpture info cleared and saved atomically.");
     };
 
     sculptureInfoFindAuthorButton.onclick = function (event) {
@@ -21469,175 +21417,53 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         imageOptimizationSectionData.section.classList.toggle("is-busy", !!busy);
     }
 
-    function updateImageOptimizationMigrationStatus(report) {
-        report = report || galleryAvifMigrationRuntime.lastValidation;
-        if (!report) {
-            imageOptimizationStatus.innerHTML = "Migration: <strong>not validated</strong>";
-            return;
-        }
-        var storageText = report.storageGeneratedWebpCount === null ? "not scanned" : String(report.storageGeneratedWebpCount);
-        imageOptimizationStatus.innerHTML =
-            "Artwork AVIF: <strong>" + report.artworks.complete + "/" + report.artworks.total + "</strong> — " +
-            "Author AVIF: <strong>" + report.authors.complete + "/" + report.authors.total + "</strong><br>" +
-            "Active WebP refs: <strong>" + report.activeGeneratedWebpCount + "</strong> — Storage WebP: <strong>" + storageText + "</strong> — " +
-            "Original WebP sources preserved: <strong>" + report.originalWebpSourcesPreserved + "</strong>";
-    }
-
-    async function runSelectedArtworkAvifTestFromUi() {
-        var artwork = selectedArtworks.length === 1 ? selectedArtworks[0] : null;
-        var state = getArtworkImageState(artwork);
-        if (!artwork || !state || !getArtworkOriginalImageUrlFromState(state)) {
-            notifyGalleryStatus("Select exactly one artwork with a source image before running the AVIF test.");
-            return;
-        }
-        if (window.confirm && !window.confirm("Generate and apply a fresh AVIF set for selected artwork: " + artwork.name + "?")) return;
+    async function runGalleryMediaRepairFromUi() {
         setImageOptimizationUiBusy(true);
+        imageOptimizationStatus.innerHTML = "Media lifecycle: <strong>repairing...</strong>";
+        notifyGalleryStatus("Checking and repairing missing AVIF media...");
         try {
-            var result = await rebuildArtworkImageVariants(artwork, { force: true });
-            markGalleryDraftDirty("selected-artwork-avif-test");
-            var nextState = getArtworkImageState(artwork) || {};
-            var totalBytes = [nextState.imageSizeWeb, nextState.imageSizeMobile, nextState.imageSizePreview].reduce(function (sum, value) { return sum + (Number(value) || 0); }, 0);
-            notifyGalleryStatus("Selected artwork AVIF ready: " + artwork.name + " — total variants " + Math.round(totalBytes / 1024) + " KB. Validate before finalization.");
-            updateImageOptimizationMigrationStatus(await validateGalleryAvifMigration({ scanStorage: false }));
+            var result = await repairGalleryManagedMedia();
+            imageOptimizationStatus.innerHTML = "Repair: <strong>" + (result.ok ? "complete" : "needs attention") + "</strong> — Artwork " + result.rebuiltArtworks + ", Author " + result.rebuiltAuthors;
+            notifyGalleryStatus("Media repair complete. Rebuilt artwork: " + result.rebuiltArtworks + ", author: " + result.rebuiltAuthors + ", failures: " + (result.failedArtworks + result.failedAuthors) + ".");
             return result;
         } catch (error) {
-            console.warn("Selected artwork AVIF test failed:", error);
-            notifyGalleryStatus("Selected artwork AVIF test failed: " + (error.message || error));
+            console.warn("Media repair failed:", error);
+            imageOptimizationStatus.innerHTML = "Repair: <strong>failed safely</strong>";
+            notifyGalleryStatus("Media repair failed safely: " + (error.message || error));
         } finally {
             setImageOptimizationUiBusy(false);
         }
     }
 
-    async function runGeneratedWebpStorageAuditFromUi() {
+    async function runGalleryMediaAuditCleanFromUi() {
         setImageOptimizationUiBusy(true);
-        notifyGalleryStatus("Auditing generated WebP folders in Supabase Storage...");
+        imageOptimizationStatus.innerHTML = "Media lifecycle: <strong>auditing...</strong>";
         try {
-            var audit = await scanGalleryLegacyGeneratedWebpStorage();
-            var report = await validateGalleryAvifMigration({ scanStorage: false });
-            updateImageOptimizationMigrationStatus(report);
-            notifyGalleryStatus("Generated WebP audit complete: " + audit.total + " file(s). Original source folders were not scanned for deletion.");
-            return audit;
-        } catch (error) {
-            console.warn("Generated WebP audit failed:", error);
-            notifyGalleryStatus("Generated WebP audit failed: " + (error.message || error));
-        } finally {
-            setImageOptimizationUiBusy(false);
-        }
-    }
-
-    async function runArtworkImageVariantsRebuildFromUi(force) {
-        var candidates = getActiveArtworks().filter(function (candidate) {
-            var state = getArtworkImageState(candidate);
-            return !!(state && getArtworkOriginalImageUrlFromState(state) && (force || artworkImageStateNeedsVariants(state)));
-        });
-        if (!candidates.length) {
-            notifyGalleryStatus(force ? "No artwork source images are available for AVIF rebuild." : "All artwork AVIF variants are complete.");
-            return;
-        }
-        if (window.confirm && !window.confirm((force ? "Force rebuild" : "Build missing") + " AVIF variants for " + candidates.length + " artwork image(s)?")) return;
-        setImageOptimizationUiBusy(true);
-        try {
-            var result = await rebuildAllArtworkImageVariants({ force: !!force });
-            if (result.rebuilt > 0) markGalleryDraftDirty(force ? "artwork-avif-force-rebuilt" : "artwork-avif-built");
-            notifyGalleryStatus("Artwork AVIF complete. Rebuilt: " + result.rebuilt + ", failed: " + result.failed + ". Validate before finalization.");
-            var report = await validateGalleryAvifMigration({ scanStorage: false });
-            updateImageOptimizationMigrationStatus(report);
-            return result;
-        } catch (error) {
-            console.warn("Artwork AVIF rebuild error:", error);
-            notifyGalleryStatus("Artwork AVIF rebuild failed: " + (error.message || error));
-        } finally {
-            setImageOptimizationUiBusy(false);
-            updateArtworkImageUi();
-            updateArtworkTransformUi();
-        }
-    }
-
-    async function runAuthorPhotoVariantsRebuildFromUi(force) {
-        setImageOptimizationUiBusy(true);
-        try {
-            var reconciliation = force
-                ? { reconciled: 0, unresolved: 0, failed: 0 }
-                : await reconcileExistingAuthorAvifVariants({ verifyFiles: true });
-            var candidates = artworkAuthors.filter(function (author) {
-                return !!(getOriginalAuthorPhotoUrlFromInfo(author) && (force || authorPhotoStateNeedsVariants(author)));
-            });
-            if (!candidates.length) {
-                notifyGalleryStatus(
-                    "Author AVIF complete. Existing sets reconciled: " + reconciliation.reconciled + ". No re-encoding was needed."
-                );
-                var completeReport = await validateGalleryAvifMigration({ scanStorage: false });
-                updateImageOptimizationMigrationStatus(completeReport);
-                return { total: 0, rebuilt: 0, failed: 0, reconciled: reconciliation.reconciled };
+            var report = await auditGalleryManagedMedia();
+            imageOptimizationStatus.innerHTML = "Audit: <strong>" + report.unusedCount + " unused</strong> of " + report.storageTotal + " managed files";
+            if (!report.unusedCount) {
+                notifyGalleryStatus("Media audit complete. No unused managed files found.");
+                return report;
             }
-            if (window.confirm && !window.confirm(
-                (force ? "Force rebuild" : "Build remaining") + " AVIF variants for " + candidates.length +
-                " author photo(s)? Existing complete Storage sets were reconciled first."
-            )) return;
-            var result = await rebuildAllAuthorPhotoVariants({ force: !!force });
-            result.reconciled = reconciliation.reconciled;
-            if (result.rebuilt > 0 || reconciliation.reconciled > 0) {
-                markGalleryDraftDirty(force ? "author-avif-force-rebuilt" : "author-avif-reconciled-built");
-            }
-            notifyGalleryStatus(
-                "Author AVIF complete. Reconciled: " + reconciliation.reconciled +
-                ", rebuilt: " + result.rebuilt + ", failed: " + result.failed + ". Validate before finalization."
+            var accepted = !window.confirm || window.confirm(
+                "Audit found " + report.unusedCount + " unused media file(s). Active state, recovery backup and pending uploads are protected. Remove them now?"
             );
-            var report = await validateGalleryAvifMigration({ scanStorage: false });
-            updateImageOptimizationMigrationStatus(report);
-            return result;
+            if (!accepted) return report;
+            var cleanup = await cleanGalleryManagedMedia(report);
+            imageOptimizationStatus.innerHTML = "Cleanup: <strong>removed " + cleanup.removed + "</strong>";
+            notifyGalleryStatus("Managed media cleanup removed " + cleanup.removed + " unused file(s).");
+            return cleanup;
         } catch (error) {
-            console.warn("Author AVIF reconciliation/rebuild error:", error);
-            notifyGalleryStatus("Author AVIF reconciliation/rebuild failed: " + (error.message || error));
-        } finally {
-            setImageOptimizationUiBusy(false);
-            updateArtworkInfoUi();
-            updateArtworkTransformUi();
-        }
-    }
-
-    async function runGalleryAvifMigrationValidationFromUi() {
-        setImageOptimizationUiBusy(true);
-        notifyGalleryStatus("Scanning AVIF state and generated WebP Storage folders...");
-        try {
-            var report = await validateGalleryAvifMigration({ scanStorage: true, reconcileExistingAuthorAvif: true });
-            updateImageOptimizationMigrationStatus(report);
-            var recoveredAuthors = report.authorReconciliation ? report.authorReconciliation.reconciled : 0;
-            notifyGalleryStatus(report.readyForFinalization
-                ? "AVIF migration is ready for finalization. Reconciled existing author AVIF: " + recoveredAuthors + ". Generated WebP in Storage: " + report.storageGeneratedWebpCount + "."
-                : "AVIF migration incomplete. Missing artwork: " + report.artworks.missing.length + ", missing authors: " + report.authors.missing.length + ", active WebP refs: " + report.activeGeneratedWebpCount + ".");
-            return report;
-        } catch (error) {
-            console.warn("AVIF migration validation error:", error);
-            notifyGalleryStatus("AVIF migration validation failed: " + (error.message || error));
+            console.warn("Media audit/cleanup failed:", error);
+            imageOptimizationStatus.innerHTML = "Cleanup: <strong>failed safely</strong>";
+            notifyGalleryStatus("Media cleanup stopped safely: " + (error.message || error));
         } finally {
             setImageOptimizationUiBusy(false);
         }
     }
 
-    async function runGalleryAvifMigrationFinalizeFromUi() {
-        setImageOptimizationUiBusy(true);
-        try {
-            var result = await finalizeGalleryAvifMigrationAndRemoveWebp();
-            var report = await validateGalleryAvifMigration({ scanStorage: true });
-            updateImageOptimizationMigrationStatus(report);
-            return result;
-        } catch (error) {
-            console.warn("AVIF migration finalization error:", error);
-            notifyGalleryStatus("AVIF finalization stopped safely: " + (error.message || error));
-        } finally {
-            setImageOptimizationUiBusy(false);
-        }
-    }
-
-    imageOptimizationTestSelectedButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runSelectedArtworkAvifTestFromUi(); };
-    imageOptimizationAuditButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runGeneratedWebpStorageAuditFromUi(); };
-    imageOptimizationArtworkButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runArtworkImageVariantsRebuildFromUi(false); };
-    imageOptimizationArtworkForceButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runArtworkImageVariantsRebuildFromUi(true); };
-    imageOptimizationAuthorButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runAuthorPhotoVariantsRebuildFromUi(false); };
-    imageOptimizationAuthorForceButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runAuthorPhotoVariantsRebuildFromUi(true); };
-    imageOptimizationValidateButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runGalleryAvifMigrationValidationFromUi(); };
-    imageOptimizationFinalizeButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runGalleryAvifMigrationFinalizeFromUi(); };
+    imageOptimizationRepairButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runGalleryMediaRepairFromUi(); };
+    imageOptimizationAuditCleanButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); runGalleryMediaAuditCleanFromUi(); };
 
     function createGalleryTextInputCompat(placeholder) {
         var input = document.createElement("input");
@@ -22177,175 +22003,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function uploadAuthorPhotoForArtwork(artwork, file) {
-        if (!artwork || !file) {
-            notifyGalleryStatus("Select one artwork and choose an author photo.");
-            return false;
-        }
-
-        if (!galleryArtworkUploadEnabled) {
-            notifyGalleryStatus("Upload is disabled in this version.");
-            return false;
-        }
-
-        var client = window.gallerySupabase;
-
-        if (!client || !client.storage) {
-            notifyGalleryStatus("Supabase Storage is not configured.");
-            return false;
-        }
-
-        if (galleryEditorLoginEnabled && !editorAuthenticated) {
-            notifyGalleryStatus("Log in as editor to upload author photo.");
-            return false;
-        }
-
-        if (!file.type || file.type.indexOf("image/") !== 0) {
-            notifyGalleryStatus("Choose an image file.");
-            return false;
-        }
-
-        var artworkAuthorImageValidation = await validateGalleryImageUploadFile(file, "author");
-
-        if (!artworkAuthorImageValidation.ok) {
-            notifyGalleryStatus(artworkAuthorImageValidation.message);
-            return false;
-        }
-
-        var authorNameForUpload = artworkInfoAuthorNameInput
-            ? artworkInfoAuthorNameInput.value.trim()
-            : "";
-
-        if (!authorNameForUpload) {
-            notifyGalleryStatus("Type author name before uploading photo.");
-            return false;
-        }
-
-        var previousInfo = normalizeArtworkInfo(getArtworkInfoState(artwork));
-        var info = normalizeArtworkInfo(previousInfo);
-        var storagePath = createAuthorPhotoStoragePath(artwork, file);
-
-        notifyGalleryStatus("Uploading author photo and creating AVIF variants...");
-
-        var uploadResponse = await client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .upload(storagePath, file, {
-                cacheControl: "3600",
-                upsert: false,
-                contentType: file.type
-            });
-
-        if (uploadResponse.error) {
-            var message = uploadResponse.error.message || "Unknown upload error";
-            console.warn("Author photo upload error:", uploadResponse.error);
-            notifyGalleryStatus("Author photo upload failed: " + message);
-            return false;
-        }
-
-        registerGalleryPendingDraftUpload(galleryArtworkStorageBucket, storagePath, "artwork-author-original");
-
-        var publicUrlResponse = client
-            .storage
-            .from(galleryArtworkStorageBucket)
-            .getPublicUrl(storagePath);
-
-        info.authorPhotoUrl = publicUrlResponse &&
-            publicUrlResponse.data &&
-            publicUrlResponse.data.publicUrl
-                ? publicUrlResponse.data.publicUrl
-                : "";
-
-        var authorVariantState = {};
-
-        try {
-            authorVariantState = await createAndUploadAuthorPhotoVariants(
-                file,
-                storagePath,
-                client
-            );
-        } catch (authorVariantError) {
-            console.warn("Author photo variants warning:", authorVariantError);
-            notifyGalleryStatus("Author photo uploaded, but AVIF variants failed. Check console.");
-        }
-
-        info = Object.assign(
-            info,
-            {
-                authorPhotoUrl: info.authorPhotoUrl,
-                authorPhotoUrlOriginal: info.authorPhotoUrl,
-                authorPhotoPath: storagePath,
-                authorPhotoBucket: galleryArtworkStorageBucket,
-                authorPhotoOriginalName: file.name || "",
-                authorPhotoMimeType: file.type || "",
-                authorPhotoSize: file.size || 0,
-                authorPhotoUploadedAt: new Date().toISOString(),
-                authorName: authorNameForUpload,
-                authorId: getAuthorIdFromName(authorNameForUpload)
-            },
-            authorVariantState || {}
-        );
-
-        var authorRecord = upsertAuthorRecord({
-            id: info.authorId,
-            name: info.authorName,
-            photoUrl: info.authorPhotoUrl,
-            photoUrlOriginal: info.authorPhotoUrlOriginal,
-            photoUrlWeb: info.authorPhotoUrlWeb,
-            photoUrlMobile: info.authorPhotoUrlMobile,
-            photoUrlPreview: info.authorPhotoUrlPreview,
-            photoPath: info.authorPhotoPath,
-            photoPathWeb: info.authorPhotoPathWeb,
-            photoPathMobile: info.authorPhotoPathMobile,
-            photoPathPreview: info.authorPhotoPathPreview,
-            photoBucket: info.authorPhotoBucket,
-            photoOriginalName: info.authorPhotoOriginalName,
-            photoMimeType: info.authorPhotoMimeType,
-            photoMimeTypeWeb: info.authorPhotoMimeTypeWeb,
-            photoMimeTypeMobile: info.authorPhotoMimeTypeMobile,
-            photoMimeTypePreview: info.authorPhotoMimeTypePreview,
-            photoSize: info.authorPhotoSize,
-            photoSizeWeb: info.authorPhotoSizeWeb,
-            photoSizeMobile: info.authorPhotoSizeMobile,
-            photoSizePreview: info.authorPhotoSizePreview,
-            photoWidthWeb: info.authorPhotoWidthWeb,
-            photoHeightWeb: info.authorPhotoHeightWeb,
-            photoWidthMobile: info.authorPhotoWidthMobile,
-            photoHeightMobile: info.authorPhotoHeightMobile,
-            photoWidthPreview: info.authorPhotoWidthPreview,
-            photoHeightPreview: info.authorPhotoHeightPreview,
-            photoUploadedAt: info.authorPhotoUploadedAt,
-            photoVariantsGeneratedAt: info.authorPhotoVariantsGeneratedAt,
-            photoVariantsRebuiltAt: info.authorPhotoVariantsRebuiltAt,
-            photoVariantSchema: info.authorPhotoVariantSchema,
-            photoVariantFormat: info.authorPhotoVariantFormat,
-            photoVariantSetId: info.authorPhotoVariantSetId,
-            photoVariantEncoder: info.authorPhotoVariantEncoder,
-            photoVariantSettings: info.authorPhotoVariantSettings
-        }, { replacePhotoState: true });
-
-        if (authorRecord) {
-            syncArtworkInfoWithAuthor(artwork, authorRecord);
-        } else {
-            setArtworkInfoState(artwork, info);
-        }
-
+        if (!artwork || !file) { notifyGalleryStatus("Select one artwork and choose an author photo."); return false; }
+        if (!galleryArtworkUploadEnabled) { notifyGalleryStatus("Upload is disabled in this version."); return false; }
+        if (galleryEditorLoginEnabled && !editorAuthenticated) { notifyGalleryStatus("Log in as editor to upload author photo."); return false; }
+        var authorName = artworkInfoAuthorNameInput ? artworkInfoAuthorNameInput.value.trim() : "";
+        if (!authorName) { notifyGalleryStatus("Type author name before uploading photo."); return false; }
+        var result = await uploadAuthorPhotoAtomically("artwork", artwork, file, authorName);
         if (artworkInfoAuthorPhotoInput) {
-            artworkInfoAuthorPhotoInput.value = info.authorPhotoUrlOriginal || info.authorPhotoUrl;
+            var info = getArtworkInfoState(artwork);
+            artworkInfoAuthorPhotoInput.value = info && (info.authorPhotoUrlOriginal || info.authorPhotoUrl) || "";
         }
-
-        updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(info));
-        updateArtworkInfoPopupContent(artwork);
-        updateAuthorFoundUi(authorRecord);
-
-        if (getAuthorPhotoPathsForDelete(previousInfo).some(function (previousPath) {
-            return !!previousPath && previousPath !== storagePath;
-        })) {
-            queueGalleryAuthorPhotoForCleanup(previousInfo, "artwork-author-photo-replaced");
-        }
-
-        markGalleryDraftDirty("artwork-author-photo-uploaded");
-        notifyGalleryStatus("Author photo uploaded with AVIF variants. Previous files will be removed after a successful gallery save.");
-        return true;
+        return result;
     }
 
     function applyArtworkInfoFromUi() {
@@ -22360,40 +22028,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var currentInfo = normalizeArtworkInfo(previousInfoForCleanup);
         var previousPhotoUrl = currentInfo.authorPhotoUrl;
 
-        currentInfo.authorPhotoUrl = artworkInfoAuthorPhotoInput.value.trim();
+        var requestedAuthorPhotoUrl = artworkInfoAuthorPhotoInput.value.trim();
+        currentInfo.authorPhotoUrl = previousPhotoUrl;
+        if (requestedAuthorPhotoUrl !== previousPhotoUrl) {
+            artworkInfoAuthorPhotoInput.value = currentInfo.authorPhotoUrlOriginal || previousPhotoUrl || "";
+            notifyGalleryStatus("Direct author-photo URL changes are disabled. Use UPLOAD PHOTO so AVIF remains complete.");
+        }
         currentInfo.authorName = artworkInfoAuthorNameInput.value.trim();
         currentInfo.authorId = getAuthorIdFromName(currentInfo.authorName);
         currentInfo.title = artworkInfoTitleInput.value.trim();
         currentInfo.description = artworkInfoDescriptionInput.value.trim();
 
-        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
-            currentInfo.authorPhotoUrlOriginal = currentInfo.authorPhotoUrl;
-            currentInfo.authorPhotoUrlWeb = "";
-            currentInfo.authorPhotoUrlMobile = "";
-            currentInfo.authorPhotoUrlPreview = "";
-            currentInfo.authorPhotoPath = "";
-            currentInfo.authorPhotoPathWeb = "";
-            currentInfo.authorPhotoPathMobile = "";
-            currentInfo.authorPhotoPathPreview = "";
-            currentInfo.authorPhotoBucket = galleryArtworkStorageBucket;
-            currentInfo.authorPhotoOriginalName = "";
-            currentInfo.authorPhotoMimeType = "";
-            currentInfo.authorPhotoMimeTypeWeb = "";
-            currentInfo.authorPhotoMimeTypeMobile = "";
-            currentInfo.authorPhotoMimeTypePreview = "";
-            currentInfo.authorPhotoSize = 0;
-            currentInfo.authorPhotoSizeWeb = 0;
-            currentInfo.authorPhotoSizeMobile = 0;
-            currentInfo.authorPhotoSizePreview = 0;
-            currentInfo.authorPhotoUploadedAt = "";
-            currentInfo.authorPhotoVariantsGeneratedAt = "";
-            currentInfo.authorPhotoVariantsRebuiltAt = "";
-            currentInfo.authorPhotoVariantSchema = "";
-            currentInfo.authorPhotoVariantFormat = "";
-            currentInfo.authorPhotoVariantSetId = "";
-            currentInfo.authorPhotoVariantEncoder = "";
-            currentInfo.authorPhotoVariantSettings = null;
-        }
 
         if (currentInfo.authorId) {
             var existingAuthor = getAuthorById(currentInfo.authorId);
@@ -22435,13 +22080,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setArtworkInfoState(artwork, currentInfo);
         }
 
-        if (currentInfo.authorPhotoUrl !== previousPhotoUrl) {
-            queueGalleryAuthorPhotoForCleanup(
-                previousInfoForCleanup,
-                "artwork-author-photo-manual-url-replaced"
-            );
-        }
-
         updateArtworkInfoEditorPhotoPreview(getBestAuthorPhotoUrlFromInfo(currentInfo));
         updateArtworkInfoPopupContent(artwork);
         updateAuthorFoundUi(getAuthorById(currentInfo.authorId));
@@ -22465,19 +22103,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        var previousInfo = cloneGalleryStateForIntegrity(getArtworkInfoState(artwork));
-        setArtworkInfoState(artwork, null);
-
-        if (previousInfo && previousInfo.authorId) {
-            await cleanupUnusedAuthorPhotoIfNeeded(previousInfo.authorId, artwork);
-        } else {
-            queueGalleryAuthorPhotoForCleanup(previousInfo, "artwork-info-cleared");
-        }
-
-        markGalleryDraftDirty("artwork-info-cleared");
-        updateArtworkInfoUi();
-        updateArtworkInfoPopupContent(artwork);
-        notifyGalleryStatus("Artwork info cleared. Save state to keep the change.");
+        var cleared = await clearGalleryOwnerInfoAtomically("artwork", artwork);
+        if (cleared) notifyGalleryStatus("Artwork info cleared and saved atomically.");
     };
 
     artworkInfoFindAuthorButton.onclick = function (event) {
@@ -23140,41 +22767,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     artworkImageApplyUrlButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
-
         var artwork = getSingleSelectedArtworkForImageUi();
         var imageUrl = artworkImageUrlInput.value.trim();
-
-        if (!artwork) {
-            notifyGalleryStatus("Zaznacz jeden obraz, aby ustawic URL.");
-            return;
-        }
-
-        if (!imageUrl) {
-            notifyGalleryStatus("Wklej URL obrazu.");
-            return;
-        }
-
-        var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
-        var nextImageState = {
-            imageUrl: imageUrl,
-            imageUrlOriginal: imageUrl,
-            fitMode: galleryArtworkDefaultFitMode,
-            source: "manual-url",
-            updatedAt: new Date().toISOString()
-        };
-
-        applyArtworkImageState(artwork, nextImageState);
-        queueReplacedGalleryArtworkStateForCleanup(
-            previousImageState,
-            nextImageState,
-            "artwork-manual-url-replaced"
-        );
-
-        updateArtworkTransformUi();
-        markGalleryDraftDirty("artwork-url-applied");
-        notifyGalleryStatus("Ustawiono obraz z URL w wersji roboczej. Uzyj Save, aby opublikowac zmiane.");
+        if (!artwork) { notifyGalleryStatus("Zaznacz jeden obraz, aby zaimportowac URL."); return; }
+        if (!imageUrl) { notifyGalleryStatus("Wklej URL obrazu."); return; }
+        importArtworkImageUrlToSupabase(artwork, imageUrl).finally(function () {
+            updateArtworkImageUi();
+            updateArtworkTransformUi();
+        });
     };
-
     artworkImageRemoveButton.onclick = function (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -23192,15 +22793,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        notifyGalleryStatus("Usuwam obraz z wersji roboczej...");
+        notifyGalleryStatus("Usuwam obraz i zapisuje zmiane atomowo...");
 
         removeArtworkImageWithStorageDelete(artwork)
             .then(function (removedImage) {
-                if (!removedImage) {
-                    return;
-                }
-
-                notifyGalleryStatus("Usunieto obraz z wersji roboczej. Pliki Storage zostana usuniete dopiero po poprawnym zapisie.");
+                if (!removedImage) return;
+                updateArtworkImageUi();
+                updateArtworkTransformUi();
             })
             .catch(function (error) {
                 console.warn("Artwork remove error:", error);
@@ -30556,7 +30155,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // TRANSITION -> only the Inspect transition controller owns the camera.
     // INSPECT    -> camera rests at the exact focus transform until manual input returns to WALK.
     var galleryInspectCameraRuntime = {
-        stage: "12C66C6B1",
+        stage: "12C66C6C",
         state: "WALK",
         transitionId: 0,
         reason: "initial",
@@ -38969,7 +38568,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Viewer and Edit share one camera ownership state machine, one safe-frame runtime and one pathfinder.
     // Navigation order belongs to artworks/sculptures (metadata.tourOrder); generated path points are read-only.
     var galleryInspectRuntime = {
-        stage: "12C66C6B1",
+        stage: "12C66C6C",
         active: false,
         opening: false,
         editPreview: false,
@@ -41710,29 +41309,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     : 0
             };
         },
+        // Compatibility alias: public URL assignment is no longer allowed to bypass AVIF.
         applyArtworkImageUrl: function (artworkNameOrIndex, imageUrl) {
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
                 : getArtworkByName(artworkNameOrIndex);
-            var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
-            var nextImageState = {
-                imageUrl: imageUrl,
-                imageUrlOriginal: imageUrl,
-                fitMode: galleryArtworkDefaultFitMode,
-                source: "GalleryApp"
-            };
-            var applied = applyArtworkImageState(artwork, nextImageState);
-
-            if (applied) {
-                queueReplacedGalleryArtworkStateForCleanup(
-                    previousImageState,
-                    nextImageState,
-                    "gallery-app-artwork-url-replaced"
-                );
-                markGalleryDraftDirty("gallery-app-artwork-url-applied");
-            }
-
-            return applied;
+            return importArtworkImageUrlToSupabase(artwork, imageUrl);
         },
         rebuildArtworkImageVariants: function (artworkNameOrIndex, options) {
             var artwork = typeof artworkNameOrIndex === "number"
@@ -41865,10 +41447,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var artwork = typeof artworkNameOrIndex === "number"
                 ? artworks[artworkNameOrIndex]
                 : getArtworkByName(artworkNameOrIndex);
-
-            setArtworkInfoState(artwork, info);
+            var previous = normalizeArtworkInfo(getArtworkInfoState(artwork));
+            var requested = normalizeArtworkInfo(info || {});
+            var requestedPhotoChanged = getOriginalAuthorPhotoUrlFromInfo(requested) !== getOriginalAuthorPhotoUrlFromInfo(previous);
+            if (requestedPhotoChanged && !isGalleryAvifVariantComplete(requested, "authorPhoto")) {
+                [
+                    "authorPhotoUrl", "authorPhotoUrlOriginal", "authorPhotoUrlWeb", "authorPhotoUrlMobile", "authorPhotoUrlPreview",
+                    "authorPhotoPath", "authorPhotoPathWeb", "authorPhotoPathMobile", "authorPhotoPathPreview",
+                    "authorPhotoBucket", "authorPhotoOriginalName", "authorPhotoMimeType", "authorPhotoMimeTypeWeb",
+                    "authorPhotoMimeTypeMobile", "authorPhotoMimeTypePreview", "authorPhotoSize", "authorPhotoSizeWeb",
+                    "authorPhotoSizeMobile", "authorPhotoSizePreview", "authorPhotoUploadedAt", "authorPhotoVariantsGeneratedAt",
+                    "authorPhotoVariantsRebuiltAt", "authorPhotoVariantSchema", "authorPhotoVariantFormat", "authorPhotoVariantSetId",
+                    "authorPhotoVariantEncoder", "authorPhotoVariantSettings"
+                ].forEach(function (key) { requested[key] = previous[key]; });
+                notifyGalleryStatus("Public setArtworkInfo cannot replace an author photo without a complete AVIF set. Use uploadAuthorPhoto.");
+            }
+            setArtworkInfoState(artwork, requested);
             updateArtworkInfoPopupContent(artwork);
-
             return getArtworkInfoState(artwork);
         },
         getAuthors: function () {
@@ -41876,26 +41471,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 return normalizeAuthorRecord(author);
             });
         },
-        rebuildAuthorPhotoVariants: function (authorIdOrName, options) {
-            return rebuildAuthorPhotoVariants(authorIdOrName, options || {});
-        },
-        rebuildAllAuthorPhotoVariants: function (options) {
-            return rebuildAllAuthorPhotoVariants(options || {});
-        },
-        reconcileExistingAuthorAvif: function (options) {
-            return reconcileExistingAuthorAvifVariants(options || { verifyFiles: true });
-        },
-        scanExistingAuthorAvifStorage: function () {
-            return scanGalleryExistingAuthorAvifStorage();
-        },
-        validateAvifMigration: function (options) {
-            return validateGalleryAvifMigration(options || { scanStorage: true });
-        },
-        scanGeneratedWebpStorage: function () {
-            return scanGalleryLegacyGeneratedWebpStorage();
-        },
-        finalizeAvifMigrationAndRemoveWebp: function (options) {
-            return finalizeGalleryAvifMigrationAndRemoveWebp(options || {});
+        repairMedia: repairGalleryManagedMedia,
+        auditMedia: auditGalleryManagedMedia,
+        cleanUnusedMedia: cleanGalleryManagedMedia,
+        getAtomicMediaDebug: getGalleryAtomicMediaDebug,
+        importArtworkImageUrl: function (artworkNameOrIndex, imageUrl) {
+            var artwork = typeof artworkNameOrIndex === "number" ? artworks[artworkNameOrIndex] : getArtworkByName(artworkNameOrIndex);
+            return importArtworkImageUrlToSupabase(artwork, imageUrl);
         },
         getAvifMigrationDebug: getGalleryAvifMigrationDebug,
         getAuthorPhotoVariantDebug: function () {

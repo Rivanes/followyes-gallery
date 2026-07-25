@@ -1,27 +1,39 @@
-# Berryboy Art Gallery — Stage 12C66C6B1
+# Berryboy Art Gallery — Stage 12C66C6C
 
-## Existing Author AVIF Reconciliation
+## Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity
 
-Wąska poprawka Stage 12C66C6B. Odzyskuje już wygenerowane zestawy zdjęć autorów znajdujące się w Supabase Storage i przypisuje je do centralnej biblioteki `artworkAuthors`, bez ponownego kodowania AVIF.
+Stage 12C66C6C zamyka serię C6 na bazie potwierdzonego Stage 12C66C6B1.
 
-### Główna zmiana
+Najważniejsze zmiany:
 
-Przycisk **RECONCILE / BUILD AUTHOR AVIF**, walidacja i finalizacja najpierw:
+- jeden atomowy pipeline dla uploadu, podmiany, importu URL, usuwania artworków oraz zdjęć autorów;
+- aktywny stan zmienia się dopiero po utworzeniu i zweryfikowaniu kompletnego zestawu Original + Desktop/Mobile/Preview AVIF;
+- błąd zapisu przywraca poprzedni obraz lub zdjęcie autora;
+- spóźniona operacja nie może nadpisać nowszego uploadu;
+- poprzednie pliki trafiają do cleanupu dopiero po potwierdzonym zapisie stanu;
+- jednorazowy kokpit migracyjny C6B został usunięty z aktywnego UI;
+- zostały dwa narzędzia: **REPAIR MEDIA** oraz **AUDIT & CLEAN MEDIA**;
+- cleanup ponownie skanuje stan tuż przed usunięciem i kasuje tylko przecięcie plików wcześniej pokazanych oraz nadal nieużywanych;
+- mobilna jakość została rozdzielona na domeny: render, cienie, światła, post-processing oraz streaming;
+- poprawiono semantykę `hardwareScalingLevel` i dodano jeden właściciel rozdzielczości renderowania;
+- artwork pozostaje w pełnej jakości Mobile AVIF i nie jest degradowany przez chwilowy spadek FPS;
+- aktywne `null LOD` zostało usunięte, a propsy otrzymały ochronę frustum i czas łaski;
+- aktualnie widoczne artworki mogą ukończyć Preview → Full także podczas ciągłego spaceru, bez naruszania izolacji przejścia Inspect.
 
-1. skanują `main/authors/AVIFv1/Desktop`, `Mobile` i `Preview`;
-2. grupują pliki po wspólnym `variantSetId`;
-3. dopasowują je do oryginalnej ścieżki zdjęcia autora;
-4. sprawdzają podpis każdego pliku AVIF;
-5. aktualizują centralny rekord autora oraz wszystkie artworki i rzeźby tego autora;
-6. dopiero dla naprawdę brakujących zestawów pozwalają uruchomić ponowne kodowanie.
+## Uruchomienie kontroli
 
-Reconciliation nie kolejkuje ani nie usuwa starych WebP. Ich fizyczne usunięcie nadal odbywa się dopiero podczas zabezpieczonego **FINALIZE + REMOVE WEBP** po dwóch zapisach stanu.
+```bash
+npm run check
+```
 
-### Najprostszy test
+## Najważniejsza diagnostyka runtime
 
-1. Kliknij **VALIDATE AVIF MIGRATION**. Walidacja automatycznie spróbuje odzyskać istniejące AVIF autorów.
-2. Oczekiwany wynik: `Author AVIF: 16/16`, `Active WebP refs: 0`.
-3. Następnie kliknij **FINALIZE + REMOVE WEBP**.
-4. Po zakończeniu oczekiwane: `Storage WebP: 0`.
+```js
+GalleryApp.getAtomicMediaDebug()
+GalleryApp.auditMedia()
+GalleryApp.repairMedia()
+GalleryApp.getMobileQuality()
+GalleryApp.getMobileQualityInspector()
+```
 
-Jeżeli jakiś autor nadal pozostaje niekompletny, użyj **RECONCILE / BUILD AUTHOR AVIF**. System najpierw odzyska istniejące zestawy, a ponowne kodowanie zaproponuje wyłącznie dla faktycznie brakujących zdjęć.
+Pełna ocena wizualnej zgodności PC i mobile wymaga testu na rzeczywistych telefonach. Testy automatyczne w paczce sprawdzają architekturę, kolejność commitów, rollback, zabezpieczenia cleanupu, profile jakości i regresje zamrożonych systemów.
