@@ -18,10 +18,10 @@ assert.equal(validateVenueManifest(raw).valid, true, 'berryboy-main/v1 manifest 
 const manifest = normalizeVenueManifest(raw, { manifestUrl: 'https://example.test/venues/berryboy-main/versions/v1/manifest.json' });
 const context = createGalleryRuntimeContext({
   venue: { venueId: 'berryboy-main', versionId: 'v1' },
-  exhibition: { stateRecordId: 'main', storageScope: 'main' }
+  exhibition: { exhibitionId: '00000000-0000-4000-8000-000000000001', exhibitionSlug: 'berryboy-main', stateRecordId: '00000000-0000-4000-8000-000000000001', storageScope: 'exhibitions/00000000-0000-4000-8000-000000000001' }
 }, manifest);
 assert.equal(context.venue.venueId, 'berryboy-main');
-assert.equal(context.exhibition.previousStateRecordId, 'main_previous');
+assert.equal(context.exhibition.previousStateRecordId, '00000000-0000-4000-8000-000000000001:previous');
 assert.equal(manifest.assets.length, 4, 'current venue must be data-driven from four manifest assets');
 
 const duplicate = structuredClone(raw);
@@ -36,7 +36,7 @@ const combinedRaw = {
   sculptureAnchors: [{ id: 'sculpt-anchor-1', nodeId: 'node-anchor-sculpt' }]
 };
 const combinedManifest = normalizeVenueManifest(combinedRaw, { manifestUrl: 'https://example.test/combined/manifest.json' });
-const combinedContext = createGalleryRuntimeContext({ exhibition: { stateRecordId: 'exhibition-a', storageScope: 'exhibitions/exhibition-a' } }, combinedManifest);
+const combinedContext = createGalleryRuntimeContext({ exhibition: { exhibitionId: 'exhibition-a', stateRecordId: 'exhibition-a', storageScope: 'exhibitions/exhibition-a' } }, combinedManifest);
 const registry = createVenueRuntimeRegistry(combinedManifest);
 const combinedAsset = combinedManifest.assets[0];
 const meshes = [

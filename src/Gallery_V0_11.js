@@ -107,8 +107,10 @@ import {
   - Stage 12C66C6B: AVIF Pipeline / Migration / WebP Removal — warianty obrazów i zdjęć autorów są kodowane do wersjonowanego AVIF w leniwie ładowanym Web Workerze, migracja jest atomowa, a wygenerowane WebP są usuwane dopiero po podwójnym bezpiecznym zapisie i audycie Storage.
   - Stage 12C66C6B1: Existing Author AVIF Reconciliation — istniejące kompletne zestawy zdjęć autorów w AVIFv1 są odzyskiwane z denormalizowanych danych lub Storage, weryfikowane i przypisywane do centralnej biblioteki autorów przed walidacją/finalizacją, bez ponownego kodowania i bez przedwczesnego usuwania WebP.
   - Stage 12C66C6C: Atomic AVIF Media Lifecycle / Mobile Scene Quality Parity — upload, replace i import URL commitują wyłącznie kompletne zestawy AVIF, panel migracyjny zastępują dwa narzędzia naprawcze, a jakość mobilna jest sterowana niezależnymi domenami renderu, cieni, świateł, efektów i streamingu.
-  - Stage 12C66C6C2: Canonical Visual State / Mobile Lighting & Reflection Parity — ustawienia zapisywane w gallery_state są kanoniczne i niezależne od urządzenia, profile mobilne tylko raz wyprowadzają runtime post-process, odbicia i environment response pozostają zgodne z PC, Messenger startuje od Balanced, a DPR/resize ma jednego właściciela.
+  - Stage 12C66C6C2: Canonical Visual State / Mobile Lighting & Reflection Parity — ustawienia zapisywane w stanie wystawy są kanoniczne i niezależne od urządzenia, profile mobilne tylko raz wyprowadzają runtime post-process, odbicia i environment response pozostają zgodne z PC, Messenger startuje od Balanced, a DPR/resize ma jednego właściciela.
   - Stage 12C66C6C2: Mobile Memory Survival / Tiered Artwork Residency — wszystkie ramy zachowują stale widoczny Preview, tylko kontrolowany zestaw dzieł rezyduje jako Full 2048, a pełne tekstury, modele, cienie i SSAO są rzeczywiście zwalniane. Mobilny przycisk DBG pokazuje LIVE/FREEZE/LAST SESSION bez konsoli.
+  - Stage 12D1: Venue-Agnostic Engine / Building Manifest — budynek jest ładowany z manifestu i rejestrowany według ról.
+  - Stage 12D2: Multi-Venue / Multi-Exhibition Data Architecture — każdy runtime ma exhibitionId, dokładną wersję Venue, draft/published/previous, repozytorium stanu i izolowany Storage scope.
 */
 
 
@@ -126,29 +128,45 @@ export const createScene = function (engineArg, canvasArg, runtimeContextArg) {
     }
 
     var galleryRuntimeContext = runtimeContextArg || globalThis.GalleryRuntimeContext || null;
-    if (!galleryRuntimeContext || galleryRuntimeContext.schema !== "berryboy-gallery-runtime-context.v1") {
-        throw new Error("Stage 12D1 requires a validated GalleryRuntimeContext before createScene().");
+    if (!galleryRuntimeContext || ["berryboy-gallery-runtime-context.v1", "berryboy-gallery-runtime-context.v2"].indexOf(galleryRuntimeContext.schema) === -1) {
+        throw new Error("Stage 12D2 requires a validated GalleryRuntimeContext before createScene().");
     }
     if (!galleryRuntimeContext.venue || !galleryRuntimeContext.venue.manifest) {
-        throw new Error("Stage 12D1 GalleryRuntimeContext is missing the normalized Venue Manifest.");
+        throw new Error("Stage 12D2 GalleryRuntimeContext is missing the normalized Venue Manifest.");
+    }
+    if (!galleryRuntimeContext.exhibition || !galleryRuntimeContext.exhibition.exhibitionId) {
+        throw new Error("Stage 12D2 GalleryRuntimeContext is missing exhibition identity.");
     }
 
     var galleryVenueManifest = galleryRuntimeContext.venue.manifest;
+    var galleryExhibitionId = galleryRuntimeContext.exhibition.exhibitionId;
+    var galleryExhibitionSlug = galleryRuntimeContext.exhibition.exhibitionSlug || null;
+    var galleryStateChannel = galleryRuntimeContext.exhibition.stateChannel || "published";
     var galleryStateRecordId = galleryRuntimeContext.exhibition.stateRecordId;
     var galleryPreviousStateRecordId = galleryRuntimeContext.exhibition.previousStateRecordId;
+    var galleryExhibitionStateRepository = galleryRuntimeContext.services && galleryRuntimeContext.services.exhibitionStateRepository;
+    var galleryMediaRepository = galleryRuntimeContext.services && galleryRuntimeContext.services.mediaRepository;
+    var galleryDatabaseVenueId = galleryRuntimeContext.exhibition.databaseVenueId || null;
+    var galleryDatabaseVenueVersionId = galleryRuntimeContext.exhibition.databaseVenueVersionId || null;
     var galleryVenueRuntimeRegistry = createVenueRuntimeRegistry(galleryVenueManifest);
 
+    if (!galleryExhibitionStateRepository || typeof galleryExhibitionStateRepository.load !== "function") {
+        throw new Error("Stage 12D2 requires ExhibitionStateRepository in GalleryRuntimeContext.services.");
+    }
+
     function getVenueRuntimeScopedStorageKey(baseKey) {
-        var technicalFlags = galleryVenueManifest.technicalFlags || {};
-        if (technicalFlags.legacyBerryboyCompatibility === true) {
-            return baseKey;
-        }
-        return baseKey + ":" + encodeURIComponent(galleryStateRecordId);
+        var platformId = galleryRuntimeContext.platform && galleryRuntimeContext.platform.platformId || "berryboy-art-gallery";
+        return [
+            baseKey,
+            encodeURIComponent(platformId),
+            encodeURIComponent(galleryExhibitionId),
+            encodeURIComponent(galleryStateChannel)
+        ].join(":");
     }
 
     var galleryVenueSpawnPoint = pickVenueSpawnPoint(galleryVenueManifest, { id: galleryRuntimeContext.venue.spawnPointId || null });
     if (!galleryVenueSpawnPoint) {
-        throw new Error("Stage 12D1 Venue Manifest has no usable spawn point.");
+        throw new Error("Stage 12D2 Venue Manifest has no usable spawn point.");
     }
 
     var scene = new BABYLON.Scene(engine);
@@ -392,7 +410,7 @@ export const createScene = function (engineArg, canvasArg, runtimeContextArg) {
 
     // STAGE 12C65E — KTX2 DECODER / FALLBACK CONTRACT
     // Babylon loads the decoder lazily. Existing JPG/WebP URLs remain authoritative fallbacks;
-    // KTX2 is preferred only when an explicit KTX2 variant exists in gallery_state or inside GLB.
+    // KTX2 is preferred only when an explicit KTX2 variant exists in the exhibition state or inside GLB.
     var galleryKtx2Runtime = {
         stage: "12C65E",
         available: false,
@@ -1412,7 +1430,7 @@ export const createScene = function (engineArg, canvasArg, runtimeContextArg) {
     var visualSsaoPipeline = null;
     var visualSsaoAttached = false;
     var visualControlRefs = {};
-    // STAGE 12C66C6C1 — canonical settings are the only values eligible for controls, localStorage and gallery_state.
+    // STAGE 12C66C6C1 — canonical settings are the only values eligible for controls, localStorage and the exhibition state.
     // visualRuntimeSettings is a derived, disposable device representation and is never serialized.
     var visualCurrentSettings = null;
     var visualRuntimeSettings = null;
@@ -1904,7 +1922,7 @@ return visualRenderingPipeline;
         );
 
         // Canonical sanitizer only. Device/profile transforms are forbidden here because
-        // this function is used by controls, localStorage, gallery_state and Save Integrity.
+        // this function is used by controls, localStorage, the exhibition state and Save Integrity.
         [
             "environment" + "Intensity",
             "ambient" + "Strength",
@@ -2014,7 +2032,7 @@ return visualRenderingPipeline;
 
     function readVisualSettingsFromScene() {
         // Public/editor reads are canonical by design. Runtime-gated Bloom/SSAO state must never
-        // leak back into controls, localStorage or gallery_state.
+        // leak back into controls, localStorage or the exhibition state.
         return normalizeVisualSettings(visualCurrentSettings || visualDefaultSettings);
     }
 
@@ -9594,13 +9612,38 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return baseName + "." + extension;
     }
 
-    function createModel3dStoragePath(slot, file) {
-        var safeFileName = createSafeModel3dFileName(file && file.name);
-        var slotName = slot && slot.name
-            ? slot.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
-            : "model-slot";
+    function createGalleryMediaId() {
+        if (galleryMediaRepository && typeof galleryMediaRepository.createMediaId === "function") {
+            return galleryMediaRepository.createMediaId();
+        }
+        if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+            return globalThis.crypto.randomUUID();
+        }
+        var bytes = new Uint8Array(16);
+        if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") {
+            globalThis.crypto.getRandomValues(bytes);
+        } else {
+            for (var index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+        }
+        bytes[6] = (bytes[6] & 15) | 64;
+        bytes[8] = (bytes[8] & 63) | 128;
+        var hex = Array.prototype.map.call(bytes, function (value) { return value.toString(16).padStart(2, "0"); });
+        return hex.slice(0, 4).join("") + "-" + hex.slice(4, 6).join("") + "-" + hex.slice(6, 8).join("") + "-" + hex.slice(8, 10).join("") + "-" + hex.slice(10, 16).join("");
+    }
 
-        return galleryArtworkStoragePrefix + "/" + galleryModel3dStorageFolder + "/" + slotName + "-" + Date.now() + "-" + safeFileName;
+    function createModel3dStoragePath(slot, file, mediaId) {
+        var safeFileName = createSafeModel3dFileName(file && file.name);
+        var slotId = ensureModel3dSlotIdentity(slot) || (slot && slot.name) || "model-slot";
+        if (galleryMediaRepository && typeof galleryMediaRepository.createPath === "function") {
+            return galleryMediaRepository.createPath({
+                entityType: "sculptures",
+                entityId: slotId,
+                mediaId: mediaId,
+                variant: "model",
+                fileName: safeFileName
+            });
+        }
+        return galleryArtworkStoragePrefix + "/sculptures/" + encodeURIComponent(slotId) + "/" + mediaId + "/model/" + safeFileName;
     }
 
     function isValidModel3dFile(file) {
@@ -9611,15 +9654,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return /\.glb$/i.test(file.name);
     }
 
-    function createArtworkStoragePath(artwork, file) {
+    function createArtworkStoragePath(artwork, file, mediaId) {
         var safeFileName = createSafeStorageFileName(file && file.name);
-        var artworkName = artwork && artwork.name
-            ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
-            : "artwork";
-
-        // STAGE 11C - STORAGE FOLDERS
-        // Nowe oryginały artworków trafiają do czytelnego folderu Original.
-        return galleryArtworkStoragePrefix + "/artworks/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        var artworkId = ensureArtworkIdentity(artwork) || (artwork && artwork.name) || "artwork";
+        if (galleryMediaRepository && typeof galleryMediaRepository.createPath === "function") {
+            return galleryMediaRepository.createPath({
+                entityType: "artworks",
+                entityId: artworkId,
+                mediaId: mediaId,
+                variant: "original",
+                fileName: safeFileName
+            });
+        }
+        return galleryArtworkStoragePrefix + "/artworks/" + encodeURIComponent(artworkId) + "/" + mediaId + "/original/" + safeFileName;
     }
 
 
@@ -9674,23 +9721,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function createArtworkVariantStoragePath(originalPath, variantName, extension, variantSetId) {
         var safeExtension = String(extension || galleryArtworkImageVariantExtension || "avif").replace(/[^a-z0-9]+/gi, "").toLowerCase() || "avif";
         var sourcePath = String(originalPath || "");
-        var slashIndex = sourcePath.lastIndexOf("/");
-        var fileName = slashIndex !== -1 ? sourcePath.slice(slashIndex + 1) : sourcePath;
         var category = getImageStorageCategoryFromPath(sourcePath);
-        var folderName = getStorageVariantFolderName(variantName);
+        var safeVariant = String(variantName || "variant").replace(/[^a-z0-9-]+/gi, "-").toLowerCase() || "variant";
         var safeSetId = String(variantSetId || createGalleryAvifVariantSetId(sourcePath))
             .replace(/[^a-z0-9-]+/gi, "-")
             .replace(/^-+|-+$/g, "")
             .toLowerCase();
-
-        if (!fileName) fileName = "image-" + Date.now() + ".jpg";
-
-        var baseName = getGalleryVariantBaseNameFromOriginalPath(fileName);
-
-        // Immutable, versioned paths prevent a browser/CDN from serving an older WebP/AVIF
-        // under the same public URL after a rebuild.
-        return galleryArtworkStoragePrefix + "/" + category + "/" + galleryArtworkImageVariantFolder + "/" + folderName + "/" + baseName + "--" + safeSetId + "." + safeExtension;
+        var originalMarker = "/original/";
+        var markerIndex = sourcePath.indexOf(originalMarker);
+        var entityRoot = markerIndex !== -1 ? sourcePath.slice(0, markerIndex) : galleryArtworkStoragePrefix + "/" + category + "/legacy/" + getGalleryVariantBaseNameFromOriginalPath(sourcePath);
+        return entityRoot + "/variants/" + safeSetId + "/" + safeVariant + "." + safeExtension;
     }
+
 
     function loadImageElementFromBlob(blob) {
         return new Promise(function (resolve, reject) {
@@ -12751,7 +12793,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var artworkId = ensureArtworkIdentity(artwork);
         var operation = beginGalleryAtomicMediaOperation("artwork:" + artworkId, "artwork-upload");
         var previousImageState = cloneGalleryStateForIntegrity(getArtworkImageState(artwork));
-        var storagePath = createArtworkStoragePath(artwork, file);
+        var mediaId = createGalleryMediaId();
+        var storagePath = createArtworkStoragePath(artwork, file, mediaId);
         var uploadedState = null;
         notifyGalleryStatus("Wgrywam oryginal i tworze kompletny zestaw AVIF...");
 
@@ -12778,7 +12821,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 mimeType: file.type || null,
                 fitMode: galleryArtworkDefaultFitMode,
                 uploadedAt: new Date().toISOString(),
-                atomicMediaOperationId: operation.id
+                atomicMediaOperationId: operation.id,
+                imageMediaId: mediaId
             }, variantState || {});
             if (!isGalleryAvifVariantComplete(uploadedState, "image")) throw new Error("Atomic artwork upload produced an incomplete AVIF set.");
             if (!isGalleryAtomicMediaOperationCurrent(operation)) {
@@ -12790,6 +12834,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (!applyArtworkImageStateSafely(artwork, uploadedState, "atomic artwork commit")) {
                 throw new Error("The complete AVIF set could not be applied to the artwork.");
             }
+            await registerGalleryMediaRecord({
+                mediaId: mediaId,
+                mediaType: "artwork-image",
+                entityType: "artwork",
+                entityId: artworkId,
+                usageRole: "artwork-image",
+                originalPath: uploadedState.imagePath,
+                desktopPath: uploadedState.imagePathWeb,
+                mobilePath: uploadedState.imagePathMobile,
+                previewPath: uploadedState.imagePathPreview,
+                metadata: { originalName: uploadedState.originalName, mimeType: uploadedState.mimeType, size: uploadedState.size }
+            });
             var saveResult = await persistGalleryAtomicMediaCommit("atomic-artwork-upload");
             if (!saveResult.ok) {
                 if (previousImageState) applyArtworkImageStateSafely(artwork, previousImageState, "atomic artwork rollback");
@@ -12926,6 +12982,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         return {
             modelPath: modelPath,
+            modelMediaId: modelState.modelMediaId || modelState.mediaId || null,
             storageBucket: bucketName
         };
     }
@@ -12998,8 +13055,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     dirty: !!gallerySaveIntegrityRuntime.dirty,
                     reason: reason || gallerySaveIntegrityRuntime.dirtyReason || "unknown",
                     dirtySince: gallerySaveIntegrityRuntime.dirtySince || 0,
-                    revision: gallerySaveIntegrityRuntime.publishedRevision,
+                    revision: gallerySaveIntegrityRuntime.activeRevision,
+                    draftRevision: gallerySaveIntegrityRuntime.draftRevision,
+                    publishedRevision: gallerySaveIntegrityRuntime.publicRevision,
+                    lockVersion: gallerySaveIntegrityRuntime.lockVersion,
+                    stateChannel: galleryStateChannel,
+                    exhibitionId: galleryExhibitionId,
                     saveInFlight: !!gallerySaveIntegrityRuntime.saveInFlight,
+                    publishInFlight: !!gallerySaveIntegrityRuntime.publishInFlight,
                     pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length
                 }
             }));
@@ -13894,35 +13957,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var skippedActive = 0;
         var protectedByPreviousBackup = 0;
         var protectedByForeignTab = 0;
+        var protectedByGlobalReferences = 0;
+        var referenceCheckFailures = 0;
 
         gallerySaveIntegrityRuntime.pendingStorageDeletes.forEach(function (entry) {
-            if (!entry || !entry.bucket || !entry.path) {
-                return;
-            }
-
+            if (!entry || !entry.bucket || !entry.path) return;
             var referenceKey = entry.bucket + "|" + entry.path;
 
-            // A queued deletion that became part of the newly published state is cancelled.
             if (activeReferences[referenceKey]) {
                 skippedActive += 1;
                 gallerySaveIntegrityRuntime.resolvedCleanupKeys[referenceKey] = true;
                 return;
             }
-
             if (isGalleryForeignQueueEntryProtected(entry)) {
                 protectedByForeignTab += 1;
                 retained.push(entry);
                 return;
             }
-
-            // The previous revision must stay fully restorable, including its Storage assets.
-            // Keep the deletion queued; it can be retried after the next successful save rotates the backup.
             if (previousBackupReferences[referenceKey]) {
                 protectedByPreviousBackup += 1;
                 retained.push(entry);
                 return;
             }
-
             removableByBucket[entry.bucket] = removableByBucket[entry.bucket] || [];
             removableByBucket[entry.bucket].push(entry);
         });
@@ -13931,7 +13987,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var removedCount = 0;
         var failedCount = 0;
 
-        if (!client || !client.storage) {
+        if (!client || !client.storage || !galleryMediaRepository || typeof galleryMediaRepository.filterDeletablePaths !== "function") {
             Object.keys(removableByBucket).forEach(function (bucket) {
                 retained = retained.concat(removableByBucket[bucket]);
             });
@@ -13945,41 +14001,67 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 skippedActive: skippedActive,
                 protectedByPreviousBackup: protectedByPreviousBackup,
                 protectedByForeignTab: protectedByForeignTab,
-                reason: "storage-not-configured"
+                protectedByGlobalReferences: protectedByGlobalReferences,
+                reason: !client || !client.storage ? "storage-not-configured" : "d2-reference-check-not-configured"
             };
         }
 
         var buckets = Object.keys(removableByBucket);
-
         for (var i = 0; i < buckets.length; i++) {
             var bucket = buckets[i];
             var entries = removableByBucket[bucket];
             var paths = entries.map(function (entry) { return entry.path; });
-            var response = await client.storage.from(bucket).remove(paths);
+            var referenceResult = await galleryMediaRepository.filterDeletablePaths(bucket, paths);
 
-            if (response.error) {
+            // Fail closed. A missing/failed global reference check must never delete a shared file.
+            if (!referenceResult || !referenceResult.ok) {
+                referenceCheckFailures += entries.length;
                 failedCount += entries.length;
                 retained = retained.concat(entries);
                 gallerySaveIntegrityRuntime.cleanupFailures.push({
                     bucket: bucket,
                     paths: paths.slice(),
+                    message: referenceResult && referenceResult.reason || "global-reference-check-failed",
+                    failedAt: Date.now()
+                });
+                continue;
+            }
+
+            var deletableSet = {};
+            (referenceResult.deletable || []).forEach(function (path) { deletableSet[String(path)] = true; });
+            var deletableEntries = [];
+            entries.forEach(function (entry) {
+                if (deletableSet[String(entry.path)]) deletableEntries.push(entry);
+                else {
+                    protectedByGlobalReferences += 1;
+                    retained.push(entry);
+                }
+            });
+            if (!deletableEntries.length) continue;
+
+            var deletablePaths = deletableEntries.map(function (entry) { return entry.path; });
+            var response = await client.storage.from(bucket).remove(deletablePaths);
+            if (response.error) {
+                failedCount += deletableEntries.length;
+                retained = retained.concat(deletableEntries);
+                gallerySaveIntegrityRuntime.cleanupFailures.push({
+                    bucket: bucket,
+                    paths: deletablePaths.slice(),
                     message: response.error.message || String(response.error),
                     failedAt: Date.now()
                 });
-                console.warn("Deferred Storage cleanup failed:", {
-                    bucket: bucket,
-                    paths: paths,
-                    error: response.error
-                });
+                console.warn("Deferred Storage cleanup failed:", { bucket: bucket, paths: deletablePaths, error: response.error });
             } else {
-                removedCount += entries.length;
-                entries.forEach(function (entry) {
+                removedCount += deletableEntries.length;
+                if (galleryMediaRepository && typeof galleryMediaRepository.confirmDeletedPaths === "function") {
+                    try { await galleryMediaRepository.confirmDeletedPaths(bucket, deletablePaths); } catch (confirmError) {
+                        console.warn("D2 media deletion confirmation failed:", confirmError);
+                    }
+                }
+                deletableEntries.forEach(function (entry) {
                     gallerySaveIntegrityRuntime.resolvedCleanupKeys[getGalleryQueueEntryKey(entry)] = true;
                     if (entry.kind === "model3d") {
-                        clearModel3dClipboardIfStoragePathMatches({
-                            storageBucket: entry.bucket,
-                            modelPath: entry.path
-                        });
+                        clearModel3dClipboardIfStoragePathMatches({ storageBucket: entry.bucket, modelPath: entry.path });
                     }
                 });
             }
@@ -13996,28 +14078,37 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             skippedReferenced: skippedActive,
             skippedActive: skippedActive,
             protectedByPreviousBackup: protectedByPreviousBackup,
-            protectedByForeignTab: protectedByForeignTab
+            protectedByForeignTab: protectedByForeignTab,
+            protectedByGlobalReferences: protectedByGlobalReferences,
+            referenceCheckFailures: referenceCheckFailures
         };
     }
 
-    function setGalleryPublishedStateBaseline(runtimeState, options) {
+    function setGallerySavedStateBaseline(runtimeState, options) {
         options = options || {};
         restoreGalleryPendingDraftUploads();
         var comparableFingerprint = getGalleryStateIntegrityFingerprint(runtimeState || serializeGalleryState());
         var serverState = options.serverState || null;
 
-        gallerySaveIntegrityRuntime.publishedStateFingerprint = comparableFingerprint;
-        gallerySaveIntegrityRuntime.publishedServerStateFingerprint = serverState
+        gallerySaveIntegrityRuntime.savedBaselineFingerprint = comparableFingerprint;
+        gallerySaveIntegrityRuntime.savedBaselineServerFingerprint = serverState
             ? getGalleryStateIntegrityFingerprint(serverState)
             : comparableFingerprint;
-        gallerySaveIntegrityRuntime.publishedStateSnapshot = cloneGalleryStateForIntegrity(serverState || runtimeState);
-        gallerySaveIntegrityRuntime.publishedServerRowExists = options.serverRowExists !== undefined
+        gallerySaveIntegrityRuntime.savedBaselineSnapshot = cloneGalleryStateForIntegrity(serverState || runtimeState);
+        gallerySaveIntegrityRuntime.savedBaselineRowExists = options.serverRowExists !== undefined
             ? !!options.serverRowExists
             : !!serverState;
-        gallerySaveIntegrityRuntime.publishedRevision = options.revision !== undefined
+        var baselineRevision = options.revision !== undefined
             ? Math.max(0, Number(options.revision) || 0)
             : getGalleryStateRevision(serverState || runtimeState);
-        gallerySaveIntegrityRuntime.publishedStateConfirmed = options.confirmed !== false;
+        gallerySaveIntegrityRuntime.activeRevision = baselineRevision;
+        gallerySaveIntegrityRuntime.publishedRevision = baselineRevision;
+        if (galleryStateChannel === "draft") gallerySaveIntegrityRuntime.draftRevision = baselineRevision;
+        if (galleryStateChannel === "published") gallerySaveIntegrityRuntime.publicRevision = baselineRevision;
+        gallerySaveIntegrityRuntime.lockVersion = options.lockVersion !== undefined
+            ? Math.max(0, Number(options.lockVersion) || 0)
+            : gallerySaveIntegrityRuntime.lockVersion;
+        gallerySaveIntegrityRuntime.savedBaselineConfirmed = options.confirmed !== false;
         gallerySaveIntegrityRuntime.baselineReady = true;
         gallerySaveIntegrityRuntime.dirty = false;
         gallerySaveIntegrityRuntime.dirtyReason = options.reason || "published-baseline";
@@ -14037,7 +14128,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var currentFingerprint = getGalleryStateIntegrityFingerprint(serializeGalleryState());
         gallerySaveIntegrityRuntime.lastStateCheckAt = Date.now();
-        var nextDirty = currentFingerprint !== gallerySaveIntegrityRuntime.publishedStateFingerprint;
+        var nextDirty = currentFingerprint !== gallerySaveIntegrityRuntime.savedBaselineFingerprint;
 
         if (nextDirty !== gallerySaveIntegrityRuntime.dirty) {
             gallerySaveIntegrityRuntime.dirty = nextDirty;
@@ -14112,99 +14203,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } catch (error) {
             return null;
         }
-    }
-
-    async function writeGalleryRemotePreviousStateBackup(client, previousState) {
-        if (!client || !previousState) {
-            return {
-                ok: false,
-                skipped: true,
-                reason: "missing-client-or-state"
-            };
-        }
-
-        var backupPayload = {
-            id: gallerySaveIntegrityRuntime.remoteBackupId,
-            state: previousState,
-            updated_at: new Date().toISOString()
-        };
-        var existingResponse = await client
-            .from("gallery_state")
-            .select("id, updated_at")
-            .eq("id", gallerySaveIntegrityRuntime.remoteBackupId)
-            .limit(1);
-
-        if (existingResponse.error) {
-            console.warn("Remote previous gallery state backup read failed:", existingResponse.error);
-            return {
-                ok: false,
-                skipped: false,
-                error: existingResponse.error,
-                reason: "backup-read-error"
-            };
-        }
-
-        var existingRows = Array.isArray(existingResponse.data)
-            ? existingResponse.data
-            : (existingResponse.data ? [existingResponse.data] : []);
-        var response = null;
-
-        if (existingRows.length > 0) {
-            response = await client
-                .from("gallery_state")
-                .update({
-                    state: previousState,
-                    updated_at: backupPayload.updated_at
-                })
-                .eq("id", gallerySaveIntegrityRuntime.remoteBackupId)
-                .select("id");
-        } else {
-            response = await client
-                .from("gallery_state")
-                .insert(backupPayload)
-                .select("id");
-
-            // A second editor may have created the backup row after our read.
-            // Retry as an update without deleting any row.
-            if (response.error) {
-                response = await client
-                    .from("gallery_state")
-                    .update({
-                        state: previousState,
-                        updated_at: backupPayload.updated_at
-                    })
-                    .eq("id", gallerySaveIntegrityRuntime.remoteBackupId)
-                    .select("id");
-            }
-        }
-
-        if (response.error) {
-            console.warn("Remote previous gallery state backup failed:", response.error);
-            return {
-                ok: false,
-                skipped: false,
-                error: response.error,
-                reason: "backup-write-error"
-            };
-        }
-
-        var committedRows = Array.isArray(response.data)
-            ? response.data
-            : (response.data ? [response.data] : []);
-
-        if (committedRows.length === 0) {
-            return {
-                ok: false,
-                skipped: false,
-                reason: "backup-write-empty"
-            };
-        }
-
-        return {
-            ok: true,
-            skipped: false,
-            mode: existingRows.length > 0 ? "update" : "insert"
-        };
     }
 
     function areModel3dStorageDeleteStatesEqual(a, b) {
@@ -16760,68 +16758,39 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryStartupStatePreloadResult = null;
 
     async function fetchGalleryStartupStateSnapshotFromSupabase() {
-        var client = window.gallerySupabase;
-
-        if (!client) {
+        if (!galleryExhibitionStateRepository) {
             return {
                 ok: false,
-                status: "no-client",
+                status: "no-repository",
                 noClient: true,
-                state: null
+                state: null,
+                channel: galleryStateChannel
             };
         }
 
-        var response = await client
-            .from("gallery_state")
-            .select("state, updated_at")
-            .eq("id", galleryStateRecordId)
-            .order("updated_at", {
-                ascending: false,
-                nullsFirst: false
-            })
-            .limit(10);
-
-        if (response.error) {
-            console.warn(response.error);
-            return {
+        var result = await galleryExhibitionStateRepository.load(galleryStateChannel);
+        if (!result || !result.ok) {
+            if (result && result.error) console.warn(result.error);
+            return Object.assign({
                 ok: false,
-                status: "error",
-                errorMessage: response.error.message || String(response.error),
-                state: null
-            };
-        }
-
-        var rows = Array.isArray(response.data)
-            ? response.data
-            : (response.data ? [response.data] : []);
-
-        var row = rows.find(function (candidate) {
-            return !!(
-                candidate &&
-                candidate.state &&
-                candidate.state.localLights &&
-                Array.isArray(candidate.state.localLights.lights)
-            );
-        }) || rows[0];
-
-        if (
-            row &&
-            row.state &&
-            Object.keys(row.state).length > 0
-        ) {
-            return {
-                ok: true,
-                status: "state-ready",
-                state: row.state,
-                updatedAt: row.updated_at || null,
-                lightCount: getStateLightCount(row.state)
-            };
+                status: result && result.status || "error",
+                state: null,
+                channel: galleryStateChannel
+            }, result || {});
         }
 
         return {
             ok: true,
-            status: "empty",
-            state: null
+            status: result.status || (result.state ? "state-ready" : "empty"),
+            state: result.state || null,
+            envelope: result.envelope || null,
+            updatedAt: result.updatedAt || null,
+            lightCount: getStateLightCount(result.state),
+            channel: result.channel || galleryStateChannel,
+            revision: Math.max(0, Number(result.revision) || 0),
+            lockVersion: Math.max(0, Number(result.lockVersion) || 0),
+            source: result.source || "d2",
+            migrationRequired: !!result.migrationRequired
         };
     }
 
@@ -16938,9 +16907,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             setTimeout(function () {
                 try {
-                    setGalleryPublishedStateBaseline(serializeGalleryState(), {
+                    setGallerySavedStateBaseline(serializeGalleryState(), {
                         serverState: result && result.state ? result.state : null,
-                        revision: getGalleryStateRevision(result && result.state ? result.state : null),
+                        revision: Math.max(0, Number(result && result.revision) || getGalleryStateRevision(result && result.state ? result.state : null)),
+                        lockVersion: Math.max(0, Number(result && result.lockVersion) || 0),
                         confirmed: !!(result && result.ok),
                         serverRowExists: !!(result && result.state),
                         reason: "startup-state-baseline"
@@ -17677,10 +17647,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryEditorLoginEnabled = true;
     var editorAuthenticated = !galleryEditorLoginEnabled || !!globalThis.galleryEditorAuthenticated;
 
-    // ARTWORK UPLOAD / SUPABASE STORAGE
-    // Pliki obrazow trzymamy w Supabase Storage, a w gallery_state zapisujemy tylko path/url.
+    // STAGE 12D2 — EXHIBITION-SCOPED MEDIA / SUPABASE STORAGE
+    // New uploads use platform-media and immutable exhibition/entity/media paths.
+    // Legacy states may still reference their original bucket and remain readable.
     var galleryArtworkUploadEnabled = true;
-    var galleryArtworkStorageBucket = "gallery-artworks";
+    var galleryArtworkStorageBucket = galleryMediaRepository && galleryMediaRepository.bucket || "platform-media";
     var galleryArtworkStoragePrefix = galleryRuntimeContext.exhibition.storageScope;
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
@@ -17689,7 +17660,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Obecne ArtSphere_* są traktowane jako sloty modeli 3D.
     // Model GLB wgrywamy raz do Storage, a potem można go kopiować/duplikować bez ponownego uploadu.
     var galleryModel3dUploadEnabled = true;
-    var galleryModel3dStorageFolder = "models/Original";
     var galleryModel3dMaxUploadSizeMb = 50;
     var galleryModel3dClipboardState = null;
     var galleryModel3dCreateCounter = 0;
@@ -17697,8 +17667,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryModel3dStorageDeleteLastDebug = null;
 
     // STAGE 12C66A — SAVE INTEGRITY / DRAFT COMMIT / DEFERRED STORAGE CLEANUP
-    // Scene edits are a local draft. Supabase gallery_state changes only through the explicit Save action.
-    // Replaced/deleted Storage files are queued and removed only after the new state is safely published.
+    // Scene edits are a local exhibition draft. Save Draft never replaces the public state.
+    // Replaced/deleted Storage files are queued and removed only after the D2 reference check confirms no exhibition uses them.
     var galleryImageUploadLimits = {
         artwork: {
             maxBytes: 24 * 1024 * 1024,
@@ -17730,8 +17700,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var gallerySaveIntegrityRuntime = {
-        stage: "12C66C6A",
-        schema: "gallery-save-integrity.v3",
+        stage: "12D2",
+        schema: "gallery-save-integrity.v4",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
         activeTabsStorageKey: getVenueRuntimeScopedStorageKey("berryboy_gallery_active_editor_tabs_v1"),
@@ -17742,12 +17712,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         heartbeatTimer: null,
         resolvedCleanupKeys: {},
         resolvedDraftUploadKeys: {},
-        publishedRevision: 0,
-        publishedStateFingerprint: "",
-        publishedServerStateFingerprint: "",
-        publishedStateSnapshot: null,
-        publishedServerRowExists: false,
-        publishedStateConfirmed: false,
+        activeRevision: Math.max(0, Number(galleryRuntimeContext.exhibition.stateRevision) || 0),
+        draftRevision: galleryStateChannel === "draft" ? Math.max(0, Number(galleryRuntimeContext.exhibition.stateRevision) || 0) : 0,
+        publicRevision: galleryStateChannel === "published" ? Math.max(0, Number(galleryRuntimeContext.exhibition.stateRevision) || 0) : 0,
+        lockVersion: Math.max(0, Number(galleryRuntimeContext.exhibition.lockVersion) || 0),
+        publishedRevision: Math.max(0, Number(galleryRuntimeContext.exhibition.stateRevision) || 0),
+        savedBaselineFingerprint: "",
+        savedBaselineServerFingerprint: "",
+        savedBaselineSnapshot: null,
+        savedBaselineRowExists: false,
+        savedBaselineConfirmed: false,
         baselineReady: false,
         dirty: false,
         dirtyReason: "startup",
@@ -17757,6 +17731,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         stateCheckIntervalMs: 5000,
         stateWatcherStarted: false,
         saveInFlight: false,
+        publishInFlight: false,
         pendingStorageDeletes: [],
         pendingDraftUploads: [],
         cleanupFailures: [],
@@ -18027,6 +18002,66 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (ok) galleryAtomicMediaRuntime.completed += 1;
         else galleryAtomicMediaRuntime.failed += 1;
         galleryAtomicMediaRuntime.lastOperation = operation;
+    }
+
+    function collectGalleryStateMediaUsages(state) {
+        var usagesById = {};
+        function visit(value) {
+            if (!value || typeof value !== "object") return;
+            if (Array.isArray(value)) {
+                value.forEach(visit);
+                return;
+            }
+            Object.keys(value).forEach(function (key) {
+                var child = value[key];
+                if (/mediaid$/i.test(key) && typeof child === "string" && child.trim()) {
+                    var mediaId = child.trim();
+                    usagesById[mediaId] = {
+                        mediaId: mediaId,
+                        entityType: "state",
+                        entityId: mediaId,
+                        usageRole: String(key).replace(/MediaId$/i, "") || "state-reference"
+                    };
+                }
+                visit(child);
+            });
+        }
+        visit(state);
+        return Object.keys(usagesById).map(function (mediaId) { return usagesById[mediaId]; });
+    }
+
+    async function syncGalleryMediaUsagesFromState(state) {
+        if (!galleryMediaRepository || typeof galleryMediaRepository.syncUsages !== "function") {
+            return { ok: false, reason: "media-usage-sync-not-configured" };
+        }
+        return await galleryMediaRepository.syncUsages(collectGalleryStateMediaUsages(state));
+    }
+
+    async function registerGalleryMediaRecord(options) {
+        options = options || {};
+        if (!galleryMediaRepository || typeof galleryMediaRepository.registerMedia !== "function") {
+            throw new Error("D2 media repository is not configured.");
+        }
+        var result = await galleryMediaRepository.registerMedia({
+            mediaId: options.mediaId,
+            mediaType: options.mediaType,
+            bucket: options.bucket || galleryArtworkStorageBucket,
+            originalPath: options.originalPath || null,
+            desktopPath: options.desktopPath || null,
+            mobilePath: options.mobilePath || null,
+            previewPath: options.previewPath || null,
+            entityType: options.entityType || null,
+            entityId: options.entityId || null,
+            usageRole: options.usageRole || null,
+            metadata: options.metadata || {}
+        });
+        if (!result || !result.ok) {
+            var error = new Error("D2 media registration failed: " + (result && result.reason || "unknown"));
+            error.code = result && result.reason || "media-register-error";
+            error.details = result || null;
+            throw error;
+        }
+        return result;
     }
 
     async function persistGalleryAtomicMediaCommit(reason) {
@@ -21977,7 +22012,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var previousInfo = cloneGalleryStateForIntegrity(ownerKind === "sculpture" ? getSculptureInfoState(owner) : getArtworkInfoState(owner));
         var previousAuthor = cloneGalleryStateForIntegrity(getAuthorById(authorId));
         var operation = beginGalleryAtomicMediaOperation("author:" + authorId, ownerKind + "-author-upload");
-        var storagePath = createAuthorPhotoStoragePath(owner, file);
+        var mediaId = createGalleryMediaId();
+        var storagePath = createAuthorPhotoStoragePath(owner, file, mediaId, authorId);
         var nextInfo = null;
         notifyGalleryStatus("Wgrywam zdjecie autora i tworze kompletny zestaw AVIF...");
         try {
@@ -22001,7 +22037,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 authorPhotoMimeType: file.type || "",
                 authorPhotoSize: file.size || 0,
                 authorPhotoUploadedAt: new Date().toISOString(),
-                atomicMediaOperationId: operation.id
+                atomicMediaOperationId: operation.id,
+                authorPhotoMediaId: mediaId
             }, variantState || {});
             if (!isGalleryAvifVariantComplete(nextInfo, "authorPhoto")) throw new Error("Atomic author upload produced an incomplete AVIF set.");
             if (!isGalleryAtomicMediaOperationCurrent(operation)) {
@@ -22011,6 +22048,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
             var authorRecord = upsertAuthorRecord({
                 id: authorId, name: authorName,
+                photoMediaId: nextInfo.authorPhotoMediaId,
                 photoUrl: nextInfo.authorPhotoUrl, photoUrlOriginal: nextInfo.authorPhotoUrlOriginal,
                 photoUrlWeb: nextInfo.authorPhotoUrlWeb, photoUrlMobile: nextInfo.authorPhotoUrlMobile, photoUrlPreview: nextInfo.authorPhotoUrlPreview,
                 photoPath: nextInfo.authorPhotoPath, photoPathWeb: nextInfo.authorPhotoPathWeb, photoPathMobile: nextInfo.authorPhotoPathMobile, photoPathPreview: nextInfo.authorPhotoPathPreview,
@@ -22026,6 +22064,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 photoVariantSettings: nextInfo.authorPhotoVariantSettings
             }, { replacePhotoState: true });
             applyAuthorPhotoInfoToOwner(ownerKind, owner, authorRecord, nextInfo);
+            await registerGalleryMediaRecord({
+                mediaId: mediaId,
+                mediaType: "author-photo",
+                entityType: "author",
+                entityId: authorId,
+                usageRole: ownerKind + "-author-photo",
+                originalPath: nextInfo.authorPhotoPath,
+                desktopPath: nextInfo.authorPhotoPathWeb,
+                mobilePath: nextInfo.authorPhotoPathMobile,
+                previewPath: nextInfo.authorPhotoPathPreview,
+                metadata: { authorName: authorName, originalName: nextInfo.authorPhotoOriginalName, mimeType: nextInfo.authorPhotoMimeType, size: nextInfo.authorPhotoSize }
+            });
             var saveResult = await persistGalleryAtomicMediaCommit("atomic-author-photo-upload");
             if (!saveResult.ok) {
                 if (previousAuthor) upsertAuthorRecord(previousAuthor, { replacePhotoState: true });
@@ -22596,6 +22646,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             id: String(author.id || getAuthorIdFromName(author.name || author.authorName || "")).trim(),
             name: String(author.name || author.authorName || "").trim(),
+            photoMediaId: String(author.photoMediaId || author.authorPhotoMediaId || "").trim(),
             photoUrl: String(author.photoUrl || author.authorPhotoUrl || "").trim(),
             photoUrlOriginal: String(author.photoUrlOriginal || author.authorPhotoUrlOriginal || author.photoUrl || author.authorPhotoUrl || "").trim(),
             photoUrlWeb: String(author.photoUrlWeb || author.authorPhotoUrlWeb || "").trim(),
@@ -22662,6 +22713,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (existing) {
             var photoStateKeys = {
+                photoMediaId: true,
                 photoUrl: true,
                 photoUrlOriginal: true,
                 photoUrlWeb: true,
@@ -22885,16 +22937,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
-    function createAuthorPhotoStoragePath(artwork, file) {
+    function createAuthorPhotoStoragePath(owner, file, mediaId, authorId) {
         var safeFileName = createSafeStorageFileName(file && file.name ? file.name : "author-photo.jpg");
-        var artworkName = artwork && artwork.name
-            ? artwork.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
-            : "artwork";
-
-        // STAGE 11C - STORAGE FOLDERS
-        // Nowe oryginały zdjęć autorów trafiają do czytelnego folderu Original.
-        return galleryArtworkStoragePrefix + "/authors/Original/" + artworkName + "-" + Date.now() + "-" + safeFileName;
+        var resolvedAuthorId = String(authorId || "author").replace(/[^a-z0-9:_-]+/gi, "-");
+        if (galleryMediaRepository && typeof galleryMediaRepository.createPath === "function") {
+            return galleryMediaRepository.createPath({
+                entityType: "authors",
+                entityId: resolvedAuthorId,
+                mediaId: mediaId,
+                variant: "original",
+                fileName: safeFileName
+            });
+        }
+        return galleryArtworkStoragePrefix + "/authors/" + encodeURIComponent(resolvedAuthorId) + "/" + mediaId + "/original/" + safeFileName;
     }
+
 
     async function uploadAuthorPhotoForArtwork(artwork, file) {
         if (!artwork || !file) { notifyGalleryStatus("Select one artwork and choose an author photo."); return false; }
@@ -28847,7 +28904,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     addVisualActionButton("SAVE LOOK", function () {
         // STAGE 12C46: Save Look is local Visual Look storage only.
-        // Publishing still belongs to normal Save State / gallery_state.
+        // SAVE LOOK remains local. Save Draft persists the exhibition draft; Publish exposes that saved draft.
         persistCurrentVisualSettings();
         scheduleVisualControlsSync(readVisualSettingsFromScene());
     });
@@ -28873,7 +28930,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var visualActionsHint = document.createElement("p");
     visualActionsHint.className = "gallery-visual-hint";
-    visualActionsHint.innerText = "SAVE LOOK stores only the local Visual Look. Save State publishes the current look with the gallery.";
+    visualActionsHint.innerText = "SAVE LOOK stores only the local Visual Look. SAVE DRAFT persists it with the private exhibition draft; PUBLISH exposes the saved draft publicly.";
     visualActionsSection.appendChild(visualActionsHint);
 
     visualLightingContent.appendChild(visualActionsSection);
@@ -36281,6 +36338,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             modelUrl: modelUrl,
             modelPath: modelPath,
+            modelMediaId: modelState.modelMediaId || modelState.mediaId || null,
             storageBucket: modelState.storageBucket || galleryArtworkStorageBucket,
             originalName: modelState.originalName || modelState.name || "model.glb",
             size: modelState.size || null,
@@ -36811,7 +36869,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
-        var storagePath = createModel3dStoragePath(slot, file);
+        var modelMediaId = createGalleryMediaId();
+        var storagePath = createModel3dStoragePath(slot, file, modelMediaId);
 
         notifyGalleryStatus("Wgrywam model 3D GLB...");
 
@@ -36851,8 +36910,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             size: file.size || null,
             mimeType: file.type || "model/gltf-binary",
             uploadedAt: new Date().toISOString(),
-            assignedAt: new Date().toISOString()
+            assignedAt: new Date().toISOString(),
+            modelMediaId: modelMediaId
         });
+
+        try {
+            await registerGalleryMediaRecord({
+                mediaId: modelMediaId,
+                mediaType: "sculpture-model",
+                entityType: "sculpture",
+                entityId: ensureModel3dSlotIdentity(slot),
+                usageRole: "sculpture-model",
+                originalPath: storagePath,
+                metadata: { originalName: file.name || "model.glb", mimeType: file.type || "model/gltf-binary", size: file.size || 0 }
+            });
+        } catch (mediaRegisterError) {
+            queueGalleryStorageCleanupPaths(galleryArtworkStorageBucket, [storagePath], "failed-model-media-register", "d2-media-register-failed");
+            console.warn("D2 model media registration failed:", mediaRegisterError);
+            notifyGalleryStatus("Model nie został przypisany, ponieważ nie udało się zarejestrować medium D2.");
+            return false;
+        }
 
         var loaded = await replaceModel3dStateInSlotSafely(
             slot,
@@ -38354,6 +38431,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         return {
             authorId: String(info.authorId || "").trim(),
+            authorPhotoMediaId: String(info.authorPhotoMediaId || info.photoMediaId || "").trim(),
             authorPhotoUrl: String(info.authorPhotoUrl || "").trim(),
             authorPhotoUrlOriginal: String(info.authorPhotoUrlOriginal || info.authorPhotoUrl || "").trim(),
             authorPhotoUrlWeb: String(info.authorPhotoUrlWeb || "").trim(),
@@ -41861,12 +41939,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             version: "Gallery_V0_11_WEB",
             savedAt: new Date().toISOString(),
+            exhibition: {
+                schema: "gallery-exhibition-binding.v1",
+                exhibitionId: galleryExhibitionId,
+                exhibitionSlug: galleryExhibitionSlug,
+                stateChannel: galleryStateChannel,
+                venueId: galleryVenueManifest.venueId,
+                venueVersionId: galleryVenueManifest.versionId
+            },
             venue: {
                 schema: "gallery-venue-binding.v1",
                 venueId: galleryVenueManifest.venueId,
                 versionId: galleryVenueManifest.versionId,
                 manifestSchema: galleryVenueManifest.schema,
-                stateRecordId: galleryStateRecordId
+                stateRecordId: galleryExhibitionId
             },
             editor: serializeEditorState(),
             lighting: readLightingSettingsFromScene(),
@@ -41893,6 +41979,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        if (state.exhibition && typeof state.exhibition === "object") {
+            var stateExhibitionId = String(state.exhibition.exhibitionId || "");
+            if (stateExhibitionId && stateExhibitionId !== galleryExhibitionId) {
+                var exhibitionMismatchError = new Error("Gallery state belongs to exhibition " + stateExhibitionId + ", not " + galleryExhibitionId + ".");
+                exhibitionMismatchError.code = "GALLERY_STATE_EXHIBITION_MISMATCH";
+                throw exhibitionMismatchError;
+            }
+            var boundVenueId = String(state.exhibition.venueId || "");
+            var boundVenueVersionId = String(state.exhibition.venueVersionId || "");
+            if (boundVenueId && boundVenueId !== galleryVenueManifest.venueId) {
+                var exhibitionVenueMismatchError = new Error("Exhibition state belongs to venue " + boundVenueId + ", not " + galleryVenueManifest.venueId + ".");
+                exhibitionVenueMismatchError.code = "GALLERY_STATE_EXHIBITION_VENUE_MISMATCH";
+                throw exhibitionVenueMismatchError;
+            }
+            if (boundVenueVersionId && boundVenueVersionId !== galleryVenueManifest.versionId) {
+                var exhibitionVenueVersionMismatchError = new Error("Exhibition state belongs to venue version " + boundVenueVersionId + ", not " + galleryVenueManifest.versionId + ".");
+                exhibitionVenueVersionMismatchError.code = "GALLERY_STATE_EXHIBITION_VENUE_VERSION_MISMATCH";
+                throw exhibitionVenueVersionMismatchError;
+            }
+        }
+
         if (state.venue && typeof state.venue === "object") {
             var stateVenueId = String(state.venue.venueId || "");
             var stateVenueVersionId = String(state.venue.versionId || "");
@@ -41907,19 +42014,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 throw venueVersionMismatchError;
             }
             var stateRecordBinding = String(state.venue.stateRecordId || "");
-            if (stateRecordBinding && stateRecordBinding !== galleryStateRecordId) {
-                var stateRecordMismatchError = new Error("Gallery state belongs to record " + stateRecordBinding + ", not " + galleryStateRecordId + ".");
+            var legacyRecordBinding = String(galleryRuntimeContext.exhibition.legacyStateRecordId || "");
+            var recordBindingAllowed = !stateRecordBinding || stateRecordBinding === galleryStateRecordId || stateRecordBinding === galleryExhibitionId;
+            if (!recordBindingAllowed && galleryRuntimeContext.exhibition.dataSource === "controlled-local-seed") {
+                recordBindingAllowed = !!legacyRecordBinding && stateRecordBinding === legacyRecordBinding;
+            }
+            if (!recordBindingAllowed) {
+                var stateRecordMismatchError = new Error("Gallery state belongs to record " + stateRecordBinding + ", not exhibition " + galleryExhibitionId + ".");
                 stateRecordMismatchError.code = "GALLERY_STATE_RECORD_MISMATCH";
                 throw stateRecordMismatchError;
             }
-        } else if (!galleryVenueManifest.technicalFlags || galleryVenueManifest.technicalFlags.legacyBerryboyCompatibility !== true) {
+        } else if (
+            galleryRuntimeContext.exhibition.dataSource !== "controlled-local-seed" ||
+            !galleryVenueManifest.technicalFlags ||
+            galleryVenueManifest.technicalFlags.legacyBerryboyCompatibility !== true
+        ) {
             var legacyStateScopeError = new Error("Legacy unscoped gallery state is allowed only for the controlled berryboy-main/v1 migration.");
             legacyStateScopeError.code = "GALLERY_STATE_LEGACY_UNSCOPED";
             throw legacyStateScopeError;
         }
 
         // Legacy C6C2 rows do not contain state.venue. They remain readable only because
-        // berryboy-main/v1 is the controlled migration target for gallery_state/main.
+        // berryboy-main/v1 is the controlled migration target for the legacy gallery_state/main record.
         // Kompatybilność ze starym V0_8: jeśli state nie ma sekcji editor,
         // traktujemy go jako dawny serializeGalleryState().
         var editorState = state.editor || state;
@@ -42047,336 +42163,315 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function loadGalleryStateFromSupabase() {
-        var client = window.gallerySupabase;
-
-        if (!client) {
-            // Tryb developerski poza stroną WEB.
+        if (!galleryExhibitionStateRepository) {
             restoreSavedLocalLightStateOnce();
-            notifyGalleryStatus("Supabase nie jest skonfigurowany. Uzywam lokalnego fallbacku.");
+            notifyGalleryStatus("ExhibitionStateRepository is unavailable.");
             return false;
         }
 
-        var response = await client
-            .from("gallery_state")
-            .select("state, updated_at")
-            .eq("id", galleryStateRecordId)
-            .order("updated_at", {
-                ascending: false,
-                nullsFirst: false
-            })
-            .limit(10);
-
-        if (response.error) {
-            console.warn(response.error);
-            notifyGalleryStatus("Nie udalo sie wczytac stanu galerii.");
+        var result = await galleryExhibitionStateRepository.load(galleryStateChannel);
+        if (!result || !result.ok) {
+            if (result && result.error) console.warn(result.error);
+            notifyGalleryStatus("Nie udalo sie wczytac stanu wystawy.");
             return false;
         }
 
-        var rows = Array.isArray(response.data)
-            ? response.data
-            : (response.data ? [response.data] : []);
-
-        var row = rows.find(function (candidate) {
-            return !!(
-                candidate &&
-                candidate.state &&
-                candidate.state.localLights &&
-                Array.isArray(candidate.state.localLights.lights)
-            );
-        }) || rows[0];
-
-        if (
-            row &&
-            row.state &&
-            Object.keys(row.state).length > 0
-        ) {
-            var applyResult = tryApplyGalleryStateSafely(row.state);
-
+        if (result.state && Object.keys(result.state).length > 0) {
+            var applyResult = tryApplyGalleryStateSafely(result.state);
             if (!applyResult.ok) {
-                notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu galerii.");
+                notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu wystawy.");
                 return false;
             }
-
-            if (applyResult.usedFallback) {
-                notifyGalleryStatus("Wczytano stan galerii bez biblioteki autorow. Sprawdz ARTWORK INFO i zapisz ponownie.");
-            } else {
-                notifyGalleryStatus("Wczytano zapisany stan galerii. Lampy: " + getStateLightCount(row.state) + ".");
-            }
-
-            setGalleryPublishedStateBaseline(serializeGalleryState(), {
-                serverState: row.state,
-                revision: getGalleryStateRevision(row.state),
+            notifyGalleryStatus(
+                (galleryStateChannel === "draft" ? "Wczytano draft wystawy. " : "Wczytano opublikowana wystawe. ") +
+                "Lampy: " + getStateLightCount(result.state) + "."
+            );
+            setGallerySavedStateBaseline(serializeGalleryState(), {
+                serverState: result.state,
+                revision: Math.max(0, Number(result.revision) || 0),
+                lockVersion: Math.max(0, Number(result.lockVersion) || 0),
                 confirmed: true,
                 serverRowExists: true,
-                reason: "manual-load-baseline"
+                reason: "manual-load-" + galleryStateChannel + "-baseline"
             });
             return true;
         }
 
-        notifyGalleryStatus("Brak zapisanego stanu. Uzywam ukladu startowego.");
-        setGalleryPublishedStateBaseline(serializeGalleryState(), {
+        notifyGalleryStatus("Brak zapisanego stanu wystawy. Uzywam ukladu startowego.");
+        setGallerySavedStateBaseline(serializeGalleryState(), {
             serverState: null,
             revision: 0,
+            lockVersion: Math.max(0, Number(result.lockVersion) || 0),
             confirmed: true,
             serverRowExists: false,
-            reason: "manual-load-empty-baseline"
+            reason: "manual-load-empty-" + galleryStateChannel + "-baseline"
         });
         return false;
     }
 
-    async function saveGalleryStateToSupabase() {
+    async function saveGalleryDraftToSupabase() {
         if (galleryEditorLoginEnabled && !editorAuthenticated) {
-            notifyGalleryStatus("Zaloguj sie jako edytor, aby zapisac stan.");
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby zapisac draft.");
             return false;
         }
-
-        if (gallerySaveIntegrityRuntime.saveInFlight) {
-            notifyGalleryStatus("Zapis galerii juz trwa.");
+        if (galleryStateChannel !== "draft") {
+            notifyGalleryStatus("Publiczny Viewer nie moze zapisywac. Otworz kanal draft po zalogowaniu.");
             return false;
         }
-
-        var client = window.gallerySupabase;
-
-        if (!client) {
-            notifyGalleryStatus("Supabase nie jest skonfigurowany.");
+        if (gallerySaveIntegrityRuntime.saveInFlight || gallerySaveIntegrityRuntime.publishInFlight) {
+            notifyGalleryStatus("Operacja zapisu lub publikacji juz trwa.");
+            return false;
+        }
+        if (!galleryExhibitionStateRepository) {
+            notifyGalleryStatus("Repozytorium stanu wystawy nie jest skonfigurowane.");
             return false;
         }
 
         gallerySaveIntegrityRuntime.saveInFlight = true;
-        dispatchGalleryDraftState("save-started");
+        dispatchGalleryDraftState("draft-save-started");
 
         try {
-            checkGalleryDraftStateNow("before-save");
-
-            var currentServerResponse = await client
-                .from("gallery_state")
-                .select("state, updated_at")
-                .eq("id", galleryStateRecordId)
-                .order("updated_at", {
-                    ascending: false,
-                    nullsFirst: false
-                })
-                .limit(1);
-
-            var currentServerState = null;
-            var currentServerUpdatedAt = null;
-            var currentServerRowExists = false;
-
-            if (currentServerResponse.error) {
-                console.warn("Pre-save gallery state read failed:", currentServerResponse.error);
-                notifyGalleryStatus("Nie udalo sie potwierdzic aktualnej wersji galerii. Zapis przerwany bez nadpisywania danych.");
-                gallerySaveIntegrityRuntime.latestSaveResult = {
-                    ok: false,
-                    reason: "pre-save-read-error",
-                    message: currentServerResponse.error.message || String(currentServerResponse.error),
-                    failedAt: Date.now()
-                };
-                return false;
-            } else {
-                var currentRows = Array.isArray(currentServerResponse.data)
-                    ? currentServerResponse.data
-                    : (currentServerResponse.data ? [currentServerResponse.data] : []);
-                var currentRow = currentRows[0] || null;
-                currentServerRowExists = !!currentRow;
-                currentServerState = currentRow && currentRow.state ? currentRow.state : null;
-                currentServerUpdatedAt = currentRow ? currentRow.updated_at || null : null;
-            }
-
-            if (!gallerySaveIntegrityRuntime.publishedStateConfirmed && currentServerState) {
-                notifyGalleryStatus("Nie potwierdzono wersji bazowej po starcie. Wczytaj aktualny stan galerii przed zapisem.");
-                gallerySaveIntegrityRuntime.latestSaveResult = {
-                    ok: false,
-                    reason: "unconfirmed-published-baseline",
-                    detectedAt: Date.now()
-                };
-                return false;
-            }
-
-            if (
-                gallerySaveIntegrityRuntime.publishedStateConfirmed &&
-                gallerySaveIntegrityRuntime.publishedServerRowExists !== currentServerRowExists
-            ) {
-                notifyGalleryStatus("Rekord galerii zostal utworzony lub usuniety w innej sesji. Wczytaj najnowszy stan przed zapisem.");
-                gallerySaveIntegrityRuntime.latestSaveResult = {
-                    ok: false,
-                    reason: "server-row-presence-conflict",
-                    detectedAt: Date.now()
-                };
-                return false;
-            }
-
-            if (
-                gallerySaveIntegrityRuntime.publishedStateConfirmed &&
-                gallerySaveIntegrityRuntime.publishedStateSnapshot &&
-                currentServerState &&
-                getGalleryStateIntegrityFingerprint(currentServerState) !== gallerySaveIntegrityRuntime.publishedServerStateFingerprint
-            ) {
-                notifyGalleryStatus("Galeria zostala zmieniona w innej sesji. Wczytaj najnowszy stan przed zapisem.");
-                gallerySaveIntegrityRuntime.latestSaveResult = {
-                    ok: false,
-                    reason: "revision-conflict",
-                    detectedAt: Date.now()
-                };
-                return false;
-            }
-
-            var localBackupOk = true;
-            var remoteBackupResult = {
-                ok: true,
-                skipped: true
-            };
-
-            if (currentServerState) {
-                localBackupOk = persistGalleryPreviousStateBackup(currentServerState, {
-                    serverUpdatedAt: currentServerUpdatedAt,
-                    previousRevision: getGalleryStateRevision(currentServerState),
-                    sessionId: gallerySaveIntegrityRuntime.sessionId
-                });
-
-                remoteBackupResult = await writeGalleryRemotePreviousStateBackup(client, currentServerState);
-
-                if (!localBackupOk && !remoteBackupResult.ok) {
-                    notifyGalleryStatus("Nie udalo sie utworzyc kopii poprzedniej wersji. Zapis przerwany bez nadpisywania galerii.");
-                    return false;
-                }
-            }
-
-            var previousRevision = Math.max(
-                getGalleryStateRevision(currentServerState),
-                gallerySaveIntegrityRuntime.publishedRevision
-            );
-            var nextRevision = previousRevision + 1;
+            checkGalleryDraftStateNow("before-draft-save");
+            var previousDraftState = cloneGalleryStateForIntegrity(gallerySaveIntegrityRuntime.savedBaselineSnapshot);
+            var expectedRevision = Math.max(0, Number(gallerySaveIntegrityRuntime.draftRevision || gallerySaveIntegrityRuntime.activeRevision) || 0);
+            var nextRevision = expectedRevision + 1;
             var state = serializeGalleryState();
             var savedAt = new Date().toISOString();
-
             state.savedAt = savedAt;
             state.saveIntegrity = {
                 schema: gallerySaveIntegrityRuntime.schema,
                 revision: nextRevision,
-                basedOnRevision: previousRevision,
+                basedOnRevision: expectedRevision,
                 sessionId: gallerySaveIntegrityRuntime.sessionId,
                 savedAt: savedAt,
-                previousBackupId: currentServerState ? gallerySaveIntegrityRuntime.remoteBackupId : null,
-                remoteBackupOk: !!remoteBackupResult.ok
+                stateChannel: "draft",
+                exhibitionId: galleryExhibitionId
             };
 
-            globalThis.BerryboyArtGalleryLatestState = state;
+            var result = await galleryExhibitionStateRepository.saveDraft(state, {
+                expectedRevision: expectedRevision,
+                expectedLockVersion: gallerySaveIntegrityRuntime.lockVersion,
+                venueId: galleryVenueManifest.venueId,
+                venueVersionId: galleryVenueManifest.versionId,
+                databaseVenueId: galleryDatabaseVenueId,
+                databaseVenueVersionId: galleryDatabaseVenueVersionId
+            });
 
-            var payload = {
-                id: galleryStateRecordId,
-                state: state,
-                updated_at: savedAt
-            };
-
-            var response = null;
-
-            if (currentServerRowExists) {
-                var commitQuery = client
-                    .from("gallery_state")
-                    .update({
-                        state: state,
-                        updated_at: savedAt
-                    })
-                    .eq("id", galleryStateRecordId);
-
-                commitQuery = currentServerUpdatedAt
-                    ? commitQuery.eq("updated_at", currentServerUpdatedAt)
-                    : commitQuery.is("updated_at", null);
-
-                response = await commitQuery.select("id");
-            } else {
-                response = await client
-                    .from("gallery_state")
-                    .insert(payload)
-                    .select("id");
-            }
-
-            if (response.error) {
-                console.warn(response.error);
-                notifyGalleryStatus("Blad zapisu stanu galerii. Poprzednia wersja i pliki pozostaly bez zmian.");
+            if (!result || !result.ok) {
+                var reason = result && result.reason || "draft-save-error";
+                if (reason === "d2-schema-required") {
+                    notifyGalleryStatus("Stage 12D2 wymaga wdrozenia migracji Supabase. Legacy gallery_state jest tylko do odczytu migracyjnego.");
+                } else if (reason === "revision-conflict" || reason === "lock-conflict") {
+                    notifyGalleryStatus("Draft zostal zmieniony w innej sesji. Wczytaj najnowsza wersje przed zapisem.");
+                } else {
+                    notifyGalleryStatus("Nie udalo sie zapisac draftu wystawy. Opublikowana wersja pozostala bez zmian.");
+                }
                 gallerySaveIntegrityRuntime.latestSaveResult = {
                     ok: false,
-                    reason: currentServerRowExists ? "state-update-error" : "state-insert-error",
-                    message: response.error.message || String(response.error),
+                    reason: reason,
+                    message: result && result.error && (result.error.message || String(result.error)) || null,
                     failedAt: Date.now()
                 };
                 return false;
             }
 
-            var committedRows = Array.isArray(response.data)
-                ? response.data
-                : (response.data ? [response.data] : []);
+            gallerySaveIntegrityRuntime.draftRevision = Math.max(0, Number(result.revision) || nextRevision);
+            gallerySaveIntegrityRuntime.activeRevision = gallerySaveIntegrityRuntime.draftRevision;
+            gallerySaveIntegrityRuntime.lockVersion = Math.max(0, Number(result.lockVersion) || gallerySaveIntegrityRuntime.lockVersion + 1);
+            globalThis.BerryboyArtGalleryLatestState = state;
 
-            if (committedRows.length === 0) {
-                notifyGalleryStatus("Galeria zostala zmieniona podczas zapisu. Publikacja zostala zatrzymana bez nadpisywania danych.");
-                gallerySaveIntegrityRuntime.latestSaveResult = {
-                    ok: false,
-                    reason: "atomic-commit-conflict",
-                    detectedAt: Date.now()
-                };
-                return false;
-            }
-
-            setGalleryPublishedStateBaseline(serializeGalleryState(), {
+            setGallerySavedStateBaseline(serializeGalleryState(), {
                 serverState: state,
-                revision: nextRevision,
+                revision: gallerySaveIntegrityRuntime.draftRevision,
+                lockVersion: gallerySaveIntegrityRuntime.lockVersion,
                 confirmed: true,
                 serverRowExists: true,
-                reason: "save-success"
+                reason: "draft-save-success"
             });
 
             var draftUploadReconcileResult = reconcileGalleryPendingDraftUploads(state, {
                 queueUnreferenced: true,
-                reason: "unreferenced-after-successful-save"
+                reason: "unreferenced-after-successful-draft-save"
             });
-            var cleanupResult = await processGalleryDeferredStorageCleanup(state, currentServerState);
+            var mediaUsageSyncResult = await syncGalleryMediaUsagesFromState(state);
+            var cleanupResult = await processGalleryDeferredStorageCleanup(state, previousDraftState);
 
             gallerySaveIntegrityRuntime.latestSaveResult = {
                 ok: true,
-                revision: nextRevision,
-                savedAt: savedAt,
-                localBackupOk: localBackupOk,
-                remoteBackupOk: !!remoteBackupResult.ok,
+                channel: "draft",
+                revision: gallerySaveIntegrityRuntime.draftRevision,
+                lockVersion: gallerySaveIntegrityRuntime.lockVersion,
+                savedAt: result.savedAt || savedAt,
                 draftUploads: draftUploadReconcileResult,
+                mediaUsages: mediaUsageSyncResult,
                 cleanup: cleanupResult
             };
-
-            if (cleanupResult.failed > 0) {
-                notifyGalleryStatus("Zapisano galerie. Niektore stare pliki pozostaly w kolejce cleanup i zostana ponowione przy nastepnym zapisie.");
-            } else {
-                notifyGalleryStatus("Zapisano stan galerii online. Rewizja: " + nextRevision + ".");
-            }
-
+            notifyGalleryStatus("Zapisano draft wystawy. Rewizja draftu: " + gallerySaveIntegrityRuntime.draftRevision + ".");
             return true;
         } catch (error) {
-            console.warn("Gallery save integrity error:", error);
-            notifyGalleryStatus("Nie udalo sie zapisac galerii. Poprzednia wersja pozostala aktywna.");
+            console.warn("Exhibition draft save error:", error);
+            notifyGalleryStatus("Nie udalo sie zapisac draftu wystawy.");
             gallerySaveIntegrityRuntime.latestSaveResult = {
                 ok: false,
-                reason: "unexpected-save-error",
+                reason: "unexpected-draft-save-error",
                 message: error && error.message ? error.message : String(error),
                 failedAt: Date.now()
             };
             return false;
         } finally {
             gallerySaveIntegrityRuntime.saveInFlight = false;
-            dispatchGalleryDraftState("save-finished");
+            dispatchGalleryDraftState("draft-save-finished");
         }
     }
+
+    async function publishGalleryDraftToSupabase() {
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby opublikowac wystawe.");
+            return false;
+        }
+        if (galleryStateChannel !== "draft") {
+            notifyGalleryStatus("Publikacja jest dostepna tylko w kanale draft.");
+            return false;
+        }
+        if (gallerySaveIntegrityRuntime.saveInFlight || gallerySaveIntegrityRuntime.publishInFlight) {
+            notifyGalleryStatus("Operacja zapisu lub publikacji juz trwa.");
+            return false;
+        }
+        if (checkGalleryDraftStateNow("before-publish")) {
+            notifyGalleryStatus("Najpierw zapisz aktualny draft, a dopiero potem go opublikuj.");
+            return false;
+        }
+
+        gallerySaveIntegrityRuntime.publishInFlight = true;
+        dispatchGalleryDraftState("publish-started");
+        try {
+            var result = await galleryExhibitionStateRepository.publish({
+                expectedDraftRevision: gallerySaveIntegrityRuntime.draftRevision,
+                expectedLockVersion: gallerySaveIntegrityRuntime.lockVersion
+            });
+            if (!result || !result.ok) {
+                notifyGalleryStatus(
+                    result && result.reason === "d2-schema-required"
+                        ? "Stage 12D2 wymaga wdrozenia migracji Supabase przed publikacja."
+                        : "Nie udalo sie opublikowac draftu. Poprzednia wersja publiczna pozostala aktywna."
+                );
+                gallerySaveIntegrityRuntime.latestPublishResult = {
+                    ok: false,
+                    reason: result && result.reason || "publish-error",
+                    message: result && result.error && (result.error.message || String(result.error)) || null,
+                    failedAt: Date.now()
+                };
+                return false;
+            }
+
+            gallerySaveIntegrityRuntime.publicRevision = Math.max(0, Number(result.publishedRevision) || gallerySaveIntegrityRuntime.draftRevision);
+            gallerySaveIntegrityRuntime.lockVersion = Math.max(0, Number(result.lockVersion) || gallerySaveIntegrityRuntime.lockVersion + 1);
+            gallerySaveIntegrityRuntime.latestPublishResult = {
+                ok: true,
+                publishedRevision: gallerySaveIntegrityRuntime.publicRevision,
+                previousRevision: Math.max(0, Number(result.previousRevision) || 0),
+                publishedAt: result.publishedAt || new Date().toISOString(),
+                lockVersion: gallerySaveIntegrityRuntime.lockVersion
+            };
+            notifyGalleryStatus("Opublikowano wystawe. Rewizja publiczna: " + gallerySaveIntegrityRuntime.publicRevision + ".");
+            return true;
+        } catch (error) {
+            console.warn("Exhibition publish error:", error);
+            notifyGalleryStatus("Nie udalo sie opublikowac wystawy.");
+            gallerySaveIntegrityRuntime.latestPublishResult = {
+                ok: false,
+                reason: "unexpected-publish-error",
+                message: error && error.message ? error.message : String(error),
+                failedAt: Date.now()
+            };
+            return false;
+        } finally {
+            gallerySaveIntegrityRuntime.publishInFlight = false;
+            dispatchGalleryDraftState("publish-finished");
+        }
+    }
+
+    async function applyGalleryPreviousPublishedStateAsDraft() {
+        if (galleryStateChannel !== "draft" || !editorAuthenticated) {
+            notifyGalleryStatus("Poprzedni stan można przywrócić tylko w zalogowanym kanale draft.");
+            return false;
+        }
+        var result = await galleryExhibitionStateRepository.load("previous");
+        if (result && result.ok && result.state) {
+            await applyGalleryState(result.state);
+            markGalleryDraftDirty("previous-published-state-applied-as-draft");
+            notifyGalleryStatus("Wczytano poprzednią opublikowaną wersję jako niezapisany draft.");
+            return true;
+        }
+        var localBackup = readGalleryPreviousStateBackup();
+        if (localBackup && localBackup.state) {
+            await applyGalleryState(localBackup.state);
+            markGalleryDraftDirty("local-recovery-backup-applied-as-draft");
+            notifyGalleryStatus("Brak poprzedniej publikacji. Wczytano lokalny backup odzyskiwania jako draft.");
+            return true;
+        }
+        notifyGalleryStatus("Brak poprzedniej opublikowanej wersji do przywrócenia.");
+        return false;
+    }
+
+    async function rollbackGalleryPublishedState() {
+        if (galleryStateChannel !== "draft" || !editorAuthenticated) {
+            notifyGalleryStatus("Rollback publikacji wymaga zalogowanego kanału draft.");
+            return false;
+        }
+        if (hasGalleryUnsavedChanges()) {
+            notifyGalleryStatus("Zapisz lub odrzuć lokalne zmiany przed rollbackiem publikacji.");
+            return false;
+        }
+        var result = await galleryExhibitionStateRepository.rollback({
+            expectedLockVersion: gallerySaveIntegrityRuntime.lockVersion
+        });
+        if (!result || !result.ok) {
+            notifyGalleryStatus("Nie udało się wykonać rollbacku. Aktualna publikacja pozostaje aktywna.");
+            return false;
+        }
+        gallerySaveIntegrityRuntime.publicRevision = Math.max(0, Number(result.publishedRevision) || 0);
+        gallerySaveIntegrityRuntime.lockVersion = Math.max(0, Number(result.lockVersion) || gallerySaveIntegrityRuntime.lockVersion + 1);
+        gallerySaveIntegrityRuntime.latestPublishResult = {
+            ok: true,
+            action: "rollback",
+            publishedRevision: gallerySaveIntegrityRuntime.publicRevision,
+            previousRevision: Math.max(0, Number(result.previousRevision) || 0),
+            lockVersion: gallerySaveIntegrityRuntime.lockVersion,
+            completedAt: new Date().toISOString()
+        };
+        dispatchGalleryDraftState("published-rollback-finished");
+        notifyGalleryStatus("Przywrócono poprzednią publikację. Rewizja publiczna: " + gallerySaveIntegrityRuntime.publicRevision + ".");
+        return true;
+    }
+
+    // Backward API name is kept as an alias, but its D2 meaning is strictly Save Draft.
+    var saveGalleryStateToSupabase = saveGalleryDraftToSupabase;
 
     globalThis.BerryboyArtGalleryWebState = {
         exportState: serializeGalleryState,
         importState: applyGalleryState,
-        save: saveGalleryStateToSupabase,
+        saveDraft: saveGalleryDraftToSupabase,
+        save: saveGalleryDraftToSupabase,
+        publish: publishGalleryDraftToSupabase,
+        rollbackPublished: rollbackGalleryPublishedState,
+        applyPreviousAsDraft: applyGalleryPreviousPublishedStateAsDraft,
         load: loadGalleryStateFromSupabase,
         getDraftStatus: function () {
             checkGalleryDraftStateNow("web-state-status");
             return {
                 dirty: gallerySaveIntegrityRuntime.dirty,
-                revision: gallerySaveIntegrityRuntime.publishedRevision,
+                exhibitionId: galleryExhibitionId,
+                stateChannel: galleryStateChannel,
+                revision: gallerySaveIntegrityRuntime.activeRevision,
+                draftRevision: gallerySaveIntegrityRuntime.draftRevision,
+                publishedRevision: gallerySaveIntegrityRuntime.publicRevision,
+                lockVersion: gallerySaveIntegrityRuntime.lockVersion,
                 saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
+                publishInFlight: gallerySaveIntegrityRuntime.publishInFlight,
                 pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length,
-                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult
+                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult,
+                latestPublishResult: gallerySaveIntegrityRuntime.latestPublishResult || null
             };
         },
         getPreviousBackup: readGalleryPreviousStateBackup
@@ -42420,7 +42515,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getMobileQualityInspector: getGalleryMobileQualityInspectorSnapshot,
         setMobileQualityInspectorVisible: setGalleryMobileQualityInspectorVisible,
         getArtworkById: getArtworkById,
-        saveStateToSupabase: saveGalleryStateToSupabase,
+        saveDraftToSupabase: saveGalleryDraftToSupabase,
+        saveStateToSupabase: saveGalleryDraftToSupabase,
+        publishDraftToSupabase: publishGalleryDraftToSupabase,
+        rollbackPublishedState: rollbackGalleryPublishedState,
+        applyPreviousPublishedStateAsDraft: applyGalleryPreviousPublishedStateAsDraft,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
@@ -42428,28 +42527,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 stage: gallerySaveIntegrityRuntime.stage,
                 dirty: gallerySaveIntegrityRuntime.dirty,
                 reason: gallerySaveIntegrityRuntime.dirtyReason,
-                revision: gallerySaveIntegrityRuntime.publishedRevision,
+                exhibitionId: galleryExhibitionId,
+                exhibitionSlug: galleryExhibitionSlug,
+                stateChannel: galleryStateChannel,
+                revision: gallerySaveIntegrityRuntime.activeRevision,
+                draftRevision: gallerySaveIntegrityRuntime.draftRevision,
+                publishedRevision: gallerySaveIntegrityRuntime.publicRevision,
+                lockVersion: gallerySaveIntegrityRuntime.lockVersion,
                 saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
+                publishInFlight: gallerySaveIntegrityRuntime.publishInFlight,
                 pendingStorageCleanup: gallerySaveIntegrityRuntime.pendingStorageDeletes.length,
                 pendingDraftUploads: gallerySaveIntegrityRuntime.pendingDraftUploads.length,
                 tabId: gallerySaveIntegrityRuntime.tabId,
                 activeTabs: readGalleryActiveEditorTabs(),
                 cleanupFailures: gallerySaveIntegrityRuntime.cleanupFailures.slice(),
-                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult
+                latestSaveResult: gallerySaveIntegrityRuntime.latestSaveResult,
+                latestPublishResult: gallerySaveIntegrityRuntime.latestPublishResult || null
             };
         },
         getPreviousStateBackup: readGalleryPreviousStateBackup,
-        applyPreviousStateBackupAsDraft: function () {
-            var backup = readGalleryPreviousStateBackup();
-
-            if (!backup || !backup.state) {
-                return false;
-            }
-
-            applyGalleryState(backup.state);
-            markGalleryDraftDirty("previous-backup-applied");
-            return true;
-        },
+        getLocalRecoveryBackup: readGalleryPreviousStateBackup,
+        applyPreviousStateBackupAsDraft: applyGalleryPreviousPublishedStateAsDraft,
         getState: serializeGalleryState,
         applyState: applyGalleryState,
         serializeGalleryState: serializeGalleryState,
@@ -42459,6 +42557,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             return {
                 version: state.version,
+                exhibitionId: state.exhibition && state.exhibition.exhibitionId,
+                exhibitionSlug: state.exhibition && state.exhibition.exhibitionSlug,
+                stateChannel: state.exhibition && state.exhibition.stateChannel,
                 venueId: state.venue && state.venue.venueId,
                 venueVersionId: state.venue && state.venue.versionId,
                 stateRecordId: state.venue && state.venue.stateRecordId,
@@ -43246,7 +43347,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 dirty: gallerySaveIntegrityRuntime.dirty,
                 dirtyReason: gallerySaveIntegrityRuntime.dirtyReason,
                 dirtySince: gallerySaveIntegrityRuntime.dirtySince,
-                publishedStateConfirmed: gallerySaveIntegrityRuntime.publishedStateConfirmed,
+                savedBaselineConfirmed: gallerySaveIntegrityRuntime.savedBaselineConfirmed,
                 saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,
                 pendingStorageDeletes: gallerySaveIntegrityRuntime.pendingStorageDeletes,
                 pendingDraftUploads: gallerySaveIntegrityRuntime.pendingDraftUploads,

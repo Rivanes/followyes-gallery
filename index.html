@@ -16,8 +16,6 @@
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 
   <style>
-    #siteHeader #saveStateButton { display: none !important; }
-
     :root {
       --header-height: 64px;
       --mobile-header-height: 54px;
@@ -413,6 +411,52 @@
       display: flex;
       gap: 10px;
       margin-top: 22px;
+    }
+
+    .galleryExhibitionChooser {
+      width: min(620px, 100%);
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      margin: 18px auto 0;
+      max-height: min(42vh, 360px);
+      overflow: auto;
+      padding: 2px;
+    }
+
+    .galleryExhibitionChoice {
+      min-height: 92px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+    }
+
+    .galleryExhibitionChoice:hover,
+    .galleryExhibitionChoice:focus-visible {
+      background: rgba(255, 255, 255, 0.13);
+      border-color: rgba(255, 255, 255, 0.52);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .galleryExhibitionChoice strong {
+      font-size: 15px;
+      line-height: 1.15;
+    }
+
+    .galleryExhibitionChoice span {
+      color: rgba(255, 255, 255, 0.66);
+      font-size: 12px;
+      line-height: 1.35;
     }
 
     #galleryBootStart,
@@ -1176,7 +1220,8 @@
         </label>
 
         <span id="authStatus">Public gallery</span>
-        <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
+        <button id="saveStateButton" class="headerButton primary hidden">Save draft</button>
+        <button id="publishStateButton" class="headerButton hidden">Publish</button>
         <button id="loginButton" class="headerButton">Log in</button>
         <button id="logoutButton" class="headerButton hidden">Log out</button>
       </div>
@@ -1259,7 +1304,7 @@
             </div>
             <div class="languageBlock" data-lang="en">
               <h3>One current state</h3>
-              <p>Each save replaces the previous layout. Visitors always see the current gallery version.</p>
+              <p>Save Draft stores private work. Publish atomically replaces the public exhibition and preserves the previous publication for rollback.</p>
             </div>
           </article>
         </div>
@@ -1759,7 +1804,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "12D1",
+              stage: "12D2",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1818,7 +1863,7 @@
       });
 
       window.BerryboyBootGuard = {
-        stage: "12D1",
+        stage: "12D2",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1832,6 +1877,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12d1_venue_agnostic_engine_manifest_20260803" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12d2_multi_venue_multi_exhibition_20260803" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

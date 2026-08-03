@@ -248,6 +248,7 @@ export function createGalleryRuntimeContext(input, manifest) {
   const venue = isObject(source.venue) ? source.venue : {};
   const platform = isObject(source.platform) ? source.platform : {};
   const exhibition = isObject(source.exhibition) ? source.exhibition : {};
+  const services = isObject(source.services) ? source.services : {};
   if (!manifest) throw new Error("GalleryRuntimeContext requires a normalized Venue Manifest");
   if (venue.venueId && venue.venueId !== manifest.venueId) {
     throw new Error(`Runtime venueId mismatch: ${venue.venueId} !== ${manifest.venueId}`);
@@ -256,18 +257,27 @@ export function createGalleryRuntimeContext(input, manifest) {
     throw new Error(`Runtime versionId mismatch: ${venue.versionId} !== ${manifest.versionId}`);
   }
 
-  const stateRecordId = asNonEmptyString(exhibition.stateRecordId);
-  const storageScope = asNonEmptyString(exhibition.storageScope);
+  const exhibitionId = asNonEmptyString(exhibition.exhibitionId || platform.exhibitionId);
+  const exhibitionSlug = asNonEmptyString(exhibition.exhibitionSlug || platform.exhibitionSlug);
+  const stateChannel = ["draft", "previous"].includes(asNonEmptyString(exhibition.stateChannel))
+    ? asNonEmptyString(exhibition.stateChannel)
+    : "published";
+  const stateRecordId = asNonEmptyString(exhibition.stateRecordId) || exhibitionId;
+  const storageScope = asNonEmptyString(exhibition.storageScope) || (exhibitionId ? `exhibitions/${exhibitionId}` : "");
+  if (!exhibitionId) throw new Error("GalleryRuntimeContext exhibition.exhibitionId is required");
   if (!stateRecordId) throw new Error("GalleryRuntimeContext exhibition.stateRecordId is required");
   if (!storageScope) throw new Error("GalleryRuntimeContext exhibition.storageScope is required");
 
   return Object.freeze({
-    schema: "berryboy-gallery-runtime-context.v1",
+    schema: "berryboy-gallery-runtime-context.v2",
+    stage: "12D2",
     platform: Object.freeze({
+      platformId: asNonEmptyString(platform.platformId) || "berryboy-art-gallery",
       locale: asNonEmptyString(platform.locale) || "en",
       mode: asNonEmptyString(platform.mode) || "viewer",
-      exhibitionId: asNonEmptyString(platform.exhibitionId) || null,
-      exhibitionSlug: asNonEmptyString(platform.exhibitionSlug) || null
+      authenticated: platform.authenticated === true,
+      exhibitionId,
+      exhibitionSlug: exhibitionSlug || null
     }),
     venue: Object.freeze({
       venueId: manifest.venueId,
@@ -276,9 +286,25 @@ export function createGalleryRuntimeContext(input, manifest) {
       manifest
     }),
     exhibition: Object.freeze({
+      exhibitionId,
+      exhibitionSlug: exhibitionSlug || null,
+      title: asNonEmptyString(exhibition.title) || exhibitionSlug || exhibitionId,
+      status: asNonEmptyString(exhibition.status) || "published",
+      stateChannel,
       stateRecordId,
-      previousStateRecordId: asNonEmptyString(exhibition.previousStateRecordId) || `${stateRecordId}_previous`,
-      storageScope
+      previousStateRecordId: asNonEmptyString(exhibition.previousStateRecordId) || `${stateRecordId}:previous`,
+      storageScope,
+      stateRevision: Math.max(0, asFiniteNumber(exhibition.stateRevision, 0)),
+      lockVersion: Math.max(0, asFiniteNumber(exhibition.lockVersion, 0)),
+      legacyStateRecordId: asNonEmptyString(exhibition.legacyStateRecordId) || null,
+      legacyPreviousStateRecordId: asNonEmptyString(exhibition.legacyPreviousStateRecordId) || null,
+      databaseVenueId: asNonEmptyString(exhibition.databaseVenueId) || null,
+      databaseVenueVersionId: asNonEmptyString(exhibition.databaseVenueVersionId) || null,
+      dataSource: asNonEmptyString(exhibition.dataSource) || "d2"
+    }),
+    services: Object.freeze({
+      exhibitionStateRepository: services.exhibitionStateRepository || null,
+      mediaRepository: services.mediaRepository || null
     })
   });
 }

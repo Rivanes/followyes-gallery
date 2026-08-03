@@ -1,62 +1,67 @@
-# Berryboy Art Gallery — Stage 12D1
+# Berryboy Art Gallery — Stage 12D2
 
-## Venue-Agnostic Engine / Building Manifest
+## Multi‑Venue / Multi‑Exhibition Data Architecture
 
-Stage 12D1 przebudowuje bazę **Stage 12C66C6C2** tak, aby silnik Babylon.js nie znał już nazw ani liczby plików obecnego budynku Berryboy.
+Stage 12D2 rozwija zaakceptowany Stage 12D1 w platformę danych obsługującą dowolną liczbę Venue i Exhibition bez zmiany kodu silnika Babylon.js.
 
-Obecna przestrzeń działa jako pierwszy pakiet Venue:
-
-- `venueId: berryboy-main`
-- `versionId: v1`
-- manifest: `venues/berryboy-main/versions/v1/manifest.json`
-
-## Najważniejsza zmiana
-
-Bootstrap ładuje i waliduje Venue Manifest **przed uruchomieniem ciężkiego silnika 3D**. Następnie tworzy `GalleryRuntimeContext`, a scena buduje jeden autorytatywny `Venue Runtime Registry`.
-
-Silnik ładuje:
+## Główna architektura
 
 ```text
-manifest.assets[]
+wybór Exhibition
+→ exhibitionId / slug
+→ dokładny Venue + Venue Version
+→ Venue Manifest
+→ kanał draft / published / previous
+→ uruchomienie jednego silnika Babylon.js
 ```
 
-Nie zakłada już:
+Bez wybranej wystawy ciężki silnik 3D, modele i artworki nie są uruchamiane.
 
-- czterech konkretnych plików GLB;
-- konkretnych nazw plików;
-- konkretnych nazw meshów;
-- jednego układu stref, kolizji, spawnów i anchorów.
+## Najważniejsze zmiany D2
 
-## Główne pliki D1
+- dynamiczny katalog opublikowanych i zaplanowanych wystaw;
+- routing przez `?exhibition={slug}` oraz `/exhibitions/{slug}`;
+- osobny stan każdej wystawy w `exhibition_states`;
+- dokładne przypięcie każdego stanu do konkretnej wersji Venue;
+- rozdzielenie **SAVE DRAFT** i **PUBLISH**;
+- atomowe `draft → published → previous`;
+- rollback poprzedniej publikacji;
+- publiczny Viewer otrzymuje tylko snapshot `published_state` przez RPC;
+- zalogowany edytor pracuje wyłącznie na kanale draft;
+- kontrolowany restart sceny przy zmianie wystawy;
+- Storage `platform-media/exhibitions/{exhibitionId}/...`;
+- stabilne UUID mediów i globalne `media_usages`;
+- cleanup współdzielonych mediów działa fail‑closed;
+- kontrolowana migracja `gallery_state/main` do pierwszej wystawy Berryboy;
+- RLS rozdzielający Platform Admin, Venue Admin i Curator;
+- Curator nie ma technicznego zapisu Venue;
+- zachowany Venue Runtime Registry z D1;
+- zachowane wszystkie zamrożone systemy C6C2 oraz aktywny panel DBG.
+
+## Główne pliki
 
 ```text
+src/runtime/exhibition-runtime.js
 src/runtime/venue-runtime.js
-venues/schema/berryboy-venue-manifest.v1.schema.json
+src/bootstrap/gallery-viewer-bootstrap.js
+src/bootstrap/gallery-editor-bootstrap.js
+supabase/migrations/20260803_stage12d2_multi_venue_multi_exhibition.sql
 venues/berryboy-main/versions/v1/manifest.json
-venues/_template/versions/v1/manifest.template.json
 ```
 
-## Uruchomienie testów
+## Testy
 
 ```bash
 npm run check
 ```
 
-Pełny zestaw obejmuje:
+Zestaw obejmuje verifier D2, test trzech wystaw w dwóch Venue, izolację kanałów, kontrolowany restart, Save Integrity, shared-media cleanup oraz wszystkie regresje C6C2/D1.
 
-- build i syntax;
-- verifier Stage 12D1;
-- test Venue Runtime;
-- wszystkie testy regresji C6C2;
-- Save Integrity;
-- startup i popup;
-- Unified Ground Collision;
-- Sculpture Core;
-- Inspect Isolation;
-- AVIF i Atomic Media;
-- mobile quality;
-- canonical visual state;
-- mobile memory survival.
+## Wdrożenie Supabase
+
+Kod D2 wymaga zastosowania migracji SQL przed pierwszym zapisem draftu, publikacją i nowymi uploadami. Migracja nie została automatycznie uruchomiona na produkcyjnym projekcie użytkownika i nie usuwa starej tabeli `gallery_state`.
+
+Szczegóły: `STAGE12D2_SUPABASE_MIGRATION_GUIDE.md`.
 
 ## Ważne: diagnostyka C6C2 nadal aktywna
 
@@ -66,8 +71,8 @@ Return to memory analysis after enough reports are collected.
 After diagnostics are complete, remove the DBG panel and all related code physically.
 Do not only disable or hide it.
 
-Panel DBG, jego snapshoty i mechanizmy stabilizacji pamięci nie zostały usunięte ani ukryte.
+Panel DBG, snapshoty i mechanizmy stabilizacji pamięci pozostały aktywne.
 
 ## Status walidacji
 
-Automatyczny zestaw testów przechodzi. W środowisku roboczym nie udało się wykonać pełnego renderowanego testu Chromium, ponieważ dostępny headless Chromium nie potrafił zainicjalizować EGL/WebGL. Dlatego paczka nadal wymaga testu wizualnego i mobilnego na realnym urządzeniu/przeglądarce.
+Automatyczny zestaw testów przechodzi. Nie wykonano pełnego wdrożenia migracji na rzeczywistym Supabase ani kompletnego testu WebGL na telefonach. Paczka wymaga wdrożenia najpierw na środowisku staging i przejścia checklisty runtime.

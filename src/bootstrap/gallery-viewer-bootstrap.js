@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12D1 / Venue-Agnostic Engine / Building Manifest
+  Berryboy Art Gallery — Stage 12D2 / Multi-Venue & Multi-Exhibition Runtime
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
@@ -7,9 +7,17 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { loadVenueManifest, createGalleryRuntimeContext, getVenueManifestSummary } from "../runtime/venue-runtime.js";
+import {
+  readExhibitionRoute,
+  resolveExhibitionRuntime,
+  ExhibitionStateRepository,
+  MediaRepository,
+  buildExhibitionUrl,
+  createControlledRestartController
+} from "../runtime/exhibition-runtime.js";
 
-const STAGE = "12D1";
-const ENGINE_CACHE_KEY = "stage12d1_venue_agnostic_engine_manifest_20260803";
+const STAGE = "12D2";
+const ENGINE_CACHE_KEY = "stage12d2_multi_venue_multi_exhibition_20260803";
 const DEFAULT_VENUE_MANIFEST_URL = new URL("../../venues/berryboy-main/versions/v1/manifest.json", import.meta.url).href;
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
@@ -23,6 +31,7 @@ const galleryToast = document.getElementById("galleryToast");
 const loginButton = document.getElementById("loginButton");
 const logoutButton = document.getElementById("logoutButton");
 const saveStateButton = document.getElementById("saveStateButton");
+const publishStateButton = document.getElementById("publishStateButton");
 const exploreBelowButton = document.getElementById("exploreBelowButton");
 const authStatus = document.getElementById("authStatus");
 const submitLoginButton = document.getElementById("submitLoginButton");
@@ -44,44 +53,109 @@ let activeScene = null;
 let galleryStartPromise = null;
 let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
 let galleryRuntimeContext = null;
+let exhibitionRuntimeResolution = null;
+let exhibitionStateRepository = null;
+let mediaRepository = null;
+let authInitializationPromise = null;
 
 function readGalleryRuntimeRequest() {
-  const params = new URLSearchParams(window.location.search || "");
-  const configured = window.BerryboyRuntimeConfig && typeof window.BerryboyRuntimeConfig === "object"
-    ? window.BerryboyRuntimeConfig
-    : {};
-  const configuredVenue = configured.venue && typeof configured.venue === "object" ? configured.venue : {};
-  const configuredExhibition = configured.exhibition && typeof configured.exhibition === "object" ? configured.exhibition : {};
-  const configuredPlatform = configured.platform && typeof configured.platform === "object" ? configured.platform : {};
-  return {
-    manifestUrl: params.get("venueManifest") || configuredVenue.manifestUrl || DEFAULT_VENUE_MANIFEST_URL,
-    context: {
-      platform: {
-        locale: currentLang,
-        mode: currentSession ? "editor" : "viewer",
-        exhibitionId: params.get("exhibitionId") || configuredPlatform.exhibitionId || null,
-        exhibitionSlug: params.get("exhibition") || configuredPlatform.exhibitionSlug || null
-      },
-      venue: {
-        venueId: params.get("venueId") || configuredVenue.venueId || null,
-        versionId: params.get("venueVersion") || configuredVenue.versionId || null
-      },
-      exhibition: {
-        stateRecordId: params.get("stateRecordId") || configuredExhibition.stateRecordId || "main",
-        previousStateRecordId: params.get("previousStateRecordId") || configuredExhibition.previousStateRecordId || "main_previous",
-        storageScope: params.get("storageScope") || configuredExhibition.storageScope || "main"
-      }
-    }
-  };
+  return readExhibitionRoute(
+    window.location,
+    window.BerryboyRuntimeConfig && typeof window.BerryboyRuntimeConfig === "object"
+      ? window.BerryboyRuntimeConfig
+      : {}
+  );
+}
+
+async function resolveCurrentExhibitionRuntime() {
+  const route = readGalleryRuntimeRequest();
+  exhibitionRuntimeResolution = await resolveExhibitionRuntime({
+    supabase,
+    session: currentSession,
+    route,
+    location: window.location,
+    runtimeConfig: window.BerryboyRuntimeConfig || {},
+    defaultManifestUrl: DEFAULT_VENUE_MANIFEST_URL
+  });
+  window.BerryboyExhibitionResolution = exhibitionRuntimeResolution;
+  return exhibitionRuntimeResolution;
 }
 
 async function prepareGalleryRuntimeContext() {
-  const request = readGalleryRuntimeRequest();
+  if (authInitializationPromise) {
+    try { await authInitializationPromise; } catch (_error) {}
+  }
+  const resolution = await resolveCurrentExhibitionRuntime();
+  if (resolution.selectionRequired || !resolution.exhibition) {
+    throw new Error("An exhibition must be selected before the 3D runtime starts.");
+  }
+  const selected = resolution.exhibition;
   bootGuard.setPhase("venue-manifest", "Venue Manifest");
-  const manifest = await loadVenueManifest(request.manifestUrl);
-  galleryRuntimeContext = createGalleryRuntimeContext(request.context, manifest);
+  const manifest = selected.manifest || await loadVenueManifest(selected.manifestUrl || DEFAULT_VENUE_MANIFEST_URL);
+
+  exhibitionStateRepository = new ExhibitionStateRepository({
+    supabase,
+    exhibition: selected,
+    channel: resolution.channel,
+    allowLegacyRead: resolution.source === "controlled-local-seed",
+    legacyStateRecordId: selected.legacyStateRecordId,
+    legacyPreviousStateRecordId: selected.legacyPreviousStateRecordId,
+    publicSnapshot: resolution.publicSnapshot || null,
+    dataMode: resolution.source
+  });
+  mediaRepository = new MediaRepository({
+    supabase,
+    bucket: "platform-media",
+    exhibitionId: selected.id
+  });
+
+  galleryRuntimeContext = createGalleryRuntimeContext({
+    platform: {
+      platformId: "berryboy-art-gallery",
+      locale: currentLang,
+      mode: currentSession ? "editor" : "viewer",
+      authenticated: !!currentSession,
+      exhibitionId: selected.id,
+      exhibitionSlug: selected.slug
+    },
+    venue: {
+      venueId: selected.venueId,
+      versionId: selected.venueVersionId
+    },
+    exhibition: {
+      exhibitionId: selected.id,
+      exhibitionSlug: selected.slug,
+      title: selected.title,
+      status: selected.status,
+      stateChannel: resolution.channel,
+      stateRecordId: selected.id,
+      previousStateRecordId: `${selected.id}:previous`,
+      storageScope: selected.storageScope,
+      stateRevision: resolution.stateBinding && resolution.stateBinding.revision || 0,
+      lockVersion: resolution.stateBinding && resolution.stateBinding.lockVersion || 0,
+      legacyStateRecordId: selected.legacyStateRecordId,
+      legacyPreviousStateRecordId: selected.legacyPreviousStateRecordId,
+      dataSource: resolution.source,
+      databaseVenueId: selected.databaseVenueId || null,
+      databaseVenueVersionId: selected.databaseVenueVersionId || null
+    },
+    services: {
+      exhibitionStateRepository,
+      mediaRepository
+    }
+  }, manifest);
   window.GalleryRuntimeContext = galleryRuntimeContext;
   window.BerryboyVenueManifestSummary = getVenueManifestSummary(manifest);
+  window.BerryboyExhibitionRuntime = {
+    stage: STAGE,
+    resolution,
+    stateRepository: exhibitionStateRepository,
+    mediaRepository,
+    buildUrl: function (exhibition, options) { return buildExhibitionUrl(exhibition, options); }
+  };
+  document.documentElement.setAttribute("data-exhibition-id", selected.id);
+  document.documentElement.setAttribute("data-exhibition-slug", selected.slug);
+  document.title = `${selected.title} — Berryboy Art Gallery`;
   return galleryRuntimeContext;
 }
 
@@ -92,7 +166,11 @@ const uiText = {
     editorAccount: "konto edytora",
     login: "Zaloguj",
     logout: "Wyloguj",
-    save: "Zapisz zmiany",
+    save: "Zapisz draft",
+    publish: "Opublikuj",
+    publishing: "Publikowanie…",
+    published: "Opublikowano",
+    publishError: "Błąd publikacji",
     saving: "Zapisywanie…",
     allSaved: "Wszystko zapisane",
     saved: "Zapisano",
@@ -119,7 +197,11 @@ const uiText = {
     editorAccount: "editor account",
     login: "Log in",
     logout: "Log out",
-    save: "Save changes",
+    save: "Save draft",
+    publish: "Publish",
+    publishing: "Publishing…",
+    published: "Published",
+    publishError: "Publish failed",
     saving: "Saving…",
     allSaved: "All changes saved",
     saved: "Saved",
@@ -168,10 +250,12 @@ function isEditorMessageVisible() {
 function updateAuthUi() {
   const isLoggedIn = !!currentSession;
   window.galleryEditorAuthenticated = isLoggedIn;
+  if (document.body) document.body.classList.toggle("is-editor-authenticated", isLoggedIn);
 
   if (loginButton) loginButton.classList.toggle("hidden", isLoggedIn);
   if (logoutButton) logoutButton.classList.toggle("hidden", !isLoggedIn);
   if (saveStateButton) saveStateButton.classList.toggle("hidden", !isLoggedIn);
+  if (publishStateButton) publishStateButton.classList.toggle("hidden", !isLoggedIn);
 
   if (authStatus) {
     authStatus.textContent = isLoggedIn
@@ -200,6 +284,7 @@ function applyLanguage(lang) {
   if (loginButton) loginButton.textContent = t("login");
   if (logoutButton) logoutButton.textContent = t("logout");
   if (saveStateButton && !saveStateButton.dataset.saveState) saveStateButton.textContent = t("save");
+  if (publishStateButton && !publishStateButton.dataset.publishState) publishStateButton.textContent = t("publish");
   if (exploreBelowButton) exploreBelowButton.textContent = t("exploreBelow");
   if (authModalTitle) authModalTitle.textContent = t("editorLogin");
   if (authEmailLabel) authEmailLabel.textContent = t("email");
@@ -224,7 +309,9 @@ function getEditorContext() {
     t,
     showToast,
     setSession,
-    getSession: function () { return currentSession; }
+    getSession: function () { return currentSession; },
+    getRuntimeContext: function () { return galleryRuntimeContext; },
+    getExhibitionResolution: function () { return exhibitionRuntimeResolution; }
   };
 }
 
@@ -506,11 +593,20 @@ async function startGalleryRuntime() {
       supabase,
       deviceProfile: window.BerryboyArtGalleryDeviceProfile || null,
       getSession: function () { return currentSession; },
+    getRuntimeContext: function () { return galleryRuntimeContext; },
+    getExhibitionResolution: function () { return exhibitionRuntimeResolution; },
       loadEditorModule,
       startedAfterExplicitClick: true,
       originalInstructionalPopupRestored: true,
       runtimeContext,
+      exhibition: exhibitionRuntimeResolution && exhibitionRuntimeResolution.exhibition || null,
+      stateRepository: exhibitionStateRepository,
+      mediaRepository,
       venueManifestSummary: window.BerryboyVenueManifestSummary || null
+    };
+    window.BerryboyViewerRuntime.restartController = createControlledRestartController({ engine, scene });
+    window.BerryboyViewerRuntime.switchExhibition = function (exhibition, options) {
+      return window.BerryboyViewerRuntime.restartController.switchExhibition(exhibition, options);
     };
 
     // Hide the page loader first, then show and verify the exact engine-owned popup from Stage 12C66A1.
@@ -575,13 +671,86 @@ async function initializeAuthRuntime() {
   }
 }
 
-// Start the editor-session check in parallel. The public gallery remains able to
-// start immediately after the explicit visitor click even if auth is slow or offline.
-initializeAuthRuntime().catch(function (error) {
+function setBootStartEnabled(enabled) {
+  const startButton = document.getElementById("galleryBootStart");
+  if (startButton) startButton.disabled = !enabled;
+}
+
+function updateBootSelectionCopy(exhibition) {
+  const title = document.getElementById("galleryBootTitle");
+  const message = document.getElementById("galleryBootMessage");
+  const startButton = document.getElementById("galleryBootStart");
+  if (title && exhibition) title.textContent = exhibition.title || "Berryboy Art Gallery";
+  if (message && exhibition) message.textContent = exhibition.shortDescription || (currentLang === "pl" ? "Wybrana wystawa jest gotowa do uruchomienia." : "The selected exhibition is ready to start.");
+  if (startButton && exhibition) startButton.textContent = exhibition.buttonLabel || t("galleryLoading");
+}
+
+async function chooseExhibitionBeforeStart() {
+  setBootStartEnabled(false);
+  if (authInitializationPromise) {
+    try { await authInitializationPromise; } catch (_error) {}
+  }
+  let resolution = await resolveCurrentExhibitionRuntime();
+  if (!resolution.selectionRequired) {
+    updateBootSelectionCopy(resolution.exhibition);
+    setBootStartEnabled(true);
+    return resolution;
+  }
+
+  const card = document.querySelector(".galleryBootCard");
+  const actions = document.getElementById("galleryBootActions");
+  const message = document.getElementById("galleryBootMessage");
+  if (message) message.textContent = currentLang === "pl" ? "Wybierz wystawę. Silnik 3D nie uruchomi się przed wyborem." : "Choose an exhibition. The 3D engine will not start before a selection.";
+  let chooser = document.getElementById("galleryExhibitionChooser");
+  if (!chooser) {
+    chooser = document.createElement("div");
+    chooser.id = "galleryExhibitionChooser";
+    chooser.className = "galleryExhibitionChooser";
+    if (card && actions) card.insertBefore(chooser, actions);
+  }
+  chooser.innerHTML = "";
+  const exhibitions = resolution.catalog && resolution.catalog.exhibitions || [];
+  if (!exhibitions.length) throw new Error("No published exhibitions are available.");
+
+  await new Promise(function (resolve, reject) {
+    exhibitions.forEach(function (exhibition) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "galleryExhibitionChoice";
+      const choiceTitle = document.createElement("strong");
+      choiceTitle.textContent = exhibition.title || "Untitled exhibition";
+      const choiceMeta = document.createElement("span");
+      choiceMeta.textContent = exhibition.subtitle || exhibition.shortDescription || exhibition.venueName || "";
+      button.appendChild(choiceTitle);
+      button.appendChild(choiceMeta);
+      button.addEventListener("click", async function () {
+        chooser.querySelectorAll("button").forEach(function (item) { item.disabled = true; });
+        try {
+          const targetUrl = new URL(buildExhibitionUrl(exhibition, { location: window.location }));
+          window.history.replaceState({}, "", targetUrl.pathname + targetUrl.search + targetUrl.hash);
+          resolution = await resolveCurrentExhibitionRuntime();
+          chooser.remove();
+          updateBootSelectionCopy(resolution.exhibition);
+          setBootStartEnabled(true);
+          resolve(resolution);
+        } catch (error) {
+          chooser.querySelectorAll("button").forEach(function (item) { item.disabled = false; });
+          reject(error);
+        }
+      });
+      chooser.appendChild(button);
+    });
+  });
+  return resolution;
+}
+
+// Resolve authentication and the selected Exhibition before the explicit 3D start gate.
+authInitializationPromise = initializeAuthRuntime().catch(function (error) {
   console.warn("Editor auth runtime warning:", error);
 });
 
 try {
+  await chooseExhibitionBeforeStart();
   await bootGuard.waitForStart();
   await startGalleryRuntime();
 } catch (error) {

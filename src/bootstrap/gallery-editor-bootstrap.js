@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12D1 Edit Workflow / Sticky Save
+  Berryboy Art Gallery — Stage 12D2 Draft / Publish Workflow
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
@@ -8,7 +8,11 @@ let initialized = false;
 let currentDraftState = {
   dirty: false,
   saveInFlight: false,
-  latestResult: null
+  publishInFlight: false,
+  latestResult: null,
+  draftRevision: 0,
+  publishedRevision: 0,
+  lockVersion: 0
 };
 let saveConfirmationTimer = 0;
 
@@ -49,6 +53,26 @@ function updateSaveButtonUi(button, forcedState) {
         : state === "dirty"
           ? runtimeContext.t("save")
           : runtimeContext.t("allSaved");
+}
+
+function updatePublishButtonUi(button, forcedState) {
+  if (!button || !runtimeContext) return;
+  let state = forcedState || "";
+  if (!state) {
+    if (currentDraftState.publishInFlight) state = "publishing";
+    else if (currentDraftState.dirty) state = "blocked-dirty";
+    else state = "ready";
+  }
+  button.dataset.publishState = state;
+  button.disabled = state === "publishing" || state === "published" || state === "blocked-dirty";
+  button.title = state === "blocked-dirty" ? "Save the draft before publishing." : "";
+  button.textContent = state === "publishing"
+    ? runtimeContext.t("publishing")
+    : state === "published"
+      ? runtimeContext.t("published")
+      : state === "error"
+        ? runtimeContext.t("publishError")
+        : runtimeContext.t("publish");
 }
 
 export function openEditorLogin() {
@@ -102,6 +126,7 @@ export function initializeEditorRuntime(context) {
   const cancelLoginButton = getElement("cancelLoginButton");
   const logoutButton = getElement("logoutButton");
   const saveStateButton = getElement("saveStateButton");
+  const publishStateButton = getElement("publishStateButton");
 
   if (cancelLoginButton) {
     cancelLoginButton.addEventListener("click", closeEditorLogin);
@@ -158,8 +183,13 @@ export function initializeEditorRuntime(context) {
       const detail = event.detail || {};
       currentDraftState.dirty = !!detail.dirty;
       currentDraftState.saveInFlight = !!detail.saveInFlight;
+      currentDraftState.publishInFlight = !!detail.publishInFlight;
+      currentDraftState.draftRevision = Number(detail.draftRevision || detail.revision || currentDraftState.draftRevision || 0);
+      currentDraftState.publishedRevision = Number(detail.publishedRevision || currentDraftState.publishedRevision || 0);
+      currentDraftState.lockVersion = Number(detail.lockVersion || currentDraftState.lockVersion || 0);
       window.clearTimeout(saveConfirmationTimer);
       updateSaveButtonUi(saveStateButton);
+      updatePublishButtonUi(publishStateButton);
     });
 
     saveStateButton.addEventListener("click", async function () {
@@ -173,7 +203,7 @@ export function initializeEditorRuntime(context) {
       let ok = false;
 
       try {
-        ok = !!(await window.GalleryApp.saveStateToSupabase());
+        ok = !!(await (window.GalleryApp.saveDraftToSupabase || window.GalleryApp.saveStateToSupabase)());
       } catch (error) {
         ok = false;
       }
@@ -188,6 +218,36 @@ export function initializeEditorRuntime(context) {
       } else {
         currentDraftState.dirty = true;
         updateSaveButtonUi(saveStateButton, "error");
+      }
+    });
+  }
+
+  if (publishStateButton) {
+    updatePublishButtonUi(publishStateButton);
+    publishStateButton.addEventListener("click", async function () {
+      if (!window.GalleryApp || typeof window.GalleryApp.publishDraftToSupabase !== "function") {
+        runtimeContext.showToast(runtimeContext.t("galleryLoading"));
+        return;
+      }
+      if (currentDraftState.dirty) {
+        runtimeContext.showToast("Save the draft before publishing.");
+        updatePublishButtonUi(publishStateButton, "blocked-dirty");
+        return;
+      }
+      currentDraftState.publishInFlight = true;
+      updatePublishButtonUi(publishStateButton, "publishing");
+      let ok = false;
+      try {
+        ok = !!(await window.GalleryApp.publishDraftToSupabase());
+      } catch (error) {
+        ok = false;
+      }
+      currentDraftState.publishInFlight = false;
+      if (ok) {
+        updatePublishButtonUi(publishStateButton, "published");
+        window.setTimeout(function () { updatePublishButtonUi(publishStateButton, "ready"); }, 1400);
+      } else {
+        updatePublishButtonUi(publishStateButton, "error");
       }
     });
   }
