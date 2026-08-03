@@ -195,6 +195,8 @@ function createHarness({
     window: { gallerySupabase: client, dispatchEvent() {} },
     globalThis: {},
     galleryArtworkStorageBucket: 'gallery-artworks',
+    galleryStateRecordId: 'main',
+    galleryPreviousStateRecordId: 'main_previous',
     galleryEditorLoginEnabled: true,
     editorAuthenticated: true,
     editMode: true,

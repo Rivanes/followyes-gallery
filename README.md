@@ -1,75 +1,73 @@
-# Berryboy Art Gallery — Stage 12C66C6C2
+# Berryboy Art Gallery — Stage 12D1
 
-## Mobile Memory Survival / Tiered Artwork Residency
+## Venue-Agnostic Engine / Building Manifest
 
-Baza: **Stage 12C66C6C1 — Canonical Visual State / Mobile Lighting & Reflection Parity**.
+Stage 12D1 przebudowuje bazę **Stage 12C66C6C2** tak, aby silnik Babylon.js nie znał już nazw ani liczby plików obecnego budynku Berryboy.
 
-Celem tego etapu jest ustabilizowanie długiego zwiedzania galerii na telefonie bez powrotu do pustych ram i bez zmiany kanonicznego oświetlenia, odbić ani kolorystyki względem wersji PC.
+Obecna przestrzeń działa jako pierwszy pakiet Venue:
 
-## Główne zmiany
+- `venueId: berryboy-main`
+- `versionId: v1`
+- manifest: `venues/berryboy-main/versions/v1/manifest.json`
 
-### Warstwowa rezydencja artworków
+## Najważniejsza zmiana
 
-- Każdy przypisany obraz zachowuje stale widoczny wariant Preview AVIF 768 px.
-- Tylko kontrolowana liczba najważniejszych obrazów utrzymuje wariant Full Mobile AVIF 2048 px.
-- Priorytet Full otrzymują: cel Inspect, Previous/Next, zaznaczone dzieło, obiekty widoczne w kadrze, aktualna strefa i najbliższe obrazy.
-- Po utracie priorytetu Full jest atomowo zastępowany Preview, a pełna tekstura zostaje zwolniona.
-- Rama nie jest wyłączana i nigdy nie pozostaje pusta.
+Bootstrap ładuje i waliduje Venue Manifest **przed uruchomieniem ciężkiego silnika 3D**. Następnie tworzy `GalleryRuntimeContext`, a scena buduje jeden autorytatywny `Venue Runtime Registry`.
 
-Budżety startowe:
+Silnik ładuje:
 
-- Mobile High: 8 Full; w osadzonej przeglądarce maksymalnie 5.
-- Mobile Balanced: 6 Full; w osadzonej przeglądarce maksymalnie 5.
-- Mobile Safe: 4 Full; w osadzonej przeglądarce maksymalnie 4.
-
-### Czyszczenie pamięci sceny
-
-- Streamowane modele są usuwane ze wszystkich rejestrów casterów i receiverów cieni przed disposalem.
-- Rejestry cieni są czyszczone z nieaktualnych oraz dispose’owanych wpisów.
-- Nieaktywne mobilne generatory cieni Spot są rzeczywiście dispose’owane.
-- Po wyłączeniu SSAO zwalniany jest pipeline, Geometry Buffer i jego render targety.
-- Monitor Tour Order nie wykonuje cyklicznych obliczeń w Viewer Mode.
-
-### Mobilna diagnostyka bez konsoli
-
-Na telefonie w prawym górnym rogu pojawia się przycisk **DBG**. Panel oferuje:
-
-- **LIVE** — aktualne dane,
-- **FREEZE** — zatrzymany snapshot do wykonania screena,
-- **LAST** — ostatni zapis poprzedniej sesji,
-- **CLOSE** — zamknięcie panelu.
-
-Snapshot pokazuje między innymi profil, FPS, render buffer, liczbę Preview/Full, szacowaną pamięć artworków, kolejki, modele, tekstury, materiały, meshe, shadow registry, generatory cieni, SSAO i Geometry Buffer. Lekki snapshot jest zapisywany do localStorage co 2,2 sekundy oraz przy `pagehide`/ukryciu strony.
-
-## Zachowana zgodność wizualna
-
-Stage C6C2 nie zmienia kanonicznych ustawień:
-
-- Hemispheric i Directional Light,
-- `scene.environmentIntensity`,
-- odbić podłogi, ścian i sufitu,
-- roughness materiałów,
-- kolorów Local Lights,
-- ustawień zapisanych w `gallery_state`.
-
-Dalsze artworki mogą być chwilowo wyświetlane jako Preview 768 px zamiast Full 2048 px, ale pozostają widoczne. Obrazy w bieżącym kadrze i Inspect są promowane do Full.
-
-## Diagnostyka programistyczna
-
-```js
-BerryboyMobileSurvival.getSnapshot()
-BerryboyMobileSurvival.getLastSession()
-BerryboyMobileSurvival.open()
-BerryboyMobileSurvival.enforceResidency()
-
-BerryboyArtGalleryMobileQuality.getSurvivalSnapshot()
-BerryboyArtGalleryMobileQuality.openSurvivalPanel()
+```text
+manifest.assets[]
 ```
 
-## Testy
+Nie zakłada już:
+
+- czterech konkretnych plików GLB;
+- konkretnych nazw plików;
+- konkretnych nazw meshów;
+- jednego układu stref, kolizji, spawnów i anchorów.
+
+## Główne pliki D1
+
+```text
+src/runtime/venue-runtime.js
+venues/schema/berryboy-venue-manifest.v1.schema.json
+venues/berryboy-main/versions/v1/manifest.json
+venues/_template/versions/v1/manifest.template.json
+```
+
+## Uruchomienie testów
 
 ```bash
 npm run check
 ```
 
-Testy automatyczne sprawdzają strukturę i zachowanie systemów, ale potwierdzenie braku zamknięcia strony wymaga długiego testu na rzeczywistych telefonach i osadzonych WebView.
+Pełny zestaw obejmuje:
+
+- build i syntax;
+- verifier Stage 12D1;
+- test Venue Runtime;
+- wszystkie testy regresji C6C2;
+- Save Integrity;
+- startup i popup;
+- Unified Ground Collision;
+- Sculpture Core;
+- Inspect Isolation;
+- AVIF i Atomic Media;
+- mobile quality;
+- canonical visual state;
+- mobile memory survival.
+
+## Ważne: diagnostyka C6C2 nadal aktywna
+
+Mobile C6C2 tests are still active.
+Collect DBG FREEZE and LAST SESSION screenshots.
+Return to memory analysis after enough reports are collected.
+After diagnostics are complete, remove the DBG panel and all related code physically.
+Do not only disable or hide it.
+
+Panel DBG, jego snapshoty i mechanizmy stabilizacji pamięci nie zostały usunięte ani ukryte.
+
+## Status walidacji
+
+Automatyczny zestaw testów przechodzi. W środowisku roboczym nie udało się wykonać pełnego renderowanego testu Chromium, ponieważ dostępny headless Chromium nie potrafił zainicjalizować EGL/WebGL. Dlatego paczka nadal wymaga testu wizualnego i mobilnego na realnym urządzeniu/przeglądarce.

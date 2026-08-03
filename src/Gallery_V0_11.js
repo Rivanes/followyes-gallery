@@ -1,3 +1,16 @@
+import {
+    createVenueRuntimeRegistry,
+    registerVenueAssetResult,
+    createVenueRegistryAudit,
+    getVenueRegistryMeshByStableId,
+    getVenueRegistryMeshStableId,
+    getVenueManifestAssetById,
+    getVenueManifestAssetIdsByRole,
+    getVenueRegistryAnchor,
+    getVenueRegistryAnchors,
+    pickVenueSpawnPoint
+} from "./runtime/venue-runtime.js";
+
 /*
   Berryboy Art Gallery
   Plik: Gallery_V0_11.js
@@ -33,7 +46,7 @@
   - PERF FIX: Color picker nie przebudowuje helperow i shadow refresh podczas przeciagania koloru.
   - TARGET FIX: Roof/Ceiling dodany jako osobny target lokalnych lamp, wlaczony domyslnie.
   - Etap 9: zapis i odczyt pelnego stanu Local Lights: lampy, parametry, transform, targets i groups.
-  - WEB: zapis/odczyt online przez GalleryApp + Supabase gallery_state / id = main.
+  - WEB: zapis/odczyt online przez GalleryApp + Supabase stateRecordId z GalleryRuntimeContext.
   - Stage 12C60A: Local Light Budget Stabilization — material light budgets, Spot shadow budget, soft-delete pool limit.
   - Stage 12C60A1 Hotfix: Wall/Artwork light budget safety — segmenty ścian nie powinny już gubić lamp przy niższym globalnym budżecie.
   - Stage 12C60A2 Hotfix: Spot Wall Occlusion Safety — SpotLight nie targetuje segmentów za blokującą ścianą.
@@ -52,7 +65,7 @@
   - Stage 12C62S6: Mobile Startup Survival Mode — na telefonach uruchamia mobile-safe startup: obniża render scale, wyłącza ciężkie postprocessy na starcie, ładuje krytyczne modele sekwencyjnie, propsy odracza po wejściu do sceny, zmniejsza budżet lokalnych cieni i ogranicza jednorazowe obciążenie GPU/RAM.
   - Stage 12C63: Startup Order Rebuild — startup zaczyna preload stanu/storage z Supabase od razu, modele ładują się równolegle/sekwencyjnie na mobile, props nie odpala się po kliknięciu Explore, finalne przypisanie świateł idzie na końcu, a popup pojawia się dopiero po settle. Mobile jakość podniesiona względem C62S6.
   - Stage 12C62S6B: Model3D Storage Delete / Reference Safe Cleanup — Delete Selected i REMOVE MODEL usuwaja GLB ze Storage tylko wtedy, gdy zaden inny slot nie uzywa tego samego modelPath.
-  - Stage 12C62S6C: Ceiling + Props GLB Loader Path Fix — loader startowy uzywa Ceiling.glb i Props.glb z raw.githubusercontent.com, bez zmian w Local Lights, retry, mobile startup i Storage delete.
+  - Stage 12C62S6C: legacy static model loader path fix (superseded by Stage 12D1 Venue Manifest).
   - Stage 12C62S6D: Supabase Static Models Root — modele startowe Floor/Wall/Props/Ceiling ladowane jako GLB z publicznego bucketu berryboy-art-gallery-assets/Models/, bez GitHub raw.
   - Stage 12C63: Full Fast Start Architecture — viewer startuje po krytycznym shellu floor/wall/ceiling; Props, artwork previews, pełne tekstury, modele rzeźb i ciężki retarget lamp przechodzą do kolejki tła. Retry nie duplikuje requestów po sztucznym timeoutcie, a Local Lights zapisują i odtwarzają gotowe targetMeshNames.
   - Stage 12C63A: Balanced Ready Gate — loader trzyma użytkownika do gotowości Props, preview obrazów, modeli rzeźb, środowiska, użytych tekstur ścian i finalnego restore świateł; po wejściu zostają tylko niewidoczne jakościowe upgrade pełnych tekstur.
@@ -99,7 +112,7 @@
 */
 
 
-export const createScene = function (engineArg, canvasArg) {
+export const createScene = function (engineArg, canvasArg, runtimeContextArg) {
 
     var engine = engineArg || globalThis.engine;
     var canvas = canvasArg || globalThis.canvas || document.getElementById("renderCanvas");
@@ -110,6 +123,32 @@ export const createScene = function (engineArg, canvasArg) {
 
     if (!canvas) {
         throw new Error("Gallery_V0_9_ENGINE: brak canvas. Przekaż canvas do createScene(engine, canvas) albo użyj elementu #renderCanvas.");
+    }
+
+    var galleryRuntimeContext = runtimeContextArg || globalThis.GalleryRuntimeContext || null;
+    if (!galleryRuntimeContext || galleryRuntimeContext.schema !== "berryboy-gallery-runtime-context.v1") {
+        throw new Error("Stage 12D1 requires a validated GalleryRuntimeContext before createScene().");
+    }
+    if (!galleryRuntimeContext.venue || !galleryRuntimeContext.venue.manifest) {
+        throw new Error("Stage 12D1 GalleryRuntimeContext is missing the normalized Venue Manifest.");
+    }
+
+    var galleryVenueManifest = galleryRuntimeContext.venue.manifest;
+    var galleryStateRecordId = galleryRuntimeContext.exhibition.stateRecordId;
+    var galleryPreviousStateRecordId = galleryRuntimeContext.exhibition.previousStateRecordId;
+    var galleryVenueRuntimeRegistry = createVenueRuntimeRegistry(galleryVenueManifest);
+
+    function getVenueRuntimeScopedStorageKey(baseKey) {
+        var technicalFlags = galleryVenueManifest.technicalFlags || {};
+        if (technicalFlags.legacyBerryboyCompatibility === true) {
+            return baseKey;
+        }
+        return baseKey + ":" + encodeURIComponent(galleryStateRecordId);
+    }
+
+    var galleryVenueSpawnPoint = pickVenueSpawnPoint(galleryVenueManifest, { id: galleryRuntimeContext.venue.spawnPointId || null });
+    if (!galleryVenueSpawnPoint) {
+        throw new Error("Stage 12D1 Venue Manifest has no usable spawn point.");
     }
 
     var scene = new BABYLON.Scene(engine);
@@ -222,6 +261,33 @@ export const createScene = function (engineArg, canvasArg) {
             upshiftFps: 46
         }
     };
+
+    function mergeGalleryVenueBudgetObject(baseValue, overrideValue) {
+        if (!overrideValue || typeof overrideValue !== "object" || Array.isArray(overrideValue)) {
+            return baseValue;
+        }
+        var output = Object.assign({}, baseValue || {});
+        Object.keys(overrideValue).forEach(function (key) {
+            var incoming = overrideValue[key];
+            if (incoming && typeof incoming === "object" && !Array.isArray(incoming)) {
+                output[key] = mergeGalleryVenueBudgetObject(output[key], incoming);
+            } else {
+                output[key] = incoming;
+            }
+        });
+        return output;
+    }
+
+    var galleryVenueQualityProfileOverrides = galleryVenueManifest.mobileBudgets && galleryVenueManifest.mobileBudgets.qualityProfiles;
+    if (galleryVenueQualityProfileOverrides && typeof galleryVenueQualityProfileOverrides === "object") {
+        Object.keys(galleryVenueQualityProfileOverrides).forEach(function (profileName) {
+            if (!galleryMobileQualityProfileDefinitions[profileName]) return;
+            galleryMobileQualityProfileDefinitions[profileName] = mergeGalleryVenueBudgetObject(
+                galleryMobileQualityProfileDefinitions[profileName],
+                galleryVenueQualityProfileOverrides[profileName]
+            );
+        });
+    }
 
     function getStoredGalleryMobileQualityMode() {
         var value = "auto";
@@ -626,7 +692,8 @@ export const createScene = function (engineArg, canvasArg) {
     var galleryStartupDeferredOptionalAssetsReleased = false;
 
     function shouldGalleryDeferOptionalStartupAsset(assetName) {
-        return assetName === "props";
+        var asset = getVenueManifestAssetById(galleryVenueManifest, assetName);
+        return !!(asset && asset.deferUntilInteractionGate);
     }
 
     function queueGalleryStartupDeferredOptionalAssetImport(assetName, run) {
@@ -731,7 +798,11 @@ export const createScene = function (engineArg, canvasArg) {
 
     var camera = new BABYLON.UniversalCamera(
         "camera",
-        new BABYLON.Vector3(-1., -2.2, -32),
+        new BABYLON.Vector3(
+            galleryVenueSpawnPoint.position.x,
+            galleryVenueSpawnPoint.position.y,
+            galleryVenueSpawnPoint.position.z
+        ),
         scene
     );
 
@@ -1248,7 +1319,11 @@ export const createScene = function (engineArg, canvasArg) {
     // Mniejszy near clipping plane ogranicza wizualne przecinanie ściany,
     // gdy zwiedzający podejdzie bardzo blisko powierzchni.
     camera.minZ = 0.035;
-    camera.setTarget(new BABYLON.Vector3(0, 1, 0));
+    camera.setTarget(new BABYLON.Vector3(
+        galleryVenueSpawnPoint.target.x,
+        galleryVenueSpawnPoint.target.y,
+        galleryVenueSpawnPoint.target.z
+    ));
 
     // STAGE 12C42:
     // Baseline walk height used as a safety fallback when focus preview recovery cannot resolve a floor.
@@ -1256,10 +1331,11 @@ export const createScene = function (engineArg, canvasArg) {
 
     scene.imageProcessingConfiguration.toneMappingEnabled = true;
     scene.imageProcessingConfiguration.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-    scene.imageProcessingConfiguration.exposure = 0.95;
-    scene.imageProcessingConfiguration.contrast = 1.05;
-    scene.environmentIntensity = 0.35;
-    var galleryEnvironmentTextureUrl = "https://playground.babylonjs.com/textures/environment.env";
+    var galleryVenueLightingDefaults = galleryVenueManifest.lightingDefaults || {};
+    scene.imageProcessingConfiguration.exposure = Number.isFinite(Number(galleryVenueLightingDefaults.exposure)) ? Number(galleryVenueLightingDefaults.exposure) : 0.95;
+    scene.imageProcessingConfiguration.contrast = Number.isFinite(Number(galleryVenueLightingDefaults.contrast)) ? Number(galleryVenueLightingDefaults.contrast) : 1.05;
+    scene.environmentIntensity = Number.isFinite(Number(galleryVenueLightingDefaults.environmentIntensity)) ? Number(galleryVenueLightingDefaults.environmentIntensity) : 0.35;
+    var galleryEnvironmentTextureUrl = galleryVenueLightingDefaults.environmentTextureUrl || "https://playground.babylonjs.com/textures/environment.env";
     var finishGalleryEnvironmentTextureLoad = registerGalleryStartupVisibleTextureLoad(
         "environment",
         "environment.env",
@@ -1331,7 +1407,7 @@ export const createScene = function (engineArg, canvasArg) {
     });
     // STAGE 12C15 - VISUAL SETTINGS / QUALITY PRESETS
     // Editor-only UI controls final viewer look. Public Viewer only sees saved state.
-    var visualSettingsStorageKey = "BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24";
+    var visualSettingsStorageKey = getVenueRuntimeScopedStorageKey("BerryboyArtGallery_VisualSettings_V0_11_STAGE12C24");
     var visualRenderingPipeline = null;
     var visualSsaoPipeline = null;
     var visualSsaoAttached = false;
@@ -2320,39 +2396,63 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    function getVenueVector3(value, fallback) {
+        value = value || {};
+        fallback = fallback || { x: 0, y: 0, z: 0 };
+        return new BABYLON.Vector3(
+            isFinite(Number(value.x)) ? Number(value.x) : Number(fallback.x || 0),
+            isFinite(Number(value.y)) ? Number(value.y) : Number(fallback.y || 0),
+            isFinite(Number(value.z)) ? Number(value.z) : Number(fallback.z || 0)
+        );
+    }
+
+    function getVenueColor3(value, fallback) {
+        value = value || {};
+        fallback = fallback || { r: 1, g: 1, b: 1 };
+        return new BABYLON.Color3(
+            isFinite(Number(value.r)) ? Number(value.r) : Number(fallback.r || 0),
+            isFinite(Number(value.g)) ? Number(value.g) : Number(fallback.g || 0),
+            isFinite(Number(value.b)) ? Number(value.b) : Number(fallback.b || 0)
+        );
+    }
+
+    var galleryVenueHemisphericDefaults = galleryVenueLightingDefaults.hemispheric || {};
+    var galleryVenueDirectionalDefaults = galleryVenueLightingDefaults.directional || {};
+
     var light = new BABYLON.HemisphericLight(
         "light",
-        new BABYLON.Vector3(0, 1, 0),
+        getVenueVector3(galleryVenueHemisphericDefaults.direction, { x: 0, y: 1, z: 0 }),
         scene
     );
 
-    light.intensity = 0.45;
-    light.diffuse = new BABYLON.Color3(1.0, 0.96, 0.90);
-    light.groundColor = new BABYLON.Color3(0.16, 0.15, 0.14);
-    light.specular = new BABYLON.Color3(0.25, 0.25, 0.25);
+    light.intensity = isFinite(Number(galleryVenueHemisphericDefaults.intensity)) ? Number(galleryVenueHemisphericDefaults.intensity) : 0.45;
+    light.diffuse = getVenueColor3(galleryVenueHemisphericDefaults.diffuse, { r: 1.0, g: 0.96, b: 0.90 });
+    light.groundColor = getVenueColor3(galleryVenueHemisphericDefaults.ground, { r: 0.16, g: 0.15, b: 0.14 });
+    light.specular = getVenueColor3(galleryVenueHemisphericDefaults.specular, { r: 0.25, g: 0.25, b: 0.25 });
 
     var mainDirectionalLight = new BABYLON.DirectionalLight(
         "MainDirectionalLight",
-        new BABYLON.Vector3(0.62, -0.72, 0.28),
+        getVenueVector3(galleryVenueDirectionalDefaults.direction, { x: 0.62, y: -0.72, z: 0.28 }),
         scene
     );
 
-    mainDirectionalLight.position = new BABYLON.Vector3(-7, 10, -6);
-    mainDirectionalLight.intensity = 0.85;
-    mainDirectionalLight.diffuse = new BABYLON.Color3(1.0, 0.96, 0.90);
-    mainDirectionalLight.specular = new BABYLON.Color3(0.35, 0.32, 0.28);
+    mainDirectionalLight.position = getVenueVector3(galleryVenueDirectionalDefaults.position, { x: -7, y: 10, z: -6 });
+    mainDirectionalLight.intensity = isFinite(Number(galleryVenueDirectionalDefaults.intensity)) ? Number(galleryVenueDirectionalDefaults.intensity) : 0.85;
+    mainDirectionalLight.diffuse = getVenueColor3(galleryVenueDirectionalDefaults.diffuse, { r: 1.0, g: 0.96, b: 0.90 });
+    mainDirectionalLight.specular = getVenueColor3(galleryVenueDirectionalDefaults.specular, { r: 0.35, g: 0.32, b: 0.28 });
 
     // Stabilna projekcja cieni.
     // Auto bounds potrafia przeliczac zasieg mapy cieni i wtedy cien "skacze",
     // szczegolnie podczas zmiany parametrow filtrowania.
     mainDirectionalLight.autoUpdateExtends = false;
     mainDirectionalLight.autoCalcShadowZBounds = false;
-    mainDirectionalLight.orthoLeft = -18;
-    mainDirectionalLight.orthoRight = 18;
-    mainDirectionalLight.orthoTop = 18;
-    mainDirectionalLight.orthoBottom = -18;
-    mainDirectionalLight.shadowMinZ = 0.5;
-    mainDirectionalLight.shadowMaxZ = 45;
+    var galleryVenueShadowProjection = galleryVenueDirectionalDefaults.shadowProjection || {};
+    mainDirectionalLight.orthoLeft = isFinite(Number(galleryVenueShadowProjection.orthoLeft)) ? Number(galleryVenueShadowProjection.orthoLeft) : -18;
+    mainDirectionalLight.orthoRight = isFinite(Number(galleryVenueShadowProjection.orthoRight)) ? Number(galleryVenueShadowProjection.orthoRight) : 18;
+    mainDirectionalLight.orthoTop = isFinite(Number(galleryVenueShadowProjection.orthoTop)) ? Number(galleryVenueShadowProjection.orthoTop) : 18;
+    mainDirectionalLight.orthoBottom = isFinite(Number(galleryVenueShadowProjection.orthoBottom)) ? Number(galleryVenueShadowProjection.orthoBottom) : -18;
+    mainDirectionalLight.shadowMinZ = isFinite(Number(galleryVenueShadowProjection.minZ)) ? Number(galleryVenueShadowProjection.minZ) : 0.5;
+    mainDirectionalLight.shadowMaxZ = isFinite(Number(galleryVenueShadowProjection.maxZ)) ? Number(galleryVenueShadowProjection.maxZ) : 45;
 
     var mainShadowGenerator = new BABYLON.ShadowGenerator(
         isGalleryDeviceProfileMobile() ? galleryDeviceProfile.mainShadowMapSize : 2048,
@@ -2904,7 +3004,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var distance = BABYLON.Vector3.DistanceSquared(lightPosition, approx.center);
 
         // C61A3: contact leaks przy scianach/podlodze byly wzmacniane przez to,
-        // ze local shadow renderList priorytetyzowal tylko Wall_segment_*.
+        // ze local shadow renderList priorytetyzowal tylko dawny prefiks segmentów ścian.
         // Po resolver parity sufit/podloga/sciany moga byc fallback meshami, wiec
         // kazdy realny wall mesh musi byc traktowany jako blocker pierwszej klasy.
         if (
@@ -3455,10 +3555,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getGalleryUiElementParent(layerName).appendChild(element);
     }
 
-    var floorMeshes = [];
-    var wallMeshes = [];
-    var ceilingMeshes = [];
-    var propMeshes = [];
+    // STAGE 12D1 — legacy domain arrays are compatibility views over one Venue Runtime Registry.
+    // They must never be reassigned or populated independently.
+    var floorMeshes = galleryVenueRuntimeRegistry.visual.floors;
+    var wallMeshes = galleryVenueRuntimeRegistry.visual.walls;
+    var ceilingMeshes = galleryVenueRuntimeRegistry.visual.ceilings;
+    var propMeshes = galleryVenueRuntimeRegistry.visual.props;
     var artSpheres = [];
     var artworks = [];
     var artworkLights = [];
@@ -3717,6 +3819,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
         }
 
+        galleryVenueRuntimeRegistry.collision.walkBlocking.forEach(function (mesh) {
+            if (!mesh || wallMeshes.indexOf(mesh) !== -1 || propMeshes.indexOf(mesh) !== -1) return;
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.viewerCollisionType = "venue-collision";
+            mesh.checkCollisions = false;
+        });
+
         if (viewerCollisionTargets.artworks) {
             getActiveArtworks().forEach(function (artwork) {
                 registerViewerCollisionMesh(artwork, "artwork");
@@ -3888,8 +3997,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getViewerWallCollisionMeshes() {
-        return wallMeshes.filter(function (mesh) {
-            return canUseViewerCollisionMesh(mesh);
+        return galleryVenueRuntimeRegistry.collision.walkBlocking.filter(function (mesh) {
+            if (!canUseViewerCollisionMesh(mesh)) return false;
+            var role = mesh.metadata && mesh.metadata.venueRole;
+            if (role === "props") return !!viewerCollisionTargets.props;
+            if (role === "walls" || role === "collision") return !!viewerCollisionTargets.walls;
+            return true;
         });
     }
 
@@ -4357,7 +4470,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     // STAGE 10B - WALL SEGMENT LIGHT TARGETING
-    // Teraz wall model jest podzielony na Wall_segment_001 - Wall_segment_071.
+    // Venue Registry exposes independent wall target surfaces.
     // Local Lights z targetem Walls nie powinny już trafiać we wszystkie wallMeshes,
     // tylko w najbliższe segmenty ściany.
     var localLightWallSegmentTargetingEnabled = true;
@@ -4459,11 +4572,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var localLightDynamicWallRetargetLastReason = null;
 
     function isLightingWallSegmentMesh(mesh) {
-        return !!(
-            mesh &&
-            mesh.name &&
-            mesh.name.indexOf("Wall_segment_") === 0
-        );
+        return !!(mesh && galleryVenueRuntimeRegistry.surfaces.lightTargets.wall.indexOf(mesh) !== -1);
     }
 
     function getLightingWallSegmentMeshes() {
@@ -4471,7 +4580,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     // STAGE 12C12 - FLOOR / CEILING SEGMENT LIGHT TARGETING
-    // Same idea as Wall_segment_: avoid one huge floor/ceiling material consuming
+    // Venue surfaces avoid one huge floor/ceiling material consuming
     // light budget for the whole gallery. Local lights target nearby segments only.
     var localLightFloorSegmentTargetingEnabled = true;
     var localLightCeilingSegmentTargetingEnabled = true;
@@ -4651,13 +4760,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getLocalLightSegmentCacheSignature() {
+        function stableSignature(meshes) {
+            return meshes.map(function (mesh) {
+                return getVenueRegistryMeshStableId(galleryVenueRuntimeRegistry, mesh) || (mesh ? mesh.name : "");
+            }).join("|");
+        }
         return [
             wallMeshes.length,
             floorMeshes.length,
             ceilingMeshes.length,
-            wallMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|"),
-            floorMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|"),
-            ceilingMeshes.map(function (mesh) { return mesh ? mesh.name : ""; }).join("|")
+            stableSignature(wallMeshes),
+            stableSignature(floorMeshes),
+            stableSignature(ceilingMeshes)
         ].join("#");
     }
 
@@ -4681,19 +4795,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function isLightingFloorSegmentMesh(mesh) {
-        return !!(
-            mesh &&
-            mesh.name &&
-            mesh.name.indexOf("Floor_segment_") === 0
-        );
+        return !!(mesh && galleryVenueRuntimeRegistry.surfaces.lightTargets.floor.indexOf(mesh) !== -1);
     }
 
     function isLightingCeilingSegmentMesh(mesh) {
-        return !!(
-            mesh &&
-            mesh.name &&
-            mesh.name.indexOf("Ceiling_segment_") === 0
-        );
+        return !!(mesh && galleryVenueRuntimeRegistry.surfaces.lightTargets.ceiling.indexOf(mesh) !== -1);
     }
 
     function getLightingFloorSegmentMeshes() {
@@ -13276,7 +13382,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     
     
     function getGalleryLegacyGeneratedWebpPrefixes() {
-        var root = String(galleryArtworkStoragePrefix || "main").replace(/^\/+|\/+$/g, "");
+        var root = String(galleryArtworkStoragePrefix || galleryRuntimeContext.exhibition.storageScope).replace(/^\/+|\/+$/g, "");
         var prefixes = [];
         ["artworks", "authors"].forEach(function (category) {
             ["Desktop", "Mobile", "Preview"].forEach(function (folder) {
@@ -13329,7 +13435,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryAuthorAvifStoragePrefixes() {
-        var root = String(galleryArtworkStoragePrefix || "main").replace(/^\/+|\/+$/g, "");
+        var root = String(galleryArtworkStoragePrefix || galleryRuntimeContext.exhibition.storageScope).replace(/^\/+|\/+$/g, "");
         var base = root + "/authors/" + galleryArtworkImageVariantFolder;
         return [
             { folder: "Desktop", suffix: "Web", prefix: base + "/Desktop" },
@@ -15310,9 +15416,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     // STAGE 12C65A - SINGLE STARTUP GATE / BATCHED FINALIZATION
     // Critical shell and saved state open the intro; one gate then drains previews/models/Props and finalizes global systems once.
-    var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
-    var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
-    var galleryOptionalAssetNames = ["props"];
+    var galleryAssetNames = galleryVenueManifest.assets.map(function (asset) { return asset.assetId; });
+    var galleryCriticalAssetNames = galleryVenueManifest.assets.filter(function (asset) { return asset.critical; }).map(function (asset) { return asset.assetId; });
+    var galleryOptionalAssetNames = galleryVenueManifest.assets.filter(function (asset) { return !asset.critical; }).map(function (asset) { return asset.assetId; });
     var assetsToLoad = galleryCriticalAssetNames.length;
     var assetsLoaded = 0;
     var galleryWebStateLoadedOnce = false;
@@ -15516,7 +15622,95 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     
+    function getGalleryManifestZoneBounds(zone) {
+        if (!zone || !zone.bounds) return null;
+        var bounds = zone.bounds;
+        var min = bounds.min || bounds.minimum || {};
+        var max = bounds.max || bounds.maximum || {};
+        var minX = Number(bounds.minX !== undefined ? bounds.minX : min.x);
+        var maxX = Number(bounds.maxX !== undefined ? bounds.maxX : max.x);
+        var minZ = Number(bounds.minZ !== undefined ? bounds.minZ : min.z);
+        var maxZ = Number(bounds.maxZ !== undefined ? bounds.maxZ : max.z);
+        var minY = Number(bounds.minY !== undefined ? bounds.minY : min.y);
+        var maxY = Number(bounds.maxY !== undefined ? bounds.maxY : max.y);
+        if (![minX, maxX, minZ, maxZ].every(isFinite)) return null;
+        if (!isFinite(minY)) minY = -1000;
+        if (!isFinite(maxY)) maxY = 1000;
+        return {
+            minX: Math.min(minX, maxX), maxX: Math.max(minX, maxX),
+            minZ: Math.min(minZ, maxZ), maxZ: Math.max(minZ, maxZ),
+            minY: Math.min(minY, maxY), maxY: Math.max(minY, maxY),
+            centerX: (minX + maxX) * 0.5,
+            centerZ: (minZ + maxZ) * 0.5
+        };
+    }
+
+    function buildGalleryStreamingZonesFromManifest() {
+        var sourceZones = galleryVenueRuntimeRegistry.zones || [];
+        if (!sourceZones.length) return null;
+        var zones = {};
+        sourceZones.forEach(function (zone) {
+            var bounds = getGalleryManifestZoneBounds(zone);
+            if (!zone || !zone.id || !bounds) return;
+            var surfaceIds = Array.isArray(zone.surfaceIds) ? zone.surfaceIds : [];
+            var zoneFloorMeshes = surfaceIds.map(getVenueMeshByStableId).filter(function (mesh, index, array) {
+                return !!mesh && floorMeshes.indexOf(mesh) !== -1 && array.indexOf(mesh) === index;
+            });
+            zones[String(zone.id)] = {
+                id: String(zone.id),
+                bounds: bounds,
+                floorMeshes: zoneFloorMeshes,
+                center: new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ),
+                source: "manifest",
+                levelId: zone.levelId || null,
+                metadata: zone.metadata || null
+            };
+        });
+        var ids = Object.keys(zones);
+        if (!ids.length) return null;
+        var adjacency = {};
+        ids.forEach(function (id) { adjacency[id] = {}; adjacency[id][id] = true; });
+        sourceZones.forEach(function (zone) {
+            if (!zone || !zones[zone.id]) return;
+            (zone.adjacentZoneIds || zone.adjacency || []).forEach(function (targetId) {
+                targetId = String(targetId || "");
+                if (!zones[targetId]) return;
+                adjacency[zone.id][targetId] = true;
+            });
+        });
+        (galleryVenueRuntimeRegistry.zoneAdjacency || []).forEach(function (edge) {
+            if (!edge) return;
+            var from = String(edge.from || edge.a || "");
+            var to = String(edge.to || edge.b || "");
+            if (!zones[from] || !zones[to]) return;
+            adjacency[from][to] = true;
+            if (edge.bidirectional !== false) adjacency[to][from] = true;
+        });
+        return { zones: zones, ids: ids, adjacency: adjacency };
+    }
+
     function rebuildGalleryStreamingZones(reason) {
+        var manifestZoneRuntime = buildGalleryStreamingZonesFromManifest();
+        if (manifestZoneRuntime) {
+            galleryZoneStreamingRuntime.zones = manifestZoneRuntime.zones;
+            galleryZoneStreamingRuntime.zoneIds = manifestZoneRuntime.ids;
+            galleryZoneStreamingRuntime.adjacency = manifestZoneRuntime.adjacency;
+            galleryZoneStreamingRuntime.zonesReady = true;
+            galleryZoneStreamingRuntime.lastReason = reason || "manifest-zones-rebuilt";
+            galleryZoneStreamingRuntime.zoneSource = "manifest";
+            return manifestZoneRuntime.zones;
+        }
+
+        if (galleryVenueManifest.technicalFlags && galleryVenueManifest.technicalFlags.floorGridZoneFallback === false) {
+            galleryZoneStreamingRuntime.zones = {};
+            galleryZoneStreamingRuntime.zoneIds = [];
+            galleryZoneStreamingRuntime.adjacency = {};
+            galleryZoneStreamingRuntime.zonesReady = true;
+            galleryZoneStreamingRuntime.lastReason = reason || "manifest-zones-required";
+            galleryZoneStreamingRuntime.zoneSource = "none";
+            return galleryZoneStreamingRuntime.zones;
+        }
+
         var zones = {};
         var cellSize = Math.max(8, Number(galleryZoneStreamingRuntime.gridCellSize) || 12);
         var floorEntries = (floorMeshes || []).map(function (mesh) {
@@ -15614,6 +15808,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryZoneStreamingRuntime.adjacency = adjacency;
         galleryZoneStreamingRuntime.zonesReady = true;
         galleryZoneStreamingRuntime.lastReason = reason || "zones-rebuilt";
+        galleryZoneStreamingRuntime.zoneSource = "floor-bounds-fallback";
         return zones;
     }
 
@@ -16579,7 +16774,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var response = await client
             .from("gallery_state")
             .select("state, updated_at")
-            .eq("id", "main")
+            .eq("id", galleryStateRecordId)
             .order("updated_at", {
                 ascending: false,
                 nullsFirst: false
@@ -16758,31 +16953,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryAssetMeshCount(assetName) {
-        if (assetName === "floor") {
-            return Array.isArray(floorMeshes) ? floorMeshes.filter(function (mesh) {
-                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
-            }).length : 0;
-        }
+        var record = galleryVenueRuntimeRegistry.assetsById.get(assetName);
+        if (!record || !Array.isArray(record.meshes)) return 0;
+        return record.meshes.filter(function (mesh) {
+            return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
+        }).length;
+    }
 
-        if (assetName === "wall") {
-            return Array.isArray(wallMeshes) ? wallMeshes.filter(function (mesh) {
-                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
-            }).length : 0;
-        }
-
-        if (assetName === "ceiling") {
-            return Array.isArray(ceilingMeshes) ? ceilingMeshes.filter(function (mesh) {
-                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
-            }).length : 0;
-        }
-
-        if (assetName === "props") {
-            return Array.isArray(propMeshes) ? propMeshes.filter(function (mesh) {
-                return mesh && mesh.name !== "__root__" && (!mesh.isDisposed || !mesh.isDisposed());
-            }).length : 0;
-        }
-
-        return 0;
+    function getGalleryAssetRoleStatus(role) {
+        var assetIds = getVenueManifestAssetIdsByRole(galleryVenueManifest, role);
+        return {
+            assetIds: assetIds,
+            loaded: assetIds.length > 0 && assetIds.every(function (assetId) { return !!galleryAssetLoadDebug.loaded[assetId]; }),
+            failed: assetIds.some(function (assetId) { return !!galleryAssetLoadDebug.failed[assetId]; })
+        };
     }
 
     function isGalleryCriticalAssetReady(assetName) {
@@ -16895,12 +17079,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         return;
                     }
 
+                    item._savedTargetStableIds = (item.light.includedOnlyMeshes || []).map(function (mesh) {
+                        return getVenueMeshStableId(mesh);
+                    }).filter(function (stableId, index, array) {
+                        return !!stableId && array.indexOf(stableId) === index;
+                    });
                     item._savedTargetMeshNames = (item.light.includedOnlyMeshes || []).map(function (mesh) {
                         return mesh && mesh.name ? mesh.name : null;
                     }).filter(function (name, index, array) {
                         return !!name && array.indexOf(name) === index;
                     });
-                    item._fastStartHasSavedTargetNames = item._savedTargetMeshNames.length > 0;
+                    item._fastStartHasSavedTargetNames = item._savedTargetStableIds.length > 0 || item._savedTargetMeshNames.length > 0;
                     item._fastStartNeedsTargetRebuild = false;
                     item._fastStartUnresolvedTargetNames = [];
                 });
@@ -16959,8 +17148,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             pendingTexturesTotal: pendingTextures,
             pendingVisibleTextures: pendingVisibleTextures,
             propsSettled: true,
-            propsLoaded: !!galleryAssetLoadDebug.loaded.props,
-            propsFailed: !!galleryAssetLoadDebug.failed.props,
+            propsLoaded: getGalleryAssetRoleStatus("props").loaded,
+            propsFailed: getGalleryAssetRoleStatus("props").failed,
             criticalZoneId: galleryZoneStreamingRuntime.currentZoneId,
             activeZoneIds: galleryZoneStreamingRuntime.activeZoneIds.slice(),
             criticalDrainComplete: !!galleryZoneStreamingRuntime.criticalDrainComplete,
@@ -17319,16 +17508,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return isGalleryAssetCritical(assetName) ? galleryCriticalAssetMaxAttempts : galleryOptionalAssetMaxAttempts;
     }
 
-    function inferGalleryStartupAssetName(rootUrl, sceneFilename) {
-        var file = String(sceneFilename || "").toLowerCase();
-        var root = String(rootUrl || "").toLowerCase();
-        if (file.indexOf("floor_segment") !== -1 || root.indexOf("/models/floor") !== -1) return "floor";
-        if (file.indexOf("wall_segments") !== -1 || root.indexOf("/models/wall") !== -1) return "wall";
-        if (file.indexOf("ceiling") !== -1 || root.indexOf("/models/ceiling") !== -1) return "ceiling";
-        if (file.indexOf("props") !== -1 || root.indexOf("/models/props") !== -1) return "props";
-        return null;
-    }
-
     function updateGalleryAssetRetryEntry(assetName, patch, reason) {
         if (!assetName) return null;
         var entry = galleryAssetLoadDebug.entries[assetName] || {};
@@ -17369,8 +17548,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
     }
 
-    function loadGalleryStartupAssetWithRetry(meshesNames, rootUrl, sceneFilename, sceneArg, onSuccess, onProgress, onError, pluginExtension) {
-        var assetName = inferGalleryStartupAssetName(rootUrl, sceneFilename);
+    function loadGalleryStartupAssetWithRetry(meshesNames, rootUrl, sceneFilename, sceneArg, onSuccess, onProgress, onError, pluginExtension, startupAssetId) {
+        var assetName = startupAssetId || null;
         if (!isGalleryKnownStartupAssetName(assetName)) {
             return BABYLON.SceneLoader.ImportMesh(meshesNames, rootUrl, sceneFilename, sceneArg, onSuccess, onProgress, onError, pluginExtension);
         }
@@ -17502,7 +17681,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // Pliki obrazow trzymamy w Supabase Storage, a w gallery_state zapisujemy tylko path/url.
     var galleryArtworkUploadEnabled = true;
     var galleryArtworkStorageBucket = "gallery-artworks";
-    var galleryArtworkStoragePrefix = "main";
+    var galleryArtworkStoragePrefix = galleryRuntimeContext.exhibition.storageScope;
     var galleryArtworkDefaultFitMode = "contain";
     var galleryArtworkImageBaseMaterial = null;
 
@@ -17536,7 +17715,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
     function createGalleryEditorPageInstanceId() {
-        var key = "berryboy_gallery_editor_page_instance_v1";
+        var key = getVenueRuntimeScopedStorageKey("berryboy_gallery_editor_page_instance_v1");
         var tabId = "tab-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
 
         // Always write a fresh page-instance id. A duplicated browser tab receives a copy of
@@ -17555,7 +17734,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         schema: "gallery-save-integrity.v3",
         sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
         tabId: createGalleryEditorPageInstanceId(),
-        activeTabsStorageKey: "berryboy_gallery_active_editor_tabs_v1",
+        activeTabsStorageKey: getVenueRuntimeScopedStorageKey("berryboy_gallery_active_editor_tabs_v1"),
         heartbeatIntervalMs: 4000,
         heartbeatStaleMs: 2 * 60 * 1000,
         backgroundTabGraceMs: 24 * 60 * 60 * 1000,
@@ -17581,10 +17760,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         pendingStorageDeletes: [],
         pendingDraftUploads: [],
         cleanupFailures: [],
-        remoteBackupId: "main_previous",
-        localBackupStorageKey: "berryboy_gallery_previous_state_backup_v1",
-        pendingCleanupStorageKey: "berryboy_gallery_pending_storage_cleanup_v1",
-        pendingDraftUploadStorageKey: "berryboy_gallery_pending_draft_uploads_v1",
+        remoteBackupId: galleryPreviousStateRecordId,
+        localBackupStorageKey: getVenueRuntimeScopedStorageKey("berryboy_gallery_previous_state_backup_v1"),
+        pendingCleanupStorageKey: getVenueRuntimeScopedStorageKey("berryboy_gallery_pending_storage_cleanup_v1"),
+        pendingDraftUploadStorageKey: getVenueRuntimeScopedStorageKey("berryboy_gallery_pending_draft_uploads_v1"),
         latestSaveResult: null
     };
 
@@ -23774,9 +23953,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     var lightingPanelMode = "edit";
     var lightingControlRefs = {};
-    var lightingPresetStorageKey = "BerryboyArtGallery_LightingPresets_V0_9_1";
-    var lightingStateStorageKey = "BerryboyArtGallery_LightingState_V0_9_1";
-    var localLightStateStorageKey = "BerryboyArtGallery_LocalLightState_V0_9_1";
+    var lightingPresetStorageKey = getVenueRuntimeScopedStorageKey("BerryboyArtGallery_LightingPresets_V0_9_1");
+    var lightingStateStorageKey = getVenueRuntimeScopedStorageKey("BerryboyArtGallery_LightingState_V0_9_1");
+    var localLightStateStorageKey = getVenueRuntimeScopedStorageKey("BerryboyArtGallery_LocalLightState_V0_9_1");
 
     var localLightItems = [];
     var selectedLocalLights = [];
@@ -24205,6 +24384,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             targetOptions: normalizeLocalTargetOptions(item.targetOptions),
             position: serializeVector3(item.markerMesh.position),
             rotation: serializeVector3(item.markerMesh.rotation),
+            targetStableIds: (item.light.includedOnlyMeshes || []).map(function (mesh) {
+                return getVenueMeshStableId(mesh);
+            }).filter(function (stableId, index, array) {
+                return !!stableId && array.indexOf(stableId) === index;
+            }),
             targetMeshNames: (item.light.includedOnlyMeshes || []).map(function (mesh) {
                 return mesh && mesh.name ? mesh.name : null;
             }).filter(function (name, index, array) {
@@ -24343,6 +24527,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        var stableIds = Array.isArray(savedState.targetStableIds)
+            ? savedState.targetStableIds.filter(function (stableId, index, array) {
+                return !!stableId && array.indexOf(stableId) === index;
+            })
+            : [];
         var names = Array.isArray(savedState.targetMeshNames) && savedState.targetMeshNames.length
             ? savedState.targetMeshNames.slice()
             : (Array.isArray(savedState.targetSegmentNames) ? savedState.targetSegmentNames.slice() : []);
@@ -24351,32 +24540,42 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return !!name && array.indexOf(name) === index;
         });
 
+        item._savedTargetStableIds = stableIds.slice();
         item._savedTargetMeshNames = names.slice();
-        item._fastStartHasSavedTargetNames = names.length > 0;
+        item._fastStartHasSavedTargetNames = stableIds.length > 0 || names.length > 0;
 
-        if (!names.length) {
+        if (!stableIds.length && !names.length) {
             item._fastStartNeedsTargetRebuild = true;
             return false;
         }
 
-        var meshes = names.map(getGalleryMeshBySavedTargetName).filter(function (mesh, index, array) {
+        var stableMeshes = stableIds.map(getVenueMeshByStableId).filter(function (mesh, index, array) {
             return !!mesh && array.indexOf(mesh) === index;
         });
-        var unresolved = names.filter(function (name) {
+        var legacyMeshes = names.map(getGalleryMeshBySavedTargetName).filter(function (mesh, index, array) {
+            return !!mesh && stableMeshes.indexOf(mesh) === -1 && array.indexOf(mesh) === index;
+        });
+        var meshes = stableMeshes.concat(legacyMeshes);
+        var unresolvedStableIds = stableIds.filter(function (stableId) {
+            return !getVenueMeshByStableId(stableId);
+        });
+        var unresolvedNames = names.filter(function (name) {
             return !getGalleryMeshBySavedTargetName(name);
         });
 
         if (!meshes.length) {
             item._fastStartNeedsTargetRebuild = true;
-            item._fastStartUnresolvedTargetNames = unresolved;
+            item._fastStartUnresolvedTargetStableIds = unresolvedStableIds;
+            item._fastStartUnresolvedTargetNames = unresolvedNames;
             return false;
         }
 
         setLocalLightIncludedMeshesIfChanged(item, meshes, reason || "saved-target-restore");
-        item._fastStartUnresolvedTargetNames = unresolved;
-        item._fastStartNeedsTargetRebuild = unresolved.length > 0;
+        item._fastStartUnresolvedTargetStableIds = unresolvedStableIds;
+        item._fastStartUnresolvedTargetNames = unresolvedNames;
+        item._fastStartNeedsTargetRebuild = unresolvedStableIds.length > 0 || unresolvedNames.length > 0;
         galleryFastStartRuntime.directLightTargetRestores += 1;
-        galleryFastStartRuntime.unresolvedSavedLightTargets += unresolved.length;
+        galleryFastStartRuntime.unresolvedSavedLightTargets += unresolvedStableIds.length + unresolvedNames.length;
         return true;
     }
 
@@ -24384,14 +24583,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var unresolvedItems = 0;
 
         (localLightItems || []).forEach(function (item) {
-            if (!item || !item.light || !Array.isArray(item._savedTargetMeshNames) || !item._savedTargetMeshNames.length) {
-                return;
-            }
+            if (!item || !item.light) return;
+            var stableIds = Array.isArray(item._savedTargetStableIds) ? item._savedTargetStableIds : [];
+            var names = Array.isArray(item._savedTargetMeshNames) ? item._savedTargetMeshNames : [];
+            if (!stableIds.length && !names.length) return;
 
-            var state = {
-                targetMeshNames: item._savedTargetMeshNames
-            };
-            restoreLocalLightTargetsFromSavedState(item, state, reason || "saved-target-hydration");
+            restoreLocalLightTargetsFromSavedState(item, {
+                targetStableIds: stableIds,
+                targetMeshNames: names
+            }, reason || "saved-target-hydration");
 
             if (item._fastStartNeedsTargetRebuild) {
                 unresolvedItems += 1;
@@ -29380,14 +29580,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     });
 
     // STAGE 10A - WALL SEGMENT PAINTING
-    // Po przejściu na Wall_segment_001 - Wall_segment_071 kolor/tekstura ściany
-    // ma być nakładana tylko na kliknięty segment, a nie na wszystkie wallMeshes.
+    // Wall paint is applied to the selected Venue surface, not every wall mesh.
     function isPaintableWallSegmentMesh(mesh) {
-        return !!(
-            mesh &&
-            mesh.name &&
-            mesh.name.indexOf("Wall_segment_") === 0
-        );
+        if (!mesh || galleryVenueRuntimeRegistry.surfaces.wallPaint.indexOf(mesh) === -1) return false;
+        var materialMetadata = mesh.material && mesh.material.metadata ? mesh.material.metadata : {};
+        if (materialMetadata.venueLocked === true) return false;
+        if ((galleryVenueManifest.editableMaterials || []).length && materialMetadata.venueEditable !== true) return false;
+        return true;
     }
 
     function normalizeWallColorName(colorName) {
@@ -33130,7 +33329,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     // STAGE 10H - WALL SEGMENT ALIGNMENT GROUP
     // Po segmentacji ścian system wyrównywania nie może traktować pojedynczego
-    // Wall_segment_0xx jako całej ściany. Do bounds/center używamy grupy segmentów
+    // Pojedyncza powierzchnia Venue nie musi oznaczać całej ściany. Do bounds/center używamy grupy powierzchni
     // leżących na tej samej płaszczyźnie ściany.
     var wallSegmentAlignmentGroupEnabled = true;
     var wallSegmentAlignmentPlaneTolerance = 0.75;
@@ -33143,11 +33342,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var wallSegmentAlignmentIntervalMergeTolerance = 0.22;
 
     function isAlignmentWallSegmentMesh(mesh) {
-        return !!(
-            mesh &&
-            mesh.name &&
-            mesh.name.indexOf("Wall_segment_") === 0
-        );
+        return !!(mesh && galleryVenueRuntimeRegistry.surfaces.artworkMount.indexOf(mesh) !== -1);
     }
 
     function getWallSegmentMeshBounds(mesh) {
@@ -35119,7 +35314,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
 
     // STAGE 10I - WALL SEGMENT DRAG GROUP
-    // Drag obrazu po ścianie też nie może traktować pojedynczego Wall_segment_0xx
+    // Drag obrazu po ścianie też nie może traktować pojedynczej powierzchni ściany
     // jako całej dostępnej ściany. Przy przesuwaniu używamy tej samej grupy
     // segmentów co przy wyrównywaniu Stage 10H.
     function getPickedWallSegmentBounds(pickWall, normal, horizontalAxis) {
@@ -35802,200 +35997,273 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    // STAGE 12C62S6D - SUPABASE STATIC MODEL ASSETS
-    var gallerySupabaseModelsRootUrl = "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/";
+    // STAGE 12D1 — VENUE-AGNOSTIC ASSET LOADER
+    // One loader consumes manifest.assets[]. The engine does not know Berryboy filenames,
+    // does not assume four files and never populates domain mesh arrays outside Venue Registry.
+    function getVenueAssetImportParts(asset) {
+        var url = String(asset && asset.publicUrl || "");
+        if (!url) return { rootUrl: "", sceneFilename: "" };
+        var slashIndex = url.lastIndexOf("/");
+        if (slashIndex < 0) return { rootUrl: "", sceneFilename: url };
+        return {
+            rootUrl: url.slice(0, slashIndex + 1),
+            sceneFilename: url.slice(slashIndex + 1)
+        };
+    }
 
-    loadGalleryStartupAssetWithRetry(
-        "",
-        gallerySupabaseModelsRootUrl,
-        "Floor_segment.glb",
-        scene,
-        function (meshes) {
+    function tagVenueRuntimeMesh(mesh, entry, asset) {
+        if (!mesh || !entry || !entry.descriptor) return;
+        mesh.metadata = mesh.metadata || {};
+        mesh.metadata.venueId = galleryVenueManifest.venueId;
+        mesh.metadata.venueVersionId = galleryVenueManifest.versionId;
+        mesh.metadata.venueAssetId = asset.assetId;
+        mesh.metadata.venueRole = entry.descriptor.role;
+        mesh.metadata.venueRoleSource = entry.descriptor.source;
+        mesh.metadata.venueStableId = entry.descriptor.stableId;
+        if (entry.descriptor.surfaceId) mesh.metadata.venueSurfaceId = entry.descriptor.surfaceId;
+        if (entry.descriptor.anchorId) mesh.metadata.venueAnchorId = entry.descriptor.anchorId;
+        if (entry.descriptor.zoneId) mesh.metadata.venueZoneId = entry.descriptor.zoneId;
+    }
 
-            floorMeshes = meshes.filter(mesh => mesh.name !== "__root__");
-            markGalleryGeometryDirty("floorImported");
+    function venueManifestRuleMatchesName(rule, name) {
+        if (!rule) return false;
+        if (typeof rule === "string") return name === rule;
+        if (typeof rule !== "object") return false;
+        if (rule.name && name !== String(rule.name)) return false;
+        if (rule.prefix && name.indexOf(String(rule.prefix)) !== 0) return false;
+        if (rule.suffix && !name.endsWith(String(rule.suffix))) return false;
+        if (rule.includes && name.indexOf(String(rule.includes)) === -1) return false;
+        if (rule.regex) {
+            try {
+                if (!(new RegExp(String(rule.regex))).test(name)) return false;
+            } catch (error) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-            floorMeshes.forEach(mesh => {
-                mesh.isPickable = true;
+    function applyVenueMaterialRules(mesh) {
+        if (!mesh || !mesh.material) return;
+        var material = mesh.material;
+        var materialName = String(material.name || material.id || "");
+        var editableRule = (galleryVenueManifest.editableMaterials || []).find(function (rule) {
+            return venueManifestRuleMatchesName(rule, materialName);
+        }) || null;
+        var lockedRule = (galleryVenueManifest.lockedMaterials || []).find(function (rule) {
+            return venueManifestRuleMatchesName(rule, materialName);
+        }) || null;
+        material.metadata = material.metadata || {};
+        material.metadata.venueId = galleryVenueManifest.venueId;
+        material.metadata.venueVersionId = galleryVenueManifest.versionId;
+        material.metadata.venueEditable = !!editableRule && !lockedRule;
+        material.metadata.venueLocked = !!lockedRule;
+        if (editableRule && typeof editableRule === "object" && editableRule.id) {
+            material.metadata.venueMaterialId = String(editableRule.id);
+        }
+        if (lockedRule && typeof lockedRule === "object" && lockedRule.id) {
+            material.metadata.venueMaterialId = String(lockedRule.id);
+        }
+    }
 
-                // Podloga odbiera cienie globalne i lokalne.
-                registerCommonShadowMesh(mesh, {
-                    global: true,
-                    local: true,
-                    receive: true,
-                    cast: false
-                });
+    function addVenueRegistryMeshUnique(target, mesh) {
+        if (mesh && target.indexOf(mesh) === -1) target.push(mesh);
+    }
+
+    function removeVenueRegistryMesh(target, mesh) {
+        var index = target.indexOf(mesh);
+        if (index !== -1) target.splice(index, 1);
+    }
+
+    function resolveVenueManifestSetMeshes(definition) {
+        definition = definition || {};
+        var ids = [];
+        ["surfaceIds", "nodeIds", "meshIds", "anchorIds"].forEach(function (key) {
+            if (Array.isArray(definition[key])) ids = ids.concat(definition[key]);
+        });
+        var meshes = ids.map(getVenueMeshByStableId).filter(function (mesh, index, array) {
+            return !!mesh && array.indexOf(mesh) === index;
+        });
+        if (Array.isArray(definition.names)) {
+            definition.names.forEach(function (name) {
+                var mesh = galleryVenueRuntimeRegistry.legacyNames.get(String(name));
+                if (mesh && meshes.indexOf(mesh) === -1) meshes.push(mesh);
             });
+        }
+        return meshes;
+    }
 
-            freezeStaticGalleryMeshes(floorMeshes, "floor");
+    function applyVenueManifestSurfaceSets() {
+        (galleryVenueManifest.collisionSets || []).forEach(function (definition) {
+            resolveVenueManifestSetMeshes(definition).forEach(function (mesh) {
+                if (definition.walkBlocking === false) removeVenueRegistryMesh(galleryVenueRuntimeRegistry.collision.walkBlocking, mesh);
+                else if (definition.walkBlocking === true) addVenueRegistryMeshUnique(galleryVenueRuntimeRegistry.collision.walkBlocking, mesh);
+                if (definition.inspectBlocking === false) removeVenueRegistryMesh(galleryVenueRuntimeRegistry.collision.inspectBlocking, mesh);
+                else if (definition.inspectBlocking === true) addVenueRegistryMeshUnique(galleryVenueRuntimeRegistry.collision.inspectBlocking, mesh);
+                if (definition.raycastOnly === false) removeVenueRegistryMesh(galleryVenueRuntimeRegistry.collision.raycastOnly, mesh);
+                else if (definition.raycastOnly === true) addVenueRegistryMeshUnique(galleryVenueRuntimeRegistry.collision.raycastOnly, mesh);
+            });
+        });
+        (galleryVenueManifest.walkableAreas || []).forEach(function (definition) {
+            resolveVenueManifestSetMeshes(definition).forEach(function (mesh) {
+                if (definition.enabled === false || definition.walkable === false) {
+                    removeVenueRegistryMesh(galleryVenueRuntimeRegistry.walkable.surfaces, mesh);
+                } else {
+                    addVenueRegistryMeshUnique(galleryVenueRuntimeRegistry.walkable.surfaces, mesh);
+                }
+            });
+        });
+    }
+
+    function configureVenueRuntimeMesh(mesh, entry, asset) {
+        if (!mesh || !entry || !entry.descriptor) return;
+        var role = entry.descriptor.role;
+        var shadowPolicy = asset.shadowPolicy || {};
+        tagVenueRuntimeMesh(mesh, entry, asset);
+        applyVenueMaterialRules(mesh);
+
+        mesh.isPickable = role !== "navigation";
+        mesh.checkCollisions = false;
+
+        if (role === "walls") {
+            registerViewerCollisionMesh(mesh, "wall");
+            if (mesh.material) {
+                configureMaterialForCommonLighting(mesh.material);
+                configureMeshMaterialForMainShadows(mesh);
+            }
+        } else if (role === "props") {
+            registerViewerCollisionMesh(mesh, "prop");
+        } else if (role === "collision") {
+            // Collision geometry is technically active but does not become a visual wall/prop.
+            mesh.metadata.viewerCollisionType = "venue-collision";
+            if (asset.collisionPolicy && asset.collisionPolicy.visible !== true) {
+                mesh.visibility = 0;
+                mesh.isPickable = true;
+            }
+        }
+
+        registerCommonShadowMesh(mesh, {
+            global: shadowPolicy.global !== false,
+            local: shadowPolicy.local !== false,
+            receive: shadowPolicy.receive !== false,
+            cast: shadowPolicy.cast === true
+        });
+
+        if (asset.streamingPolicy && asset.streamingPolicy.static === true) {
+            freezeStaticGalleryMesh(mesh, "venue:" + asset.assetId);
+        }
+    }
+
+    function finalizeVenueAssetRuntime(asset, assetRecord) {
+        var roles = Object.keys(assetRecord.roleCounts || {});
+        var hasFloor = roles.indexOf("floor") !== -1 || roles.indexOf("walkable") !== -1;
+        var hasWalls = roles.indexOf("walls") !== -1;
+        var hasCeiling = roles.indexOf("ceiling") !== -1;
+        var hasProps = roles.indexOf("props") !== -1;
+        var hasCollision = roles.indexOf("collision") !== -1;
+
+        if (hasFloor || hasWalls || hasCeiling || hasCollision) {
+            markGalleryGeometryDirty("venueAssetImported:" + asset.assetId);
+        }
+        if (hasProps) {
+            markGalleryObjectsDirty("venueAssetImported:" + asset.assetId);
+        }
+
+        if (hasFloor) {
             updateMobileFloorBounds();
-            rebuildGalleryStreamingZones("floor-imported");
-            refreshGalleryCurrentStreamingZone("floor-imported", true);
+            rebuildGalleryStreamingZones("venue-floor-imported:" + asset.assetId);
+            refreshGalleryCurrentStreamingZone("venue-floor-imported:" + asset.assetId, true);
             applyVisualReflectionSettings(readVisualSettingsFromScene());
-            refreshViewerCollisionMeshes();
             refreshArtworkLightExclusions();
             refreshPedestalLightIncludedMeshes();
-
-            assetLoaded("floor");
-        },
-        null,
-        function (scene, message, exception) {
-            console.error("Floor GLB load failed:", {
-                file: "Floor_segment.glb",
-                message: message,
-                exception: exception
-            });
-
-            assetLoaded("floor", true);
         }
-    );
-
-    // STAGE 12C62S6D - SUPABASE STATIC MODELS ROOT
-    // Modele startowe sa teraz w publicznym buckecie Supabase, plasko w folderze Models/.
-    // GLB trzyma geometrie i zaleznosci w jednym pliku, wiec nie uzywamy juz folderow Floor/Wall/props/Ceiling z GitHub raw.
-    var wallModelRootUrl = gallerySupabaseModelsRootUrl;
-
-    loadGalleryStartupAssetWithRetry(
-        "",
-        wallModelRootUrl,
-        "Wall_segments.glb",
-        scene,
-        function (meshes) {
-
-            wallMeshes = meshes.filter(mesh => mesh.name !== "__root__");
-            markGalleryGeometryDirty("wallImported");
-
-            wallMeshes.forEach(mesh => {
-                mesh.isPickable = true;
-                registerViewerCollisionMesh(mesh, "wall");
-
-                if (mesh.material) {
-                    configureMaterialForCommonLighting(mesh.material);
-                    configureMeshMaterialForMainShadows(mesh);
-                }
-
-                registerCommonShadowMesh(mesh, {
-                    global: true,
-                    local: true,
-                    receive: true,
-                    cast: true
-                });
-            });
-
-            freezeStaticGalleryMeshes(wallMeshes, "wall");
-            console.log("Wall GLB loaded", {
-                rootUrl: wallModelRootUrl,
-                file: "Wall_segments.glb",
-                meshes: wallMeshes
-            });
-            refreshViewerCollisionMeshes();
+        if (hasWalls) {
             refreshCommonLightingMaterialSupport();
-
-            assetLoaded("wall");
-        },
-        null,
-        function (scene, message, exception) {
-            console.error("Wall GLB load failed:", {
-                rootUrl: wallModelRootUrl,
-                file: "Wall_segments.glb",
-                message: message,
-                exception: exception
-            });
-
-            assetLoaded("wall", true);
         }
-    );
-
-    // STAGE 12C62S6D - PROPS GLB SUPABASE PATH
-    // Props are loaded from the shared Supabase Models root.
-    loadGalleryStartupAssetWithRetry(
-        "",
-        gallerySupabaseModelsRootUrl,
-        "Props.glb",
-        scene,
-        function (meshes) {
-            meshes.forEach(mesh => {
-                mesh.isPickable = true;
-
-                if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) {
-                    propMeshes.push(mesh);
-                    registerViewerCollisionMesh(mesh, "prop");
-                }
-
-                registerCommonShadowMesh(mesh, {
-                    global: true,
-                    local: true,
-                    receive: true,
-                    cast: true
-                });
+        if (hasProps) {
+            rebuildGalleryStreamingZones("venue-props-imported:" + asset.assetId);
+            assetRecord.meshes.forEach(function (mesh) {
+                var entry = galleryVenueRuntimeRegistry.meshEntryByMesh.get(mesh);
+                if (entry && entry.descriptor.role === "props") configureGalleryPropStreamingLod(mesh);
             });
-
-            markGalleryObjectsDirty("propsImported");
-            rebuildGalleryStreamingZones("props-imported");
-            propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); });
             updateGalleryPropZoneActivation();
             if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) {
                 galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
             } else {
-                refreshViewerCollisionMeshes();
-                hydrateSavedLocalLightTargetsForAll("props-imported");
+                hydrateSavedLocalLightTargetsForAll("venue-props-imported:" + asset.assetId);
             }
-
-            assetLoaded("props");
-        },
-        null,
-        function (scene, message, exception) {
-            console.error("Props GLB load failed:", {
-                file: "Props.glb",
-                message: message,
-                exception: exception
-            });
-
-            assetLoaded("props", true);
         }
-    );
 
-    // STAGE 12C62S6D - CEILING GLB SUPABASE PATH
-    // Ceiling is loaded from the shared Supabase Models root.
-    loadGalleryStartupAssetWithRetry(
-        "",
-        gallerySupabaseModelsRootUrl,
-        "Ceiling.glb",
-        scene,
-        function (meshes) {
-            meshes.forEach(mesh => {
-                mesh.isPickable = true;
+        if (hasFloor || hasWalls || hasProps || hasCollision) {
+            refreshViewerCollisionMeshes();
+        }
 
-                if (mesh.name !== "__root__" && ceilingMeshes.indexOf(mesh) === -1) {
-                    ceilingMeshes.push(mesh);
-                }
+        if (hasCeiling) {
+            markGalleryGeometryDirty("venue-ceiling-imported:" + asset.assetId);
+        }
 
-                // Sufit moze teraz odbierac lokalne swiatlo jako osobny target per lampa.
-                // Nie dodajemy go jako lokalnego castera, zeby nie blokowal swiatla z lamp.
-                registerCommonShadowMesh(mesh, {
-                    global: true,
-                    local: true,
-                    receive: true,
-                    cast: false
+        applyVenueManifestSurfaceSets();
+        return createVenueRegistryAudit(galleryVenueRuntimeRegistry);
+    }
+
+    function loadVenueManifestAsset(asset) {
+        var importParts = getVenueAssetImportParts(asset);
+        if (!importParts.sceneFilename) {
+            assetLoaded(asset.assetId, true, { reason: "missing-public-url" });
+            return;
+        }
+
+        loadGalleryStartupAssetWithRetry(
+            "",
+            importParts.rootUrl,
+            importParts.sceneFilename,
+            scene,
+            function (meshes) {
+                var assetRecord = registerVenueAssetResult(
+                    galleryVenueRuntimeRegistry,
+                    asset,
+                    meshes,
+                    galleryRuntimeContext
+                );
+
+                assetRecord.meshes.forEach(function (mesh) {
+                    var entry = galleryVenueRuntimeRegistry.meshEntryByMesh.get(mesh);
+                    configureVenueRuntimeMesh(mesh, entry, asset);
                 });
-            });
 
-            markGalleryGeometryDirty("ceilingImported");
-            freezeStaticGalleryMeshes(ceilingMeshes, "ceiling");
+                var audit = finalizeVenueAssetRuntime(asset, assetRecord);
+                console.log("Venue asset loaded", {
+                    venueId: galleryVenueManifest.venueId,
+                    versionId: galleryVenueManifest.versionId,
+                    assetId: asset.assetId,
+                    role: asset.role,
+                    url: asset.publicUrl,
+                    meshCount: assetRecord.meshes.length,
+                    roleCounts: assetRecord.roleCounts
+                });
+                assetLoaded(asset.assetId, false, { audit: audit, roleCounts: assetRecord.roleCounts });
+            },
+            null,
+            function (failedScene, message, exception) {
+                console.error("Venue asset load failed:", {
+                    venueId: galleryVenueManifest.venueId,
+                    versionId: galleryVenueManifest.versionId,
+                    assetId: asset.assetId,
+                    role: asset.role,
+                    url: asset.publicUrl,
+                    message: message,
+                    exception: exception
+                });
+                assetLoaded(asset.assetId, true, { message: message || null });
+            },
+            null,
+            asset.assetId
+        );
+    }
 
-            assetLoaded("ceiling");
-        },
-        null,
-        function (scene, message, exception) {
-            console.error("Ceiling GLB load failed:", {
-                file: "Ceiling.glb",
-                message: message,
-                exception: exception
-            });
-
-            assetLoaded("ceiling", true);
-        }
-    );
+    galleryVenueManifest.assets.forEach(function (asset) {
+        loadVenueManifestAsset(asset);
+    });
 
 
     // STAGE 12A - 3D MODEL SLOT LOGIC
@@ -36679,7 +36947,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
         if (sculptureBlocked) return false;
 
-        return !wallMeshes.some(function (wall) {
+        return !getViewerWallCollisionMeshes().some(function (wall) {
             if (!wall || !wall.getBoundingInfo || !canUseViewerCollisionMesh(wall)) return false;
             try {
                 wall.computeWorldMatrix(true);
@@ -38465,7 +38733,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         lastPathFailure: null,
         monitorTick: 0,
         suppressMonitorUntil: 0,
-        entrancePosition: new BABYLON.Vector3(-1, -2.2, -32)
+        entrancePosition: new BABYLON.Vector3(
+            galleryVenueSpawnPoint.position.x,
+            galleryVenueSpawnPoint.position.y,
+            galleryVenueSpawnPoint.position.z
+        )
     };
 
     function getGalleryExhibitStableKey(object, type) {
@@ -38759,8 +39031,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             seen[id] = true;
             result.push({ mesh: mesh, type: type });
         }
-        wallMeshes.forEach(function (mesh) { add(mesh, "wall"); });
-        propMeshes.forEach(function (mesh) { add(mesh, "prop"); });
+        galleryVenueRuntimeRegistry.collision.inspectBlocking.forEach(function (mesh) {
+            var role = mesh && mesh.metadata ? mesh.metadata.venueRole : null;
+            add(mesh, role === "props" ? "prop" : "wall");
+        });
         artSpheres.forEach(function (slot) {
             if (!slot || isGalleryExhibitMeshPartOfTarget(slot, targetObject)) return;
             if (slot.metadata && slot.metadata.sculptureCollisionProxy) add(slot.metadata.sculptureCollisionProxy, "sculpture-proxy");
@@ -39153,20 +39427,119 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+    function getGalleryManifestNavigationNodePosition(node, y) {
+        if (!node || !node.position) return null;
+        var x = Number(node.position.x);
+        var z = Number(node.position.z);
+        var nodeY = Number(node.position.y);
+        if (!isFinite(x) || !isFinite(z)) return null;
+        return new BABYLON.Vector3(x, isFinite(nodeY) ? nodeY : y, z);
+    }
+
+    function findGalleryExhibitManifestNavigationPath(start, end, targetObject, collisionSnapshot) {
+        var graph = galleryVenueRuntimeRegistry.navigation || {};
+        var nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+        var edges = Array.isArray(graph.edges) ? graph.edges : [];
+        if (nodes.length < 2 || !edges.length) return null;
+        var snapshot = getGalleryExhibitCollisionSnapshot(targetObject, collisionSnapshot);
+        var nodeById = {};
+        var positionById = {};
+        nodes.forEach(function (node) {
+            if (!node || !node.id) return;
+            var position = getGalleryManifestNavigationNodePosition(node, start.y);
+            if (!position) return;
+            nodeById[String(node.id)] = node;
+            positionById[String(node.id)] = position;
+        });
+        var ids = Object.keys(nodeById);
+        if (ids.length < 2) return null;
+
+        function nearestConnectable(point) {
+            return ids.map(function (id) {
+                return { id: id, distance: BABYLON.Vector3.Distance(point, positionById[id]) };
+            }).sort(function (a, b) { return a.distance - b.distance; }).find(function (candidate) {
+                return !isGalleryExhibitSegmentBlocked(point, positionById[candidate.id], targetObject, snapshot);
+            }) || null;
+        }
+
+        var startNode = nearestConnectable(start);
+        var endNode = nearestConnectable(end);
+        if (!startNode || !endNode) return null;
+
+        var adjacency = {};
+        ids.forEach(function (id) { adjacency[id] = []; });
+        edges.forEach(function (edge) {
+            if (!edge) return;
+            var from = String(edge.from || edge.a || "");
+            var to = String(edge.to || edge.b || "");
+            if (!positionById[from] || !positionById[to]) return;
+            var cost = Number(edge.cost);
+            if (!isFinite(cost) || cost <= 0) cost = BABYLON.Vector3.Distance(positionById[from], positionById[to]);
+            adjacency[from].push({ id: to, cost: cost });
+            if (edge.bidirectional !== false && edge.oneWay !== true) adjacency[to].push({ id: from, cost: cost });
+        });
+
+        var open = [{ id: startNode.id, g: 0, f: 0 }];
+        var best = {}; best[startNode.id] = 0;
+        var parent = {};
+        var closed = {};
+        while (open.length) {
+            open.sort(function (a, b) { return a.f - b.f; });
+            var current = open.shift();
+            if (closed[current.id]) continue;
+            closed[current.id] = true;
+            if (current.id === endNode.id) break;
+            (adjacency[current.id] || []).forEach(function (next) {
+                if (closed[next.id]) return;
+                if (isGalleryExhibitSegmentBlocked(positionById[current.id], positionById[next.id], targetObject, snapshot)) return;
+                var g = current.g + next.cost;
+                if (best[next.id] !== undefined && g >= best[next.id]) return;
+                best[next.id] = g;
+                parent[next.id] = current.id;
+                var h = BABYLON.Vector3.Distance(positionById[next.id], positionById[endNode.id]);
+                open.push({ id: next.id, g: g, f: g + h });
+            });
+        }
+        if (startNode.id !== endNode.id && !parent[endNode.id]) return null;
+
+        var routeIds = [endNode.id];
+        while (routeIds[0] !== startNode.id) {
+            var previous = parent[routeIds[0]];
+            if (!previous) return null;
+            routeIds.unshift(previous);
+        }
+        var complete = [start.clone()].concat(routeIds.map(function (id) {
+            var point = positionById[id].clone();
+            point.y = start.y;
+            return point;
+        })).concat([end.clone()]);
+
+        var simplified = [complete[0]];
+        for (var i = 1; i < complete.length - 1; i += 1) {
+            if (!isGalleryExhibitSegmentBlocked(simplified[simplified.length - 1], complete[i + 1], targetObject, snapshot)) continue;
+            simplified.push(complete[i]);
+        }
+        simplified.push(complete[complete.length - 1]);
+        return isGalleryExhibitPathClear(simplified, targetObject, snapshot) ? simplified.slice(1) : null;
+    }
+
     function findGalleryExhibitSafePath(startPosition, endPosition, targetObject, options) {
         options = options || {};
         var start = startPosition.clone(), end = endPosition.clone();
         var exclusions = [targetObject, options.sourceObject].filter(Boolean);
         var snapshot = getGalleryExhibitCollisionSnapshot(exclusions, options.collisionSnapshot);
         var directClear = isGalleryExhibitPathClear([start, end], exclusions, snapshot);
-        var path = findGalleryExhibitDoglegPath(start, end, exclusions, snapshot);
+        var path = findGalleryExhibitManifestNavigationPath(start, end, exclusions, snapshot);
+        var usedManifestGraph = !!path;
+        var allowLocalFallback = !galleryVenueManifest.technicalFlags || galleryVenueManifest.technicalFlags.localAStarFallback !== false;
+        if (!path && allowLocalFallback) path = findGalleryExhibitDoglegPath(start, end, exclusions, snapshot);
         var usedGrid = false;
-        if (!path && options.allowGrid !== false) {
+        if (!path && allowLocalFallback && options.allowGrid !== false) {
             path = findGalleryExhibitGridPath(start, end, exclusions, snapshot);
             usedGrid = !!path;
         }
         viewerSafeFocusPathDebug = {
-            mode: directClear ? "direct" : (usedGrid ? "grid" : (path ? "dogleg" : "blocked")),
+            mode: usedManifestGraph ? "manifest-navigation" : (directClear ? "direct" : (usedGrid ? "grid" : (path ? "dogleg" : "blocked"))),
             pointCount: path ? path.length : 0,
             targetName: targetObject && targetObject.name ? targetObject.name : null,
             sourceName: options.sourceObject && options.sourceObject.name ? options.sourceObject.name : null,
@@ -40987,6 +41360,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return getMeshByNameFromList(wallMeshes, name);
     }
 
+    function getVenueMeshByStableId(stableId) {
+        return getVenueRegistryMeshByStableId(galleryVenueRuntimeRegistry, stableId);
+    }
+
+    function getWallMeshByStableId(stableId) {
+        var mesh = getVenueMeshByStableId(stableId);
+        return mesh && wallMeshes.indexOf(mesh) !== -1 ? mesh : null;
+    }
+
+    function getVenueMeshStableId(mesh) {
+        return getVenueRegistryMeshStableId(galleryVenueRuntimeRegistry, mesh);
+    }
+
     function getWallColorNameFromMaterial(material) {
         if (!material) {
             return null;
@@ -41044,6 +41430,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             selectedWallMaterialName: getWallColorNameFromMaterial(selectedWallMaterial),
             walls: wallMeshes.map(function (wallMesh) {
                 return {
+                    surfaceId: getVenueMeshStableId(wallMesh),
                     name: wallMesh.name,
                     materialName: wallMesh.material ? wallMesh.material.name : null,
                     colorName: getWallColorNameFromMaterial(wallMesh.material),
@@ -41073,6 +41460,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     rotation: vectorToState(artwork.rotation),
                     scaling: vectorToState(artwork.scaling),
                     wall: {
+                        surfaceId: wallMesh ? getVenueMeshStableId(wallMesh) : null,
                         wallMeshName: wallMesh ? wallMesh.name : null,
                         wallAxis: wallData ? wallData.wallAxis : null,
                         wallValue: wallData ? wallData.wallValue : null,
@@ -41131,7 +41519,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     return;
                 }
 
-                var wallMesh = getWallMeshByName(wallState.name);
+                var wallMesh = getWallMeshByStableId(wallState.surfaceId) || getWallMeshByName(wallState.name);
                 var colorName = normalizeWallColorName(
                     wallState.segmentColorName ||
                     wallState.colorName ||
@@ -41211,7 +41599,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 if (artworkState.wall) {
                     setArtworkWallMetadata(
                         artwork,
-                        getWallMeshByName(artworkState.wall.wallMeshName),
+                        getWallMeshByStableId(artworkState.wall.surfaceId) || getWallMeshByName(artworkState.wall.wallMeshName),
                         artworkState.wall.wallAxis,
                         artworkState.wall.wallValue,
                         artworkState.wall.horizontalAxis
@@ -41473,6 +41861,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return {
             version: "Gallery_V0_11_WEB",
             savedAt: new Date().toISOString(),
+            venue: {
+                schema: "gallery-venue-binding.v1",
+                venueId: galleryVenueManifest.venueId,
+                versionId: galleryVenueManifest.versionId,
+                manifestSchema: galleryVenueManifest.schema,
+                stateRecordId: galleryStateRecordId
+            },
             editor: serializeEditorState(),
             lighting: readLightingSettingsFromScene(),
             visualSettings: createVisualSettingsSnapshot(),
@@ -41498,6 +41893,33 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        if (state.venue && typeof state.venue === "object") {
+            var stateVenueId = String(state.venue.venueId || "");
+            var stateVenueVersionId = String(state.venue.versionId || "");
+            if (stateVenueId && stateVenueId !== galleryVenueManifest.venueId) {
+                var venueMismatchError = new Error("Gallery state belongs to venue " + stateVenueId + ", not " + galleryVenueManifest.venueId + ".");
+                venueMismatchError.code = "GALLERY_STATE_VENUE_MISMATCH";
+                throw venueMismatchError;
+            }
+            if (stateVenueVersionId && stateVenueVersionId !== galleryVenueManifest.versionId) {
+                var venueVersionMismatchError = new Error("Gallery state belongs to venue version " + stateVenueVersionId + ", not " + galleryVenueManifest.versionId + ".");
+                venueVersionMismatchError.code = "GALLERY_STATE_VENUE_VERSION_MISMATCH";
+                throw venueVersionMismatchError;
+            }
+            var stateRecordBinding = String(state.venue.stateRecordId || "");
+            if (stateRecordBinding && stateRecordBinding !== galleryStateRecordId) {
+                var stateRecordMismatchError = new Error("Gallery state belongs to record " + stateRecordBinding + ", not " + galleryStateRecordId + ".");
+                stateRecordMismatchError.code = "GALLERY_STATE_RECORD_MISMATCH";
+                throw stateRecordMismatchError;
+            }
+        } else if (!galleryVenueManifest.technicalFlags || galleryVenueManifest.technicalFlags.legacyBerryboyCompatibility !== true) {
+            var legacyStateScopeError = new Error("Legacy unscoped gallery state is allowed only for the controlled berryboy-main/v1 migration.");
+            legacyStateScopeError.code = "GALLERY_STATE_LEGACY_UNSCOPED";
+            throw legacyStateScopeError;
+        }
+
+        // Legacy C6C2 rows do not contain state.venue. They remain readable only because
+        // berryboy-main/v1 is the controlled migration target for gallery_state/main.
         // Kompatybilność ze starym V0_8: jeśli state nie ma sekcji editor,
         // traktujemy go jako dawny serializeGalleryState().
         var editorState = state.editor || state;
@@ -41637,7 +42059,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var response = await client
             .from("gallery_state")
             .select("state, updated_at")
-            .eq("id", "main")
+            .eq("id", galleryStateRecordId)
             .order("updated_at", {
                 ascending: false,
                 nullsFirst: false
@@ -41729,7 +42151,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var currentServerResponse = await client
                 .from("gallery_state")
                 .select("state, updated_at")
-                .eq("id", "main")
+                .eq("id", galleryStateRecordId)
                 .order("updated_at", {
                     ascending: false,
                     nullsFirst: false
@@ -41841,7 +42263,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             globalThis.BerryboyArtGalleryLatestState = state;
 
             var payload = {
-                id: "main",
+                id: galleryStateRecordId,
                 state: state,
                 updated_at: savedAt
             };
@@ -41855,7 +42277,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         state: state,
                         updated_at: savedAt
                     })
-                    .eq("id", "main");
+                    .eq("id", galleryStateRecordId);
 
                 commitQuery = currentServerUpdatedAt
                     ? commitQuery.eq("updated_at", currentServerUpdatedAt)
@@ -41962,6 +42384,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     globalThis.GalleryApp = {
         setEditorAuthenticated: setEditorAuthenticated,
+        getRuntimeContext: function () {
+            return galleryRuntimeContext;
+        },
+        getVenueManifest: function () {
+            return galleryVenueManifest;
+        },
+        getVenueRegistryAudit: function () {
+            return createVenueRegistryAudit(galleryVenueRuntimeRegistry);
+        },
+        getVenueAnchor: function (anchorId) {
+            return getVenueRegistryAnchor(galleryVenueRuntimeRegistry, anchorId);
+        },
+        getVenueAnchors: function (kind) {
+            return getVenueRegistryAnchors(galleryVenueRuntimeRegistry, kind);
+        },
+        getVenueNavigationGraph: function () {
+            return galleryVenueRuntimeRegistry.navigation;
+        },
+        getVenueMeshByStableId: getVenueMeshByStableId,
         isEditorLoginEnabled: function () {
             return galleryEditorLoginEnabled;
         },
@@ -42018,6 +42459,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             return {
                 version: state.version,
+                venueId: state.venue && state.venue.venueId,
+                venueVersionId: state.venue && state.venue.versionId,
+                stateRecordId: state.venue && state.venue.stateRecordId,
                 artworks: state.editor && state.editor.artworks ? state.editor.artworks.length : 0,
                 walls: state.editor && state.editor.walls ? state.editor.walls.length : 0,
                 spheres: state.editor && state.editor.spheres ? state.editor.spheres.length : 0,
@@ -42235,7 +42679,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 imagePlaneSurfaceEpsilon: artworkImagePlaneSurfaceEpsilon,
                 imagePlanePickableForPopup: artworkImagePlanePickableForPopup,
                 wallColorTextureBaseUrl: wallColorTextureBaseUrl,
-                wallModelRootUrl: typeof wallModelRootUrl !== "undefined" ? wallModelRootUrl : "",
+                venueId: galleryVenueManifest.venueId,
+                venueVersionId: galleryVenueManifest.versionId,
+                venueManifestUrl: galleryVenueManifest.manifestUrl,
+                venueRegistry: createVenueRegistryAudit(galleryVenueRuntimeRegistry),
                 artworkImagePlaneMirrorFix: true,
                 imagePlaneEditSelectionPassthrough: true
             }, inspectDebug);

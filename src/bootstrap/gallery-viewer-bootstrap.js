@@ -1,14 +1,16 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6C2
+  Berryboy Art Gallery — Stage 12D1 / Venue-Agnostic Engine / Building Manifest
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+import { loadVenueManifest, createGalleryRuntimeContext, getVenueManifestSummary } from "../runtime/venue-runtime.js";
 
-const STAGE = "12C66C6C2";
-const ENGINE_CACHE_KEY = "stage12c66c6c2_mobile_memory_survival_tiered_artwork_20260725";
+const STAGE = "12D1";
+const ENGINE_CACHE_KEY = "stage12d1_venue_agnostic_engine_manifest_20260803";
+const DEFAULT_VENUE_MANIFEST_URL = new URL("../../venues/berryboy-main/versions/v1/manifest.json", import.meta.url).href;
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -41,6 +43,47 @@ let activeEngine = null;
 let activeScene = null;
 let galleryStartPromise = null;
 let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
+let galleryRuntimeContext = null;
+
+function readGalleryRuntimeRequest() {
+  const params = new URLSearchParams(window.location.search || "");
+  const configured = window.BerryboyRuntimeConfig && typeof window.BerryboyRuntimeConfig === "object"
+    ? window.BerryboyRuntimeConfig
+    : {};
+  const configuredVenue = configured.venue && typeof configured.venue === "object" ? configured.venue : {};
+  const configuredExhibition = configured.exhibition && typeof configured.exhibition === "object" ? configured.exhibition : {};
+  const configuredPlatform = configured.platform && typeof configured.platform === "object" ? configured.platform : {};
+  return {
+    manifestUrl: params.get("venueManifest") || configuredVenue.manifestUrl || DEFAULT_VENUE_MANIFEST_URL,
+    context: {
+      platform: {
+        locale: currentLang,
+        mode: currentSession ? "editor" : "viewer",
+        exhibitionId: params.get("exhibitionId") || configuredPlatform.exhibitionId || null,
+        exhibitionSlug: params.get("exhibition") || configuredPlatform.exhibitionSlug || null
+      },
+      venue: {
+        venueId: params.get("venueId") || configuredVenue.venueId || null,
+        versionId: params.get("venueVersion") || configuredVenue.versionId || null
+      },
+      exhibition: {
+        stateRecordId: params.get("stateRecordId") || configuredExhibition.stateRecordId || "main",
+        previousStateRecordId: params.get("previousStateRecordId") || configuredExhibition.previousStateRecordId || "main_previous",
+        storageScope: params.get("storageScope") || configuredExhibition.storageScope || "main"
+      }
+    }
+  };
+}
+
+async function prepareGalleryRuntimeContext() {
+  const request = readGalleryRuntimeRequest();
+  bootGuard.setPhase("venue-manifest", "Venue Manifest");
+  const manifest = await loadVenueManifest(request.manifestUrl);
+  galleryRuntimeContext = createGalleryRuntimeContext(request.context, manifest);
+  window.GalleryRuntimeContext = galleryRuntimeContext;
+  window.BerryboyVenueManifestSummary = getVenueManifestSummary(manifest);
+  return galleryRuntimeContext;
+}
 
 const uiText = {
   pl: {
@@ -413,6 +456,7 @@ async function startGalleryRuntime() {
   if (galleryStartPromise) return galleryStartPromise;
 
   galleryStartPromise = (async function () {
+    const runtimeContext = await prepareGalleryRuntimeContext();
     await ensureBabylonDependencies();
 
     bootGuard.setPhase("engine-module", "Gallery engine module");
@@ -436,7 +480,7 @@ async function startGalleryRuntime() {
     activeEngine = engine;
 
     bootGuard.setPhase("scene", "Gallery scene");
-    const scene = engineModule.createScene(engine, canvas);
+    const scene = engineModule.createScene(engine, canvas, runtimeContext);
     activeScene = scene;
     updateAuthUi();
 
@@ -464,7 +508,9 @@ async function startGalleryRuntime() {
       getSession: function () { return currentSession; },
       loadEditorModule,
       startedAfterExplicitClick: true,
-      originalInstructionalPopupRestored: true
+      originalInstructionalPopupRestored: true,
+      runtimeContext,
+      venueManifestSummary: window.BerryboyVenueManifestSummary || null
     };
 
     // Hide the page loader first, then show and verify the exact engine-owned popup from Stage 12C66A1.
