@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const runtime = fs.readFileSync(new URL('../src/runtime/exhibition-runtime.js', import.meta.url), 'utf8');
+const bootstrap = fs.readFileSync(new URL('../src/bootstrap/gallery-viewer-bootstrap.js', import.meta.url), 'utf8');
+const venues = fs.readFileSync(new URL('../admin/views/venues.js', import.meta.url), 'utf8');
+assert.ok(runtime.includes('venueTestVersionId'));
+assert.ok(runtime.includes('venueTest: true'));
+assert.ok(bootstrap.includes('exhibitionRuntimeResolution.venueTest'));
+assert.ok(venues.includes('venueTestVersionId'));
+assert.ok(bootstrap.includes('publishStateButton.disabled = !editorEnabled'));
+assert.ok(bootstrap.includes('saveStateButton.disabled = !editorEnabled'));
+console.log('Venue Test Mode tests passed.');

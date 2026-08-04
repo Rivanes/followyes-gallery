@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { buildEditorUrl, readEditorBridge } from '../src/platform/editor-bridge.js';
+const url = buildEditorUrl({ id: '00000000-0000-4000-8000-000000000001', slug: 'berryboy-main' }, { locationHref: 'https://example.test/admin/', returnUrl: '../admin/#/exhibitions/x' });
+const parsed = new URL(url);
+assert.equal(parsed.pathname, '/gallery/');
+assert.equal(parsed.searchParams.get('channel'), 'draft');
+assert.equal(parsed.searchParams.get('editor'), '1');
+assert.equal(readEditorBridge(parsed).isEditorRequest, true);
+assert.equal(readEditorBridge(parsed).returnUrl, '../admin/#/exhibitions/x');
+console.log('Editor Bridge tests passed.');
