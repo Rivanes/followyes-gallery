@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C6 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C7 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c6_transition_guard_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c6_transition_guard_20260812";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c6_transition_guard_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
 
-const STAGE = "12C66C6C8C6";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c6_transition_guard_20260812";
+const STAGE = "12C66C6C8C7";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -138,8 +138,17 @@ async function updateNetworkDiagnosticsStatus() {
       const net = last.network || {};
       transitionPart = `Last: ${last.from} → ${last.to} · ${net.supabaseNetworkFetches || 0} net · ${formatDeliveryBytes(net.supabaseNetworkKnownBytes || 0)} · ${last.mode || "transition"} · ${Math.round(Number(last.durationMs) || 0)} ms`;
     }
-    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart}`;
-    networkDiagnostics.title = "Measured by the local Service Worker. Bytes use response Content-Length when available; 0 Storage network fetches is the strongest signal that the transition stayed local.";
+    const engineDebug = window.BerryboyArtGalleryExhibitions && typeof window.BerryboyArtGalleryExhibitions.getDebug === "function"
+      ? window.BerryboyArtGalleryExhibitions.getDebug()
+      : null;
+    const hydration = engineDebug && engineDebug.lastHydrationProfile;
+    const integrity = engineDebug && engineDebug.lastSpaceIntegrity;
+    const cpuPart = hydration
+      ? `CPU: prepare ${Math.round(Number(hydration.prepareMs) || 0)} · hydrate ${Math.round(Number(hydration.hydrateMs) || 0)} · finalize ${Math.round(Number(hydration.finalizeMs) || 0)} ms`
+      : "CPU: waiting";
+    const spacePart = integrity ? `Space ${integrity.ok ? "OK" : "FAIL"}` : "Space guard ready";
+    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${spacePart}`;
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. CPU phases come from C6C8C7 atomic hydration. Space OK means canonical wall/floor/ceiling/prop references survived the transition.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }

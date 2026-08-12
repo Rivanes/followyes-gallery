@@ -104,8 +104,14 @@ function installInputGuards() {
   }, true);
 }
 
-function waitForPaint() {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+async function waitForPaint() {
+  // C6C8C7: rAF callbacks run before paint. Resolving a Promise inside the second rAF
+  // can immediately continue into synchronous Babylon work and starve the compositor.
+  // Cross a real task boundary, then one final frame, so the blocking overlay is visible
+  // before atomic Exhibition hydration begins.
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 34));
+  await new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
 export function isTransitionGuardActive() {

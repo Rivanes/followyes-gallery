@@ -110,6 +110,7 @@
   - Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch — switching Exhibitions inside the same space_id keeps the loaded building, static collision geometry and Space assets resident; only Exhibition-owned content/presentation is replaced, global refreshes are batched once, and entering Admin reuses a valid Tour instead of rebuilding it unconditionally.
   - Stage 12C66C6C8C5: Exhibition Residency / Zero-Reload Mode Transition — clean same-Space Exhibitions are parked as disabled Babylon layers instead of disposed, recently visited layers resume from RAM/GPU, Admin↔Public mode changes avoid collision/tour rebuilds, and transition/network diagnostics expose whether a switch generated Storage traffic.
   - Stage 12C66C6C8C6: Transition Guard / Loading Feedback — Exhibition and Admin↔Public transitions show one full-page interaction lock before synchronous Babylon work begins, preventing click/scroll spam while preserving the zero-reload/resident runtime paths.
+  - Stage 12C66C6C8C7: Scene Ownership / Atomic Exhibition Hydration — Space nodes have immutable ownership barriers and canonical integrity checks; Exhibition layers park complete owned runtime, stale light callbacks are owner-scoped, first-load state hydration is batched, heavy Tour/light work is deferred after the visible transition paint.
 */
 
 
@@ -211,8 +212,8 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C6",
-        schema: "exhibition-platform-multi-exhibition.v6",
+        stage: "12C66C6C8C7",
+        schema: "exhibition-platform-multi-exhibition.v7",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
         active: null,
@@ -243,7 +244,17 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         maxParkedLayers: galleryDeviceProfile && galleryDeviceProfile.mobile ? 1 : 2,
         lastResidentLayerAction: "startup",
         lastResidentLayerId: null,
-        lastModeTransition: null
+        lastModeTransition: null,
+        transitionEpoch: 0,
+        hydrationActive: false,
+        hydrationExhibitionId: null,
+        hydrationEpoch: 0,
+        ownershipViolations: 0,
+        blockedSpaceDisposals: 0,
+        spaceIntegrityBaseline: Object.create(null),
+        lastSpaceIntegrity: null,
+        lastHydrationProfile: null,
+        deferredTourReason: null
     };
 
     if (!engine) {
@@ -6810,7 +6821,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C6",
+        stage: "12C66C6C8C7",
         schema: "exhibition-asset-delivery.v3",
         desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
         desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
@@ -8940,6 +8951,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         localLightLoadTimeRetargetReason = reason || "loadTimeRetargetScheduled";
+        var scheduledExhibitionId = getActiveGalleryExhibitionId();
+        var scheduledEpoch = Number(galleryExhibitionRuntime.transitionEpoch) || 0;
         localLightSegmentAwareRetargetDebugStats.loadFullScheduled += 1;
 
         if (localLightLoadTimeRetargetTimer) {
@@ -8953,6 +8966,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         localLightLoadTimeRetargetTimer = setTimeout(function () {
             var run = function () {
                 localLightLoadTimeRetargetTimer = null;
+                if (scheduledEpoch !== (Number(galleryExhibitionRuntime.transitionEpoch) || 0) || !isGalleryExhibitionOwnerActive(scheduledExhibitionId)) return;
                 commitLoadTimeLocalLightRetargetImmediate(localLightLoadTimeRetargetReason || reason || "loadTimeRetargetScheduled");
             };
 
@@ -9166,7 +9180,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function scheduleLocalLightAtomicTargetCommit(item, reason, delayMs) {
-        if (!item || item.softDeleted || !item.light) {
+        if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -9178,7 +9192,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item._localLightAtomicTargetCommitTimer = setTimeout(function () {
             item._localLightAtomicTargetCommitTimer = null;
 
-            if (!item || item.softDeleted || !item.light) {
+            if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || !isGalleryExhibitionOwnerActive(item.exhibitionId || getActiveGalleryExhibitionId())) {
                 return;
             }
 
@@ -9207,7 +9221,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function scheduleDeferredLocalLightFinalRetarget(item, reason, delayMs) {
-        if (!item || item.softDeleted || !item.light) {
+        if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -9220,7 +9234,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item._localLightFinalRetargetTimer = setTimeout(function () {
             item._localLightFinalRetargetTimer = null;
 
-            if (!item || item.softDeleted || !item.light) {
+            if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || !isGalleryExhibitionOwnerActive(item.exhibitionId || getActiveGalleryExhibitionId())) {
                 return;
             }
 
@@ -9803,7 +9817,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artwork.metadata.artworkFrameRuntime = null;
         try {
             if (runtime.root && !(runtime.root.isDisposed && runtime.root.isDisposed())) {
-                runtime.root.dispose(false, false);
+                disposeGalleryExhibitionOwnedNode(runtime.root, getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId(), "dispose-artwork-frame", true);
             }
         } catch (error) {
             console.warn("Artwork frame runtime dispose warning:", error);
@@ -9913,13 +9927,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var scaleRoot = new BABYLON.TransformNode(artwork.name + "_FrameScale_" + generation, scene);
         var facingRoot = new BABYLON.TransformNode(artwork.name + "_FrameFacing_" + generation, scene);
         var orientationRoot = new BABYLON.TransformNode(artwork.name + "_FrameOrientation_" + generation, scene);
+        var frameOwnerId = getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId();
+        tagGalleryExhibitionNode(root, "artwork-frame-root", frameOwnerId);
+        tagGalleryExhibitionNode(scaleRoot, "artwork-frame-scale", frameOwnerId);
+        tagGalleryExhibitionNode(facingRoot, "artwork-frame-facing", frameOwnerId);
+        tagGalleryExhibitionNode(orientationRoot, "artwork-frame-orientation", frameOwnerId);
         scaleRoot.parent = root;
         facingRoot.parent = scaleRoot;
         orientationRoot.parent = facingRoot;
 
         var rootNodes = Array.isArray(instance.rootNodes) ? instance.rootNodes : [];
         rootNodes.forEach(function (node) {
-            if (node) node.parent = orientationRoot;
+            if (!node) return;
+            tagGalleryExhibitionNode(node, "artwork-frame-node", frameOwnerId);
+            if (node.getDescendants) {
+                try { node.getDescendants(false).forEach(function (child) { tagGalleryExhibitionNode(child, "artwork-frame-node", frameOwnerId); }); } catch (error) {}
+            }
+            node.parent = orientationRoot;
         });
 
         var meshes = [];
@@ -9942,6 +9966,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mesh.metadata = mesh.metadata || {};
             mesh.metadata.isArtworkFrameMesh = true;
             mesh.metadata.parentArtworkName = artwork.name;
+            tagGalleryExhibitionNode(mesh, "artwork-frame-mesh", frameOwnerId);
             mesh.isPickable = true;
             mesh.checkCollisions = false;
             mesh.receiveShadows = true;
@@ -11517,6 +11542,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         imagePlane.metadata = imagePlane.metadata || {};
         imagePlane.metadata.isArtworkImagePlane = true;
         imagePlane.metadata.parentArtworkName = artwork.name;
+        tagGalleryExhibitionNode(imagePlane, "artwork-image", getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId());
 
         artwork.metadata.imagePlane = imagePlane;
         syncDetachedArtworkImagePlane(artwork);
@@ -15138,6 +15164,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         node.metadata = node.metadata || {};
         node.metadata.model3dOwnerSlotId = slotId;
         node.metadata.model3dSlotName = slot.name; // legacy/debug only
+        tagGalleryExhibitionNode(node, "sculpture-owned-node", slot.metadata.galleryOwnerId || getActiveGalleryExhibitionId());
         try { node._galleryModel3dOwnerSlot = slot; } catch (error) {}
         return node;
     }
@@ -15156,6 +15183,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             delete gallerySculptureCoreRuntime.colliderRegistry[currentId];
         }
         slot.metadata.model3dSlotId = slotId;
+        tagGalleryExhibitionNode(slot, "sculpture-slot", slot.metadata.galleryOwnerId || getActiveGalleryExhibitionId());
         gallerySculptureCoreRuntime.slotRegistry[slotId] = slot;
         try { slot._galleryModel3dOwnerSlot = slot; } catch (error) {}
 
@@ -17903,6 +17931,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshAllLocalSpotShadows(true);
             requestAllLocalSpotShadowRefresh(true);
             updateLocalLightsUi();
+            scheduleGalleryDeferredTourAfterHydration(reason || "startup-batch-finalized");
 
             galleryStartupFinalizeDebug.finalLightMode = needsFallback
                 ? "12C65A-single-batch-fallback-retarget"
@@ -26020,7 +26049,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function scheduleLocalLightParameterFinalCommit(item, reason, delayMs) {
-        if (!item || item.softDeleted || !item.light) {
+        if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -26036,7 +26065,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item._localLightParameterFinalCommitTimer = setTimeout(function () {
             item._localLightParameterFinalCommitTimer = null;
 
-            if (!item || item.softDeleted || !item.light) {
+            if (!item || item.softDeleted || item.exhibitionLayerParked || !item.light || !isGalleryExhibitionOwnerActive(item.exhibitionId || getActiveGalleryExhibitionId())) {
                 return;
             }
 
@@ -26865,7 +26894,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (item.helperMeshes && item.helperMeshes.length) {
             item.helperMeshes.forEach(function (helperMesh) {
-                if (helperMesh && helperMesh.dispose) {
+                if (helperMesh && helperMesh.dispose && canGalleryExhibitionMutateNode(helperMesh, "dispose-local-light-helper", item.exhibitionId || getActiveGalleryExhibitionId())) {
                     helperMesh.dispose();
                 }
             });
@@ -26874,7 +26903,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         item.helperMeshes = [];
 
         if (item.helperMesh) {
-            item.helperMesh.dispose();
+            if (canGalleryExhibitionMutateNode(item.helperMesh, "dispose-local-light-helper", item.exhibitionId || getActiveGalleryExhibitionId())) item.helperMesh.dispose();
             item.helperMesh = null;
         }
     }
@@ -27273,6 +27302,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (item.rootNode && item.rootNode.setEnabled) {
             item.rootNode.setEnabled(true);
         }
+        item.exhibitionId = normalizeGalleryRuntimeId(getActiveGalleryExhibitionId(), "main");
+        item.exhibitionLayerParked = false;
+        tagGalleryExhibitionNode(item.markerMesh, "local-light-marker", item.exhibitionId);
+        if (item.rootNode) tagGalleryExhibitionNode(item.rootNode, "local-light-root", item.exhibitionId);
+        try { if (item.light) { item.light.metadata = item.light.metadata || {}; item.light.metadata.galleryOwnerType = "exhibition"; item.light.metadata.galleryOwnerId = item.exhibitionId; item.light.metadata.galleryOwnerRole = "local-light"; } } catch (error) {}
 
         localLightItems.push(item);
 
@@ -27297,6 +27331,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!object || !object.dispose) {
             return;
         }
+        var expectedOwnerId = object.metadata && object.metadata.galleryOwnerId ? object.metadata.galleryOwnerId : getActiveGalleryExhibitionId();
+        if (!canGalleryExhibitionMutateNode(object, "clean-disabled-local-light-" + (label || "object"), expectedOwnerId)) return;
 
         try {
             object.dispose();
@@ -27372,6 +27408,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!item) {
             return;
         }
+        cancelGalleryLocalLightDeferredWork(item);
+        var itemOwnerId = item.exhibitionId || getActiveGalleryExhibitionId();
+        if (item.rootNode && !canGalleryExhibitionMutateNode(item.rootNode, "dispose-local-light-root", itemOwnerId)) return;
+        if (item.markerMesh && !canGalleryExhibitionMutateNode(item.markerMesh, "dispose-local-light-marker", itemOwnerId)) return;
 
         if (
             localLightHighlightLayer &&
@@ -27683,6 +27723,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         mesh.metadata = mesh.metadata || {};
         mesh.metadata.localLightHelperFor = item.id;
         mesh.metadata.localLightHelperTag = tag;
+        tagGalleryExhibitionNode(mesh, "local-light-helper", item.exhibitionId || getActiveGalleryExhibitionId());
 
         if (canReuse) {
             localLightTargetDebugStats.helperReused += 1;
@@ -27908,7 +27949,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function updateLocalLightHelper(item) {
-        if (!item) {
+        if (!item || item.exhibitionLayerParked || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -27944,7 +27985,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function scheduleLocalLightHelperUpdateDuringDrag(item, finalUpdate) {
-        if (!item || item.softDeleted) {
+        if (!item || item.softDeleted || item.exhibitionLayerParked || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -27979,7 +28020,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             localLightGizmoPreviewHelperPending = false;
             localLightGizmoPreviewHelperItem = null;
 
-            if (!helperItem || helperItem.softDeleted) {
+            if (!helperItem || helperItem.softDeleted || helperItem.exhibitionLayerParked || (helperItem.exhibitionId && !isGalleryExhibitionOwnerActive(helperItem.exhibitionId))) {
                 return;
             }
 
@@ -28314,7 +28355,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var localLightSpawnShadowDelayMs = 700;
 
     function scheduleDeferredLocalLightSpawnSetup(item, reason) {
-        if (!item || item.softDeleted) {
+        if (!item || item.softDeleted || item.exhibitionLayerParked || (item.exhibitionId && !isGalleryExhibitionOwnerActive(item.exhibitionId))) {
             return;
         }
 
@@ -28348,7 +28389,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             // The new lamp keeps its minimal safe target set until the user finishes positioning it,
             // then dragEnd performs exactly one atomic target commit.
             queue.forEach(function (queuedItem) {
-                if (!queuedItem || queuedItem.softDeleted || !queuedItem.light) {
+                if (!queuedItem || queuedItem.softDeleted || queuedItem.exhibitionLayerParked || !queuedItem.light || !isGalleryExhibitionOwnerActive(queuedItem.exhibitionId || getActiveGalleryExhibitionId())) {
                     return;
                 }
 
@@ -28405,7 +28446,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             userEnabled: options.light && options.light.isEnabled
                 ? !!options.light.isEnabled()
                 : true,
-            userIntensity: options.light ? Number(options.light.intensity) || 0 : 0
+            userIntensity: options.light ? Number(options.light.intensity) || 0 : 0,
+            exhibitionId: normalizeGalleryRuntimeId(options.exhibitionId || getActiveGalleryExhibitionId(), "main"),
+            exhibitionLayerParked: false
         };
 
         // STAGE 12C51: PointLight is spherical, so it should include the nearby ceiling by default.
@@ -28418,6 +28461,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         options.markerMesh.renderOutline = false;
         options.markerMesh.metadata = options.markerMesh.metadata || {};
         options.markerMesh.metadata.localLightId = id;
+        tagGalleryExhibitionNode(options.markerMesh, "local-light-marker", item.exhibitionId);
+        if (item.rootNode) tagGalleryExhibitionNode(item.rootNode, "local-light-root", item.exhibitionId);
+        try { if (item.light) { item.light.metadata = item.light.metadata || {}; item.light.metadata.galleryOwnerType = "exhibition"; item.light.metadata.galleryOwnerId = item.exhibitionId; item.light.metadata.galleryOwnerRole = "local-light"; } } catch (error) {}
 
         localLightItems.push(item);
 
@@ -31256,7 +31302,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C6",
+            stage: "12C66C6C8C7",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -31315,6 +31361,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function setGallerySameRuntimeModeState(targetEditMode, reason) {
         var startedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        var modeSpaceIntegrityBefore = captureGallerySpaceIntegritySnapshot("before-workspace-mode-transition");
         editMode = !!targetEditMode;
         if (document.body) document.body.classList.toggle("gallery-edit-mode-active", editMode);
         configureCameraPointerButtons();
@@ -31339,6 +31386,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateViewerModePlaceholderVisibility();
         }
 
+        verifyGallerySpaceIntegrity(modeSpaceIntegrityBefore, "after-workspace-mode-transition");
+        verifyGalleryCanonicalSpaceIntegrity("canonical-after-workspace-mode-transition");
         var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         galleryExhibitionRuntime.lastModeTransition = {
             type: "workspace-mode",
@@ -34054,6 +34103,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             existing.isPickable = false;
             existing.renderingGroupId = 2;
 
+            tagGalleryExhibitionNode(existing, "artwork-selection-glow", getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId());
             artwork.metadata.selectionGlowPlane = existing;
         }
 
@@ -37155,6 +37205,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     loadGalleryStartupAssetWithRetry("", galleryFloorSpaceAsset.rootUrl, galleryFloorSpaceAsset.deliveryFileName, scene,
         function (meshes) {
             floorMeshes = meshes.filter(mesh => mesh.name !== "__root__");
+            tagGallerySpaceCollection(floorMeshes, "floor");
+            registerGallerySpaceIntegrityBaseline("floor", floorMeshes);
             markGalleryGeometryDirty("floorImported");
             floorMeshes.forEach(mesh => { mesh.isPickable = true; registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: false }); });
             freezeStaticGalleryMeshes(floorMeshes, "floor");
@@ -37168,7 +37220,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     loadGalleryStartupAssetWithRetry("", galleryWallSpaceAsset.rootUrl, galleryWallSpaceAsset.deliveryFileName, scene,
         function (meshes) {
-            wallMeshes = meshes.filter(mesh => mesh.name !== "__root__"); markGalleryGeometryDirty("wallImported");
+            wallMeshes = meshes.filter(mesh => mesh.name !== "__root__"); tagGallerySpaceCollection(wallMeshes, "wall"); registerGallerySpaceIntegrityBaseline("wall", wallMeshes); markGalleryGeometryDirty("wallImported");
             wallMeshes.forEach(mesh => { mesh.isPickable = true; registerViewerCollisionMesh(mesh, "wall"); if (mesh.material) { configureMaterialForCommonLighting(mesh.material); configureMeshMaterialForMainShadows(mesh); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
             freezeStaticGalleryMeshes(wallMeshes, "wall"); console.log("Wall Space asset loaded", { spaceId: galleryActiveSpaceId, rootUrl: galleryWallSpaceAsset.rootUrl, file: galleryWallSpaceAsset.fileName, meshes: wallMeshes });
             refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); assetLoaded("wall");
@@ -37179,7 +37231,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     loadGalleryStartupAssetWithRetry("", galleryPropsSpaceAsset.rootUrl, galleryPropsSpaceAsset.deliveryFileName, scene,
         function (meshes) {
-            meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
+            meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); tagGallerySpaceNode(mesh, "prop"); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
+            registerGallerySpaceIntegrityBaseline("prop", propMeshes);
             markGalleryObjectsDirty("propsImported"); rebuildGalleryStreamingZones("props-imported"); propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); }); updateGalleryPropZoneActivation();
             if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true; else { refreshViewerCollisionMeshes(); hydrateSavedLocalLightTargetsForAll("props-imported"); }
             assetLoaded("props");
@@ -37190,7 +37243,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     loadGalleryStartupAssetWithRetry("", galleryCeilingSpaceAsset.rootUrl, galleryCeilingSpaceAsset.deliveryFileName, scene,
         function (meshes) {
-            meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && ceilingMeshes.indexOf(mesh) === -1) ceilingMeshes.push(mesh); registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: false }); });
+            meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && ceilingMeshes.indexOf(mesh) === -1) { ceilingMeshes.push(mesh); tagGallerySpaceNode(mesh, "ceiling"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: false }); });
+            registerGallerySpaceIntegrityBaseline("ceiling", ceilingMeshes);
             markGalleryGeometryDirty("ceilingImported"); freezeStaticGalleryMeshes(ceilingMeshes, "ceiling"); assetLoaded("ceiling");
         }, null,
         function (scene, message, exception) { console.error("Ceiling Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryCeilingSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("ceiling", true); },
@@ -37307,7 +37361,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         (runtime.meshes || []).forEach(addNode);
         addNode(runtime.root);
 
-        (runtime.meshes || []).forEach(function (mesh) { unregisterCommonShadowMesh(mesh, "model-runtime-dispose"); });
+        var slotOwnerId = getGalleryNodeOwnerId(slot) || getActiveGalleryExhibitionId();
+        nodes = nodes.filter(function (node) { return canGalleryExhibitionMutateNode(node, "dispose-model-runtime", slotOwnerId); });
+        (runtime.meshes || []).forEach(function (mesh) { if (nodes.indexOf(mesh) !== -1) unregisterCommonShadowMesh(mesh, "model-runtime-dispose"); });
         nodes.forEach(function (node) {
             try { if (node && node.getClassName && /Mesh/.test(node.getClassName())) unregisterCommonShadowMesh(node, "model-node-dispose"); } catch (error) {}
         });
@@ -37319,9 +37375,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
         nodes.forEach(function (node) {
             if (!node || (node.isDisposed && node.isDisposed())) return;
-            try { if (node.dispose) node.dispose(true, false); } catch (error) {
-                try { if (node.dispose) node.dispose(); } catch (fallbackError) {}
-            }
+            // Nodes are already collected deepest-first. Never recurse here: an accidental
+            // cross-owner child must not be destroyed together with a model runtime.
+            disposeGalleryExhibitionOwnedNode(node, slotOwnerId, "dispose-model-runtime-node", false);
         });
         slot.metadata.model3dRuntime = null;
         pruneGalleryShadowRegistries("model-runtime-disposed");
@@ -38454,6 +38510,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         pedestal.metadata.isModel3dSlot = true;
         pedestal.metadata.model3d = pedestal.metadata.model3d || null;
         pedestal.metadata.model3dRuntime = pedestal.metadata.model3dRuntime || null;
+        tagGalleryExhibitionNode(pedestal, "sculpture-slot", options.exhibitionId || getActiveGalleryExhibitionId());
         ensureModel3dSlotIdentity(pedestal, options.slotId || ("model3d-" + slotName));
         forgetDeletedModel3dSlotName(pedestal.name);
         artSpheres.push(pedestal);
@@ -38462,8 +38519,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         markGalleryObjectsDirty("sculptureSlotAdded");
         ensureModel3dSlotUnifiedStructure(pedestal, index);
         createPedestalLight(pedestal, index);
-        refreshArtworkLightExclusions();
-        refreshAllCommonLocalLightTargets();
+        if (!galleryExhibitionRuntime.hydrationActive && !(galleryFastStartRuntime && galleryFastStartRuntime.stateApplyActive)) {
+            refreshArtworkLightExclusions();
+            refreshAllCommonLocalLightTargets();
+        }
         if (typeof updateViewerModePlaceholderVisibility === "function") updateViewerModePlaceholderVisibility();
         return pedestal;
     }
@@ -38513,6 +38572,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artwork.metadata.spotLight = null;
         artwork.metadata.isDynamicArtwork = false;
         artwork.metadata.deletedArtwork = false;
+        tagGalleryExhibitionNode(artwork, "artwork", getActiveGalleryExhibitionId());
         ensureArtworkIdentity(artwork);
         updateArtworkCreateCounterFromName(artwork.name);
         registerViewerCollisionMesh(artwork, "artwork");
@@ -38529,8 +38589,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artworks.push(artwork);
         markGalleryObjectsDirty("artworkAdded");
 
-        // Auto artwork lights disabled in Stage 8M.
-        refreshAllCommonLocalLightTargets();
+        // Auto artwork lights disabled in Stage 8M. During atomic hydration the global
+        // light target refresh is committed once after the complete exhibition layer exists.
+        if (!galleryExhibitionRuntime.hydrationActive && !(galleryFastStartRuntime && galleryFastStartRuntime.stateApplyActive)) refreshAllCommonLocalLightTargets();
     });
 
 
@@ -38671,6 +38732,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artwork.metadata.isDynamicArtwork = !!options.isDynamicArtwork;
         artwork.metadata.deletedArtwork = false;
         artwork.metadata.createdAt = options.createdAt || new Date().toISOString();
+        tagGalleryExhibitionNode(artwork, "artwork", options.exhibitionId || getActiveGalleryExhibitionId());
         ensureArtworkIdentity(artwork, options.artworkId);
 
         registerViewerCollisionMesh(artwork, "artwork");
@@ -38685,7 +38747,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artworks.push(artwork);
         markGalleryObjectsDirty("artworkAdded");
         updateArtworkCreateCounterFromName(artwork.name);
-        refreshAllCommonLocalLightTargets();
+        if (!galleryExhibitionRuntime.hydrationActive && !(galleryFastStartRuntime && galleryFastStartRuntime.stateApplyActive)) {
+            refreshAllCommonLocalLightTargets();
+        }
 
         return artwork;
     }
@@ -39146,6 +39210,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var imageMaterial = artwork.metadata.imageMaterial || null;
 
         if (imagePlane && !imagePlane.isDisposed()) {
+            if (!canGalleryExhibitionMutateNode(imagePlane, "dispose-artwork-image", getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId())) return;
             try {
                 imagePlane.dispose();
             } catch (error) {
@@ -39182,6 +39247,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!artwork || (artwork.isDisposed && artwork.isDisposed())) {
             return false;
         }
+        if (!canGalleryExhibitionMutateNode(artwork, "delete-artwork", getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId())) return false;
 
         var isDynamicArtwork = !!(
             artwork.metadata &&
@@ -39214,7 +39280,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         try {
-            artwork.dispose();
+            if (artwork.metadata && artwork.metadata.selectionGlowPlane && !(artwork.metadata.selectionGlowPlane.isDisposed && artwork.metadata.selectionGlowPlane.isDisposed())) {
+                disposeGalleryExhibitionOwnedNode(artwork.metadata.selectionGlowPlane, getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId(), "dispose-artwork-selection-glow", false);
+                artwork.metadata.selectionGlowPlane = null;
+            }
+            disposeGalleryExhibitionOwnedNode(artwork, getGalleryNodeOwnerId(artwork) || getActiveGalleryExhibitionId(), "dispose-artwork-root", false);
         } catch (error) {
             console.warn("Artwork mesh dispose warning:", error);
         }
@@ -42694,20 +42764,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (!options.deferGlobalRefresh) {
-            refreshCommonLightingMaterialSupport();
-            refreshArtworkLightExclusions();
-            refreshPedestalLightIncludedMeshes();
-
-            if (!galleryFastStartRuntime.stateApplyActive) {
+            if (galleryFastStartRuntime.stateApplyActive || galleryExhibitionRuntime.hydrationActive) {
+                // C6C8C7 atomic state apply: structure first, one global commit later.
+                galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
+                galleryExhibitTourRuntime.dirty = true;
+                updateGalleryTourOrderUi();
+            } else {
+                refreshCommonLightingMaterialSupport();
+                refreshArtworkLightExclusions();
+                refreshPedestalLightIncludedMeshes();
                 refreshAllCommonLocalLightTargets();
                 refreshAllLocalSpotShadows();
+                updateEditHelpStatus();
+                updateAlignmentPanel();
+                updateFocusCameraUi();
+                rebuildGalleryExhibitTour({ reason: "editor-state-applied", recalculateAutoOrder: true, force: true });
+                updateGalleryTourOrderUi();
             }
-
-            updateEditHelpStatus();
-            updateAlignmentPanel();
-            updateFocusCameraUi();
-            rebuildGalleryExhibitTour({ reason: "editor-state-applied", recalculateAutoOrder: true, force: true });
-            updateGalleryTourOrderUi();
         }
     }
 
@@ -42758,7 +42831,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (baseline.lighting) applyLightingSettings(cloneGalleryJson(baseline.lighting), true, true);
             if (baseline.visualSettings) applyVisualSettings(normalizeVisualSettings(cloneGalleryJson(baseline.visualSettings)), true, true);
             writeLightingPresets([]);
-            refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); refreshArtworkLightExclusions(); refreshPedestalLightIncludedMeshes(); refreshAllCommonLocalLightTargets(); refreshAllLocalSpotShadows(); updateViewerModePlaceholderVisibility(); updateLocalLightsUi(); updateEditHelpStatus(); updateAlignmentPanel(); rebuildGalleryExhibitTour({ reason: "exhibition-runtime-reset", recalculateAutoOrder: true, force: true }); updateGalleryTourOrderUi();
+            if (galleryFastStartRuntime.stateApplyActive || galleryExhibitionRuntime.hydrationActive) {
+                galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
+                galleryExhibitTourRuntime.dirty = true;
+                updateViewerModePlaceholderVisibility();
+                updateLocalLightsUi();
+                updateGalleryTourOrderUi();
+            } else {
+                refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); refreshArtworkLightExclusions(); refreshPedestalLightIncludedMeshes(); refreshAllCommonLocalLightTargets(); refreshAllLocalSpotShadows(); updateViewerModePlaceholderVisibility(); updateLocalLightsUi(); updateEditHelpStatus(); updateAlignmentPanel(); rebuildGalleryExhibitTour({ reason: "exhibition-runtime-reset", recalculateAutoOrder: true, force: true }); updateGalleryTourOrderUi();
+            }
         } finally { galleryExhibitionRuntime.switching = previousSwitchingState; }
     }
 
@@ -42834,12 +42915,229 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         try { node.setEnabled(!!enabled); return true; } catch (error) { return false; }
     }
 
+    // C6C8C7 — SCENE OWNERSHIP CONTRACT
+    // Space nodes are immutable infrastructure. Exhibition cleanup may only mutate nodes
+    // explicitly owned by the active/parked exhibition layer.
+    function tagGallerySceneOwner(node, ownerType, ownerId, role) {
+        if (!node) return node;
+        node.metadata = node.metadata || {};
+        node.metadata.galleryOwnerType = ownerType || null;
+        node.metadata.galleryOwnerId = ownerId || null;
+        if (role) node.metadata.galleryOwnerRole = role;
+        return node;
+    }
+
+    function tagGallerySpaceNode(node, role) {
+        return tagGallerySceneOwner(node, "space", galleryActiveSpaceId, role || "space-node");
+    }
+
+    function tagGalleryExhibitionNode(node, role, exhibitionId) {
+        return tagGallerySceneOwner(node, "exhibition", normalizeGalleryRuntimeId(exhibitionId || getActiveGalleryExhibitionId(), "main"), role || "exhibition-node");
+    }
+
+    function isGallerySpaceOwnedNode(node) {
+        return !!(node && node.metadata && node.metadata.galleryOwnerType === "space");
+    }
+
+    function getGalleryNodeOwnerId(node) {
+        return node && node.metadata ? String(node.metadata.galleryOwnerId || "") : "";
+    }
+
+    function canGalleryExhibitionMutateNode(node, operation, expectedExhibitionId) {
+        if (!node) return true;
+        if (isGallerySpaceOwnedNode(node)) {
+            galleryExhibitionRuntime.ownershipViolations += 1;
+            galleryExhibitionRuntime.blockedSpaceDisposals += /dispose|delete|remove/i.test(String(operation || "")) ? 1 : 0;
+            console.error("C6C8C7 ownership barrier blocked Exhibition mutation of Space node", {
+                operation: operation || "mutation",
+                node: node.name || null,
+                role: node.metadata && node.metadata.galleryOwnerRole || null,
+                spaceId: node.metadata && node.metadata.galleryOwnerId || null
+            });
+            return false;
+        }
+        var ownerType = node.metadata && node.metadata.galleryOwnerType;
+        var ownerId = getGalleryNodeOwnerId(node);
+        var expectedId = normalizeGalleryRuntimeId(expectedExhibitionId || getActiveGalleryExhibitionId(), "main");
+        if (ownerType === "exhibition" && ownerId && expectedId && ownerId !== expectedId) {
+            galleryExhibitionRuntime.ownershipViolations += 1;
+            console.warn("C6C8C7 ownership barrier blocked cross-exhibition mutation", { operation: operation || "mutation", node: node.name || null, ownerId: ownerId, expectedId: expectedId });
+            return false;
+        }
+        return true;
+    }
+
+    function disposeGalleryExhibitionOwnedNode(node, expectedExhibitionId, operation, recurse) {
+        if (!node || (node.isDisposed && node.isDisposed())) return true;
+        if (!canGalleryExhibitionMutateNode(node, operation || "dispose-exhibition-node", expectedExhibitionId)) return false;
+        if (recurse && node.getDescendants) {
+            try {
+                var descendants = node.getDescendants(false) || [];
+                for (var i = 0; i < descendants.length; i += 1) {
+                    if (!canGalleryExhibitionMutateNode(descendants[i], (operation || "dispose-exhibition-node") + "-descendant", expectedExhibitionId)) return false;
+                }
+            } catch (error) {}
+        }
+        try {
+            if (node.dispose) node.dispose(!recurse, false);
+            return true;
+        } catch (error) {
+            console.warn("C6C8C7 exhibition node dispose warning", { operation: operation || "dispose", node: node.name || null, error: error });
+            return false;
+        }
+    }
+
+    function tagGallerySpaceAncestorChain(node, role) {
+        var parent = node && node.parent ? node.parent : null;
+        var guard = 0;
+        while (parent && guard < 64) {
+            tagGallerySpaceNode(parent, (role || "space") + "-ancestor");
+            parent = parent.parent || null;
+            guard += 1;
+        }
+    }
+
+    function tagGallerySpaceCollection(nodes, role) {
+        (nodes || []).forEach(function (node) {
+            if (!node) return;
+            tagGallerySpaceNode(node, role);
+            tagGallerySpaceAncestorChain(node, role);
+        });
+    }
+
+    function captureGallerySpaceNodeIntegrityEntry(node, role) {
+        var ancestors = [];
+        var parent = node && node.parent ? node.parent : null;
+        var guard = 0;
+        while (parent && guard < 64) {
+            tagGallerySpaceNode(parent, (role || "space") + "-ancestor");
+            ancestors.push({
+                ref: parent,
+                name: parent.name || "",
+                enabled: isGalleryNodeEnabled(parent),
+                isVisible: parent.isVisible === undefined ? null : !!parent.isVisible,
+                visibility: typeof parent.visibility === "number" ? parent.visibility : null
+            });
+            parent = parent.parent || null;
+            guard += 1;
+        }
+        return {
+            ref: node,
+            name: node && node.name || "",
+            enabled: isGalleryNodeEnabled(node),
+            isVisible: node && node.isVisible === undefined ? null : !!(node && node.isVisible),
+            visibility: node && typeof node.visibility === "number" ? node.visibility : null,
+            ancestors: ancestors
+        };
+    }
+
+    function registerGallerySpaceIntegrityBaseline(role, nodes) {
+        var key = String(role || "space");
+        galleryExhibitionRuntime.spaceIntegrityBaseline[key] = (nodes || []).filter(Boolean).map(function (node) {
+            tagGallerySpaceNode(node, key);
+            tagGallerySpaceAncestorChain(node, key);
+            return captureGallerySpaceNodeIntegrityEntry(node, key);
+        });
+    }
+
+    function verifyGalleryCanonicalSpaceIntegrity(reason) {
+        var baseline = galleryExhibitionRuntime.spaceIntegrityBaseline || {};
+        var snapshot = {
+            reason: "canonical-space-baseline",
+            spaceId: galleryActiveSpaceId,
+            wall: baseline.wall || [],
+            floor: baseline.floor || [],
+            ceiling: baseline.ceiling || [],
+            prop: baseline.prop || [],
+            at: 0
+        };
+        return verifyGallerySpaceIntegrity(snapshot, reason || "canonical-space-integrity");
+    }
+
+    function captureGallerySpaceIntegritySnapshot(reason) {
+        function capture(nodes, role) {
+            return (nodes || []).filter(Boolean).map(function (node) {
+                tagGallerySpaceNode(node, role);
+                tagGallerySpaceAncestorChain(node, role);
+                return captureGallerySpaceNodeIntegrityEntry(node, role);
+            });
+        }
+        return {
+            reason: reason || "snapshot",
+            spaceId: galleryActiveSpaceId,
+            wall: capture(wallMeshes, "wall"),
+            floor: capture(floorMeshes, "floor"),
+            ceiling: capture(ceilingMeshes, "ceiling"),
+            prop: capture(propMeshes, "prop"),
+            at: Date.now()
+        };
+    }
+
+    function verifyGallerySpaceIntegrity(snapshot, reason) {
+        if (!snapshot) return { ok: true, reason: reason || "no-snapshot", failures: [] };
+        var failures = [];
+        function verifyIntegrityEntry(kind, entry, label, enforceVisibility) {
+            var node = entry && entry.ref;
+            var nodeLabel = label || (entry && entry.name) || "unnamed";
+            if (!node) { failures.push(kind + ":missing-ref:" + nodeLabel); return; }
+            if (node.isDisposed && node.isDisposed()) { failures.push(kind + ":disposed:" + nodeLabel); return; }
+            if (!isGallerySpaceOwnedNode(node)) failures.push(kind + ":ownership-lost:" + nodeLabel);
+            if (entry.enabled && !isGalleryNodeEnabled(node)) failures.push(kind + ":disabled:" + nodeLabel);
+            if (enforceVisibility && entry.isVisible === true && node.isVisible === false) failures.push(kind + ":hidden:" + nodeLabel);
+            if (enforceVisibility && entry.visibility !== null && entry.visibility > 0.0001 && typeof node.visibility === "number" && node.visibility <= 0.0001) failures.push(kind + ":visibility-zero:" + nodeLabel);
+            (entry.ancestors || []).forEach(function (ancestorEntry) {
+                verifyIntegrityEntry(kind + "-ancestor", ancestorEntry, (ancestorEntry.name || "ancestor") + "<" + nodeLabel, true);
+            });
+        }
+        function verify(kind, currentNodes, expectedEntries) {
+            currentNodes = (currentNodes || []).filter(Boolean);
+            expectedEntries = expectedEntries || [];
+            if (currentNodes.length !== expectedEntries.length) failures.push(kind + ":count " + expectedEntries.length + "->" + currentNodes.length);
+            var enforceVisibility = kind !== "prop";
+            expectedEntries.forEach(function (entry) {
+                var node = entry.ref;
+                if (!node || currentNodes.indexOf(node) === -1) failures.push(kind + ":missing:" + (entry.name || "unnamed"));
+                else verifyIntegrityEntry(kind, entry, entry.name || "unnamed", enforceVisibility);
+            });
+        }
+        verify("wall", wallMeshes, snapshot.wall);
+        verify("floor", floorMeshes, snapshot.floor);
+        verify("ceiling", ceilingMeshes, snapshot.ceiling);
+        verify("prop", propMeshes, snapshot.prop);
+        var result = { ok: failures.length === 0, reason: reason || "verify", failures: failures, spaceId: galleryActiveSpaceId, checkedAt: Date.now(), counts: { wall: wallMeshes.length, floor: floorMeshes.length, ceiling: ceilingMeshes.length, prop: propMeshes.length } };
+        galleryExhibitionRuntime.lastSpaceIntegrity = result;
+        if (!result.ok) {
+            console.error("C6C8C7 SPACE INTEGRITY FAILURE", result);
+            throw new Error("Space integrity guard blocked a corrupted exhibition transition: " + failures.join(", "));
+        }
+        return result;
+    }
+
+    function isGalleryExhibitionOwnerActive(ownerId) {
+        return normalizeGalleryRuntimeId(ownerId, "main") === normalizeGalleryRuntimeId(getActiveGalleryExhibitionId(), "main");
+    }
+
+    function cancelGalleryLocalLightDeferredWork(item) {
+        if (!item) return;
+        try { cancelLocalLightAtomicTargetCommit(item); } catch (error) {}
+        try { cancelDeferredLocalLightFinalRetarget(item); } catch (error) {}
+        try { clearLocalLightParameterFinalCommit(item); } catch (error) {}
+        if (item._localSpotShadowBudgetDisposeTimer) { clearTimeout(item._localSpotShadowBudgetDisposeTimer); item._localSpotShadowBudgetDisposeTimer = null; }
+    }
+
+    function scheduleGalleryDeferredTourAfterHydration(reason) {
+        galleryExhibitionRuntime.deferredTourReason = reason || "atomic-hydration";
+        scheduleGalleryExhibitTourRebuild(galleryExhibitionRuntime.deferredTourReason, { recalculateAutoOrder: false, delayMs: 650 });
+    }
+
     function setGalleryArtworkResidentEnabled(artwork, enabled, savedState) {
         if (!artwork || (artwork.isDisposed && artwork.isDisposed())) return;
         var state = savedState || {};
         setGalleryNodeEnabledSafe(artwork, enabled ? state.artwork !== false : false);
         var imagePlane = artwork.metadata && artwork.metadata.imagePlane;
         if (imagePlane) setGalleryNodeEnabledSafe(imagePlane, enabled ? state.imagePlane !== false : false);
+        var glowPlane = artwork.metadata && artwork.metadata.selectionGlowPlane;
+        if (glowPlane) setGalleryNodeEnabledSafe(glowPlane, enabled ? state.glowPlane !== false : false);
         var frameRuntime = artwork.metadata && artwork.metadata.artworkFrameRuntime;
         if (frameRuntime && frameRuntime.root) setGalleryNodeEnabledSafe(frameRuntime.root, enabled ? state.frameRoot !== false : false);
     }
@@ -42849,19 +43147,33 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var state = savedState || {};
         setGalleryNodeEnabledSafe(slot, enabled ? state.slot !== false : false);
         var proxy = slot.metadata && slot.metadata.sculptureCollisionProxy;
-        if (proxy && !enabled) setGalleryNodeEnabledSafe(proxy, false);
+        if (proxy) setGalleryNodeEnabledSafe(proxy, enabled ? state.proxy !== false : false);
+        var placeholder = slot.metadata && (slot.metadata.placeholderMesh || slot.metadata.sculptureMesh);
+        if (placeholder) setGalleryNodeEnabledSafe(placeholder, enabled ? state.placeholder !== false : false);
+        var runtime = slot.metadata && slot.metadata.model3dRuntime;
+        (runtime && runtime.rootNodes || []).forEach(function (node, idx) {
+            var states = state.runtimeRoots || [];
+            setGalleryNodeEnabledSafe(node, enabled ? states[idx] !== false : false);
+        });
     }
 
     function setGalleryLocalLightResidentEnabled(item, enabled, savedState) {
         if (!item || item.hardDisposed) return;
         var state = savedState || {};
+        if (!enabled) cancelGalleryLocalLightDeferredWork(item);
         if (item.rootNode) setGalleryNodeEnabledSafe(item.rootNode, enabled ? state.rootNode !== false : false);
         if (item.markerMesh) setGalleryNodeEnabledSafe(item.markerMesh, enabled ? state.markerMesh !== false : false);
+        if (item.targetMesh && item.targetMesh.metadata && item.targetMesh.metadata.galleryOwnerType === "exhibition") setGalleryNodeEnabledSafe(item.targetMesh, enabled ? state.targetMesh !== false : false);
+        if (item.helperMesh) setGalleryNodeEnabledSafe(item.helperMesh, enabled ? state.helperMesh !== false : false);
+        (item.helperMeshes || []).forEach(function (helper, idx) {
+            var states = state.helperMeshes || [];
+            setGalleryNodeEnabledSafe(helper, enabled ? states[idx] !== false : false);
+        });
         if (item.light) {
             if (!enabled) {
                 try { if (item.light.setEnabled) item.light.setEnabled(false); } catch (error) {}
                 try { item.light.intensity = 0; } catch (error) {}
-            } else {
+            } else if (isGalleryExhibitionOwnerActive(item.exhibitionId || getActiveGalleryExhibitionId())) {
                 applyLocalLightUserState(item);
             }
         }
@@ -42870,20 +43182,33 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function captureGalleryExhibitionLayerNodeStates(layer) {
         layer.artworkNodeStates = (layer.artworks || []).map(function (artwork) {
             var imagePlane = artwork && artwork.metadata ? artwork.metadata.imagePlane : null;
+            var glowPlane = artwork && artwork.metadata ? artwork.metadata.selectionGlowPlane : null;
             var frameRuntime = artwork && artwork.metadata ? artwork.metadata.artworkFrameRuntime : null;
             return {
                 artwork: isGalleryNodeEnabled(artwork),
                 imagePlane: imagePlane ? isGalleryNodeEnabled(imagePlane) : false,
+                glowPlane: glowPlane ? isGalleryNodeEnabled(glowPlane) : false,
                 frameRoot: frameRuntime && frameRuntime.root ? isGalleryNodeEnabled(frameRuntime.root) : false
             };
         });
         layer.sculptureNodeStates = (layer.artSpheres || []).map(function (slot) {
-            return { slot: isGalleryNodeEnabled(slot) };
+            var proxy = slot && slot.metadata ? slot.metadata.sculptureCollisionProxy : null;
+            var placeholder = slot && slot.metadata ? (slot.metadata.placeholderMesh || slot.metadata.sculptureMesh) : null;
+            var runtime = slot && slot.metadata ? slot.metadata.model3dRuntime : null;
+            return {
+                slot: isGalleryNodeEnabled(slot),
+                proxy: proxy ? isGalleryNodeEnabled(proxy) : false,
+                placeholder: placeholder ? isGalleryNodeEnabled(placeholder) : false,
+                runtimeRoots: (runtime && runtime.rootNodes || []).map(isGalleryNodeEnabled)
+            };
         });
         layer.localLightNodeStates = (layer.localLightItems || []).map(function (item) {
             return {
                 rootNode: item && item.rootNode ? isGalleryNodeEnabled(item.rootNode) : false,
-                markerMesh: item && item.markerMesh ? isGalleryNodeEnabled(item.markerMesh) : false
+                markerMesh: item && item.markerMesh ? isGalleryNodeEnabled(item.markerMesh) : false,
+                targetMesh: item && item.targetMesh && item.targetMesh.metadata && item.targetMesh.metadata.galleryOwnerType === "exhibition" ? isGalleryNodeEnabled(item.targetMesh) : false,
+                helperMesh: item && item.helperMesh ? isGalleryNodeEnabled(item.helperMesh) : false,
+                helperMeshes: (item && item.helperMeshes || []).map(isGalleryNodeEnabled)
             };
         });
     }
@@ -42957,6 +43282,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setGalleryLocalLightResidentEnabled(item, false, layer.localLightNodeStates[index]);
         });
 
+        if (Array.isArray(galleryFastStartRuntime.deferredArtworkLoads)) {
+            galleryFastStartRuntime.deferredArtworkLoads = galleryFastStartRuntime.deferredArtworkLoads.filter(function (entry) {
+                return !(entry && layer.artworks.indexOf(entry.artwork) !== -1);
+            });
+        }
+        if (Array.isArray(galleryFastStartRuntime.deferredFullArtworkLoads)) {
+            galleryFastStartRuntime.deferredFullArtworkLoads = galleryFastStartRuntime.deferredFullArtworkLoads.filter(function (entry) {
+                return !(entry && layer.artworks.indexOf(entry.artwork) !== -1);
+            });
+        }
         if (Array.isArray(galleryFastStartRuntime.deferredModelLoads)) {
             galleryFastStartRuntime.deferredModelLoads = galleryFastStartRuntime.deferredModelLoads.filter(function (entry) {
                 return !(entry && layer.artSpheres.indexOf(entry.slot) !== -1);
@@ -43036,7 +43371,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             unregisterArtworkIdentity(artwork);
             disposeArtworkFrameRuntime(artwork);
             disposeArtworkImageOnly(artwork);
-            try { artwork.dispose(); } catch (error) {}
+            disposeGalleryExhibitionOwnedNode(artwork, layer.id, "evict-artwork-root", false);
         });
         (layer.artSpheres || []).forEach(function (slot) {
             if (!slot || (slot.isDisposed && slot.isDisposed())) return;
@@ -43044,17 +43379,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             disposeModel3dSlotRuntime(slot);
             disposeSculptureCollisionProxy(slot);
             var placeholder = slot.metadata && (slot.metadata.placeholderMesh || slot.metadata.sculptureMesh);
-            if (placeholder && !(placeholder.isDisposed && placeholder.isDisposed())) { try { placeholder.dispose(); } catch (error) {} }
+            if (placeholder && !(placeholder.isDisposed && placeholder.isDisposed())) disposeGalleryExhibitionOwnedNode(placeholder, layer.id, "evict-sculpture-placeholder", false);
             unregisterModel3dSlotIdentity(slot);
-            try { slot.dispose(); } catch (error) {}
+            disposeGalleryExhibitionOwnedNode(slot, layer.id, "evict-sculpture-slot", false);
         });
         (layer.localLightItems || []).concat(layer.localLightSoftDeletedItems || []).filter(function (item, index, array) {
             return item && array.indexOf(item) === index;
         }).forEach(function (item) {
+            cancelGalleryLocalLightDeferredWork(item);
             try { if (item.localShadowGenerator && item.localShadowGenerator.dispose) item.localShadowGenerator.dispose(); } catch (error) {}
             try { if (item.light && item.light.dispose) item.light.dispose(); } catch (error) {}
-            try { if (item.markerMesh && item.markerMesh.dispose) item.markerMesh.dispose(); } catch (error) {}
-            try { if (item.rootNode && item.rootNode.dispose) item.rootNode.dispose(); } catch (error) {}
+            (item.helperMeshes || []).forEach(function (helper) { disposeGalleryExhibitionOwnedNode(helper, layer.id, "evict-local-light-helper", false); });
+            if (item.helperMesh && (item.helperMeshes || []).indexOf(item.helperMesh) === -1) disposeGalleryExhibitionOwnedNode(item.helperMesh, layer.id, "evict-local-light-helper", false);
+            if (item.targetMesh) disposeGalleryExhibitionOwnedNode(item.targetMesh, layer.id, "evict-local-light-target", false);
+            if (item.markerMesh) disposeGalleryExhibitionOwnedNode(item.markerMesh, layer.id, "evict-local-light-marker", false);
+            if (item.rootNode) disposeGalleryExhibitionOwnedNode(item.rootNode, layer.id, "evict-local-light-root", false);
             item.hardDisposed = true;
         });
         return true;
@@ -43139,38 +43478,87 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateLightingPresetRows();
     }
 
-    function finalizeGallerySameSpaceExhibitionDelta(reason) {
+    function finalizeGallerySameSpaceExhibitionDelta(reason, profile) {
+        var finalizeStartedAt = getGalleryPerformanceNow();
         refreshViewerExhibitionCollisionMeshes();
         refreshCommonLightingMaterialSupport();
         refreshArtworkLightExclusions();
         refreshPedestalLightIncludedMeshes();
-        refreshAllCommonLocalLightTargets();
-        scheduleLoadTimeLocalLightRetarget("same-space-exhibition-delta", localLightLoadTimeRetargetDelayMs);
-        refreshAllLocalSpotShadows();
+        // Prefer the target names persisted with the Exhibition. A full segment-aware
+        // retarget and shadow refresh are post-hydration work and must not block the switch.
+        var unresolvedLightTargets = hydrateSavedLocalLightTargetsForAll(reason || "same-space-atomic-hydration");
+        if (unresolvedLightTargets && unresolvedLightTargets.length) {
+            scheduleLoadTimeLocalLightRetarget("same-space-exhibition-delta-unresolved", localLightLoadTimeRetargetDelayMs);
+        }
+        var lightingCommitEpoch = Number(galleryExhibitionRuntime.transitionEpoch) || 0;
+        var lightingCommitExhibitionId = getActiveGalleryExhibitionId();
+        runGalleryFastStartIdleTask(function () {
+            if (lightingCommitEpoch !== (Number(galleryExhibitionRuntime.transitionEpoch) || 0) || !isGalleryExhibitionOwnerActive(lightingCommitExhibitionId)) return;
+            refreshAllLocalSpotShadows();
+        }, 800);
         updateViewerModePlaceholderVisibility();
         updateLocalLightsUi();
         updateEditHelpStatus();
         updateAlignmentPanel();
         updateFocusCameraUi();
-        rebuildGalleryExhibitTour({ reason: reason || "same-space-exhibition-delta", recalculateAutoOrder: true, force: true });
+        // C6C8C7: do not block Exhibition hydration with O(n^2) route/path recomputation.
+        // Saved tourOrder is already restored by applyEditorState. Paths are rebuilt after paint/idle.
+        scheduleGalleryDeferredTourAfterHydration(reason || "same-space-exhibition-delta");
         updateGalleryTourOrderUi();
         galleryExhibitionRuntime.deltaSwitchActive = false;
+        galleryExhibitionRuntime.hydrationActive = false;
+        galleryExhibitionRuntime.hydrationExhibitionId = null;
+        if (profile) {
+            profile.finalizeMs = Math.round((getGalleryPerformanceNow() - finalizeStartedAt) * 100) / 100;
+            profile.previewQueue = galleryFastStartRuntime.deferredArtworkLoads.length;
+            profile.modelQueue = galleryFastStartRuntime.deferredModelLoads.length;
+            profile.unresolvedLightTargets = unresolvedLightTargets ? unresolvedLightTargets.length : 0;
+            profile.lightingDeferred = true;
+            profile.tourDeferred = true;
+            profile.totalMs = Math.round((getGalleryPerformanceNow() - profile.startedAt) * 100) / 100;
+            galleryExhibitionRuntime.lastHydrationProfile = profile;
+        }
+        if (galleryZoneStreamingRuntime && galleryZoneStreamingRuntime.started) scheduleGalleryZoneStreamingPump("atomic-exhibition-hydration", 40);
     }
 
     function applyGallerySameSpaceExhibitionState(state, reason) {
         var applyResult = { ok: true, usedFallback: false };
+        var previousStateApplyActive = !!galleryFastStartRuntime.stateApplyActive;
+        var previousBatchHydrationActive = !!galleryFastStartRuntime.startupBatchHydrationActive;
+        var profile = {
+            reason: reason || "same-space-exhibition-delta",
+            exhibitionId: getActiveGalleryExhibitionId(),
+            epoch: Number(galleryExhibitionRuntime.transitionEpoch) || 0,
+            startedAt: getGalleryPerformanceNow(),
+            prepareMs: 0,
+            hydrateMs: 0,
+            finalizeMs: 0,
+            tourDeferred: false
+        };
+        galleryExhibitionRuntime.hydrationActive = true;
+        galleryExhibitionRuntime.hydrationExhibitionId = getActiveGalleryExhibitionId();
+        galleryExhibitionRuntime.hydrationEpoch = Number(galleryExhibitionRuntime.transitionEpoch) || 0;
+        galleryFastStartRuntime.stateApplyActive = true;
+        galleryFastStartRuntime.startupBatchHydrationActive = true;
         try {
+            var prepareStartedAt = getGalleryPerformanceNow();
             prepareGallerySameSpaceExhibitionDelta(state);
+            profile.prepareMs = Math.round((getGalleryPerformanceNow() - prepareStartedAt) * 100) / 100;
             if (state && Object.keys(state).length > 0) {
+                var hydrateStartedAt = getGalleryPerformanceNow();
                 applyResult = tryApplyGalleryStateSafely(state, {
                     skipWalls: true,
                     skipSpacePresentation: true,
                     deferGlobalRefresh: true
                 });
+                profile.hydrateMs = Math.round((getGalleryPerformanceNow() - hydrateStartedAt) * 100) / 100;
             }
             return applyResult;
         } finally {
-            if (galleryExhibitionRuntime.deltaSwitchActive) finalizeGallerySameSpaceExhibitionDelta(reason);
+            galleryFastStartRuntime.stateApplyActive = previousStateApplyActive;
+            galleryFastStartRuntime.startupBatchHydrationActive = previousBatchHydrationActive;
+            if (galleryExhibitionRuntime.deltaSwitchActive) finalizeGallerySameSpaceExhibitionDelta(reason, profile);
+            else { galleryExhibitionRuntime.hydrationActive = false; galleryExhibitionRuntime.hydrationExhibitionId = null; }
         }
     }
 
@@ -43368,7 +43756,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!options.force && !confirmGalleryDiscardUnsavedChanges("Switching exhibition")) return false;
         var client = window.gallerySupabase; if (!client) { notifyGalleryStatus("Supabase nie jest skonfigurowany."); return false; }
         galleryExhibitionRuntime.switching = true;
+        galleryExhibitionRuntime.transitionEpoch = (Number(galleryExhibitionRuntime.transitionEpoch) || 0) + 1;
+        var transitionEpoch = galleryExhibitionRuntime.transitionEpoch;
         var transitionStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        var spaceIntegrityBefore = captureGallerySpaceIntegritySnapshot("before-exhibition-switch-" + transitionEpoch);
         var previousExhibition = galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition();
         var previousRuntimeState = serializeGalleryState();
         var previousBaseline = {
@@ -43436,6 +43827,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 galleryExhibitionRuntime.lastSwitchMode = "full-space-switch";
             }
 
+            verifyGallerySpaceIntegrity(spaceIntegrityBefore, "after-exhibition-switch-" + transitionEpoch);
+            verifyGalleryCanonicalSpaceIntegrity("canonical-after-exhibition-switch-" + transitionEpoch);
             pruneGalleryExhibitionLayerResidency(exhibition.id);
             var transitionFinishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
             galleryExhibitionRuntime.lastSwitchDurationMs = Math.max(0, transitionFinishedAt - transitionStartedAt);
@@ -43449,6 +43842,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 mode: galleryExhibitionRuntime.lastSwitchMode,
                 residentHit: targetLayerRestored,
                 durationMs: Math.round(galleryExhibitionRuntime.lastSwitchDurationMs * 10) / 10,
+                epoch: transitionEpoch,
+                spaceIntegrity: galleryExhibitionRuntime.lastSpaceIntegrity ? cloneGalleryJson(galleryExhibitionRuntime.lastSpaceIntegrity) : null,
+                hydration: galleryExhibitionRuntime.lastHydrationProfile ? cloneGalleryJson(galleryExhibitionRuntime.lastHydrationProfile) : null,
                 at: Date.now()
             };
             setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: state && Object.keys(state).length ? state : null, revision: getGalleryStateRevision(state), confirmed: true, serverRowExists: !!row, reason: "exhibition-switch-baseline" });
@@ -43472,6 +43868,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     if (previousResident) applyGalleryResidentLayerPresentation(previousRuntimeState, "resident-exhibition-rollback");
                     else if (rollbackSameSpace) applyGallerySameSpaceExhibitionState(previousRuntimeState, "same-space-exhibition-rollback");
                     else { resetGalleryRuntimeToBlankExhibition(); tryApplyGalleryStateSafely(previousRuntimeState); }
+                    verifyGallerySpaceIntegrity(spaceIntegrityBefore, "after-exhibition-switch-rollback-" + transitionEpoch);
+                    verifyGalleryCanonicalSpaceIntegrity("canonical-after-exhibition-switch-rollback-" + transitionEpoch);
                     setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: previousRuntimeState, revision: previousBaseline.publishedRevision, confirmed: previousBaseline.publishedStateConfirmed, serverRowExists: previousBaseline.publishedServerRowExists, reason: "exhibition-switch-rollback" });
                 } catch (rollbackError) { console.warn("Exhibition switch rollback failed:", rollbackError); }
             }
@@ -43838,7 +44236,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateMetadata: updateGalleryExhibitionMetadata,
         switchTo: switchGalleryExhibition,
         getSpace: function () { return cloneGalleryJson(gallerySpaceDefinition); },
-        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount, fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount, residentLayerCount: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length, residentLayerIds: Object.keys(galleryExhibitionRuntime.layerResidency || {}), residentLayerHits: galleryExhibitionRuntime.residentLayerHits, residentLayerMisses: galleryExhibitionRuntime.residentLayerMisses, residentLayerParks: galleryExhibitionRuntime.residentLayerParks, residentLayerEvictions: galleryExhibitionRuntime.residentLayerEvictions, maxParkedLayers: galleryExhibitionRuntime.maxParkedLayers, lastResidentLayerAction: galleryExhibitionRuntime.lastResidentLayerAction, lastResidentLayerId: galleryExhibitionRuntime.lastResidentLayerId, lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode, lastSwitchDurationMs: galleryExhibitionRuntime.lastSwitchDurationMs, lastSwitchFromId: galleryExhibitionRuntime.lastSwitchFromId, lastSwitchToId: galleryExhibitionRuntime.lastSwitchToId, lastSwitchSpaceId: galleryExhibitionRuntime.lastSwitchSpaceId, lastModeTransition: galleryExhibitionRuntime.lastModeTransition, lastError: galleryExhibitionRuntime.lastError }; }
+        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount, fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount, residentLayerCount: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length, residentLayerIds: Object.keys(galleryExhibitionRuntime.layerResidency || {}), residentLayerHits: galleryExhibitionRuntime.residentLayerHits, residentLayerMisses: galleryExhibitionRuntime.residentLayerMisses, residentLayerParks: galleryExhibitionRuntime.residentLayerParks, residentLayerEvictions: galleryExhibitionRuntime.residentLayerEvictions, maxParkedLayers: galleryExhibitionRuntime.maxParkedLayers, lastResidentLayerAction: galleryExhibitionRuntime.lastResidentLayerAction, lastResidentLayerId: galleryExhibitionRuntime.lastResidentLayerId, lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode, lastSwitchDurationMs: galleryExhibitionRuntime.lastSwitchDurationMs, lastSwitchFromId: galleryExhibitionRuntime.lastSwitchFromId, lastSwitchToId: galleryExhibitionRuntime.lastSwitchToId, lastSwitchSpaceId: galleryExhibitionRuntime.lastSwitchSpaceId, lastModeTransition: galleryExhibitionRuntime.lastModeTransition, transitionEpoch: galleryExhibitionRuntime.transitionEpoch, hydrationActive: galleryExhibitionRuntime.hydrationActive, hydrationExhibitionId: galleryExhibitionRuntime.hydrationExhibitionId, ownershipViolations: galleryExhibitionRuntime.ownershipViolations, blockedSpaceDisposals: galleryExhibitionRuntime.blockedSpaceDisposals, lastSpaceIntegrity: galleryExhibitionRuntime.lastSpaceIntegrity ? cloneGalleryJson(galleryExhibitionRuntime.lastSpaceIntegrity) : null, lastHydrationProfile: galleryExhibitionRuntime.lastHydrationProfile ? cloneGalleryJson(galleryExhibitionRuntime.lastHydrationProfile) : null, lastError: galleryExhibitionRuntime.lastError }; }
     };
 
     globalThis.GalleryApp = {
@@ -43874,6 +44272,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getMobileQualityInspector: getGalleryMobileQualityInspectorSnapshot,
         setMobileQualityInspectorVisible: setGalleryMobileQualityInspectorVisible,
         getAssetDeliveryDebug: getGalleryAssetDeliveryDebug,
+        getSceneOwnershipDebug: function () {
+            var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
+            return {
+                stage: "12C66C6C8C7",
+                activeExhibitionId: getActiveGalleryExhibitionId(),
+                spaceId: galleryActiveSpaceId,
+                transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
+                hydrationActive: galleryExhibitionRuntime.hydrationActive,
+                hydrationExhibitionId: galleryExhibitionRuntime.hydrationExhibitionId,
+                ownershipViolations: galleryExhibitionRuntime.ownershipViolations,
+                blockedSpaceDisposals: galleryExhibitionRuntime.blockedSpaceDisposals,
+                lastSpaceIntegrity: galleryExhibitionRuntime.lastSpaceIntegrity ? cloneGalleryJson(galleryExhibitionRuntime.lastSpaceIntegrity) : null,
+                lastHydrationProfile: galleryExhibitionRuntime.lastHydrationProfile ? cloneGalleryJson(galleryExhibitionRuntime.lastHydrationProfile) : null,
+                counts: { wall: integrity.wall.length, floor: integrity.floor.length, ceiling: integrity.ceiling.length, prop: integrity.prop.length, artworks: artworks.length, sculptures: artSpheres.length, localLights: localLightItems.length, parkedLayers: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length }
+            };
+        },
+        verifySpaceIntegrity: function () {
+            var snapshot = captureGallerySpaceIntegritySnapshot("manual-integrity-check");
+            return verifyGallerySpaceIntegrity(snapshot, "manual-integrity-check");
+        },
         getArtworkById: getArtworkById,
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
@@ -43888,7 +44306,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C6",
+                stage: "12C66C6C8C7",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

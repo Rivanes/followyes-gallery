@@ -1,58 +1,26 @@
-# C6C8C6 — Transition Guard / Loading Feedback
+# C6C8C7 — Scene Ownership / Atomic Exhibition Hydration
 
-Full-page loading feedback and input blocking for Exhibition switches and Same-Runtime Admin/Public transitions. No database schema change.
+Current production package for the Exhibition Platform.
 
-# Exhibition Platform — C6C8C5
+## What changed
+- Space nodes (`walls`, `floor`, `ceiling`, `props`) have explicit immutable ownership and a canonical integrity baseline.
+- Exhibition cleanup cannot dispose or disable Space-owned nodes.
+- Parked Exhibition layers include artwork image/frame/glow nodes, sculpture runtime/proxies and complete Local Light helpers.
+- Delayed Local Light work is cancelled or ignored after an Exhibition is parked/switched.
+- First-load Exhibition state is applied as one atomic batch: artwork previews/models queue instead of doing heavy per-item refreshes.
+- global material/collision/light refresh happens once after hydration; Tour/path work and expensive lighting work are deferred.
+- transition guard now crosses a real browser task boundary so the loading overlay can paint before Babylon work starts.
+- Admin diagnostics show Storage transfer plus CPU hydration phases and `Space OK/FAIL`.
 
-**Exhibition Residency / Zero-Reload Mode Transition / Storage Network Diagnostics**
+## Cache / egress
+The persistent asset cache name remains `exhibition-platform-assets-v1`; installing this Stage does not intentionally invalidate already cached heavy assets.
 
-C6C8C5 keeps the current Space resident, parks recently visited same-Space Exhibition layers in Babylon RAM/GPU, resumes them without rebuilding artwork/sculpture objects, and measures local-cache vs Storage-network delivery through the Service Worker. Admin ↔ Public same-runtime transitions are UI/mode changes only.
+## SQL
+No new SQL is required for C6C8C7. Keep the existing `SUPABASE_SQL` folder as the project database reference.
 
-No new SQL migration is required for C6C8C5. Existing `SUPABASE_SQL` files are preserved.
-
-# Previous stage — C6C8C4 Space Residency / Exhibition Delta Switch
-
-C6C8C4 porządkuje przełączanie wystaw wewnątrz tego samego `space_id` bez ponownego przygotowywania budynku.
-
-## Główna zasada
-
-Jeżeli dwie wystawy używają tego samego `space_id`, warstwa **Space pozostaje rezydentna**:
-
-- Floor / Walls / Ceiling / Props nie są ponownie importowane,
-- statyczne kolizje budynku nie są przebudowywane przy każdym switchu,
-- cache world-bounds i segmentów Space nie jest czyszczony tylko dlatego, że zmienił się artwork/rzeźba,
-- nie wykonujemy już pełnego `resetGalleryRuntimeToBlankExhibition()` dla same-space switch.
-
-Zmienia się wyłącznie warstwa Exhibition: artworky, rzeźby, Local Lights, wall presentation, lighting/visual state i dane wystawy. Globalne zależności są odświeżane **raz po zakończeniu delta switch**, zamiast wielokrotnie w trakcie reset/apply.
-
-## Viewer ↔ Admin
-
-Same-runtime Admin dalej używa tego samego Babylon `engine` i `scene`. Wejście do Edit Mode nie przebudowuje już Tour bezwarunkowo — jeśli roster/pozycje/order się nie zmieniły, istniejący Tour zostaje użyty.
-
-## Diagnostyka
-
-`GalleryApp.exhibitions.getDebug()` pokazuje m.in.:
-
-- `sameSpaceSwitchCount`,
-- `fullRuntimeResetCount`,
-- `lastSwitchMode`,
-- `lastSwitchDurationMs`,
-- `lastSwitchFromId` / `lastSwitchToId`.
-
-W C6C8C5 ten mechanizm jest rozszerzony: pierwszy cold switch używa `same-space-delta-load`, a powrót do zaparkowanej warstwy używa `resident-layer-resume`.
-
-## Cache Space GLB
-
-Zasady C6C8C3 zostają bez zmian. `src/config/gallery-space-config.js` ma jawne `version` dla Space i jego assetów. Podmiana fixed-path GLB wymaga zwiększenia odpowiedniej wersji, bez czyszczenia całego persistent cache.
-
-## Supabase
-
-**C6C8C4 nie wymaga nowego SQL.** Nadal obowiązuje migracja `SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql` z C6C8C3.
-
-## Weryfikacja
+## Verification
+Run:
 
 ```bash
 npm run check
 ```
-
-Pełny check obejmuje dotychczasowe regresje oraz `test:space-residency`.
