@@ -16,18 +16,19 @@ const currentMigration=fs.readFileSync(new URL('../SUPABASE_SQL/04_RUNTIME_HYGIE
 const txt=fs.readFileSync(new URL('../ENGINE_LOGIN_DISABLED.txt',import.meta.url),'utf8');
 const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-bootstrap.js',import.meta.url),'utf8');
 const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
+const transitionGuard=fs.readFileSync(new URL('../src/bootstrap/transition-guard.js',import.meta.url),'utf8');
 
 function assert(c,m){if(!c)throw new Error(m)}
 function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C5"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C5"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C5"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c5_exhibition_residency_20260812'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C5: Exhibition Residency / Zero-Reload Mode Transition'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C6"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C6"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C6"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c6_transition_guard_20260812'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c6_transition_guard_20260812'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C6: Transition Guard / Loading Feedback'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -64,4 +65,8 @@ assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.inc
 assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('same-runtime-ui-only'),'Zero-reload mode transition missing');
 assert(admin.includes('id="networkDiagnostics"')&&adminBootstrap.includes('getExhibitionAssetDeliveryStats'),'Admin network diagnostics missing');
 assert(assetCacheSw.includes('EXHIBITION_ASSET_DELIVERY_STATS')&&assetCacheSw.includes('supabaseNetworkFetches'),'Storage delivery instrumentation missing');
+assert(transitionGuard.includes('beginTransitionGuard')&&transitionGuard.includes('endTransitionGuard')&&transitionGuard.includes('epTransitionSpinner'),'Transition guard module missing');
+assert(bootstrap.includes('Returning to Public Page…')&&bootstrap.includes('Opening Admin Workspace…'),'Viewer/Admin same-runtime transition feedback missing');
+assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Keeping the current 3D Space resident.'),'Exhibition switch loading feedback missing');
+assert(adminBootstrap.includes('void captureExhibitionTransitionDiagnostic'),'Diagnostics still block the visible exhibition transition');
 console.log('Current Exhibition Platform verifier passed.');

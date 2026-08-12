@@ -1,3 +1,7 @@
+# C6C8C6 — Transition Guard / Loading Feedback
+
+Full-page loading feedback and input blocking for Exhibition switches and Same-Runtime Admin/Public transitions. No database schema change.
+
 # Exhibition Platform — C6C8C5
 
 **Exhibition Residency / Zero-Reload Mode Transition / Storage Network Diagnostics**

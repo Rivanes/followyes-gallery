@@ -1,13 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C5 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C6 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c6_transition_guard_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c6_transition_guard_20260812";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c6_transition_guard_20260812";
 
-const STAGE = "12C66C6C8C5";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c5_exhibition_residency_20260812";
+const STAGE = "12C66C6C8C6";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c6_transition_guard_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -416,7 +417,7 @@ function syncSelectedFromCatalog(id) {
 
 async function selectAndSwitchExhibition(id) {
   const target = catalog.find((item) => item.id === id);
-  if (!target) return;
+  if (!target || isTransitionGuardActive()) return;
   if (!engineReady || !window.GalleryApp) {
     setSelectedExhibition(target);
     updateUrlExhibition(id);
@@ -430,18 +431,27 @@ async function selectAndSwitchExhibition(id) {
   if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return;
   viewportStatus.innerHTML = `3D preview: <strong>switching to ${target.name}…</strong>`;
   const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
-  const transitionStartedAt = performance.now();
   const fromId = current && current.id ? current.id : "?";
+  const guardToken = await beginTransitionGuard({
+    title: `Switching to ${target.name}…`,
+    detail: "Keeping the current 3D Space resident.",
+    minVisibleMs: 150
+  });
+  if (!guardToken) return;
+  const transitionStartedAt = performance.now();
   try {
     const ok = await window.GalleryApp.switchExhibition(id, { force: true });
     if (!ok) return;
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
     viewportStatus.innerHTML = `3D preview: <strong>${target.name}</strong>`;
-    await captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id);
-    await updateAssetDeliveryStatus();
+    void captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id)
+      .then(() => updateAssetDeliveryStatus())
+      .catch(() => null);
   } catch (error) {
     showToast("Could not switch exhibition: " + (error.message || error));
+  } finally {
+    await endTransitionGuard(guardToken);
   }
 }
 
@@ -821,6 +831,13 @@ if (publicPageButton) {
       return;
     }
 
+    if (isTransitionGuardActive()) return;
+    const guardToken = await beginTransitionGuard({
+      title: "Opening Public Page…",
+      detail: "Passing the current exhibition to the Viewer.",
+      minVisibleMs: 150
+    });
+    if (!guardToken) return;
     if (window.GalleryApp && typeof window.GalleryApp.createNavigationHandoff === "function") {
       try { window.GalleryApp.createNavigationHandoff(); } catch (_error) {}
     }

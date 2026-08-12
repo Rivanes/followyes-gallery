@@ -109,6 +109,7 @@
   - Stage 12C66C6C8C3: Runtime Hygiene / Cache Versioning — editor heartbeat exists only while Admin Workspace is active, same-runtime Admin policies refresh on enter/exit, dirty scene state can be discarded without rebuilding the scene, Space/Frame fixed-path GLBs receive cache-busting versions, and public visibility of Main follows the same publication flag as every other Exhibition.
   - Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch — switching Exhibitions inside the same space_id keeps the loaded building, static collision geometry and Space assets resident; only Exhibition-owned content/presentation is replaced, global refreshes are batched once, and entering Admin reuses a valid Tour instead of rebuilding it unconditionally.
   - Stage 12C66C6C8C5: Exhibition Residency / Zero-Reload Mode Transition — clean same-Space Exhibitions are parked as disabled Babylon layers instead of disposed, recently visited layers resume from RAM/GPU, Admin↔Public mode changes avoid collision/tour rebuilds, and transition/network diagnostics expose whether a switch generated Storage traffic.
+  - Stage 12C66C6C8C6: Transition Guard / Loading Feedback — Exhibition and Admin↔Public transitions show one full-page interaction lock before synchronous Babylon work begins, preventing click/scroll spam while preserving the zero-reload/resident runtime paths.
 */
 
 
@@ -210,7 +211,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C5",
+        stage: "12C66C6C8C6",
         schema: "exhibition-platform-multi-exhibition.v6",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -6809,7 +6810,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C5",
+        stage: "12C66C6C8C6",
         schema: "exhibition-asset-delivery.v3",
         desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
         desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
@@ -31255,7 +31256,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C5",
+            stage: "12C66C6C8C6",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -43887,7 +43888,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C5",
+                stage: "12C66C6C8C6",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

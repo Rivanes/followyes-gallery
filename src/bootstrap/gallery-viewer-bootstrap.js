@@ -1,16 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C5
+  Exhibition Platform — Stage 12C66C6C8C6
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c6_transition_guard_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c6_transition_guard_20260812";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c6_transition_guard_20260812";
 
-const STAGE = "12C66C6C8C5";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c5_exhibition_residency_20260812";
+const STAGE = "12C66C6C8C6";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c6_transition_guard_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -241,8 +242,6 @@ function ensureInlineAdminWorkspaceDom() {
 async function closeInlineAdminWorkspace(options = {}) {
   const shell = document.getElementById("inlineAdminWorkspace");
   if (!shell || !shell.classList.contains("active")) return true;
-  const transitionStartedAt = performance.now();
-  const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
 
   const adminModule = inlineAdminModulePromise ? await inlineAdminModulePromise.catch(() => null) : null;
   const metadataDirty = !!(adminModule && typeof adminModule.hasAdminMetadataUnsavedChanges === "function" && adminModule.hasAdminMetadataUnsavedChanges());
@@ -255,68 +254,100 @@ async function closeInlineAdminWorkspace(options = {}) {
     if (!discardUnsaved) return false;
   }
 
-  if (discardUnsaved && metadataDirty && adminModule && typeof adminModule.discardAdminMetadataChanges === "function") {
-    adminModule.discardAdminMetadataChanges();
-  }
+  if (isTransitionGuardActive()) return false;
+  const activeBefore = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
+  const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
+  const transitionStartedAt = performance.now();
+  const guardToken = await beginTransitionGuard({
+    title: "Returning to Public Page…",
+    detail: "Keeping the current 3D scene and exhibition in memory.",
+    minVisibleMs: 150
+  });
+  if (!guardToken) return false;
 
-  if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
-    const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved });
-    if (!exited) return false;
-  }
-
-  if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
-    await adminModule.suspendAdminWorkspace();
-  }
-
-  const gallerySection = document.getElementById("gallerySection");
-  if (gallerySection && gallerySectionHomeParent) {
-    if (gallerySectionHomeNextSibling && gallerySectionHomeNextSibling.parentNode === gallerySectionHomeParent) gallerySectionHomeParent.insertBefore(gallerySection, gallerySectionHomeNextSibling);
-    else gallerySectionHomeParent.appendChild(gallerySection);
-  }
-  shell.classList.remove("active");
-  document.body.classList.remove("inline-admin-workspace-active");
-  const active = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
   try {
-    const url = new URL(location.href);
-    url.searchParams.set("exhibition", active && active.id ? active.id : "main");
-    history.replaceState(null, "", url);
-  } catch (_error) {}
-  window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
-  await finishModeTransitionDiagnostic(transitionBefore, transitionStartedAt, `Admin:${active && active.id ? active.id : "main"}`, `Public:${active && active.id ? active.id : "main"}`);
-  return true;
+    if (discardUnsaved && metadataDirty && adminModule && typeof adminModule.discardAdminMetadataChanges === "function") {
+      adminModule.discardAdminMetadataChanges();
+    }
+
+    if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
+      const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved });
+      if (!exited) return false;
+    }
+
+    if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
+      await adminModule.suspendAdminWorkspace();
+    }
+
+    const gallerySection = document.getElementById("gallerySection");
+    if (gallerySection && gallerySectionHomeParent) {
+      if (gallerySectionHomeNextSibling && gallerySectionHomeNextSibling.parentNode === gallerySectionHomeParent) gallerySectionHomeParent.insertBefore(gallerySection, gallerySectionHomeNextSibling);
+      else gallerySectionHomeParent.appendChild(gallerySection);
+    }
+    shell.classList.remove("active");
+    document.body.classList.remove("inline-admin-workspace-active");
+    const active = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : activeBefore;
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("exhibition", active && active.id ? active.id : "main");
+      history.replaceState(null, "", url);
+    } catch (_error) {}
+    window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+    void finishModeTransitionDiagnostic(
+      transitionBefore,
+      transitionStartedAt,
+      `Admin:${active && active.id ? active.id : "main"}`,
+      `Public:${active && active.id ? active.id : "main"}`
+    ).catch(() => null);
+    return true;
+  } finally {
+    await endTransitionGuard(guardToken);
+  }
 }
 
 async function openInlineAdminWorkspace(exhibitionId) {
-  if (!currentSession) return false;
+  if (!currentSession || isTransitionGuardActive()) return false;
+  const guardToken = await beginTransitionGuard({
+    title: "Opening Admin Workspace…",
+    detail: "Reusing the live 3D scene — no building reload.",
+    minVisibleMs: 150
+  });
+  if (!guardToken) return false;
+
   if (!activeEngine || !activeScene || !window.GalleryApp) {
     const target = `./admin.html?exhibition=${encodeURIComponent(exhibitionId || getRequestedExhibitionId())}`;
     location.href = target;
     return false;
   }
-  const shell = ensureInlineAdminWorkspaceDom();
-  const stage = document.getElementById("adminViewportStage");
-  const gallerySection = document.getElementById("gallerySection");
-  if (stage && gallerySection && gallerySection.parentNode !== stage) stage.appendChild(gallerySection);
-  shell.classList.add("active");
-  document.body.classList.add("inline-admin-workspace-active");
-  if (window.GalleryApp.hideViewerIntroOverlay) window.GalleryApp.hideViewerIntroOverlay();
-  const inlineContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || {};
-  Object.assign(inlineContext, {
-    engine: activeEngine,
-    scene: activeScene,
-    supabase,
-    session: currentSession,
-    exhibitionId: exhibitionId || (window.GalleryApp.getActiveExhibition && window.GalleryApp.getActiveExhibition().id) || "main",
-    close: closeInlineAdminWorkspace,
-    onSessionLost: () => closeInlineAdminWorkspace({ discardUnsaved: true, force: true })
-  });
-  window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ = inlineContext;
-  if (window.GalleryApp.enterAdminWorkspaceMode) window.GalleryApp.enterAdminWorkspaceMode();
-  if (!inlineAdminModulePromise) inlineAdminModulePromise = import(`./admin-workspace-bootstrap.js?v=${ENGINE_CACHE_KEY}`);
-  const adminModule = await inlineAdminModulePromise;
-  if (adminModule && typeof adminModule.resumeAdminWorkspace === "function") await adminModule.resumeAdminWorkspace();
-  window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
-  return true;
+
+  try {
+    const shell = ensureInlineAdminWorkspaceDom();
+    const stage = document.getElementById("adminViewportStage");
+    const gallerySection = document.getElementById("gallerySection");
+    if (stage && gallerySection && gallerySection.parentNode !== stage) stage.appendChild(gallerySection);
+    shell.classList.add("active");
+    document.body.classList.add("inline-admin-workspace-active");
+    if (window.GalleryApp.hideViewerIntroOverlay) window.GalleryApp.hideViewerIntroOverlay();
+    const inlineContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || {};
+    Object.assign(inlineContext, {
+      engine: activeEngine,
+      scene: activeScene,
+      supabase,
+      session: currentSession,
+      exhibitionId: exhibitionId || (window.GalleryApp.getActiveExhibition && window.GalleryApp.getActiveExhibition().id) || "main",
+      close: closeInlineAdminWorkspace,
+      onSessionLost: () => closeInlineAdminWorkspace({ discardUnsaved: true, force: true })
+    });
+    window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ = inlineContext;
+    if (window.GalleryApp.enterAdminWorkspaceMode) window.GalleryApp.enterAdminWorkspaceMode();
+    if (!inlineAdminModulePromise) inlineAdminModulePromise = import(`./admin-workspace-bootstrap.js?v=${ENGINE_CACHE_KEY}`);
+    const adminModule = await inlineAdminModulePromise;
+    if (adminModule && typeof adminModule.resumeAdminWorkspace === "function") await adminModule.resumeAdminWorkspace();
+    window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+    return true;
+  } finally {
+    await endTransitionGuard(guardToken);
+  }
 }
 
 window.ExhibitionPlatformOpenAdminWorkspace = openInlineAdminWorkspace;
