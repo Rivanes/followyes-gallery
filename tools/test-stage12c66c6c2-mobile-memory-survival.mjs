@@ -3,7 +3,7 @@ const source=fs.readFileSync(new URL('../src/Gallery_V0_11.js',import.meta.url),
 function assert(c,m){if(!c)throw new Error(m)}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if('"\'`'.includes(c)){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(source.includes('schema: "gallery-artwork-residency.v1"'),'Residency runtime missing');
+assert(source.includes('schema: "gallery-artwork-residency.v2"'),'Residency runtime missing');
 for(const value of ['fullTextures: 8','fullTextures: 6','fullTextures: 4']) assert(source.includes(value),`Missing residency budget ${value}`);
 assert(source.includes('embeddedFullTextures: 5')&&source.includes('embeddedFullTextures: 4'),'Embedded-browser budgets missing');
 assert(!source.includes('artwork textures are permanent residents once assigned'),'Permanent Full residency returned');

@@ -102,6 +102,8 @@
   - Stage 12C66C6C6: Artwork Frame Runtime Performance — frame GLBs warm in parallel on Edit entry, per-variant geometry descriptors are cached after first use, and frame assignment updates only the new frame materials/local-light membership instead of rescanning the whole gallery.
   - Stage 12C66C6C7C8: Space / Exhibition Split + Multi-Exhibition — the current building definition moves outside the engine, gallery_state is keyed by active exhibition instead of hard-coded main, Storage is scoped per exhibition, and the editor can create/switch independent exhibitions inside the same 3D Space.
   - Stage 12C66C6C7C8B: Admin Workspace — exhibition catalog/metadata management moves out of the in-scene editor into admin.html; the engine keeps only scene-editing controls and exposes programmatic exhibition/edit-mode APIs for the workspace.
+  - Stage 12C66C6C7C8B1: Public Viewer / Admin Edit Gate — the public index is viewer-only; its Edit Mode control routes authenticated editors into admin.html for the active exhibition, while Edit Mode can only be enabled inside Admin Workspace.
+  - Stage 12C66C6C8C: Asset Residency / Egress Guard — artwork Full textures become proximity/Inspect-driven on desktop and mobile, Full residency is bounded globally, repeated Storage asset requests are expected to be served by the persistent browser asset cache across Viewer/Admin navigation, and poster uploads are normalized to a compact delivery asset.
 */
 
 
@@ -110,6 +112,8 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     var engine = engineArg || globalThis.engine;
     var canvas = canvasArg || globalThis.canvas || document.getElementById("renderCanvas");
     var runtimeOptions = runtimeOptionsArg && typeof runtimeOptionsArg === "object" ? runtimeOptionsArg : {};
+    var galleryAdminWorkspaceMode = runtimeOptions.adminWorkspace === true;
+    var galleryPublicViewerOnly = !galleryAdminWorkspaceMode;
     var gallerySpaceDefinition = runtimeOptions.spaceDefinition || globalThis.BerryboyGallerySpaceDefinition || null;
 
     function normalizeGalleryRuntimeId(value, fallbackValue) {
@@ -6661,13 +6665,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
-    // STAGE 12C66C6C2 — MOBILE MEMORY SURVIVAL / TIERED ARTWORK RESIDENCY
-    // Every assigned frame keeps a Preview texture visible. Full Mobile AVIF textures are
-    // admitted by one bounded residency owner and are atomically downgraded to Preview.
+    // STAGE 12C66C6C8C — ASSET RESIDENCY / EGRESS GUARD
+    // Every assigned artwork keeps a Preview visible. Full AVIF/KTX2 is promoted only when
+    // the artwork is close enough, visible/active, or explicitly protected by Inspect/Edit.
+    // The same bounded owner now applies on desktop and mobile so a public visit never
+    // hydrates every 3072px artwork merely because the viewer stayed on the page.
+    var galleryArtworkEgressPolicy = {
+        stage: "12C66C6C8C",
+        schema: "exhibition-asset-delivery.v1",
+        desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
+        desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
+        mobileFullDistance: 9.5,
+        desktopGraceMs: 14000,
+        desktopVisibleGraceMs: 8000
+    };
+
     var galleryArtworkResidencyRuntime = {
-        stage: "12C66C6C2",
-        schema: "gallery-artwork-residency.v1",
-        enabled: !!galleryDeviceProfile.mobile,
+        stage: "12C66C6C8C",
+        schema: "gallery-artwork-residency.v2",
+        enabled: true,
         desiredFullIds: Object.create(null),
         desiredFullOrder: [],
         currentBudget: 0,
@@ -6685,7 +6701,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         estimatedArtworkMiB: 0,
         estimatedFullMiB: 0,
         estimatedPreviewMiB: 0,
-        sessionId: "mobile-survival-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+        sessionId: "asset-residency-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
         snapshotStorageKey: "berryboy_mobile_survival_last_snapshot_v1",
         previousSessionSnapshot: null,
         snapshotTimer: null,
@@ -6709,17 +6725,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function getGalleryArtworkResidencyDefinition(profileName) {
         var profile = getGalleryMobileQualityProfileDefinition(profileName || galleryDeviceProfile.currentQualityProfile);
-        return Object.assign({
+        var definition = Object.assign({
             fullTextures: 6,
             embeddedFullTextures: 5,
             fullGraceMs: 8000,
             visibleGraceMs: 4800,
             inspectPinMs: 22000
         }, profile.artworkResidency || {});
+        if (!isGalleryDeviceProfileMobile()) {
+            definition.fullGraceMs = galleryArtworkEgressPolicy.desktopGraceMs;
+            definition.visibleGraceMs = galleryArtworkEgressPolicy.desktopVisibleGraceMs;
+        }
+        return definition;
     }
 
     function getGalleryArtworkFullResidencyBudget() {
-        if (!isGalleryDeviceProfileMobile()) return Number.POSITIVE_INFINITY;
+        if (!isGalleryDeviceProfileMobile()) {
+            return Math.max(2, Math.floor(Number(galleryArtworkEgressPolicy.desktopFullTextures) || 5));
+        }
         var definition = getGalleryArtworkResidencyDefinition();
         var budget = Math.max(2, Math.floor(Number(definition.fullTextures) || 6));
         if (galleryDeviceProfile.embeddedBrowser) {
@@ -6785,20 +6808,35 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return { score: score, protectedTarget: protectedTarget, visible: visible, tier: tier, distance: distance };
     }
 
+    function isGalleryArtworkFullEgressEligible(artwork, priority) {
+        if (!artwork || !priority) return false;
+        if (priority.protectedTarget) return true;
+        var distance = Number(priority.distance);
+        if (!isFinite(distance)) return false;
+        var threshold = isGalleryDeviceProfileMobile()
+            ? Number(galleryArtworkEgressPolicy.mobileFullDistance) || 9.5
+            : Number(galleryArtworkEgressPolicy.desktopFullDistance) || 12.5;
+        // Current-zone artworks get a small lead so Full can finish before the visitor reaches them.
+        if (priority.tier === "critical") threshold += isGalleryDeviceProfileMobile() ? 1.5 : 2.0;
+        if (distance > threshold) return false;
+        return priority.visible || priority.tier === "critical" || priority.tier === "nearby";
+    }
+
     function refreshGalleryArtworkResidencyDesired(reason, force) {
-        if (!isGalleryDeviceProfileMobile()) return { budget: Number.POSITIVE_INFINITY, desiredIds: [] };
         var now = Date.now();
         if (!force && now - galleryArtworkResidencyRuntime.lastRefreshAt < galleryArtworkResidencyRuntime.refreshMinimumMs) {
             return { budget: galleryArtworkResidencyRuntime.effectiveBudget, desiredIds: galleryArtworkResidencyRuntime.desiredFullOrder.slice() };
         }
         galleryArtworkResidencyRuntime.lastRefreshAt = now;
-        var candidates = getActiveArtworks().filter(function (artwork) {
+        var allCandidates = getActiveArtworks().filter(function (artwork) {
             return !!(artwork && !isArtworkDeleted(artwork) && getArtworkImageState(artwork));
         }).map(function (artwork) {
-            return { artwork: artwork, priority: getGalleryArtworkResidencyPriority(artwork, now) };
+            var priority = getGalleryArtworkResidencyPriority(artwork, now);
+            return { artwork: artwork, priority: priority, eligible: isGalleryArtworkFullEgressEligible(artwork, priority) };
         }).sort(function (a, b) {
             return b.priority.score - a.priority.score || Number(a.priority.distance || 0) - Number(b.priority.distance || 0);
         });
+        var candidates = allCandidates.filter(function (entry) { return entry.eligible || entry.priority.protectedTarget; });
         var baseBudget = getGalleryArtworkFullResidencyBudget();
         var protectedCount = candidates.filter(function (entry) { return entry.priority.protectedTarget; }).length;
         var effectiveBudget = Math.max(baseBudget, Math.min(10, protectedCount));
@@ -6813,17 +6851,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryArtworkResidencyRuntime.desiredFullOrder = order;
         galleryArtworkResidencyRuntime.currentBudget = baseBudget;
         galleryArtworkResidencyRuntime.effectiveBudget = effectiveBudget;
-        candidates.forEach(function (entry) {
+        allCandidates.forEach(function (entry) {
             var stream = entry.artwork.metadata.galleryStreaming = entry.artwork.metadata.galleryStreaming || {};
             stream.residencyDesiredFull = !!desired[ensureArtworkIdentity(entry.artwork)];
+            stream.residencyEgressEligible = !!entry.eligible;
             stream.residencyPriority = Math.round(entry.priority.score);
+            stream.residencyDistance = isFinite(Number(entry.priority.distance)) ? Number(entry.priority.distance) : null;
             stream.residencyReason = reason || "refresh";
         });
-        return { budget: effectiveBudget, desiredIds: order.slice(), candidates: candidates };
+        return { budget: effectiveBudget, desiredIds: order.slice(), candidates: allCandidates };
     }
 
     function isGalleryArtworkFullResidencyDesired(artwork) {
-        if (!isGalleryDeviceProfileMobile()) return true;
         if (!artwork) return false;
         return !!galleryArtworkResidencyRuntime.desiredFullIds[ensureArtworkIdentity(artwork)];
     }
@@ -6849,7 +6888,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function downgradeGalleryArtworkToPreview(artwork, reason) {
-        if (!isGalleryDeviceProfileMobile() || !artwork || galleryArtworkResidencyRuntime.downgradeActive) return false;
+        if (!artwork || galleryArtworkResidencyRuntime.downgradeActive) return false;
         var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
         var state = getArtworkImageState(artwork);
         if (!state || stream.textureState !== "full" || stream.loading || !hasGalleryArtworkPreviewVariant(state)) return false;
@@ -6877,11 +6916,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             scheduleGalleryArtworkResidencyMaintenance("downgrade-settled", 180, true);
             scheduleGalleryFastStartFullArtworkDrainWhenIdle("downgrade-settled", 220);
         };
-        return !!applyArtworkImageStateSafely(artwork, previewState, "12C66C6C2 full-to-preview");
+        return !!applyArtworkImageStateSafely(artwork, previewState, "12C66C6C8C full-to-preview");
     }
 
     function enforceGalleryArtworkResidencyBudget(reason, force) {
-        if (!isGalleryDeviceProfileMobile() || !galleryArtworkResidencyRuntime.enabled) return null;
+        if (!galleryArtworkResidencyRuntime.enabled) return null;
         var refreshed = refreshGalleryArtworkResidencyDesired(reason || "residency", !!force);
         var now = Date.now();
         var definition = getGalleryArtworkResidencyDefinition();
@@ -6923,7 +6962,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function scheduleGalleryArtworkResidencyMaintenance(reason, delayMs, force) {
-        if (!isGalleryDeviceProfileMobile() || !galleryArtworkResidencyRuntime.enabled) return;
+        if (!galleryArtworkResidencyRuntime.enabled) return;
         if (galleryArtworkResidencyRuntime.maintenanceTimer) return;
         galleryArtworkResidencyRuntime.maintenanceTimer = setTimeout(function () {
             galleryArtworkResidencyRuntime.maintenanceTimer = null;
@@ -9441,10 +9480,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryArtworkFrameWarmupPromise;
     }
 
+    function getGalleryArtworkFrameWarmupEntries(catalog) {
+        var usedKeys = Object.create(null);
+        getActiveArtworks().forEach(function (artwork) {
+            var state = getArtworkFrameState(artwork);
+            var key = getArtworkFrameCatalogKey(state);
+            if (key) usedKeys[key] = true;
+        });
+        return (Array.isArray(catalog) ? catalog : []).filter(function (entry) {
+            return !!usedKeys[getArtworkFrameCatalogKey(entry)];
+        });
+    }
+
     function warmGalleryArtworkFrameLibrary() {
         return loadGalleryArtworkFrameCatalog(false)
             .then(function (catalog) {
-                return prefetchGalleryArtworkFrameCatalogAssets(catalog);
+                return prefetchGalleryArtworkFrameCatalogAssets(getGalleryArtworkFrameWarmupEntries(catalog));
             })
             .catch(function (error) {
                 console.warn("Artwork frame library warmup warning:", error);
@@ -9524,7 +9575,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 entry.publicUrl = getArtworkFramePublicUrl(entry);
             });
             galleryArtworkFrameCatalogLoaded = true;
-            prefetchGalleryArtworkFrameCatalogAssets(galleryArtworkFrameCatalog);
+            // C6C8C: listing the library must not download every GLB. Only frames already
+            // used by the active exhibition are warmed; a new variant loads on first use.
             return galleryArtworkFrameCatalog.slice();
         })().finally(function () {
             galleryArtworkFrameCatalogLoading = null;
@@ -16519,10 +16571,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function maintainGalleryStreamingMemoryBudget(reason) {
-        if (!galleryDeviceProfile.mobile || !galleryZoneStreamingRuntime.started) return;
+        if (!galleryZoneStreamingRuntime.started) return;
         var now = Date.now();
 
-        // C6C2: every assigned frame stays visible as Preview; Full 2048 residency is bounded.
+        // C6C8C: every assigned artwork stays visible as Preview; Full residency is proximity-bound on every device.
         (artworks || []).forEach(function (artwork) {
             if (!artwork || !artwork.metadata || !artwork.metadata.artworkImage || isArtworkDeleted(artwork)) return;
             ensureArtworkIdentity(artwork);
@@ -16531,6 +16583,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (artwork.metadata.imagePlane && artwork.metadata.imageMaterial) artwork.metadata.imagePlane.setEnabled(true);
         });
         enforceGalleryArtworkResidencyBudget(reason || "streaming-memory-budget", false);
+
+        // Heavy model disposal remains a mobile-memory concern. Desktop still benefits from
+        // the artwork egress guard above, but keeps its existing sculpture residency behavior.
+        if (!galleryDeviceProfile.mobile) {
+            galleryZoneStreamingRuntime.lastReason = reason || "desktop-artwork-egress-guard";
+            return;
+        }
 
         var residentModels = [];
         (artSpheres || []).forEach(function (slot) {
@@ -16694,11 +16753,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 artworks: { critical: artworkCritical, nearby: artworkNearby, deferred: artworkDeferred, fullUpgrade: galleryFastStartRuntime.deferredFullArtworkLoads.length },
                 models: { critical: modelCritical, nearby: modelNearby, deferred: modelDeferred }
             },
-            artworkPolicy: "preview-always-visible-tiered-full-residency",
+            artworkPolicy: "preview-first-proximity-full-cache-backed",
             artworkResidency: getGalleryArtworkResidencyMemorySnapshot(),
             artworkCore: Object.assign({}, galleryArtworkCoreRuntime, { registrySize: Object.keys(galleryArtworkCoreRuntime.registry).length, registry: undefined }),
             ktx2: galleryKtx2Runtime
         })));
+    }
+
+    function getGalleryAssetDeliveryDebug() {
+        var residency = getGalleryArtworkResidencyMemorySnapshot();
+        return {
+            stage: galleryArtworkEgressPolicy.stage,
+            schema: galleryArtworkEgressPolicy.schema,
+            adminWorkspace: !!galleryAdminWorkspaceMode,
+            device: isGalleryDeviceProfileMobile() ? "mobile" : "desktop",
+            fullDistance: isGalleryDeviceProfileMobile() ? galleryArtworkEgressPolicy.mobileFullDistance : galleryArtworkEgressPolicy.desktopFullDistance,
+            fullBudget: getGalleryArtworkFullResidencyBudget(),
+            desiredFullIds: galleryArtworkResidencyRuntime.desiredFullOrder.slice(),
+            queuedFull: galleryFastStartRuntime.deferredFullArtworkLoads.length,
+            residency: residency,
+            policy: "preview-first-proximity-full-cache-backed"
+        };
     }
 
     globalThis.BerryboyArtGalleryStreaming = {
@@ -17017,7 +17092,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return Number(a.queuedAt || 0) - Number(b.queuedAt || 0);
         });
         var entryIndex = galleryFastStartRuntime.deferredFullArtworkLoads.findIndex(function (candidate) {
-            return !isGalleryDeviceProfileMobile() || isGalleryArtworkFullResidencyDesired(candidate.artwork);
+            return isGalleryArtworkFullResidencyDesired(candidate.artwork);
         });
         if (entryIndex < 0) {
             galleryArtworkResidencyRuntime.preventedFullLoads += galleryFastStartRuntime.deferredFullArtworkLoads.length ? 1 : 0;
@@ -17025,14 +17100,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         var entry = galleryFastStartRuntime.deferredFullArtworkLoads[entryIndex];
         if (!entry) return;
-        if (isGalleryDeviceProfileMobile()) {
-            var residencyMemory = getGalleryArtworkResidencyMemorySnapshot();
-            var alreadyFull = entry.artwork && entry.artwork.metadata && entry.artwork.metadata.galleryStreaming && entry.artwork.metadata.galleryStreaming.textureState === "full";
-            if (!alreadyFull && residencyMemory.full >= residencyMemory.effectiveBudget) {
-                enforceGalleryArtworkResidencyBudget("full-capacity", true);
-                scheduleGalleryFastStartFullArtworkDrainWhenIdle("full-wait-for-preview-downgrade", 260);
-                return;
-            }
+        var residencyMemory = getGalleryArtworkResidencyMemorySnapshot();
+        var alreadyFull = entry.artwork && entry.artwork.metadata && entry.artwork.metadata.galleryStreaming && entry.artwork.metadata.galleryStreaming.textureState === "full";
+        if (!alreadyFull && residencyMemory.full >= residencyMemory.effectiveBudget) {
+            enforceGalleryArtworkResidencyBudget("full-capacity", true);
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle("full-wait-for-preview-downgrade", 260);
+            return;
         }
         var priorityOverride = canGalleryPriorityFullArtworkBypassMovement(entry);
         if (galleryFastStartRuntime.backgroundDrainActive || (isGalleryViewerBusyForFullArtworkUpgrade() && !priorityOverride)) {
@@ -17296,6 +17369,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function fetchGalleryStartupStateSnapshotFromSupabase() {
+        var handoff = runtimeOptions && runtimeOptions.initialExhibitionSnapshot;
+        if (handoff && typeof handoff === "object") {
+            var handoffExhibition = normalizeGalleryExhibitionRecord(handoff.exhibition);
+            var handoffState = handoff.state && typeof handoff.state === "object" ? handoff.state : null;
+            var handoffAge = Date.now() - Number(handoff.createdAt || 0);
+            if (handoffExhibition && handoffExhibition.id === galleryRequestedExhibitionId && handoffAge >= 0 && handoffAge <= 120000) {
+                setActiveGalleryExhibitionContext(handoffExhibition, { persistCurrentQueues: false });
+                cacheGalleryExhibitionState(handoffExhibition, handoffState, { updatedAt: handoff.updatedAt || null, rowExists: handoff.rowExists !== false, source: "viewer-admin-handoff" });
+                return {
+                    ok: true,
+                    status: "session-handoff",
+                    exhibition: handoffExhibition,
+                    state: handoffState,
+                    updatedAt: handoff.updatedAt || null,
+                    rowExists: handoff.rowExists !== false,
+                    lightCount: handoffState ? getStateLightCount(handoffState) : 0,
+                    sessionHandoff: true
+                };
+            }
+        }
         var client = window.gallerySupabase;
         if (!client) {
             setActiveGalleryExhibitionContext(getGalleryFallbackMainExhibition(), { persistCurrentQueues: false });
@@ -17306,6 +17399,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             setActiveGalleryExhibitionContext(exhibition, { persistCurrentQueues: false });
             var row = await fetchGalleryStateRowForExhibition(client, exhibition.id);
             var state = row && row.state && typeof row.state === "object" ? row.state : null;
+            cacheGalleryExhibitionState(exhibition, state, { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: "startup-supabase" });
             if (state && Object.keys(state).length > 0) {
                 return { ok: true, status: "state-ready", exhibition: exhibition, state: state, updatedAt: row.updated_at || null, rowExists: true, lightCount: getStateLightCount(state) };
             }
@@ -18284,8 +18378,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // STAGE 12C66C6C7C8 — ACTIVE EXHIBITION CONTEXT
     // The physical Space stays loaded. Exhibition content/state/storage can switch independently.
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C7C8B",
-        schema: "exhibition-platform-multi-exhibition.v2",
+        stage: "12C66C6C8C",
+        schema: "exhibition-platform-multi-exhibition.v3",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
         active: null,
@@ -18296,8 +18390,41 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         creating: false,
         lastError: "",
         spaceBaselineCaptured: false,
-        spaceBaseline: null
+        spaceBaseline: null,
+        stateCache: Object.create(null),
+        stateCacheHits: 0,
+        stateCacheMisses: 0
     };
+
+    function cacheGalleryExhibitionState(exhibition, state, options) {
+        options = options || {};
+        var normalized = normalizeGalleryExhibitionRecord(exhibition);
+        if (!normalized || !normalized.id) return null;
+        var entry = {
+            exhibition: Object.assign({}, normalized),
+            state: state && typeof state === "object" ? cloneGalleryJson(state) : null,
+            updatedAt: options.updatedAt || null,
+            rowExists: options.rowExists !== false,
+            cachedAt: Date.now(),
+            source: options.source || "runtime"
+        };
+        galleryExhibitionRuntime.stateCache[normalized.id] = entry;
+        return entry;
+    }
+
+    function getCachedGalleryExhibitionState(exhibitionId) {
+        exhibitionId = normalizeGalleryRuntimeId(exhibitionId, "main");
+        var entry = galleryExhibitionRuntime.stateCache[exhibitionId] || null;
+        if (entry) galleryExhibitionRuntime.stateCacheHits += 1;
+        else galleryExhibitionRuntime.stateCacheMisses += 1;
+        return entry;
+    }
+
+    function invalidateCachedGalleryExhibitionState(exhibitionId) {
+        exhibitionId = normalizeGalleryRuntimeId(exhibitionId, "main");
+        delete galleryExhibitionRuntime.stateCache[exhibitionId];
+        return true;
+    }
 
     function getActiveGalleryExhibitionId() {
         return normalizeGalleryRuntimeId(galleryExhibitionRuntime.activeId || galleryActiveExhibitionId, "main");
@@ -30953,10 +31080,48 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         );
     }
 
+    function createGalleryNavigationHandoff() {
+        var exhibition = galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition();
+        var exhibitionId = normalizeGalleryRuntimeId(exhibition && exhibition.id, getActiveGalleryExhibitionId());
+        var payload = {
+            stage: "12C66C6C8C",
+            schema: "exhibition-navigation-handoff.v1",
+            createdAt: Date.now(),
+            exhibition: exhibition,
+            state: serializeGalleryState(),
+            updatedAt: gallerySaveIntegrityRuntime && gallerySaveIntegrityRuntime.publishedStateConfirmed ? new Date().toISOString() : null,
+            rowExists: gallerySaveIntegrityRuntime ? gallerySaveIntegrityRuntime.publishedServerRowExists !== false : true,
+            spaceId: galleryActiveSpaceId
+        };
+        try {
+            sessionStorage.setItem("exhibition_platform_handoff_" + exhibitionId, JSON.stringify(payload));
+            return payload;
+        } catch (error) {
+            console.warn("Navigation handoff storage warning:", error);
+            return null;
+        }
+    }
+
+    function openGalleryAdminWorkspaceForActiveExhibition() {
+        var exhibitionId = getActiveGalleryExhibitionId();
+        var targetUrl = "./admin.html?exhibition=" + encodeURIComponent(exhibitionId || "main");
+        createGalleryNavigationHandoff();
+        try {
+            window.location.href = targetUrl;
+        } catch (error) {
+            console.warn("Admin Workspace navigation warning:", error);
+        }
+        return false;
+    }
+
     editButton.onclick = function (event) {
         if (event) {
             event.preventDefault();
             event.stopPropagation();
+        }
+
+        if (galleryPublicViewerOnly) {
+            return openGalleryAdminWorkspaceForActiveExhibition();
         }
 
         if (isGalleryInspectTransitionInteractionLocked()) {
@@ -42448,6 +42613,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var exhibition = options.exhibition || await resolveGalleryExhibitionMetadata(client, exhibitionId);
             var row = await fetchGalleryStateRowForExhibition(client, exhibition.id);
             var rowState = row && row.state && typeof row.state === "object" ? row.state : null;
+            cacheGalleryExhibitionState(exhibition, rowState, { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: "manual-load-supabase" });
             if (options.resetRuntime !== false) { setActiveGalleryExhibitionContext(exhibition, { restoreQueues: true }); resetGalleryRuntimeToBlankExhibition(); } else setActiveGalleryExhibitionContext(exhibition, { restoreQueues: false });
             if (rowState && Object.keys(rowState).length > 0) {
                 var applyResult = tryApplyGalleryStateSafely(rowState);
@@ -42478,15 +42644,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
         var contextChanged = false;
         try {
-            var exhibition = await resolveGalleryExhibitionMetadata(client, exhibitionId);
-            var row = await fetchGalleryStateRowForExhibition(client, exhibition.id);
-            var state = row && row.state && typeof row.state === "object" ? row.state : null;
+            if (!hasGalleryUnsavedChanges() && previousExhibition) {
+                cacheGalleryExhibitionState(previousExhibition, previousRuntimeState, { rowExists: previousBaseline.publishedServerRowExists, source: "switch-away-clean-runtime" });
+            }
+            var cachedTarget = options.forceRemote ? null : getCachedGalleryExhibitionState(exhibitionId);
+            var exhibition = cachedTarget ? Object.assign({}, cachedTarget.exhibition) : await resolveGalleryExhibitionMetadata(client, exhibitionId);
+            var row = null;
+            var state = null;
+            if (cachedTarget) {
+                state = cachedTarget.state && typeof cachedTarget.state === "object" ? cloneGalleryJson(cachedTarget.state) : null;
+                row = cachedTarget.rowExists === false ? null : { id: exhibition.id, state: state, updated_at: cachedTarget.updatedAt || null };
+            } else {
+                row = await fetchGalleryStateRowForExhibition(client, exhibition.id);
+                state = row && row.state && typeof row.state === "object" ? row.state : null;
+                cacheGalleryExhibitionState(exhibition, state, { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: "switch-supabase" });
+            }
             try { persistGalleryPendingStorageCleanupQueue(); } catch (error) {} try { persistGalleryPendingDraftUploads(); } catch (error) {}
             setActiveGalleryExhibitionContext(exhibition, { persistCurrentQueues: false, restoreQueues: true }); contextChanged = true;
             resetGalleryRuntimeToBlankExhibition();
             if (state && Object.keys(state).length > 0) { var applyResult = tryApplyGalleryStateSafely(state); if (!applyResult.ok) throw new Error("Saved exhibition state could not be applied."); }
             setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: state && Object.keys(state).length ? state : null, revision: getGalleryStateRevision(state), confirmed: true, serverRowExists: !!row, reason: "exhibition-switch-baseline" });
-            globalThis.BerryboyArtGalleryLatestState = serializeGalleryState(); notifyGalleryStatus("Active exhibition: " + exhibition.name + "."); return true;
+            cacheGalleryExhibitionState(exhibition, serializeGalleryState(), { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: cachedTarget ? "switch-cache-hit" : "switch-loaded" });
+            globalThis.BerryboyArtGalleryLatestState = serializeGalleryState(); notifyGalleryStatus("Active exhibition: " + exhibition.name + (cachedTarget ? " (session cache)." : ".")); return true;
         } catch (error) {
             galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); console.warn("Exhibition switch failed:", error);
             if (contextChanged && previousExhibition) {
@@ -42522,8 +42701,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (metadataResponse.error) throw metadataResponse.error;
             exhibition = normalizeGalleryExhibitionRecord(Array.isArray(metadataResponse.data) ? metadataResponse.data[0] : metadataResponse.data) || exhibition;
             var blankState = createBlankGalleryExhibitionState(exhibition);
-            var stateResponse = await client.from("gallery_state").insert({ id: exhibition.id, state: blankState, updated_at: new Date().toISOString() }).select("id");
+            var blankUpdatedAt = new Date().toISOString();
+            var stateResponse = await client.from("gallery_state").insert({ id: exhibition.id, state: blankState, updated_at: blankUpdatedAt }).select("id");
             if (stateResponse.error) { try { await client.from("gallery_exhibitions").delete().eq("id", exhibition.id); } catch (rollbackError) {} throw stateResponse.error; }
+            cacheGalleryExhibitionState(exhibition, blankState, { updatedAt: blankUpdatedAt, rowExists: true, source: "create-exhibition" });
             galleryExhibitionRuntime.catalogLoaded = false; await loadGalleryExhibitionCatalog(true); await switchGalleryExhibition(exhibition.id, { force: true }); return exhibition;
         } catch (error) { galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); console.warn("Create exhibition failed:", error); notifyGalleryStatus("Nie udalo sie utworzyc wystawy: " + galleryExhibitionRuntime.lastError); return null; }
         finally { galleryExhibitionRuntime.creating = false; }
@@ -42571,6 +42752,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
         });
         galleryExhibitionRuntime.catalogLoaded = true;
+        if (galleryExhibitionRuntime.stateCache[updated.id]) {
+            galleryExhibitionRuntime.stateCache[updated.id].exhibition = Object.assign({}, updated);
+        }
 
         if (updated.id === getActiveGalleryExhibitionId()) {
             setActiveGalleryExhibitionContext(updated, { persistCurrentQueues: false, restoreQueues: false });
@@ -42779,6 +42963,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 serverRowExists: true,
                 reason: "save-success"
             });
+            if (typeof cacheGalleryExhibitionState === "function" && typeof galleryExhibitionRuntime !== "undefined") {
+                cacheGalleryExhibitionState(
+                    galleryExhibitionRuntime.active || getGalleryFallbackMainExhibition(),
+                    state,
+                    { updatedAt: savedAt, rowExists: true, source: "save-success" }
+                );
+            }
 
             var draftUploadReconcileResult = reconcileGalleryPendingDraftUploads(state, {
                 queueUnreferenced: true,
@@ -42846,7 +43037,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateMetadata: updateGalleryExhibitionMetadata,
         switchTo: switchGalleryExhibition,
         getSpace: function () { return cloneGalleryJson(gallerySpaceDefinition); },
-        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, lastError: galleryExhibitionRuntime.lastError }; }
+        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, lastError: galleryExhibitionRuntime.lastError }; }
     };
 
     globalThis.GalleryApp = {
@@ -42859,8 +43050,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         setEditMode: function (enabled) {
             var desired = !!enabled;
+            if (desired && galleryPublicViewerOnly) {
+                return false;
+            }
             if (editMode !== desired && editButton && typeof editButton.click === "function") editButton.click();
             return !!editMode;
+        },
+        isAdminWorkspaceMode: function () {
+            return !!galleryAdminWorkspaceMode;
         },
         hasUnsavedChanges: hasGalleryUnsavedChanges,
         confirmDiscardUnsavedChanges: confirmGalleryDiscardUnsavedChanges,
@@ -42872,19 +43069,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         setMobileQualityMode: setGalleryMobileQualityMode,
         getMobileQualityInspector: getGalleryMobileQualityInspectorSnapshot,
         setMobileQualityInspectorVisible: setGalleryMobileQualityInspectorVisible,
+        getAssetDeliveryDebug: getGalleryAssetDeliveryDebug,
         getArtworkById: getArtworkById,
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
         getActiveExhibition: function () { return galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition(); },
+        createNavigationHandoff: createGalleryNavigationHandoff,
         getExhibitions: function (force) { return loadGalleryExhibitionCatalog(!!force); },
         createExhibition: createGalleryExhibition,
         updateExhibitionMetadata: updateGalleryExhibitionMetadata,
         switchExhibition: switchGalleryExhibition,
+        invalidateExhibitionStateCache: invalidateCachedGalleryExhibitionState,
         getSpaceDefinition: function () { return cloneGalleryJson(gallerySpaceDefinition); },
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C7C8B",
+                stage: "12C66C6C8C",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

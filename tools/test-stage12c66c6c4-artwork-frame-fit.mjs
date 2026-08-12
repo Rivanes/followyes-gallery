@@ -20,8 +20,10 @@ expect('Default frame calibration exists',
   source.includes('depthOverlapRatio: 0.92') &&
   source.includes('zRotationDegrees: 180'));
 
-expect('Frame catalog prefetch is started after Storage read',
-  source.includes('prefetchGalleryArtworkFrameCatalogAssets(galleryArtworkFrameCatalog);'));
+expect('Frame warmup preserves prefetch for variants already used by the active exhibition',
+  source.includes('function getGalleryArtworkFrameWarmupEntries(catalog)') &&
+  source.includes('prefetchGalleryArtworkFrameCatalogAssets(getGalleryArtworkFrameWarmupEntries(catalog))') &&
+  !source.includes('prefetchGalleryArtworkFrameCatalogAssets(galleryArtworkFrameCatalog);'));
 
 expect('Frame scaling uses calibrated inner opening instead of outer bounds',
   source.includes('var calibration = getArtworkFrameCalibration(frameState);') &&

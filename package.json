@@ -1,13 +1,13 @@
 {
-  "name": "exhibition-platform-stage12c66c6c7c8b-admin-workspace",
-  "version": "0.11.66-c6c7c8b",
+  "name": "exhibition-platform-stage12c66c6c8c-asset-residency-egress-guard",
+  "version": "0.11.66-c6c8c",
   "private": true,
-  "description": "Exhibition Platform \u2014 Stage 12C66C6C7C8B / Admin Workspace / Multi-Exhibition",
+  "description": "Exhibition Platform — Stage 12C66C6C8C / Asset Residency / Egress Guard",
   "type": "module",
   "scripts": {
-    "build": "node tools/build-stage12c66c6c7c8b.mjs",
-    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/config/gallery-space-config.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && node --check src/bootstrap/admin-workspace-bootstrap.js && node --check src/workers/gallery-avif-encoder-worker.js && node --check src/vendor/gallery-avif-encoder.mjs",
-    "verify": "node tools/verify-stage12c66c6c7c8b.mjs",
+    "build": "node tools/build-stage12c66c6c8c.mjs",
+    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/config/gallery-space-config.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && node --check src/bootstrap/admin-workspace-bootstrap.js && node --check src/bootstrap/asset-cache-bootstrap.js && node --check asset-cache-sw.js && node --check src/workers/gallery-avif-encoder-worker.js && node --check src/vendor/gallery-avif-encoder.mjs",
+    "verify": "node tools/verify-stage12c66c6c8c.mjs",
     "test:save-integrity": "node tools/test-stage12c66c6a1-save-integrity.mjs",
     "test:startup": "node tools/test-stage12c66c6a1-startup.mjs",
     "test:image-validation": "node tools/test-stage12c66c6a1-image-validation.mjs",
@@ -21,7 +21,7 @@
     "test:atomic-media": "node tools/test-stage12c66c6c-atomic-media.mjs",
     "test:media-recovery": "node tools/test-stage12c66c6c-media-recovery.mjs",
     "test:mobile-quality": "node tools/test-stage12c66c6c-mobile-quality-domains.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress",
     "test:author-reconciliation": "node tools/test-stage12c66c6c-author-reconciliation.mjs",
     "test:canonical-visual": "node tools/test-stage12c66c6c1-canonical-visual-state.mjs",
     "test:memory-survival": "node tools/test-stage12c66c6c2-mobile-memory-survival.mjs",
@@ -30,6 +30,8 @@
     "test:artwork-frame-facing": "node tools/test-stage12c66c6c5-artwork-frame-facing.mjs",
     "test:artwork-frame-performance": "node tools/test-stage12c66c6c6-artwork-frame-performance.mjs",
     "test:multi-exhibition": "node tools/test-stage12c66c6c7c8-multi-exhibition.mjs",
-    "test:admin-workspace": "node tools/test-stage12c66c6c7c8b-admin-workspace.mjs"
+    "test:admin-workspace": "node tools/test-stage12c66c6c7c8b-admin-workspace.mjs",
+    "test:public-admin-edit-gate": "node tools/test-stage12c66c6c7c8b1-public-admin-edit-gate.mjs",
+    "test:asset-residency-egress": "node tools/test-stage12c66c6c8c-asset-residency-egress-guard.mjs"
   }
 }

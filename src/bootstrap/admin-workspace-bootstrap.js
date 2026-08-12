@@ -1,19 +1,23 @@
 /*
-  Exhibition Platform — Stage 12C66C6C7C8B Admin Workspace
+  Exhibition Platform — Stage 12C66C6C8C Admin Workspace / Asset Residency / Egress Guard
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c7c8b_admin_workspace_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c_asset_residency_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c_asset_residency_20260812";
 
-const STAGE = "12C66C6C7C8B";
-const ENGINE_CACHE_KEY = "stage12c66c6c7c8b_admin_workspace_20260812";
+const STAGE = "12C66C6C8C";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c_asset_residency_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const STORAGE_BUCKET = "gallery-artworks";
 const MAX_POSTER_BYTES = 14 * 1024 * 1024;
+const POSTER_DELIVERY_MAX_SIDE = 1400;
+const POSTER_DELIVERY_QUALITY = 0.82;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
+const assetCacheReadyPromise = registerExhibitionAssetCache();
 
 const el = (id) => document.getElementById(id);
 const canvas = el("renderCanvas");
@@ -41,6 +45,7 @@ const posterFileInput = el("posterFileInput");
 const posterPreview = el("posterPreview");
 const posterStatus = el("posterStatus");
 const viewportStatus = el("viewportStatus");
+const assetDeliveryStatus = el("assetDeliveryStatus");
 const workspaceLoading = el("workspaceLoading");
 const startupError = el("startupError");
 const galleryToast = el("galleryToast");
@@ -72,6 +77,24 @@ function getRequestedExhibitionId() {
     const params = new URLSearchParams(location.search);
     return (params.get("exhibition") || localStorage.getItem("exhibition_platform_admin_active") || "main").trim() || "main";
   } catch (_error) { return "main"; }
+}
+
+function readNavigationHandoff(id) {
+  const key = `exhibition_platform_handoff_${id}`;
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    sessionStorage.removeItem(key);
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.schema !== "exhibition-navigation-handoff.v1") return null;
+    if (!parsed.exhibition || String(parsed.exhibition.id) !== String(id)) return null;
+    if (Date.now() - Number(parsed.createdAt || 0) > 120000) return null;
+    if (String(parsed.spaceId || gallerySpaceDefinition.id) !== String(gallerySpaceDefinition.id)) return null;
+    return parsed;
+  } catch (_error) {
+    try { sessionStorage.removeItem(key); } catch (_ignore) {}
+    return null;
+  }
 }
 
 function updateUrlExhibition(id) {
@@ -117,6 +140,17 @@ async function fetchCatalog() {
   catalog = (response.data || []).map(normalizeExhibition).filter(Boolean);
   renderCatalog();
   return catalog;
+}
+
+function upsertLocalCatalogRecord(record) {
+  const normalized = normalizeExhibition(record);
+  if (!normalized) return null;
+  const index = catalog.findIndex((item) => item.id === normalized.id);
+  if (index >= 0) catalog[index] = normalized;
+  else catalog.push(normalized);
+  catalog.sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  renderCatalog();
+  return normalized;
 }
 
 function renderCatalog() {
@@ -193,9 +227,9 @@ async function selectAndSwitchExhibition(id) {
     const ok = await window.GalleryApp.switchExhibition(id);
     if (!ok) return;
     updateUrlExhibition(id);
-    await fetchCatalog();
-    syncSelectedFromCatalog(id);
+    setSelectedExhibition(catalog.find((item) => item.id === id) || target);
     viewportStatus.innerHTML = `3D preview: <strong>${target.name}</strong>`;
+    updateAssetDeliveryStatus();
   } catch (error) {
     showToast("Could not switch exhibition: " + (error.message || error));
   }
@@ -217,29 +251,68 @@ async function saveMetadata(patch) {
   return normalizeExhibition((response.data || [])[0]);
 }
 
+async function decodePosterImage(file) {
+  if (typeof createImageBitmap === "function") {
+    try { return await createImageBitmap(file); } catch (_error) {}
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not decode poster image.")); };
+    image.src = url;
+  });
+}
+
+async function optimizePosterForDelivery(file) {
+  const source = await decodePosterImage(file);
+  const width = Number(source.width || source.naturalWidth) || 1;
+  const height = Number(source.height || source.naturalHeight) || 1;
+  const scale = Math.min(1, POSTER_DELIVERY_MAX_SIDE / Math.max(width, height));
+  const targetWidth = Math.max(1, Math.round(width * scale));
+  const targetHeight = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const context = canvas.getContext("2d", { alpha: false, desynchronized: true });
+  if (!context) throw new Error("Could not create poster optimizer canvas.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(source, 0, 0, targetWidth, targetHeight);
+  if (source && typeof source.close === "function") source.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", POSTER_DELIVERY_QUALITY));
+  canvas.width = 1;
+  canvas.height = 1;
+  if (!blob) throw new Error("Could not encode optimized poster.");
+  return { blob, width: targetWidth, height: targetHeight, size: blob.size || 0, mimeType: "image/webp" };
+}
+
 async function uploadPoster(file) {
   if (!selectedExhibition || !file) return;
   if (!/^image\//i.test(file.type || "")) throw new Error("Choose an image file.");
-  if (file.size > MAX_POSTER_BYTES) throw new Error("Poster is too large. Maximum size is 14 MB.");
+  if (file.size > MAX_POSTER_BYTES) throw new Error("Poster source is too large. Maximum input size is 14 MB.");
   const oldPath = selectedExhibition.cover_path;
-  const ext = (file.name.split(".").pop() || "img").toLowerCase().replace(/[^a-z0-9]/g, "");
   const base = sanitizeFileName(file.name.replace(/\.[^.]+$/, ""));
-  const path = `${selectedExhibition.storage_prefix}/branding/posters/${Date.now()}-${base}.${ext || "img"}`;
-  posterStatus.textContent = "Uploading poster…";
-  const upload = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, {
+  posterStatus.textContent = "Optimizing poster for delivery…";
+  const optimized = await optimizePosterForDelivery(file);
+  const path = `${selectedExhibition.storage_prefix}/branding/posters/${Date.now()}-${base}-cover.webp`;
+  posterStatus.textContent = `Uploading optimized poster · ${optimized.width}×${optimized.height} · ${(optimized.size / 1024).toFixed(0)} KB…`;
+  const upload = await supabase.storage.from(STORAGE_BUCKET).upload(path, optimized.blob, {
     cacheControl: "31536000",
     upsert: false,
-    contentType: file.type || undefined
+    contentType: optimized.mimeType
   });
   if (upload.error) throw upload.error;
   try {
     const updated = await saveMetadata({ cover_path: path });
-    await fetchCatalog();
-    setSelectedExhibition(updated || catalog.find((item) => item.id === selectedExhibition.id));
+    const localUpdated = upsertLocalCatalogRecord(updated || Object.assign({}, selectedExhibition, { cover_path: path }));
+    setSelectedExhibition(localUpdated);
     if (oldPath && oldPath !== path) {
+      const oldUrl = publicUrlFor(oldPath);
       supabase.storage.from(STORAGE_BUCKET).remove([oldPath]).catch(() => {});
+      if (oldUrl) evictExhibitionAssetCacheUrl(oldUrl).catch(() => {});
     }
-    showToast("Poster updated.");
+    showToast(`Poster optimized to ${(optimized.size / 1024).toFixed(0)} KB and updated.`);
   } catch (error) {
     await supabase.storage.from(STORAGE_BUCKET).remove([path]).catch(() => {});
     throw error;
@@ -250,9 +323,11 @@ async function removePoster() {
   if (!selectedExhibition || !selectedExhibition.cover_path) return;
   const oldPath = selectedExhibition.cover_path;
   const updated = await saveMetadata({ cover_path: null });
-  await fetchCatalog();
-  setSelectedExhibition(updated || catalog.find((item) => item.id === selectedExhibition.id));
+  const localUpdated = upsertLocalCatalogRecord(updated || Object.assign({}, selectedExhibition, { cover_path: null }));
+  setSelectedExhibition(localUpdated);
+  const oldUrl = publicUrlFor(oldPath);
   supabase.storage.from(STORAGE_BUCKET).remove([oldPath]).catch(() => {});
+  if (oldUrl) evictExhibitionAssetCacheUrl(oldUrl).catch(() => {});
   showToast("Poster removed.");
 }
 
@@ -300,17 +375,34 @@ function installResize() {
   resize();
 }
 
-async function startEngine(initialId) {
+async function updateAssetDeliveryStatus() {
+  if (!assetDeliveryStatus) return;
+  try {
+    const cache = await getExhibitionAssetCacheStatus();
+    const delivery = window.GalleryApp && typeof window.GalleryApp.getAssetDeliveryDebug === "function"
+      ? window.GalleryApp.getAssetDeliveryDebug()
+      : null;
+    const residency = delivery && delivery.residency ? delivery.residency : null;
+    const cacheText = cache && cache.controlled ? `${cache.entries || 0} cached assets` : "browser cache warming";
+    const textureText = residency ? `${residency.full || 0}/${delivery.fullBudget || residency.effectiveBudget || 0} Full · ${residency.preview || 0} Preview` : "Preview-first";
+    assetDeliveryStatus.textContent = `Asset delivery: ${textureText} · ${cacheText}`;
+  } catch (_error) {
+    assetDeliveryStatus.textContent = "Asset delivery: Preview-first / proximity Full";
+  }
+}
+
+async function startEngine(initialId, initialSnapshot) {
   if (engineReady) return;
   workspaceLoading.classList.remove("hidden");
   viewportStatus.innerHTML = "3D preview: <strong>starting…</strong>";
+  await assetCacheReadyPromise;
   await ensureBabylon();
   const ready = waitForInteractionReady();
   const module = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
   engine = new window.BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: false, stencil: true, antialias: true, powerPreference: "high-performance", adaptToDeviceRatio: false
   });
-  scene = module.createScene(engine, canvas, { spaceDefinition: gallerySpaceDefinition, exhibitionId: initialId });
+  scene = module.createScene(engine, canvas, { spaceDefinition: gallerySpaceDefinition, exhibitionId: initialId, adminWorkspace: true, initialExhibitionSnapshot: initialSnapshot || null });
   engine.runRenderLoop(() => scene.render());
   installResize();
   await ready;
@@ -327,6 +419,8 @@ async function startEngine(initialId) {
   updateUrlExhibition(active.id);
   await fetchCatalog();
   syncSelectedFromCatalog(active.id);
+  await updateAssetDeliveryStatus();
+  window.setInterval(updateAssetDeliveryStatus, 8000);
 }
 
 function updateSceneSaveButton() {
@@ -387,8 +481,8 @@ createExhibitionForm.addEventListener("submit", async (event) => {
     const created = await window.GalleryApp.createExhibition(name);
     if (!created) return;
     newExhibitionName.value = "";
-    await fetchCatalog();
-    syncSelectedFromCatalog(created.id);
+    const localCreated = upsertLocalCatalogRecord(created);
+    setSelectedExhibition(localCreated);
     updateUrlExhibition(created.id);
   } catch (error) { showToast(error.message || String(error)); }
   finally { setBusy(createExhibitionButton, false); }
@@ -405,8 +499,8 @@ detailsForm.addEventListener("submit", async (event) => {
       is_published: exhibitionPublished.checked,
       sort_order: Number(exhibitionSortOrder.value) || 0
     });
-    await fetchCatalog();
-    setSelectedExhibition(updated || catalog.find((item) => item.id === selectedExhibition.id));
+    const localUpdated = upsertLocalCatalogRecord(updated || selectedExhibition);
+    setSelectedExhibition(localUpdated);
     showToast("Exhibition details saved.");
   } catch (error) { showToast(error.message || String(error)); }
   finally { setBusy(saveMetadataButton, false); }
@@ -463,7 +557,8 @@ async function initializeWorkspace() {
     const initial = catalog.find((item) => item.id === requested) || catalog.find((item) => item.id === "main") || catalog[0];
     if (!initial) throw new Error("No exhibition exists. Check the Multi-Exhibition SQL migration.");
     setSelectedExhibition(initial);
-    await startEngine(initial.id);
+    const navigationHandoff = readNavigationHandoff(initial.id);
+    await startEngine(initial.id, navigationHandoff);
   } catch (error) {
     startupError.textContent = error.message || String(error);
     startupError.style.display = "grid";

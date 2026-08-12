@@ -1,20 +1,22 @@
 /*
-  Exhibition Platform — Stage 12C66C6C7C8B
+  Exhibition Platform — Stage 12C66C6C8C
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c7c8b_admin_workspace_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c_asset_residency_20260812";
+import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c_asset_residency_20260812";
 
-const STAGE = "12C66C6C7C8B";
-const ENGINE_CACHE_KEY = "stage12c66c6c7c8b_admin_workspace_20260812";
+const STAGE = "12C66C6C8C";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c_asset_residency_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
+const assetCacheReadyPromise = registerExhibitionAssetCache();
 
 function getRequestedExhibitionId() {
   try { const params = new URLSearchParams(window.location.search); return (params.get("exhibition") || "main").trim() || "main"; } catch (error) { return "main"; }
@@ -134,7 +136,8 @@ function updateAuthUi() {
 
   if (loginButton) loginButton.classList.toggle("hidden", isLoggedIn);
   if (logoutButton) logoutButton.classList.toggle("hidden", !isLoggedIn);
-  if (saveStateButton) saveStateButton.classList.toggle("hidden", !isLoggedIn);
+  // Public index is viewer-only. Saving/editing belongs exclusively to admin.html.
+  if (saveStateButton) saveStateButton.classList.add("hidden");
   if (adminWorkspaceButton) adminWorkspaceButton.classList.toggle("hidden", !isLoggedIn);
 
   if (authStatus) {
@@ -207,6 +210,17 @@ document.querySelectorAll("[data-set-lang]").forEach(function (button) {
     applyLanguage(button.getAttribute("data-set-lang"));
   });
 });
+
+if (adminWorkspaceButton) {
+  adminWorkspaceButton.addEventListener("click", function (event) {
+    if (!window.GalleryApp || typeof window.GalleryApp.createNavigationHandoff !== "function") return;
+    try {
+      const active = window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
+      window.GalleryApp.createNavigationHandoff();
+      if (active && active.id) adminWorkspaceButton.href = `./admin.html?exhibition=${encodeURIComponent(active.id)}`;
+    } catch (_error) {}
+  });
+}
 
 if (loginButton) {
   loginButton.addEventListener("pointerenter", function () {
@@ -420,6 +434,8 @@ async function startGalleryRuntime() {
   if (galleryStartPromise) return galleryStartPromise;
 
   galleryStartPromise = (async function () {
+    // Give the persistent asset cache a chance to claim this page before heavy Storage requests begin.
+    await assetCacheReadyPromise;
     await ensureBabylonDependencies();
 
     bootGuard.setPhase("engine-module", "Gallery engine module");
