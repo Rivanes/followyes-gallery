@@ -1,5 +1,5 @@
-/* Exhibition Platform — Stage 12C66C6C8C4 persistent asset-cache bootstrap. */
-const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c4_space_residency_20260812", import.meta.url);
+/* Exhibition Platform — Stage 12C66C6C8C5 persistent asset-cache bootstrap. */
+const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c5_exhibition_residency_20260812", import.meta.url);
 let registrationPromise = null;
 let statusMemo = null;
 let statusMemoAt = 0;
@@ -82,11 +82,37 @@ export async function evictExhibitionAssetCacheUrl(url) {
   return sendWorkerMessage("EXHIBITION_ASSET_CACHE_EVICT", { url: String(url) });
 }
 
+export async function getExhibitionAssetDeliveryStats() {
+  await registerExhibitionAssetCache();
+  const stats = await sendWorkerMessage("EXHIBITION_ASSET_DELIVERY_STATS");
+  return Object.assign({
+    schema: "exhibition-storage-delivery-stats.v1",
+    startedAt: 0,
+    assetRequests: 0,
+    cacheHits: 0,
+    networkFetches: 0,
+    coalescedRequests: 0,
+    networkKnownBytes: 0,
+    supabaseNetworkFetches: 0,
+    supabaseNetworkKnownBytes: 0,
+    byCategory: {},
+    lastNetworkUrl: null,
+    lastNetworkAt: 0
+  }, stats || {});
+}
+
+export async function resetExhibitionAssetDeliveryStats() {
+  await registerExhibitionAssetCache();
+  return sendWorkerMessage("EXHIBITION_ASSET_DELIVERY_RESET");
+}
+
 if (typeof window !== "undefined") {
   window.ExhibitionAssetCache = {
     register: registerExhibitionAssetCache,
     getStatus: getExhibitionAssetCacheStatus,
     clear: clearExhibitionAssetCache,
-    evict: evictExhibitionAssetCacheUrl
+    evict: evictExhibitionAssetCacheUrl,
+    getDeliveryStats: getExhibitionAssetDeliveryStats,
+    resetDeliveryStats: resetExhibitionAssetDeliveryStats
   };
 }

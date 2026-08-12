@@ -1,16 +1,16 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C4
+  Exhibition Platform — Stage 12C66C6C8C5
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c4_space_residency_20260812";
-import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c4_space_residency_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
 
-const STAGE = "12C66C6C8C4";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c4_space_residency_20260812";
+const STAGE = "12C66C6C8C5";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c5_exhibition_residency_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -43,6 +43,43 @@ async function resolvePublishedExhibitionId(requestedId) {
 }
 
 const assetCacheReadyPromise = registerExhibitionAssetCache();
+
+function deliveryStatsDelta(before, after) {
+  before = before || {};
+  after = after || {};
+  return {
+    assetRequests: Math.max(0, Number(after.assetRequests || 0) - Number(before.assetRequests || 0)),
+    cacheHits: Math.max(0, Number(after.cacheHits || 0) - Number(before.cacheHits || 0)),
+    networkFetches: Math.max(0, Number(after.networkFetches || 0) - Number(before.networkFetches || 0)),
+    networkKnownBytes: Math.max(0, Number(after.networkKnownBytes || 0) - Number(before.networkKnownBytes || 0)),
+    supabaseNetworkFetches: Math.max(0, Number(after.supabaseNetworkFetches || 0) - Number(before.supabaseNetworkFetches || 0)),
+    supabaseNetworkKnownBytes: Math.max(0, Number(after.supabaseNetworkKnownBytes || 0) - Number(before.supabaseNetworkKnownBytes || 0))
+  };
+}
+
+function publishTransitionNetworkDiagnostic(record) {
+  window.ExhibitionNetworkDiagnostics = window.ExhibitionNetworkDiagnostics || {};
+  window.ExhibitionNetworkDiagnostics.lastTransition = record;
+  try { window.dispatchEvent(new CustomEvent("exhibition-network-diagnostic", { detail: record })); } catch (_error) {}
+  return record;
+}
+
+async function finishModeTransitionDiagnostic(before, startedAt, fromLabel, toLabel) {
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const after = await getExhibitionAssetDeliveryStats().catch(() => null);
+  const delta = deliveryStatsDelta(before, after);
+  return publishTransitionNetworkDiagnostic({
+    type: "workspace-mode",
+    from: fromLabel,
+    to: toLabel,
+    mode: "same-runtime-ui-only",
+    durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    network: delta,
+    zeroStorageNetwork: delta.supabaseNetworkFetches === 0,
+    at: Date.now()
+  });
+}
 
 function getRequestedExhibitionId() {
   try { const params = new URLSearchParams(window.location.search); return (params.get("exhibition") || "main").trim() || "main"; } catch (error) { return "main"; }
@@ -155,7 +192,7 @@ function ensureInlineAdminWorkspaceStyles() {
     #inlineAdminWorkspace .posterActions { display:grid; gap:7px; }
     #inlineAdminWorkspace #posterFileInput { display:none; }
     #inlineAdminMain { min-width:0; min-height:0; padding:18px; background:radial-gradient(circle at 30% 10%,rgba(255,255,255,.035),transparent 36%),#0b0d0c; }
-    #inlineAdminViewportCard { height:100%; min-height:0; display:grid; grid-template-rows:42px minmax(0,1fr); border:1px solid rgba(255,255,255,.10); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
+    #inlineAdminViewportCard { height:100%; min-height:0; display:grid; grid-template-rows:56px minmax(0,1fr); border:1px solid rgba(255,255,255,.10); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
     #inlineAdminViewportToolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 12px; border-bottom:1px solid rgba(255,255,255,.10); background:rgba(20,22,21,.96); }
     #inlineAdminWorkspace #viewportStatus { min-width:0; color:rgba(255,255,255,.57); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #inlineAdminWorkspace #viewportStatus strong { color:rgba(255,255,255,.92); }
@@ -188,7 +225,7 @@ function ensureInlineAdminWorkspaceDom() {
         <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibitions</h2><p>Switch the active exhibition or create a new one in the current 3D Space.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div><div class="sectionBody"><form id="createExhibitionForm"><input id="newExhibitionName" class="adminInput" maxlength="120" placeholder="New exhibition name" autocomplete="off"/><button id="createExhibitionButton" class="adminButton primary" type="submit">CREATE</button></form><div style="height:10px"></div><div id="exhibitionList"><div class="fieldMeta">Loading exhibition catalog…</div></div></div></section>
         <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata used by the admin workspace and the future public carousel.</p></div></div><div class="sectionBody"><form id="detailsForm"><label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required/></label><label class="fieldLabel">Description<textarea id="exhibitionDescription" class="adminTextarea" maxlength="4000" placeholder="Short exhibition description"></textarea></label><div class="inlineFields"><label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly/></label><label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1"/></label></div><div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox"/></div><div class="fieldLabel">Poster / cover</div><div class="posterCard"><img id="posterPreview" alt="Exhibition poster preview"/><div class="posterActions"><button id="choosePosterButton" class="adminButton" type="button">UPLOAD / REPLACE</button><button id="removePosterButton" class="adminButton danger" type="button">REMOVE</button><div id="posterStatus" class="fieldMeta">No poster assigned.</div><input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif"/></div></div><div class="fieldMeta">Space: <strong id="exhibitionSpaceId">main-space</strong></div><button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button></form></div></section>
       </aside>
-      <main id="inlineAdminMain"><section id="inlineAdminViewportCard"><div id="inlineAdminViewportToolbar"><div><div id="viewportStatus">3D preview: <strong>ready</strong></div><div id="assetDeliveryStatus" class="fieldMeta">Asset delivery: same runtime</div></div><div class="fieldMeta">Same live 3D runtime — no scene reload.</div></div><div id="adminViewportStage"><div id="workspaceLoading" class="workspaceLoading hidden"><div class="loadingCard">Preparing Admin Workspace…</div></div></div></section></main>
+      <main id="inlineAdminMain"><section id="inlineAdminViewportCard"><div id="inlineAdminViewportToolbar"><div><div id="viewportStatus">3D preview: <strong>ready</strong></div><div id="assetDeliveryStatus" class="fieldMeta">Asset delivery: same runtime</div><div id="networkDiagnostics" class="fieldMeta">Network: measuring Storage delivery…</div></div><div class="fieldMeta">Same live 3D runtime — no scene reload.</div></div><div id="adminViewportStage"><div id="workspaceLoading" class="workspaceLoading hidden"><div class="loadingCard">Preparing Admin Workspace…</div></div></div></section></main>
     </div>`;
   document.body.appendChild(shell);
   const logout = document.getElementById("inlineAdminLogoutButton");
@@ -204,6 +241,8 @@ function ensureInlineAdminWorkspaceDom() {
 async function closeInlineAdminWorkspace(options = {}) {
   const shell = document.getElementById("inlineAdminWorkspace");
   if (!shell || !shell.classList.contains("active")) return true;
+  const transitionStartedAt = performance.now();
+  const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
 
   const adminModule = inlineAdminModulePromise ? await inlineAdminModulePromise.catch(() => null) : null;
   const metadataDirty = !!(adminModule && typeof adminModule.hasAdminMetadataUnsavedChanges === "function" && adminModule.hasAdminMetadataUnsavedChanges());
@@ -243,6 +282,7 @@ async function closeInlineAdminWorkspace(options = {}) {
     history.replaceState(null, "", url);
   } catch (_error) {}
   window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+  await finishModeTransitionDiagnostic(transitionBefore, transitionStartedAt, `Admin:${active && active.id ? active.id : "main"}`, `Public:${active && active.id ? active.id : "main"}`);
   return true;
 }
 

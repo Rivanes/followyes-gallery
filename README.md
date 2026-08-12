@@ -1,4 +1,12 @@
-# Exhibition Platform — C6C8C4 Space Residency / Exhibition Delta Switch
+# Exhibition Platform — C6C8C5
+
+**Exhibition Residency / Zero-Reload Mode Transition / Storage Network Diagnostics**
+
+C6C8C5 keeps the current Space resident, parks recently visited same-Space Exhibition layers in Babylon RAM/GPU, resumes them without rebuilding artwork/sculpture objects, and measures local-cache vs Storage-network delivery through the Service Worker. Admin ↔ Public same-runtime transitions are UI/mode changes only.
+
+No new SQL migration is required for C6C8C5. Existing `SUPABASE_SQL` files are preserved.
+
+# Previous stage — C6C8C4 Space Residency / Exhibition Delta Switch
 
 C6C8C4 porządkuje przełączanie wystaw wewnątrz tego samego `space_id` bez ponownego przygotowywania budynku.
 
@@ -27,7 +35,7 @@ Same-runtime Admin dalej używa tego samego Babylon `engine` i `scene`. Wejście
 - `lastSwitchDurationMs`,
 - `lastSwitchFromId` / `lastSwitchToId`.
 
-Dla przejścia pomiędzy wystawami w `main-space` oczekiwany `lastSwitchMode` to `same-space-delta`.
+W C6C8C5 ten mechanizm jest rozszerzony: pierwszy cold switch używa `same-space-delta-load`, a powrót do zaparkowanej warstwy używa `resident-layer-resume`.
 
 ## Cache Space GLB
 

@@ -93,7 +93,7 @@
     #posterFileInput { display:none; }
 
     #workspaceMain { min-width:0; min-height:0; padding:18px; background:radial-gradient(circle at 30% 10%, rgba(255,255,255,.035), transparent 36%), #0b0d0c; }
-    #viewportCard { height:100%; min-height:0; display:grid; grid-template-rows:42px minmax(0,1fr); border:1px solid var(--line); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
+    #viewportCard { height:100%; min-height:0; display:grid; grid-template-rows:56px minmax(0,1fr); border:1px solid var(--line); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
     #viewportToolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 12px; border-bottom:1px solid var(--line); background:rgba(20,22,21,.96); }
     #viewportStatus { min-width:0; color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #viewportStatus strong { color:var(--text); }
@@ -186,6 +186,7 @@
             <div>
               <div id="viewportStatus">3D preview: <strong>starting…</strong></div>
               <div id="assetDeliveryStatus" class="fieldMeta">Asset delivery: preparing cache…</div>
+              <div id="networkDiagnostics" class="fieldMeta">Network: measuring Storage delivery…</div>
             </div>
             <div class="fieldMeta">Scene editor stays inside this viewport.</div>
           </div>
@@ -213,6 +214,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=stage12c66c6c8c4_space_residency_20260812"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812"></script>
 </body>
 </html>

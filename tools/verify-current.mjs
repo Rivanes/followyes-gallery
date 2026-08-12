@@ -22,12 +22,12 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C4"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C4"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C4"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c4_space_residency_20260812'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c4_space_residency_20260812'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C5"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C5"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C5"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c5_exhibition_residency_20260812'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C5: Exhibition Residency / Zero-Reload Mode Transition'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -50,7 +50,7 @@ assert(currentMigration.includes('(storage.foldername(name))[2] = \'frames\''),'
 assert(admin.includes('id="adminViewportStage"')&&admin.includes('id="exhibitionList"'),'Direct Admin page missing');
 assert(source.includes('enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode')&&source.includes('exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode'),'Same-runtime engine mode API missing');
 assert(source.includes('discardUnsavedChanges: discardGalleryUnsavedChanges'),'Scene discard API missing');
-assert(source.includes('function applyGallerySameSpaceExhibitionState(')&&source.includes('lastSwitchMode = "same-space-delta"'),'Same-space Exhibition delta path missing');
+assert(source.includes('function applyGallerySameSpaceExhibitionState(')&&source.includes('lastSwitchMode = "same-space-delta-load"')&&source.includes('lastSwitchMode = "resident-layer-resume"'),'Same-space Exhibition delta/resident path missing');
 assert(source.includes('function refreshViewerExhibitionCollisionMeshes('),'Exhibition-only collision refresh missing');
 assert(source.includes('ensureGalleryExhibitTourCurrent("enter-edit-mode")'),'Edit mode still rebuilds Tour unconditionally');
 assert(bootstrap.includes('openInlineAdminWorkspace')&&bootstrap.includes('engine: activeEngine')&&bootstrap.includes('scene: activeScene'),'Viewer same-runtime handoff missing');
@@ -60,4 +60,8 @@ assert(admin.includes('.adminButton:visited')&&admin.includes('text-decoration:n
 assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes('exhibition-platform-assets-v1'),'Persistent asset cache missing');
 assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v2'),'Production runtime missing current hygiene changes');
 assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.BerryboyGallerySpaceDefinition ='),'Login-disabled test build missing');
+assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.includes('function restoreGalleryExhibitionLayer('),'Exhibition layer residency missing');
+assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('same-runtime-ui-only'),'Zero-reload mode transition missing');
+assert(admin.includes('id="networkDiagnostics"')&&adminBootstrap.includes('getExhibitionAssetDeliveryStats'),'Admin network diagnostics missing');
+assert(assetCacheSw.includes('EXHIBITION_ASSET_DELIVERY_STATS')&&assetCacheSw.includes('supabaseNetworkFetches'),'Storage delivery instrumentation missing');
 console.log('Current Exhibition Platform verifier passed.');

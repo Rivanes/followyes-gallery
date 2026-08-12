@@ -1,13 +1,13 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C4 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C5 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c4_space_residency_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c4_space_residency_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c5_exhibition_residency_20260812";
 
-const STAGE = "12C66C6C8C4";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c4_space_residency_20260812";
+const STAGE = "12C66C6C8C5";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c5_exhibition_residency_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -51,6 +51,7 @@ const posterPreview = el("posterPreview");
 const posterStatus = el("posterStatus");
 const viewportStatus = el("viewportStatus");
 const assetDeliveryStatus = el("assetDeliveryStatus");
+const networkDiagnostics = el("networkDiagnostics");
 const workspaceLoading = el("workspaceLoading");
 const startupError = el("startupError");
 const galleryToast = el("galleryToast");
@@ -72,6 +73,76 @@ let workspaceActive = true;
 let metadataBaseline = "";
 let metadataDirty = false;
 let metadataBeforeUnloadInstalled = false;
+
+function formatDeliveryBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function deliveryStatsDelta(before, after) {
+  before = before || {};
+  after = after || {};
+  return {
+    assetRequests: Math.max(0, Number(after.assetRequests || 0) - Number(before.assetRequests || 0)),
+    cacheHits: Math.max(0, Number(after.cacheHits || 0) - Number(before.cacheHits || 0)),
+    networkFetches: Math.max(0, Number(after.networkFetches || 0) - Number(before.networkFetches || 0)),
+    networkKnownBytes: Math.max(0, Number(after.networkKnownBytes || 0) - Number(before.networkKnownBytes || 0)),
+    supabaseNetworkFetches: Math.max(0, Number(after.supabaseNetworkFetches || 0) - Number(before.supabaseNetworkFetches || 0)),
+    supabaseNetworkKnownBytes: Math.max(0, Number(after.supabaseNetworkKnownBytes || 0) - Number(before.supabaseNetworkKnownBytes || 0))
+  };
+}
+
+function publishTransitionNetworkDiagnostic(record) {
+  window.ExhibitionNetworkDiagnostics = window.ExhibitionNetworkDiagnostics || {};
+  window.ExhibitionNetworkDiagnostics.lastTransition = record;
+  try { window.dispatchEvent(new CustomEvent("exhibition-network-diagnostic", { detail: record })); } catch (_error) {}
+  return record;
+}
+
+async function captureExhibitionTransitionDiagnostic(before, startedAt, fromId, toId) {
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  const after = await getExhibitionAssetDeliveryStats().catch(() => null);
+  const delta = deliveryStatsDelta(before, after);
+  const engineDebug = window.BerryboyArtGalleryExhibitions && typeof window.BerryboyArtGalleryExhibitions.getDebug === "function"
+    ? window.BerryboyArtGalleryExhibitions.getDebug()
+    : null;
+  const record = {
+    type: "exhibition",
+    from: fromId || "?",
+    to: toId || "?",
+    mode: engineDebug && engineDebug.lastSwitchMode ? engineDebug.lastSwitchMode : "unknown",
+    residentHit: !!(engineDebug && engineDebug.lastSwitchMode === "resident-layer-resume"),
+    durationMs: engineDebug && Number.isFinite(Number(engineDebug.lastSwitchDurationMs))
+      ? Math.round(Number(engineDebug.lastSwitchDurationMs) * 10) / 10
+      : Math.round((performance.now() - startedAt) * 10) / 10,
+    network: delta,
+    zeroStorageNetwork: delta.supabaseNetworkFetches === 0,
+    at: Date.now()
+  };
+  publishTransitionNetworkDiagnostic(record);
+  return record;
+}
+
+async function updateNetworkDiagnosticsStatus() {
+  if (!workspaceActive || !networkDiagnostics) return;
+  try {
+    const stats = await getExhibitionAssetDeliveryStats();
+    const last = window.ExhibitionNetworkDiagnostics && window.ExhibitionNetworkDiagnostics.lastTransition;
+    const sessionPart = `Storage session: ${stats.supabaseNetworkFetches || 0} net · ${formatDeliveryBytes(stats.supabaseNetworkKnownBytes || 0)} known · ${stats.cacheHits || 0} local hits`;
+    let transitionPart = "Last transition: waiting for a switch";
+    if (last) {
+      const net = last.network || {};
+      transitionPart = `Last: ${last.from} → ${last.to} · ${net.supabaseNetworkFetches || 0} net · ${formatDeliveryBytes(net.supabaseNetworkKnownBytes || 0)} · ${last.mode || "transition"} · ${Math.round(Number(last.durationMs) || 0)} ms`;
+    }
+    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart}`;
+    networkDiagnostics.title = "Measured by the local Service Worker. Bytes use response Content-Length when available; 0 Storage network fetches is the strongest signal that the transition stayed local.";
+  } catch (_error) {
+    networkDiagnostics.textContent = "Network: diagnostics unavailable";
+  }
+}
 
 function showToast(message) {
   if (!message) return;
@@ -358,13 +429,17 @@ async function selectAndSwitchExhibition(id) {
   }
   if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return;
   viewportStatus.innerHTML = `3D preview: <strong>switching to ${target.name}…</strong>`;
+  const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
+  const transitionStartedAt = performance.now();
+  const fromId = current && current.id ? current.id : "?";
   try {
     const ok = await window.GalleryApp.switchExhibition(id, { force: true });
     if (!ok) return;
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
     viewportStatus.innerHTML = `3D preview: <strong>${target.name}</strong>`;
-    updateAssetDeliveryStatus();
+    await captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id);
+    await updateAssetDeliveryStatus();
   } catch (error) {
     showToast("Could not switch exhibition: " + (error.message || error));
   }
@@ -534,9 +609,13 @@ async function updateAssetDeliveryStatus() {
     const residency = delivery && delivery.residency ? delivery.residency : null;
     const cacheText = cache && cache.controlled ? `${cache.entries || 0} cached assets` : "browser cache warming";
     const textureText = residency ? `${residency.full || 0}/${delivery.fullBudget || residency.effectiveBudget || 0} Full · ${residency.preview || 0} Preview` : "Preview-first";
-    assetDeliveryStatus.textContent = `Asset delivery: ${textureText} · ${cacheText}`;
+    const exhibitionResidency = delivery && delivery.exhibitionResidency ? delivery.exhibitionResidency : null;
+    const layerText = exhibitionResidency ? `${exhibitionResidency.parked || 0} parked exhibition layer${exhibitionResidency.parked === 1 ? "" : "s"}` : "layer residency ready";
+    assetDeliveryStatus.textContent = `Asset delivery: ${textureText} · ${cacheText} · ${layerText}`;
+    await updateNetworkDiagnosticsStatus();
   } catch (_error) {
     assetDeliveryStatus.textContent = "Asset delivery: Preview-first / proximity Full";
+    await updateNetworkDiagnosticsStatus();
   }
 }
 
@@ -637,6 +716,10 @@ window.addEventListener("gallery-status", (event) => {
   if (!workspaceActive) return;
   const detail = event.detail || {};
   if (detail.message) showToast(detail.message);
+});
+
+window.addEventListener("exhibition-network-diagnostic", () => {
+  if (workspaceActive) updateNetworkDiagnosticsStatus();
 });
 
 saveStateButton.addEventListener("click", async () => {

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C3
+  Exhibition Platform — Stage 12C66C6C8C5
   Persistent asset cache for public Storage delivery across Viewer/Admin navigation.
   Database/auth/API requests are never cached here.
 
@@ -16,6 +16,56 @@ const inFlight = new Map();
 let statsMemo = null;
 let statsMemoAt = 0;
 let statsDirty = true;
+
+const deliveryStats = {
+  schema: "exhibition-storage-delivery-stats.v1",
+  startedAt: Date.now(),
+  assetRequests: 0,
+  cacheHits: 0,
+  networkFetches: 0,
+  coalescedRequests: 0,
+  networkKnownBytes: 0,
+  supabaseNetworkFetches: 0,
+  supabaseNetworkKnownBytes: 0,
+  byCategory: Object.create(null),
+  lastNetworkUrl: null,
+  lastNetworkAt: 0
+};
+
+function classifyAssetUrl(urlString) {
+  const lower = String(urlString || "").toLowerCase();
+  if (lower.includes("/frames/")) return "frames";
+  if (lower.includes("/branding/") || lower.includes("poster")) return "posters";
+  if (/\.(?:glb|gltf)(?:$|[?#])/i.test(lower)) return "models";
+  if (lower.includes("/artworks/") || lower.includes("/authors/")) return "images";
+  return "other";
+}
+
+function ensureDeliveryCategory(name) {
+  if (!deliveryStats.byCategory[name]) {
+    deliveryStats.byCategory[name] = { requests: 0, cacheHits: 0, networkFetches: 0, networkKnownBytes: 0 };
+  }
+  return deliveryStats.byCategory[name];
+}
+
+function cloneDeliveryStats() {
+  return JSON.parse(JSON.stringify(deliveryStats));
+}
+
+function resetDeliveryStats() {
+  deliveryStats.startedAt = Date.now();
+  deliveryStats.assetRequests = 0;
+  deliveryStats.cacheHits = 0;
+  deliveryStats.networkFetches = 0;
+  deliveryStats.coalescedRequests = 0;
+  deliveryStats.networkKnownBytes = 0;
+  deliveryStats.supabaseNetworkFetches = 0;
+  deliveryStats.supabaseNetworkKnownBytes = 0;
+  deliveryStats.byCategory = Object.create(null);
+  deliveryStats.lastNetworkUrl = null;
+  deliveryStats.lastNetworkAt = 0;
+  return cloneDeliveryStats();
+}
 
 function isCacheableAssetRequest(request) {
   if (!request || request.method !== "GET") return false;
@@ -64,17 +114,35 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (!isCacheableAssetRequest(request)) return;
 
+  const categoryName = classifyAssetUrl(request.url);
+  const category = ensureDeliveryCategory(categoryName);
+  deliveryStats.assetRequests += 1;
+  category.requests += 1;
+
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(request);
-    if (cached) return cached;
+    if (cached) {
+      deliveryStats.cacheHits += 1;
+      category.cacheHits += 1;
+      return cached;
+    }
 
     const key = request.url;
     let networkPromise = inFlight.get(key);
     if (!networkPromise) {
+      deliveryStats.networkFetches += 1;
+      category.networkFetches += 1;
+      if (key.includes(STORAGE_PUBLIC_MARKER)) deliveryStats.supabaseNetworkFetches += 1;
+      deliveryStats.lastNetworkUrl = key;
+      deliveryStats.lastNetworkAt = Date.now();
       networkPromise = (async () => {
         const response = await fetch(request);
         if (response && (response.ok || response.type === "opaque")) {
+          const knownBytes = Number(response.headers && response.headers.get ? response.headers.get("content-length") : 0) || 0;
+          deliveryStats.networkKnownBytes += knownBytes;
+          category.networkKnownBytes += knownBytes;
+          if (key.includes(STORAGE_PUBLIC_MARKER)) deliveryStats.supabaseNetworkKnownBytes += knownBytes;
           try {
             await cache.put(request, response.clone());
             statsDirty = true;
@@ -83,6 +151,8 @@ self.addEventListener("fetch", (event) => {
         return response;
       })();
       inFlight.set(key, networkPromise);
+    } else {
+      deliveryStats.coalescedRequests += 1;
     }
 
     try {
@@ -116,6 +186,10 @@ self.addEventListener("message", (event) => {
   const port = event.ports && event.ports[0];
   if (data.type === "EXHIBITION_ASSET_CACHE_STATS") {
     event.waitUntil(getCacheStats(data.force === true).then((stats) => { if (port) port.postMessage(stats); }));
+  } else if (data.type === "EXHIBITION_ASSET_DELIVERY_STATS") {
+    if (port) port.postMessage(cloneDeliveryStats());
+  } else if (data.type === "EXHIBITION_ASSET_DELIVERY_RESET") {
+    if (port) port.postMessage(resetDeliveryStats());
   } else if (data.type === "EXHIBITION_ASSET_CACHE_CLEAR") {
     event.waitUntil(caches.delete(CACHE_NAME).then(async () => {
       await caches.open(CACHE_NAME);
