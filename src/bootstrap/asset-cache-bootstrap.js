@@ -1,6 +1,8 @@
-/* Exhibition Platform — Stage 12C66C6C8C persistent asset-cache bootstrap. */
-const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c_asset_residency_20260812", import.meta.url);
+/* Exhibition Platform — Stage 12C66C6C8C1 persistent asset-cache bootstrap. */
+const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812", import.meta.url);
 let registrationPromise = null;
+let statusMemo = null;
+let statusMemoAt = 0;
 
 function waitForController(timeoutMs = 1800) {
   if (!navigator.serviceWorker || navigator.serviceWorker.controller) return Promise.resolve(navigator.serviceWorker && navigator.serviceWorker.controller);
@@ -49,25 +51,34 @@ function sendWorkerMessage(type, payload = {}) {
   });
 }
 
-export async function getExhibitionAssetCacheStatus() {
+export async function getExhibitionAssetCacheStatus(options = {}) {
+  const force = options && options.force === true;
+  const now = Date.now();
+  if (!force && statusMemo && now - statusMemoAt < 60000) return Object.assign({}, statusMemo);
   const registration = await registerExhibitionAssetCache();
-  const stats = registration.controlled ? await sendWorkerMessage("EXHIBITION_ASSET_CACHE_STATS") : null;
-  return Object.assign({
+  const stats = registration.controlled ? await sendWorkerMessage("EXHIBITION_ASSET_CACHE_STATS", { force }) : null;
+  statusMemo = Object.assign({
     supported: !!registration.supported,
     controlled: !!registration.controlled,
     entries: 0,
     knownBytes: 0
   }, stats || {});
+  statusMemoAt = now;
+  return Object.assign({}, statusMemo);
 }
 
 export async function clearExhibitionAssetCache() {
   await registerExhibitionAssetCache();
+  statusMemo = null;
+  statusMemoAt = 0;
   return sendWorkerMessage("EXHIBITION_ASSET_CACHE_CLEAR");
 }
 
 export async function evictExhibitionAssetCacheUrl(url) {
   if (!url) return null;
   await registerExhibitionAssetCache();
+  statusMemo = null;
+  statusMemoAt = 0;
   return sendWorkerMessage("EXHIBITION_ASSET_CACHE_EVICT", { url: String(url) });
 }
 

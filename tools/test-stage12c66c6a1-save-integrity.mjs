@@ -196,6 +196,7 @@ function createHarness({
     globalThis: {},
     galleryArtworkStorageBucket: 'gallery-artworks',
     galleryEditorLoginEnabled: true,
+    galleryAdminWorkspaceMode: true,
     editorAuthenticated: true,
     editMode: true,
     galleryFastStartRuntime: { stateApplyActive: false },

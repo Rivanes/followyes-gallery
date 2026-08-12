@@ -1,4 +1,14 @@
-# Exhibition Platform — Stage 12C66C6C8C
+# Exhibition Platform — Stage 12C66C6C8C1
+
+## Runtime Lifecycle / Admin Transition Fix
+
+- Save/Exhibition runtimes initialize before startup state preload, eliminating the empty-first-load Main Exhibition race after Viewer → Admin handoff.
+- Public Viewer does not start editor dirty tracking and does not register an editor `beforeunload` warning.
+- Viewer/Admin navigation handoff prefers the confirmed published Exhibition snapshot instead of incidental live Viewer runtime state.
+- Admin preview hydration uses the intended desktop preview concurrency; automatic Full upgrades wait for Preview population unless Inspect explicitly requests Full.
+- `PUBLIC PAGE` preserves the active Exhibition and clean Admin → Viewer navigation can reuse the short-lived state handoff.
+- Persistent asset cache now uses a stable cache name and locally migrates previous stage cache entries instead of flushing them on every application stage.
+- Cache statistics are throttled; Admin no longer rescans Cache Storage every 8 seconds.
 
 ## Asset Residency / Egress Guard
 
@@ -43,3 +53,7 @@ W `SUPABASE_SQL/04_STAGE_C6C8C_NO_SQL_REQUIRED.sql` znajduje się tylko marker d
 3. W Adminie przełącz `Main → Test → Main`. Drugi powrót do Main powinien użyć session state cache.
 4. Wgraj duży poster i sprawdź status — zapisany plik powinien być zoptymalizowanym `.webp` do 1400 px.
 5. `npm run check` musi przejść w całości.
+
+## C6C8C1 / SQL
+
+C6C8C1 **nie wymaga kolejnej migracji bazy danych**. `SUPABASE_SQL/05_STAGE_C6C8C1_NO_SQL_REQUIRED.sql` jest wyłącznie markerem kontrolnym.

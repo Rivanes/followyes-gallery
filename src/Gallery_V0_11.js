@@ -104,6 +104,7 @@
   - Stage 12C66C6C7C8B: Admin Workspace — exhibition catalog/metadata management moves out of the in-scene editor into admin.html; the engine keeps only scene-editing controls and exposes programmatic exhibition/edit-mode APIs for the workspace.
   - Stage 12C66C6C7C8B1: Public Viewer / Admin Edit Gate — the public index is viewer-only; its Edit Mode control routes authenticated editors into admin.html for the active exhibition, while Edit Mode can only be enabled inside Admin Workspace.
   - Stage 12C66C6C8C: Asset Residency / Egress Guard — artwork Full textures become proximity/Inspect-driven on desktop and mobile, Full residency is bounded globally, repeated Storage asset requests are expected to be served by the persistent browser asset cache across Viewer/Admin navigation, and poster uploads are normalized to a compact delivery asset.
+  - Stage 12C66C6C8C1: Runtime Lifecycle / Admin Transition Fix — Exhibition/Save runtimes are initialized before state preload, public Viewer no longer owns editor dirty tracking or unload prompts, Viewer/Admin handoff uses confirmed published snapshots, Admin preview hydration uses the intended desktop concurrency, Full upgrades yield to Preview population, and active Exhibition is preserved when returning to the public page.
 */
 
 
@@ -143,6 +144,67 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     var galleryArtworkStoragePrefix = galleryActiveExhibitionId === "main"
         ? "main"
         : "exhibitions/" + galleryActiveExhibitionId;
+
+    // STAGE 12C66C6C8C1 — RUNTIME LIFECYCLE ORDER
+    // These two runtimes must exist before the startup state preload begins.
+    // A Viewer -> Admin handoff is synchronous, unlike Supabase fetches, so late
+    // initialization could make the first Main Exhibition preload race the engine startup.
+    var gallerySaveIntegrityRuntime = {
+        stage: "12C66C6C8C1",
+        schema: "gallery-save-integrity.v4",
+        sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
+        tabId: createGalleryEditorPageInstanceId(),
+        activeTabsStorageKey: "berryboy_gallery_active_editor_tabs_v1",
+        heartbeatIntervalMs: 4000,
+        heartbeatStaleMs: 2 * 60 * 1000,
+        backgroundTabGraceMs: 24 * 60 * 60 * 1000,
+        foreignDraftGraceMs: 24 * 60 * 60 * 1000,
+        heartbeatTimer: null,
+        resolvedCleanupKeys: {},
+        resolvedDraftUploadKeys: {},
+        publishedRevision: 0,
+        publishedStateFingerprint: "",
+        publishedServerStateFingerprint: "",
+        publishedStateSnapshot: null,
+        publishedServerRowExists: false,
+        publishedStateConfirmed: false,
+        baselineReady: false,
+        dirty: false,
+        dirtyReason: "startup",
+        dirtySince: 0,
+        lastStateCheckAt: 0,
+        stateCheckTimer: null,
+        stateCheckIntervalMs: 5000,
+        stateWatcherStarted: false,
+        saveInFlight: false,
+        pendingStorageDeletes: [],
+        pendingDraftUploads: [],
+        cleanupFailures: [],
+        remoteBackupId: "main__previous",
+        localBackupStorageKey: "berryboy_gallery_previous_state_backup_main_v1",
+        pendingCleanupStorageKey: "berryboy_gallery_pending_storage_cleanup_main_v1",
+        pendingDraftUploadStorageKey: "berryboy_gallery_pending_draft_uploads_main_v1",
+        latestSaveResult: null
+    };
+
+    var galleryExhibitionRuntime = {
+        stage: "12C66C6C8C1",
+        schema: "exhibition-platform-multi-exhibition.v4",
+        defaultExhibitionId: "main",
+        activeId: galleryActiveExhibitionId,
+        active: null,
+        catalog: [],
+        catalogLoaded: false,
+        catalogLoading: null,
+        switching: false,
+        creating: false,
+        lastError: "",
+        spaceBaselineCaptured: false,
+        spaceBaseline: null,
+        stateCache: Object.create(null),
+        stateCacheHits: 0,
+        stateCacheMisses: 0
+    };
 
     if (!engine) {
         throw new Error("Gallery_V0_9_ENGINE: brak obiektu engine. Przekaż engine do createScene(engine, canvas) albo ustaw globalThis.engine.");
@@ -13581,6 +13643,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function markGalleryDraftDirty(reason) {
+        if (!galleryAdminWorkspaceMode) {
+            return false;
+        }
         if (!gallerySaveIntegrityRuntime.baselineReady || gallerySaveIntegrityRuntime.saveInFlight) {
             return false;
         }
@@ -14576,7 +14641,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function setGalleryPublishedStateBaseline(runtimeState, options) {
         options = options || {};
-        restoreGalleryPendingDraftUploads();
+        if (galleryAdminWorkspaceMode) {
+            restoreGalleryPendingDraftUploads();
+        }
         var comparableFingerprint = getGalleryStateIntegrityFingerprint(runtimeState || serializeGalleryState());
         var serverState = options.serverState || null;
 
@@ -14596,15 +14663,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         gallerySaveIntegrityRuntime.dirty = false;
         gallerySaveIntegrityRuntime.dirtyReason = options.reason || "published-baseline";
         gallerySaveIntegrityRuntime.dirtySince = 0;
-        reconcileGalleryPendingDraftUploads(serverState || runtimeState, {
-            queueUnreferenced: options.confirmed !== false,
-            reason: "baseline-orphan-draft-upload"
-        });
+        if (galleryAdminWorkspaceMode) {
+            reconcileGalleryPendingDraftUploads(serverState || runtimeState, {
+                queueUnreferenced: options.confirmed !== false,
+                reason: "baseline-orphan-draft-upload"
+            });
+        }
         dispatchGalleryDraftState(gallerySaveIntegrityRuntime.dirtyReason);
-        startGalleryDraftStateWatcher();
+        if (galleryAdminWorkspaceMode) {
+            startGalleryDraftStateWatcher();
+        }
     }
 
     function checkGalleryDraftStateNow(reason) {
+        if (!galleryAdminWorkspaceMode) {
+            return false;
+        }
         if (!gallerySaveIntegrityRuntime.baselineReady || gallerySaveIntegrityRuntime.saveInFlight || galleryFastStartRuntime.stateApplyActive) {
             return gallerySaveIntegrityRuntime.dirty;
         }
@@ -14624,6 +14698,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function startGalleryDraftStateWatcher() {
+        if (!galleryAdminWorkspaceMode) {
+            return;
+        }
         if (gallerySaveIntegrityRuntime.stateWatcherStarted) {
             return;
         }
@@ -16639,7 +16716,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryZoneStreamingRuntime.streamPumpActive = true;
         galleryFastStartRuntime.backgroundDrainActive = true;
 
-        var artworkConcurrency = Math.max(1, Math.min(3, Number(galleryDeviceProfile.previewTextureConcurrency) || 2));
+        var requestedArtworkConcurrency = Math.max(1, Number(galleryDeviceProfile.previewTextureConcurrency) || 2);
+        var artworkConcurrency = galleryAdminWorkspaceMode
+            ? requestedArtworkConcurrency
+            : Math.max(1, Math.min(3, requestedArtworkConcurrency));
         var modelConcurrency = Math.max(1, Number(galleryFastStartRuntime.modelLoadConcurrency) || 1);
         var artworkStarted = 0;
         var pumpFinished = false;
@@ -17100,6 +17180,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         var entry = galleryFastStartRuntime.deferredFullArtworkLoads[entryIndex];
         if (!entry) return;
+        var previewPopulationPending = galleryFastStartRuntime.deferredArtworkLoads.some(isGalleryArtworkQueueEntryCurrent) || Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length > 0;
+        if (previewPopulationPending && !entry.inspectPriority) {
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle("preview-population-first", 220);
+            return;
+        }
         var residencyMemory = getGalleryArtworkResidencyMemorySnapshot();
         var alreadyFull = entry.artwork && entry.artwork.metadata && entry.artwork.metadata.galleryStreaming && entry.artwork.metadata.galleryStreaming.textureState === "full";
         if (!alreadyFull && residencyMemory.full >= residencyMemory.effectiveBudget) {
@@ -17372,9 +17457,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var handoff = runtimeOptions && runtimeOptions.initialExhibitionSnapshot;
         if (handoff && typeof handoff === "object") {
             var handoffExhibition = normalizeGalleryExhibitionRecord(handoff.exhibition);
-            var handoffState = handoff.state && typeof handoff.state === "object" ? handoff.state : null;
+            var handoffHasState = !!(handoff.state && typeof handoff.state === "object");
+            var handoffState = handoffHasState ? handoff.state : null;
             var handoffAge = Date.now() - Number(handoff.createdAt || 0);
-            if (handoffExhibition && handoffExhibition.id === galleryRequestedExhibitionId && handoffAge >= 0 && handoffAge <= 120000) {
+            if (handoffExhibition && handoffExhibition.id === galleryRequestedExhibitionId && handoffHasState && handoffAge >= 0 && handoffAge <= 120000) {
                 setActiveGalleryExhibitionContext(handoffExhibition, { persistCurrentQueues: false });
                 cacheGalleryExhibitionState(handoffExhibition, handoffState, { updatedAt: handoff.updatedAt || null, rowExists: handoff.rowExists !== false, source: "viewer-admin-handoff" });
                 return {
@@ -18337,64 +18423,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return tabId;
     }
 
-    var gallerySaveIntegrityRuntime = {
-        stage: "12C66C6A",
-        schema: "gallery-save-integrity.v3",
-        sessionId: "gallery-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10),
-        tabId: createGalleryEditorPageInstanceId(),
-        activeTabsStorageKey: "berryboy_gallery_active_editor_tabs_v1",
-        heartbeatIntervalMs: 4000,
-        heartbeatStaleMs: 2 * 60 * 1000,
-        backgroundTabGraceMs: 24 * 60 * 60 * 1000,
-        foreignDraftGraceMs: 24 * 60 * 60 * 1000,
-        heartbeatTimer: null,
-        resolvedCleanupKeys: {},
-        resolvedDraftUploadKeys: {},
-        publishedRevision: 0,
-        publishedStateFingerprint: "",
-        publishedServerStateFingerprint: "",
-        publishedStateSnapshot: null,
-        publishedServerRowExists: false,
-        publishedStateConfirmed: false,
-        baselineReady: false,
-        dirty: false,
-        dirtyReason: "startup",
-        dirtySince: 0,
-        lastStateCheckAt: 0,
-        stateCheckTimer: null,
-        stateCheckIntervalMs: 5000,
-        stateWatcherStarted: false,
-        saveInFlight: false,
-        pendingStorageDeletes: [],
-        pendingDraftUploads: [],
-        cleanupFailures: [],
-        remoteBackupId: "main__previous",
-        localBackupStorageKey: "berryboy_gallery_previous_state_backup_main_v1",
-        pendingCleanupStorageKey: "berryboy_gallery_pending_storage_cleanup_main_v1",
-        pendingDraftUploadStorageKey: "berryboy_gallery_pending_draft_uploads_main_v1",
-        latestSaveResult: null
-    };
-
-    // STAGE 12C66C6C7C8 — ACTIVE EXHIBITION CONTEXT
-    // The physical Space stays loaded. Exhibition content/state/storage can switch independently.
-    var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C",
-        schema: "exhibition-platform-multi-exhibition.v3",
-        defaultExhibitionId: "main",
-        activeId: galleryActiveExhibitionId,
-        active: null,
-        catalog: [],
-        catalogLoaded: false,
-        catalogLoading: null,
-        switching: false,
-        creating: false,
-        lastError: "",
-        spaceBaselineCaptured: false,
-        spaceBaseline: null,
-        stateCache: Object.create(null),
-        stateCacheHits: 0,
-        stateCacheMisses: 0
-    };
+    // STAGE 12C66C6C8C1: Save/Exhibition runtime objects are initialized at createScene start,
+    // before beginGalleryStartupStatePreload(), to eliminate synchronous handoff races.
 
     function cacheGalleryExhibitionState(exhibition, state, options) {
         options = options || {};
@@ -31061,6 +31091,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
 
     function hasGalleryUnsavedChanges() {
+        if (!galleryAdminWorkspaceMode) {
+            return false;
+        }
         return !!(
             gallerySaveIntegrityRuntime &&
             gallerySaveIntegrityRuntime.baselineReady &&
@@ -31083,14 +31116,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function createGalleryNavigationHandoff() {
         var exhibition = galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition();
         var exhibitionId = normalizeGalleryRuntimeId(exhibition && exhibition.id, getActiveGalleryExhibitionId());
+        var cachedPublished = getCachedGalleryExhibitionState(exhibitionId);
+        var publishedSnapshot = cachedPublished && cachedPublished.state && typeof cachedPublished.state === "object"
+            ? cloneGalleryJson(cachedPublished.state)
+            : (gallerySaveIntegrityRuntime.publishedStateSnapshot ? cloneGalleryJson(gallerySaveIntegrityRuntime.publishedStateSnapshot) : null);
+        var handoffState = galleryAdminWorkspaceMode && hasGalleryUnsavedChanges()
+            ? serializeGalleryState()
+            : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C",
+            stage: "12C66C6C8C1",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
-            state: serializeGalleryState(),
-            updatedAt: gallerySaveIntegrityRuntime && gallerySaveIntegrityRuntime.publishedStateConfirmed ? new Date().toISOString() : null,
-            rowExists: gallerySaveIntegrityRuntime ? gallerySaveIntegrityRuntime.publishedServerRowExists !== false : true,
+            state: handoffState,
+            updatedAt: cachedPublished ? cachedPublished.updatedAt || null : null,
+            rowExists: cachedPublished ? cachedPublished.rowExists !== false : (gallerySaveIntegrityRuntime ? gallerySaveIntegrityRuntime.publishedServerRowExists !== false : true),
+            source: galleryAdminWorkspaceMode ? "admin" : "public-viewer",
             spaceId: galleryActiveSpaceId
         };
         try {
@@ -31199,7 +31240,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             editButton.style.display = (!galleryEditorLoginEnabled || editorAuthenticated) ? "" : "none";
         }
 
-        if (editorAuthenticated && typeof wallPalette !== "undefined" && wallPalette) {
+        if (galleryAdminWorkspaceMode && editorAuthenticated && typeof wallPalette !== "undefined" && wallPalette) {
             Array.from(wallPalette.querySelectorAll("[data-wall-texture-url]")).forEach(function (swatch) {
                 var textureUrl = swatch.getAttribute("data-wall-texture-url");
 
@@ -31236,15 +31277,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     setEditorAuthenticated(editorAuthenticated);
 
 
-    registerGalleryDomEvent("galleryUnsavedBeforeUnload", window, "beforeunload", function (event) {
-        if (!hasGalleryUnsavedChanges()) {
-            return;
-        }
+    if (galleryAdminWorkspaceMode) {
+        registerGalleryDomEvent("galleryUnsavedBeforeUnload", window, "beforeunload", function (event) {
+            if (!hasGalleryUnsavedChanges()) {
+                return;
+            }
 
-        event.preventDefault();
-        event.returnValue = "";
-        return "";
-    });
+            event.preventDefault();
+            event.returnValue = "";
+            return "";
+        });
+    }
 
 
     function getMobileResponsiveWidth() {

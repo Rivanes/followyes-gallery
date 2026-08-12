@@ -20,7 +20,8 @@ expect('Scene factory accepts external runtime options',
   source.includes('export const createScene = function (engineArg, canvasArg, runtimeOptionsArg)') &&
   source.includes('runtimeOptions.spaceDefinition') &&
   bootstrap.includes('spaceDefinition: gallerySpaceDefinition') &&
-  bootstrap.includes('exhibitionId: getRequestedExhibitionId()'));
+  bootstrap.includes('const requestedExhibitionId = getRequestedExhibitionId()') &&
+  bootstrap.includes('exhibitionId: requestedExhibitionId'));
 
 expect('Current building GLBs live in external Space config',
   config.includes('Floor_segment.glb') && config.includes('Wall_segments.glb') &&
