@@ -1,21 +1,25 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C1 Admin Workspace / Runtime Lifecycle / Transition Fix
+  Exhibition Platform — Stage 12C66C6C8C2 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
 
-const STAGE = "12C66C6C8C1";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c1_runtime_lifecycle_20260812";
+const STAGE = "12C66C6C8C2";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c2_same_runtime_admin_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
+const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
+const inlineWorkspaceMode = !!(inlineRuntimeContext && inlineRuntimeContext.engine && inlineRuntimeContext.scene);
 const STORAGE_BUCKET = "gallery-artworks";
 const MAX_POSTER_BYTES = 14 * 1024 * 1024;
 const POSTER_DELIVERY_MAX_SIDE = 1400;
 const POSTER_DELIVERY_QUALITY = 0.82;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+const supabase = inlineRuntimeContext && inlineRuntimeContext.supabase
+  ? inlineRuntimeContext.supabase
+  : createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
 const assetCacheReadyPromise = registerExhibitionAssetCache();
 
@@ -93,6 +97,9 @@ async function getAssetCacheStatusThrottled(force = false) {
 }
 
 function getRequestedExhibitionId() {
+  if (inlineRuntimeContext && inlineRuntimeContext.exhibitionId) {
+    return String(inlineRuntimeContext.exhibitionId).trim() || "main";
+  }
   try {
     const params = new URLSearchParams(location.search);
     return (params.get("exhibition") || localStorage.getItem("exhibition_platform_admin_active") || "main").trim() || "main";
@@ -123,6 +130,7 @@ function updateUrlExhibition(id) {
     url.searchParams.set("exhibition", id);
     history.replaceState(null, "", url);
     localStorage.setItem("exhibition_platform_admin_active", id);
+    if (inlineRuntimeContext) inlineRuntimeContext.exhibitionId = id;
   } catch (_error) {}
 }
 
@@ -417,6 +425,39 @@ async function startEngine(initialId, initialSnapshot) {
   if (engineReady) return;
   workspaceLoading.classList.remove("hidden");
   viewportStatus.innerHTML = "3D preview: <strong>starting…</strong>";
+
+  if (inlineWorkspaceMode) {
+    engine = inlineRuntimeContext.engine;
+    scene = inlineRuntimeContext.scene;
+    installResize();
+    window.galleryEditorAuthenticated = true;
+    if (window.GalleryApp) {
+      window.GalleryApp.setEditorAuthenticated(true);
+      window.GalleryApp.hideViewerIntroOverlay();
+      if (typeof window.GalleryApp.enterAdminWorkspaceMode === "function") {
+        window.GalleryApp.enterAdminWorkspaceMode();
+      } else {
+        window.GalleryApp.setEditMode(true);
+      }
+    }
+    engineReady = true;
+    workspaceLoading.classList.add("hidden");
+    const activeInline = window.GalleryApp && window.GalleryApp.getActiveExhibition
+      ? window.GalleryApp.getActiveExhibition()
+      : selectedExhibition;
+    if (activeInline) {
+      viewportStatus.innerHTML = `3D preview: <strong>${activeInline.name}</strong>`;
+      updateUrlExhibition(activeInline.id);
+      syncSelectedFromCatalog(activeInline.id);
+    }
+    if (engine && engine.resize) engine.resize();
+    assetCacheStatusReadAt = 0;
+    await updateAssetDeliveryStatus();
+    if (assetDeliveryInterval) window.clearInterval(assetDeliveryInterval);
+    assetDeliveryInterval = window.setInterval(updateAssetDeliveryStatus, 30000);
+    return;
+  }
+
   await assetCacheReadyPromise;
   await ensureBabylon();
   const ready = waitForInteractionReady();
@@ -439,7 +480,7 @@ async function startEngine(initialId, initialSnapshot) {
   const active = window.GalleryApp.getActiveExhibition();
   viewportStatus.innerHTML = `3D preview: <strong>${active.name}</strong>`;
   updateUrlExhibition(active.id);
-  await fetchCatalog();
+  if (!catalog.length) await fetchCatalog();
   syncSelectedFromCatalog(active.id);
   assetCacheStatusReadAt = 0;
   await updateAssetDeliveryStatus();
@@ -548,11 +589,17 @@ removePosterButton.addEventListener("click", async () => {
 });
 
 if (publicPageButton) {
-  publicPageButton.addEventListener("click", () => {
+  publicPageButton.addEventListener("click", async (event) => {
     const active = window.GalleryApp && typeof window.GalleryApp.getActiveExhibition === "function"
       ? window.GalleryApp.getActiveExhibition()
       : selectedExhibition;
     updatePublicPageHref(active && active.id ? active.id : "main");
+
+    if (inlineWorkspaceMode && inlineRuntimeContext && typeof inlineRuntimeContext.close === "function") {
+      event.preventDefault();
+      await inlineRuntimeContext.close();
+      return;
+    }
 
     // Never hand an unpublished draft to the public Viewer. If the workspace is clean,
     // the confirmed state can be handed over to skip a redundant database state read.
@@ -565,7 +612,7 @@ if (publicPageButton) {
   });
 }
 
-logoutButton.addEventListener("click", async () => {
+if (!inlineWorkspaceMode && logoutButton) logoutButton.addEventListener("click", async () => {
   if (window.GalleryApp && window.GalleryApp.hasUnsavedChanges && window.GalleryApp.hasUnsavedChanges()) {
     if (!window.confirm("You have unsaved 3D scene changes. Log out anyway?")) return;
   }
@@ -573,7 +620,7 @@ logoutButton.addEventListener("click", async () => {
   location.href = "./index.html";
 });
 
-adminLoginForm.addEventListener("submit", async (event) => {
+if (adminLoginForm) adminLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   adminLoginError.style.display = "none";
   const email = el("adminEmail").value.trim();
@@ -610,15 +657,46 @@ async function initializeWorkspace() {
 
 supabase.auth.onAuthStateChange((_event, nextSession) => {
   session = nextSession || null;
-  if (!session && engineReady) location.href = "./index.html";
+  if (!session && engineReady) {
+    if (inlineWorkspaceMode && inlineRuntimeContext && typeof inlineRuntimeContext.onSessionLost === "function") {
+      inlineRuntimeContext.onSessionLost();
+    } else {
+      location.href = "./index.html";
+    }
+  }
 });
 
-const sessionResponse = await supabase.auth.getSession();
-session = sessionResponse.data.session || null;
-if (!session) {
-  authGate.classList.add("visible");
-  workspaceLoading.classList.add("hidden");
-} else {
-  authGate.classList.remove("visible");
+if (inlineWorkspaceMode && inlineRuntimeContext.session) {
+  session = inlineRuntimeContext.session;
+  if (authGate) authGate.classList.remove("visible");
   await initializeWorkspace();
+} else {
+  const sessionResponse = await supabase.auth.getSession();
+  session = sessionResponse.data.session || null;
+  if (!session) {
+    if (authGate) authGate.classList.add("visible");
+    workspaceLoading.classList.add("hidden");
+  } else {
+    if (authGate) authGate.classList.remove("visible");
+    await initializeWorkspace();
+  }
+}
+
+export async function resumeAdminWorkspace() {
+  if (!session && inlineRuntimeContext && inlineRuntimeContext.session) session = inlineRuntimeContext.session;
+  if (!session) return false;
+  if (window.GalleryApp && typeof window.GalleryApp.enterAdminWorkspaceMode === "function") {
+    window.GalleryApp.enterAdminWorkspaceMode();
+  }
+  if (engine && engine.resize) engine.resize();
+  const active = window.GalleryApp && window.GalleryApp.getActiveExhibition
+    ? window.GalleryApp.getActiveExhibition()
+    : selectedExhibition;
+  if (active) {
+    updateUrlExhibition(active.id);
+    if (catalog.length) syncSelectedFromCatalog(active.id);
+    viewportStatus.innerHTML = `3D preview: <strong>${active.name}</strong>`;
+  }
+  await updateAssetDeliveryStatus();
+  return true;
 }

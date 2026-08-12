@@ -105,6 +105,7 @@
   - Stage 12C66C6C7C8B1: Public Viewer / Admin Edit Gate — the public index is viewer-only; its Edit Mode control routes authenticated editors into admin.html for the active exhibition, while Edit Mode can only be enabled inside Admin Workspace.
   - Stage 12C66C6C8C: Asset Residency / Egress Guard — artwork Full textures become proximity/Inspect-driven on desktop and mobile, Full residency is bounded globally, repeated Storage asset requests are expected to be served by the persistent browser asset cache across Viewer/Admin navigation, and poster uploads are normalized to a compact delivery asset.
   - Stage 12C66C6C8C1: Runtime Lifecycle / Admin Transition Fix — Exhibition/Save runtimes are initialized before state preload, public Viewer no longer owns editor dirty tracking or unload prompts, Viewer/Admin handoff uses confirmed published snapshots, Admin preview hydration uses the intended desktop concurrency, Full upgrades yield to Preview population, and active Exhibition is preserved when returning to the public page.
+  - Stage 12C66C6C8C2: Same-Runtime Admin Workspace — authenticated Viewer→Admin transitions reuse the already-running Babylon engine, scene, GPU textures and Space instead of navigating to a second document; Admin can return to the public Viewer without rebuilding the scene, while direct admin.html remains supported.
 */
 
 
@@ -1231,6 +1232,22 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         });
 
         return handler;
+    }
+
+
+    function unregisterGalleryDomEvent(key) {
+        if (!key) return false;
+        var removed = false;
+        for (var i = galleryDomListenerRegistry.length - 1; i >= 0; i--) {
+            var existing = galleryDomListenerRegistry[i];
+            if (!existing || existing.key !== key) continue;
+            try {
+                existing.element.removeEventListener(existing.type, existing.handler, existing.options || false);
+            } catch (removeError) {}
+            galleryDomListenerRegistry.splice(i, 1);
+            removed = true;
+        }
+        return removed;
     }
 
     var galleryBeforeRenderObserverRegistry = {};
@@ -14732,6 +14749,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         scheduleNextCheck();
+    }
+
+
+    function stopGalleryDraftStateWatcher() {
+        if (gallerySaveIntegrityRuntime.stateCheckTimer) {
+            clearTimeout(gallerySaveIntegrityRuntime.stateCheckTimer);
+            gallerySaveIntegrityRuntime.stateCheckTimer = null;
+        }
+        gallerySaveIntegrityRuntime.stateWatcherStarted = false;
     }
 
     function persistGalleryPreviousStateBackup(previousState, metadata) {
@@ -31124,7 +31150,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C1",
+            stage: "12C66C6C8C2",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -31145,6 +31171,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function openGalleryAdminWorkspaceForActiveExhibition() {
         var exhibitionId = getActiveGalleryExhibitionId();
+        if (typeof window.ExhibitionPlatformOpenAdminWorkspace === "function") {
+            try {
+                window.ExhibitionPlatformOpenAdminWorkspace(exhibitionId || "main");
+                return false;
+            } catch (inlineError) {
+                console.warn("Inline Admin Workspace warning:", inlineError);
+            }
+        }
+
         var targetUrl = "./admin.html?exhibition=" + encodeURIComponent(exhibitionId || "main");
         createGalleryNavigationHandoff();
         try {
@@ -31153,6 +31188,56 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             console.warn("Admin Workspace navigation warning:", error);
         }
         return false;
+    }
+
+    function enterGalleryAdminWorkspaceMode() {
+        if (galleryAdminWorkspaceMode) {
+            if (!editMode && editButton && typeof editButton.click === "function") editButton.click();
+            return !!editMode;
+        }
+
+        galleryAdminWorkspaceMode = true;
+        galleryPublicViewerOnly = false;
+        installGalleryAdminBeforeUnloadGuard();
+        if (gallerySaveIntegrityRuntime.baselineReady) startGalleryDraftStateWatcher();
+        if (editorAuthenticated && typeof warmGalleryArtworkFrameLibrary === "function") warmGalleryArtworkFrameLibrary();
+        if (typeof scheduleGalleryZoneStreamingPump === "function") scheduleGalleryZoneStreamingPump("same-runtime-admin-enter", 0);
+        if (!editMode && editButton && typeof editButton.click === "function") editButton.click();
+        return !!editMode;
+    }
+
+    function exitGalleryAdminWorkspaceMode(options) {
+        options = options || {};
+        if (!galleryAdminWorkspaceMode) return true;
+
+        if (hasGalleryUnsavedChanges()) {
+            if (!options.discardUnsaved) return false;
+            var publishedSnapshot = gallerySaveIntegrityRuntime.publishedStateSnapshot
+                ? cloneGalleryStateForIntegrity(gallerySaveIntegrityRuntime.publishedStateSnapshot)
+                : null;
+            if (publishedSnapshot) {
+                applyGalleryState(publishedSnapshot);
+                setGalleryPublishedStateBaseline(publishedSnapshot, {
+                    serverState: publishedSnapshot,
+                    serverRowExists: gallerySaveIntegrityRuntime.publishedServerRowExists,
+                    revision: gallerySaveIntegrityRuntime.publishedRevision,
+                    confirmed: true,
+                    reason: "same-runtime-admin-discard"
+                });
+            }
+        }
+
+        if (editMode && editButton && typeof editButton.click === "function") {
+            editButton.click();
+            if (editMode) return false;
+        }
+        stopGalleryDraftStateWatcher();
+        removeGalleryAdminBeforeUnloadGuard();
+        galleryAdminWorkspaceMode = false;
+        galleryPublicViewerOnly = true;
+        setEditorUiVisible(false);
+        updateViewerModePlaceholderVisibility();
+        return true;
     }
 
     editButton.onclick = function (event) {
@@ -31277,16 +31362,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     setEditorAuthenticated(editorAuthenticated);
 
 
-    if (galleryAdminWorkspaceMode) {
+    function installGalleryAdminBeforeUnloadGuard() {
+        if (!galleryAdminWorkspaceMode) return false;
         registerGalleryDomEvent("galleryUnsavedBeforeUnload", window, "beforeunload", function (event) {
-            if (!hasGalleryUnsavedChanges()) {
-                return;
-            }
-
+            if (!hasGalleryUnsavedChanges()) return;
             event.preventDefault();
             event.returnValue = "";
             return "";
         });
+        return true;
+    }
+
+    function removeGalleryAdminBeforeUnloadGuard() {
+        return unregisterGalleryDomEvent("galleryUnsavedBeforeUnload");
+    }
+
+    if (galleryAdminWorkspaceMode) {
+        installGalleryAdminBeforeUnloadGuard();
     }
 
 
@@ -43102,6 +43194,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         isAdminWorkspaceMode: function () {
             return !!galleryAdminWorkspaceMode;
         },
+        enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode,
+        exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode,
         hasUnsavedChanges: hasGalleryUnsavedChanges,
         confirmDiscardUnsavedChanges: confirmGalleryDiscardUnsavedChanges,
         setEditorLoginEnabled: function (isEnabled) {

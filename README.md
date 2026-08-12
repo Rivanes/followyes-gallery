@@ -1,4 +1,4 @@
-# Exhibition Platform — Stage 12C66C6C8C1
+# Exhibition Platform — Stage 12C66C6C8C2
 
 ## Runtime Lifecycle / Admin Transition Fix
 
@@ -57,3 +57,12 @@ W `SUPABASE_SQL/04_STAGE_C6C8C_NO_SQL_REQUIRED.sql` znajduje się tylko marker d
 ## C6C8C1 / SQL
 
 C6C8C1 **nie wymaga kolejnej migracji bazy danych**. `SUPABASE_SQL/05_STAGE_C6C8C1_NO_SQL_REQUIRED.sql` jest wyłącznie markerem kontrolnym.
+
+## C6C8C2 / Same-Runtime Admin Workspace
+
+- `EDIT MODE` na publicznym Viewerze nie przechodzi już do drugiego dokumentu i nie tworzy nowego Babylon Engine.
+- Ten sam `engine`, `scene`, Space, modele i tekstury GPU są przenoszone layoutem do Admin Workspace.
+- `PUBLIC PAGE` wraca do Viewera bez przeładowania sceny.
+- `admin.html` pozostaje jako bezpośredni / awaryjny punkt wejścia do panelu.
+- Link `PUBLIC PAGE` ma jawnie ustawiony styl przycisku, także po odwiedzeniu.
+- Stage nie wymaga migracji SQL.

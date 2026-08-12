@@ -1,16 +1,16 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C1
+  Exhibition Platform — Stage 12C66C6C8C2
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812";
-import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
+import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
 
-const STAGE = "12C66C6C8C1";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c1_runtime_lifecycle_20260812";
+const STAGE = "12C66C6C8C2";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c2_same_runtime_admin_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -68,6 +68,179 @@ let activeEngine = null;
 let activeScene = null;
 let galleryStartPromise = null;
 let currentLang = localStorage.getItem("berryboy_art_gallery_lang") || "en";
+
+let inlineAdminModulePromise = null;
+let inlineAdminWorkspaceMounted = false;
+let gallerySectionHomeParent = null;
+let gallerySectionHomeNextSibling = null;
+
+function ensureInlineAdminWorkspaceStyles() {
+  if (document.getElementById("inlineAdminWorkspaceStyles")) return;
+  const style = document.createElement("style");
+  style.id = "inlineAdminWorkspaceStyles";
+  style.textContent = `
+    #inlineAdminWorkspace { position:fixed; inset:0; z-index:19000; display:none; grid-template-rows:64px minmax(0,1fr); background:#0b0d0c; color:rgba(255,255,255,.92); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    #inlineAdminWorkspace.active { display:grid; }
+    body.inline-admin-workspace-active { overflow:hidden !important; }
+    body.inline-admin-workspace-active #siteHeader, body.inline-admin-workspace-active #siteContent, body.inline-admin-workspace-active #siteFooter { visibility:hidden !important; pointer-events:none !important; }
+    #inlineAdminTopbar { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 22px; border-bottom:1px solid rgba(255,255,255,.10); background:rgba(13,15,14,.98); }
+    #inlineAdminTopbar .adminBrand { display:flex; align-items:center; gap:12px; min-width:0; }
+    #inlineAdminTopbar .adminBrandMark { width:30px; height:30px; border:1px solid rgba(255,255,255,.18); border-radius:9px; display:grid; place-items:center; font-weight:800; font-size:11px; }
+    #inlineAdminTopbar .adminBrandText strong { display:block; font-size:13px; letter-spacing:.07em; text-transform:uppercase; }
+    #inlineAdminTopbar .adminBrandText span { display:block; margin-top:2px; color:rgba(255,255,255,.57); font-size:11px; }
+    #inlineAdminTopbar .topActions { display:flex; align-items:center; gap:8px; }
+    #inlineAdminTopbar .topUser { color:rgba(255,255,255,.57); font-size:12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #inlineAdminWorkspace .adminButton { min-height:36px; padding:0 13px; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.055); color:rgba(255,255,255,.92) !important; cursor:pointer; font-weight:700; font-size:11px; letter-spacing:.04em; text-decoration:none !important; display:inline-flex; align-items:center; justify-content:center; }
+    #inlineAdminWorkspace .adminButton:visited { color:rgba(255,255,255,.92) !important; }
+    #inlineAdminWorkspace .adminButton:hover { background:rgba(255,255,255,.09); }
+    #inlineAdminWorkspace .adminButton.primary { background:rgba(125,160,127,.16); border-color:rgba(154,180,155,.45); }
+    #inlineAdminWorkspace .adminButton.danger { color:#f0b5b5 !important; }
+    #inlineAdminWorkspace .adminButton:disabled { opacity:.4; cursor:default; }
+    #inlineAdminBody { min-height:0; display:grid; grid-template-columns:360px minmax(0,1fr); }
+    #inlineAdminSidebar { min-height:0; overflow:auto; border-right:1px solid rgba(255,255,255,.10); background:rgba(17,19,18,.98); padding:18px; }
+    #inlineAdminWorkspace .workspaceSection { border:1px solid rgba(255,255,255,.10); border-radius:14px; background:rgba(255,255,255,.035); overflow:hidden; margin-bottom:14px; }
+    #inlineAdminWorkspace .sectionHead { padding:14px 14px 10px; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+    #inlineAdminWorkspace .sectionHead h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+    #inlineAdminWorkspace .sectionHead p { margin:5px 0 0; color:rgba(255,255,255,.57); font-size:11px; line-height:1.45; }
+    #inlineAdminWorkspace .sectionBody { padding:0 14px 14px; }
+    #inlineAdminWorkspace #createExhibitionForm { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+    #inlineAdminWorkspace .adminInput, #inlineAdminWorkspace .adminTextarea { width:100%; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.055); color:rgba(255,255,255,.92); outline:none; font:inherit; }
+    #inlineAdminWorkspace .adminInput { height:38px; padding:0 11px; }
+    #inlineAdminWorkspace .adminTextarea { min-height:92px; resize:vertical; padding:10px 11px; line-height:1.45; }
+    #inlineAdminWorkspace #exhibitionList { display:grid; gap:7px; max-height:280px; overflow:auto; padding-right:2px; }
+    #inlineAdminWorkspace .exhibitionRow { width:100%; display:grid; grid-template-columns:48px minmax(0,1fr); gap:10px; align-items:center; text-align:left; padding:7px; border:1px solid transparent; border-radius:10px; background:transparent; color:rgba(255,255,255,.92); cursor:pointer; }
+    #inlineAdminWorkspace .exhibitionRow:hover { background:rgba(255,255,255,.045); }
+    #inlineAdminWorkspace .exhibitionRow.active { border-color:rgba(154,180,155,.38); background:rgba(125,160,127,.16); }
+    #inlineAdminWorkspace .exhibitionThumb { width:48px; height:48px; border-radius:8px; border:1px solid rgba(255,255,255,.10); object-fit:cover; background:rgba(255,255,255,.035); }
+    #inlineAdminWorkspace .exhibitionMeta { min-width:0; }
+    #inlineAdminWorkspace .exhibitionMeta strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+    #inlineAdminWorkspace .exhibitionMeta span { display:block; margin-top:4px; color:rgba(255,255,255,.57); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #inlineAdminWorkspace .statusDot { display:inline-block; width:6px; height:6px; border-radius:50%; background:#777; margin-right:5px; vertical-align:1px; }
+    #inlineAdminWorkspace .statusDot.published { background:#7fa982; }
+    #inlineAdminWorkspace #detailsForm { display:grid; gap:11px; }
+    #inlineAdminWorkspace .fieldLabel { display:grid; gap:6px; color:rgba(255,255,255,.57); font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    #inlineAdminWorkspace .fieldMeta { color:rgba(255,255,255,.57); font-size:10px; line-height:1.4; }
+    #inlineAdminWorkspace .inlineFields { display:grid; grid-template-columns:1fr 110px; gap:9px; }
+    #inlineAdminWorkspace .checkRow { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:38px; border:1px solid rgba(255,255,255,.10); border-radius:10px; padding:0 10px; }
+    #inlineAdminWorkspace .checkRow span { font-size:11px; color:rgba(255,255,255,.57); }
+    #inlineAdminWorkspace .posterCard { display:grid; grid-template-columns:94px minmax(0,1fr); gap:11px; align-items:start; }
+    #inlineAdminWorkspace #posterPreview { width:94px; aspect-ratio:4/5; object-fit:cover; border-radius:10px; border:1px solid rgba(255,255,255,.18); background:#101210; }
+    #inlineAdminWorkspace .posterActions { display:grid; gap:7px; }
+    #inlineAdminWorkspace #posterFileInput { display:none; }
+    #inlineAdminMain { min-width:0; min-height:0; padding:18px; background:radial-gradient(circle at 30% 10%,rgba(255,255,255,.035),transparent 36%),#0b0d0c; }
+    #inlineAdminViewportCard { height:100%; min-height:0; display:grid; grid-template-rows:42px minmax(0,1fr); border:1px solid rgba(255,255,255,.10); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
+    #inlineAdminViewportToolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 12px; border-bottom:1px solid rgba(255,255,255,.10); background:rgba(20,22,21,.96); }
+    #inlineAdminWorkspace #viewportStatus { min-width:0; color:rgba(255,255,255,.57); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #inlineAdminWorkspace #viewportStatus strong { color:rgba(255,255,255,.92); }
+    #adminViewportStage { position:relative; min-width:0; min-height:0; overflow:hidden; isolation:isolate; }
+    #inlineAdminWorkspace #gallerySection { width:100% !important; height:100% !important; min-height:0 !important; }
+    #inlineAdminWorkspace .workspaceLoading { position:absolute; inset:0; z-index:45; display:grid; place-items:center; pointer-events:none; background:rgba(5,6,6,.72); backdrop-filter:blur(4px); }
+    #inlineAdminWorkspace .workspaceLoading.hidden { display:none; }
+    #inlineAdminWorkspace .loadingCard { padding:13px 16px; border:1px solid rgba(255,255,255,.10); border-radius:10px; background:#161918; color:rgba(255,255,255,.57); font-size:11px; }
+    @media (max-width:980px) { #inlineAdminBody { grid-template-columns:1fr; overflow:auto; } #inlineAdminSidebar { max-height:45vh; border-right:0; border-bottom:1px solid rgba(255,255,255,.10); } #inlineAdminMain { min-height:680px; } }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureInlineAdminWorkspaceDom() {
+  if (inlineAdminWorkspaceMounted) return document.getElementById("inlineAdminWorkspace");
+  ensureInlineAdminWorkspaceStyles();
+  const gallerySection = document.getElementById("gallerySection");
+  gallerySectionHomeParent = gallerySection ? gallerySection.parentNode : null;
+  gallerySectionHomeNextSibling = gallerySection ? gallerySection.nextSibling : null;
+
+  const shell = document.createElement("div");
+  shell.id = "inlineAdminWorkspace";
+  shell.innerHTML = `
+    <header id="inlineAdminTopbar">
+      <div class="adminBrand"><div class="adminBrandMark">EP</div><div class="adminBrandText"><strong>Admin Workspace</strong><span>Exhibition Platform</span></div></div>
+      <div class="topActions"><span id="adminUser" class="topUser">Editor</span><a class="adminButton" id="publicPageButton" href="#">PUBLIC PAGE</a><button id="inlineAdminLogoutButton" class="adminButton danger" type="button">LOG OUT</button></div>
+    </header>
+    <div id="inlineAdminBody">
+      <aside id="inlineAdminSidebar">
+        <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibitions</h2><p>Switch the active exhibition or create a new one in the current 3D Space.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div><div class="sectionBody"><form id="createExhibitionForm"><input id="newExhibitionName" class="adminInput" maxlength="120" placeholder="New exhibition name" autocomplete="off"/><button id="createExhibitionButton" class="adminButton primary" type="submit">CREATE</button></form><div style="height:10px"></div><div id="exhibitionList"><div class="fieldMeta">Loading exhibition catalog…</div></div></div></section>
+        <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata used by the admin workspace and the future public carousel.</p></div></div><div class="sectionBody"><form id="detailsForm"><label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required/></label><label class="fieldLabel">Description<textarea id="exhibitionDescription" class="adminTextarea" maxlength="4000" placeholder="Short exhibition description"></textarea></label><div class="inlineFields"><label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly/></label><label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1"/></label></div><div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox"/></div><div class="fieldLabel">Poster / cover</div><div class="posterCard"><img id="posterPreview" alt="Exhibition poster preview"/><div class="posterActions"><button id="choosePosterButton" class="adminButton" type="button">UPLOAD / REPLACE</button><button id="removePosterButton" class="adminButton danger" type="button">REMOVE</button><div id="posterStatus" class="fieldMeta">No poster assigned.</div><input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif"/></div></div><div class="fieldMeta">Space: <strong id="exhibitionSpaceId">main-space</strong></div><button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button></form></div></section>
+      </aside>
+      <main id="inlineAdminMain"><section id="inlineAdminViewportCard"><div id="inlineAdminViewportToolbar"><div><div id="viewportStatus">3D preview: <strong>ready</strong></div><div id="assetDeliveryStatus" class="fieldMeta">Asset delivery: same runtime</div></div><div class="fieldMeta">Same live 3D runtime — no scene reload.</div></div><div id="adminViewportStage"><div id="workspaceLoading" class="workspaceLoading hidden"><div class="loadingCard">Preparing Admin Workspace…</div></div></div></section></main>
+    </div>`;
+  document.body.appendChild(shell);
+  const logout = document.getElementById("inlineAdminLogoutButton");
+  if (logout) logout.addEventListener("click", async () => {
+    if (window.GalleryApp && window.GalleryApp.hasUnsavedChanges && window.GalleryApp.hasUnsavedChanges()) {
+      if (!window.confirm("You have unsaved changes. Log out anyway?")) return;
+    }
+    await supabase.auth.signOut();
+    await closeInlineAdminWorkspace({ discardUnsaved: true, force: true });
+  });
+  inlineAdminWorkspaceMounted = true;
+  return shell;
+}
+
+async function closeInlineAdminWorkspace(options = {}) {
+  const shell = document.getElementById("inlineAdminWorkspace");
+  if (!shell || !shell.classList.contains("active")) return true;
+  const dirty = window.GalleryApp && window.GalleryApp.hasUnsavedChanges ? window.GalleryApp.hasUnsavedChanges() : false;
+  let discardUnsaved = options.discardUnsaved === true;
+  if (dirty && !discardUnsaved && !options.force) {
+    discardUnsaved = window.confirm("You have unsaved Admin changes. Discard them and return to the public Viewer?");
+    if (!discardUnsaved) return false;
+  }
+  if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
+    const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved });
+    if (!exited) return false;
+  }
+  const gallerySection = document.getElementById("gallerySection");
+  if (gallerySection && gallerySectionHomeParent) {
+    if (gallerySectionHomeNextSibling && gallerySectionHomeNextSibling.parentNode === gallerySectionHomeParent) gallerySectionHomeParent.insertBefore(gallerySection, gallerySectionHomeNextSibling);
+    else gallerySectionHomeParent.appendChild(gallerySection);
+  }
+  shell.classList.remove("active");
+  document.body.classList.remove("inline-admin-workspace-active");
+  const active = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set("exhibition", active && active.id ? active.id : "main");
+    history.replaceState(null, "", url);
+  } catch (_error) {}
+  window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+  return true;
+}
+
+async function openInlineAdminWorkspace(exhibitionId) {
+  if (!currentSession) return false;
+  if (!activeEngine || !activeScene || !window.GalleryApp) {
+    const target = `./admin.html?exhibition=${encodeURIComponent(exhibitionId || getRequestedExhibitionId())}`;
+    location.href = target;
+    return false;
+  }
+  const shell = ensureInlineAdminWorkspaceDom();
+  const stage = document.getElementById("adminViewportStage");
+  const gallerySection = document.getElementById("gallerySection");
+  if (stage && gallerySection && gallerySection.parentNode !== stage) stage.appendChild(gallerySection);
+  shell.classList.add("active");
+  document.body.classList.add("inline-admin-workspace-active");
+  if (window.GalleryApp.hideViewerIntroOverlay) window.GalleryApp.hideViewerIntroOverlay();
+  const inlineContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || {};
+  Object.assign(inlineContext, {
+    engine: activeEngine,
+    scene: activeScene,
+    supabase,
+    session: currentSession,
+    exhibitionId: exhibitionId || (window.GalleryApp.getActiveExhibition && window.GalleryApp.getActiveExhibition().id) || "main",
+    close: closeInlineAdminWorkspace,
+    onSessionLost: () => closeInlineAdminWorkspace({ discardUnsaved: true, force: true })
+  });
+  window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ = inlineContext;
+  if (window.GalleryApp.enterAdminWorkspaceMode) window.GalleryApp.enterAdminWorkspaceMode();
+  if (!inlineAdminModulePromise) inlineAdminModulePromise = import(`./admin-workspace-bootstrap.js?v=${ENGINE_CACHE_KEY}`);
+  const adminModule = await inlineAdminModulePromise;
+  if (adminModule && typeof adminModule.resumeAdminWorkspace === "function") await adminModule.resumeAdminWorkspace();
+  window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+  return true;
+}
+
+window.ExhibitionPlatformOpenAdminWorkspace = openInlineAdminWorkspace;
+window.ExhibitionPlatformCloseAdminWorkspace = closeInlineAdminWorkspace;
 
 const uiText = {
   pl: {
@@ -232,12 +405,11 @@ document.querySelectorAll("[data-set-lang]").forEach(function (button) {
 
 if (adminWorkspaceButton) {
   adminWorkspaceButton.addEventListener("click", function (event) {
-    if (!window.GalleryApp || typeof window.GalleryApp.createNavigationHandoff !== "function") return;
-    try {
-      const active = window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
-      window.GalleryApp.createNavigationHandoff();
-      if (active && active.id) adminWorkspaceButton.href = `./admin.html?exhibition=${encodeURIComponent(active.id)}`;
-    } catch (_error) {}
+    event.preventDefault();
+    const active = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
+    openInlineAdminWorkspace(active && active.id ? active.id : getRequestedExhibitionId()).catch(function (error) {
+      console.warn("Inline Admin Workspace open failed:", error);
+    });
   });
 }
 

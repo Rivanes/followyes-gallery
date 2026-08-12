@@ -1,5 +1,5 @@
-/* Exhibition Platform — Stage 12C66C6C8C1 persistent asset-cache bootstrap. */
-const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812", import.meta.url);
+/* Exhibition Platform — Stage 12C66C6C8C2 persistent asset-cache bootstrap. */
+const SERVICE_WORKER_URL = new URL("../../asset-cache-sw.js?v=stage12c66c6c8c2_same_runtime_admin_20260812", import.meta.url);
 let registrationPromise = null;
 let statusMemo = null;
 let statusMemoAt = 0;

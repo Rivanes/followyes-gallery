@@ -39,8 +39,10 @@
     .topUser { color:var(--muted); font-size:12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .adminButton {
       min-height:36px; padding:0 13px; border:1px solid var(--line-strong); border-radius:10px;
-      background:rgba(255,255,255,.055); cursor:pointer; font-weight:700; font-size:11px; letter-spacing:.04em;
+      background:rgba(255,255,255,.055); color:var(--text); cursor:pointer; font-weight:700; font-size:11px; letter-spacing:.04em;
+      text-decoration:none; display:inline-flex; align-items:center; justify-content:center;
     }
+    .adminButton:visited { color:var(--text); text-decoration:none; }
     .adminButton:hover { background:rgba(255,255,255,.09); }
     .adminButton.primary { background:var(--accent-bg); border-color:rgba(154,180,155,.45); }
     .adminButton.danger { color:#f0b5b5; }
@@ -210,6 +212,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=stage12c66c6c8c1_runtime_lifecycle_20260812"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=stage12c66c6c8c2_same_runtime_admin_20260812"></script>
 </body>
 </html>

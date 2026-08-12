@@ -27,7 +27,7 @@ expect('Save and Exhibition runtimes initialize before startup state preload',
 expect('Public Viewer cannot become dirty and owns no editor beforeunload guard',
   source.includes('function hasGalleryUnsavedChanges() {\n        if (!galleryAdminWorkspaceMode)') &&
   source.includes('function markGalleryDraftDirty(reason) {\n        if (!galleryAdminWorkspaceMode)') &&
-  source.includes('if (galleryAdminWorkspaceMode) {\n        registerGalleryDomEvent("galleryUnsavedBeforeUnload"'));
+  source.includes('function installGalleryAdminBeforeUnloadGuard()') && source.includes('if (galleryAdminWorkspaceMode) {\n        installGalleryAdminBeforeUnloadGuard();'));
 
 expect('Public baseline does not start editor draft watcher',
   source.includes('if (galleryAdminWorkspaceMode) {\n            startGalleryDraftStateWatcher();') &&

@@ -1,6 +1,6 @@
 /*
   Exhibition Platform — current Space definition.
-  Stage 12C66C6C8C1 keeps the physical 3D Space from Exhibition content.
+  Stage 12C66C6C8C2 keeps the physical 3D Space from Exhibition content.
   The engine consumes this object and no longer hard-codes the current building GLBs.
 */
 
