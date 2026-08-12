@@ -1,0 +1,96 @@
+{
+  "schema": "berryboy-venue-manifest.v1",
+  "venueId": "replace-me",
+  "versionId": "v1",
+  "coordinateSystem": {
+    "upAxis": "Y",
+    "units": "meters"
+  },
+  "assets": [
+    {
+      "assetId": "building-v1",
+      "role": "building",
+      "path": "./models/building.glb",
+      "critical": true,
+      "loadOrder": 10,
+      "shadowPolicy": {
+        "global": true,
+        "local": true,
+        "receive": true,
+        "cast": true
+      },
+      "streamingPolicy": {
+        "static": true
+      }
+    },
+    {
+      "assetId": "collision-v1",
+      "role": "collision",
+      "path": "./models/collision.glb",
+      "critical": true,
+      "loadOrder": 20,
+      "collisionPolicy": {
+        "walkBlocking": true,
+        "inspectBlocking": true,
+        "visible": false
+      },
+      "shadowPolicy": {
+        "global": false,
+        "local": false,
+        "receive": false,
+        "cast": false
+      },
+      "streamingPolicy": {
+        "static": true
+      }
+    }
+  ],
+  "spawnPoints": [
+    {
+      "id": "visitor-safe",
+      "position": {
+        "x": 0,
+        "y": 1.6,
+        "z": 0
+      },
+      "target": {
+        "x": 0,
+        "y": 1.6,
+        "z": 1
+      },
+      "safe": true,
+      "visitor": true
+    }
+  ],
+  "zones": [],
+  "zoneAdjacency": [],
+  "collisionSets": [],
+  "walkableAreas": [],
+  "artworkAnchors": [],
+  "sculptureAnchors": [],
+  "navigationGraph": {
+    "nodes": [],
+    "edges": []
+  },
+  "editableMaterials": [],
+  "lockedMaterials": [],
+  "meshRules": {
+    "metadataFirst": true
+  },
+  "lightingDefaults": {
+    "environmentTextureUrl": "https://playground.babylonjs.com/textures/environment.env",
+    "environmentIntensity": 0.35,
+    "toneMapping": "ACES",
+    "exposure": 0.95,
+    "contrast": 1.05
+  },
+  "mobileBudgets": {
+    "inheritCanonicalC6C2": true
+  },
+  "technicalFlags": {
+    "legacyBerryboyCompatibility": false,
+    "floorGridZoneFallback": false,
+    "localAStarFallback": false,
+    "mobileC6C2DiagnosticsActive": true
+  }
+}
