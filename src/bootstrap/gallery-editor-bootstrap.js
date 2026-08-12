@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6C7C8 Edit Workflow / Multi-Exhibition / Sticky Save
+  Exhibition Platform — Stage 12C66C6C7C8B Edit Auth Bridge / Admin Workspace
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
@@ -132,6 +132,10 @@ export function initializeEditorRuntime(context) {
       runtimeContext.setSession(response.data.session || null);
       closeEditorLogin();
       runtimeContext.showToast(runtimeContext.t("loggedIn"));
+      if (!document.body || document.body.dataset.adminWorkspace !== "true") {
+        window.location.href = "./admin.html";
+        return;
+      }
     });
   }
 

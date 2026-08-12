@@ -46,9 +46,8 @@ expect('Storage and save-integrity keys are scoped per exhibition',
 expect('Frame library remains shared at main/frames',
   source.includes('return "main/" + galleryArtworkFrameStorageFolder;'));
 
-expect('Editor can list, create and switch exhibitions',
-  source.includes('createEditorSection("EXHIBITIONS")') &&
-  source.includes('exhibitionManagerCreateButton.innerText = "CREATE"') &&
+expect('Engine can create and switch exhibitions while catalog UI is external',
+  !source.includes('createEditorSection("EXHIBITIONS")') &&
   source.includes('function createGalleryExhibition(') &&
   source.includes('function switchGalleryExhibition('));
 

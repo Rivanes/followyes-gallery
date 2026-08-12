@@ -101,6 +101,7 @@
   - Stage 12C66C6C5: Artwork Frame Facing Fix — adds a local 180° Y facing flip after frame normalization so the decorative/front side faces away from the wall while preserving the required 180° Z in-plane rotation.
   - Stage 12C66C6C6: Artwork Frame Runtime Performance — frame GLBs warm in parallel on Edit entry, per-variant geometry descriptors are cached after first use, and frame assignment updates only the new frame materials/local-light membership instead of rescanning the whole gallery.
   - Stage 12C66C6C7C8: Space / Exhibition Split + Multi-Exhibition — the current building definition moves outside the engine, gallery_state is keyed by active exhibition instead of hard-coded main, Storage is scoped per exhibition, and the editor can create/switch independent exhibitions inside the same 3D Space.
+  - Stage 12C66C6C7C8B: Admin Workspace — exhibition catalog/metadata management moves out of the in-scene editor into admin.html; the engine keeps only scene-editing controls and exposes programmatic exhibition/edit-mode APIs for the workspace.
 */
 
 
@@ -18283,8 +18284,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // STAGE 12C66C6C7C8 — ACTIVE EXHIBITION CONTEXT
     // The physical Space stays loaded. Exhibition content/state/storage can switch independently.
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C7C8",
-        schema: "gallery-multi-exhibition.v1",
+        stage: "12C66C6C7C8B",
+        schema: "exhibition-platform-multi-exhibition.v2",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
         active: null,
@@ -18362,6 +18363,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         globalThis.BerryboyGalleryActiveExhibition = Object.assign({}, normalized);
+        try {
+            window.dispatchEvent(new CustomEvent("gallery-exhibition-context-change", {
+                detail: {
+                    exhibition: Object.assign({}, normalized),
+                    exhibitionId: nextId,
+                    spaceId: galleryActiveSpaceId,
+                    storagePrefix: galleryArtworkStoragePrefix
+                }
+            }));
+        } catch (error) {}
         return normalized;
     }
 
@@ -21643,11 +21654,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
 
-        .gallery-exhibition-manager-list { display: grid; gap: 7px; margin-top: 10px; }
-        .gallery-exhibition-manager-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-        .gallery-exhibition-manager-meta { min-width: 0; font-size: 11px; line-height: 1.3; color: rgba(45,45,45,0.68); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .gallery-exhibition-manager-meta strong { display: block; color: rgba(30,30,30,0.9); font-size: 12px; }
-        .gallery-exhibition-manager-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; }
 
         .gallery-editor-primary-tabs {
             flex: 0 0 auto;
@@ -21820,32 +21826,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     selectionSectionData.section.appendChild(selectedArtworkCountStatus);
     editorScroll.appendChild(selectionSectionData.section);
 
-    var exhibitionManagerSectionData = createEditorSection("EXHIBITIONS");
-    var exhibitionManagerStatus = document.createElement("p"); exhibitionManagerStatus.className = "gallery-editor-status-line"; exhibitionManagerStatus.innerText = "Active: Main Exhibition";
-    var exhibitionManagerSpaceStatus = document.createElement("p"); exhibitionManagerSpaceStatus.className = "gallery-editor-status-line"; exhibitionManagerSpaceStatus.innerText = "Space: " + (gallerySpaceDefinition.name || galleryActiveSpaceId);
-    var exhibitionManagerCreateWrap = document.createElement("div"); exhibitionManagerCreateWrap.className = "gallery-exhibition-manager-create";
-    var exhibitionManagerNameInput = document.createElement("input"); exhibitionManagerNameInput.type = "text"; exhibitionManagerNameInput.className = "gallery-editor-text-input"; exhibitionManagerNameInput.placeholder = "New exhibition name"; exhibitionManagerNameInput.maxLength = 120;
-    var exhibitionManagerCreateButton = document.createElement("button"); exhibitionManagerCreateButton.type = "button"; exhibitionManagerCreateButton.className = "gallery-editor-action-button is-primary"; exhibitionManagerCreateButton.innerText = "CREATE";
-    exhibitionManagerCreateWrap.appendChild(exhibitionManagerNameInput); exhibitionManagerCreateWrap.appendChild(exhibitionManagerCreateButton);
-    var exhibitionManagerList = document.createElement("div"); exhibitionManagerList.className = "gallery-exhibition-manager-list";
-    var exhibitionManagerReloadButton = document.createElement("button"); exhibitionManagerReloadButton.type = "button"; exhibitionManagerReloadButton.className = "gallery-editor-action-button"; exhibitionManagerReloadButton.innerText = "REFRESH LIST";
-    exhibitionManagerSectionData.section.appendChild(exhibitionManagerStatus); exhibitionManagerSectionData.section.appendChild(exhibitionManagerSpaceStatus); exhibitionManagerSectionData.section.appendChild(exhibitionManagerCreateWrap); exhibitionManagerSectionData.section.appendChild(exhibitionManagerList); exhibitionManagerSectionData.section.appendChild(exhibitionManagerReloadButton); editorScroll.appendChild(exhibitionManagerSectionData.section);
-
-    function renderGalleryExhibitionManagerList() {
-        if (!exhibitionManagerList) return; exhibitionManagerList.innerHTML = ""; var catalog = galleryExhibitionRuntime.catalog || [];
-        if (!catalog.length) { var empty = document.createElement("p"); empty.className = "gallery-editor-status-line"; empty.innerText = galleryExhibitionRuntime.catalogLoading ? "Loading exhibitions..." : "No exhibition catalog. Run the SQL migration if this is the first C6C7/C6C8 test."; exhibitionManagerList.appendChild(empty); return; }
-        catalog.forEach(function (exhibition) {
-            var row = document.createElement("div"); row.className = "gallery-exhibition-manager-row";
-            var meta = document.createElement("div"); meta.className = "gallery-exhibition-manager-meta"; var title = document.createElement("strong"); title.innerText = exhibition.name; var detail = document.createElement("span"); detail.innerText = exhibition.id === getActiveGalleryExhibitionId() ? "ACTIVE · " + exhibition.storage_prefix : (exhibition.is_published ? "Published · " : "Draft · ") + exhibition.storage_prefix; meta.appendChild(title); meta.appendChild(detail);
-            var openButton = document.createElement("button"); openButton.type = "button"; openButton.className = "gallery-editor-action-button" + (exhibition.id === getActiveGalleryExhibitionId() ? " is-primary" : ""); openButton.innerText = exhibition.id === getActiveGalleryExhibitionId() ? "OPEN" : "SWITCH"; openButton.disabled = galleryExhibitionRuntime.switching || exhibition.id === getActiveGalleryExhibitionId(); openButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); switchGalleryExhibition(exhibition.id); };
-            row.appendChild(meta); row.appendChild(openButton); exhibitionManagerList.appendChild(row);
-        });
-    }
-    function updateGalleryExhibitionManagerUi() {
-        if (!exhibitionManagerSectionData || !exhibitionManagerSectionData.section) return; var active = galleryExhibitionRuntime.active || getGalleryFallbackMainExhibition(); exhibitionManagerSectionData.section.classList.toggle("is-hidden", !editMode); exhibitionManagerStatus.innerText = "Active: " + active.name + " [" + active.id + "]"; exhibitionManagerSpaceStatus.innerText = "Space: " + (gallerySpaceDefinition.name || galleryActiveSpaceId) + " [" + galleryActiveSpaceId + "]"; exhibitionManagerCreateButton.disabled = galleryExhibitionRuntime.creating || galleryExhibitionRuntime.switching; exhibitionManagerReloadButton.disabled = !!galleryExhibitionRuntime.catalogLoading || galleryExhibitionRuntime.switching; renderGalleryExhibitionManagerList();
-    }
-    exhibitionManagerCreateButton.onclick = async function (event) { event.preventDefault(); event.stopPropagation(); var created = await createGalleryExhibition(exhibitionManagerNameInput.value); if (created) exhibitionManagerNameInput.value = ""; updateGalleryExhibitionManagerUi(); };
-    exhibitionManagerReloadButton.onclick = function (event) { event.preventDefault(); event.stopPropagation(); galleryExhibitionRuntime.catalogLoaded = false; loadGalleryExhibitionCatalog(true).then(updateGalleryExhibitionManagerUi).catch(function (error) { galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); updateGalleryExhibitionManagerUi(); }); updateGalleryExhibitionManagerUi(); };
+    // Stage 12C66C6C7C8B: exhibition catalog/metadata management lives in admin.html.
+    // The in-scene panel is intentionally limited to editing the active exhibition content.
 
     var artworkManageSectionData = createEditorSection("ARTWORKS / SCULPTURES");
     var artworkManageActions = document.createElement("div");
@@ -29682,7 +29664,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     [
-        exhibitionManagerSectionData,
         artworkManageSectionData,
         artworkImageSectionData,
         artworkFrameSectionData,
@@ -31005,8 +30986,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(true);
             warmGalleryArtworkFrameLibrary();
-            loadGalleryExhibitionCatalog(false).then(updateGalleryExhibitionManagerUi).catch(function (error) { galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); updateGalleryExhibitionManagerUi(); });
-            updateGalleryExhibitionManagerUi();
 
             refreshMobileViewerMode();
             updateViewerCollisionMode();
@@ -42475,11 +42454,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 if (!applyResult.ok) { notifyGalleryStatus("Nie udalo sie wczytac zapisanej wystawy."); return false; }
                 if (applyResult.usedFallback) notifyGalleryStatus("Wczytano wystawe bez biblioteki autorow. Sprawdz ARTWORK INFO i zapisz ponownie."); else if (!options.silent) notifyGalleryStatus("Wczytano wystawe: " + exhibition.name + ". Lampy: " + getStateLightCount(rowState) + ".");
                 setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: rowState, revision: getGalleryStateRevision(rowState), confirmed: true, serverRowExists: true, reason: "manual-load-exhibition-baseline" });
-                if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi(); return true;
+                return true;
             }
             if (!options.silent) notifyGalleryStatus("Wystawa nie ma jeszcze stanu. Uzywam pustej wystawy.");
             setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: null, revision: 0, confirmed: true, serverRowExists: !!row, reason: "manual-load-empty-exhibition-baseline" });
-            if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi(); return false;
+            return false;
         } catch (error) { console.warn("Gallery exhibition load failed:", error); notifyGalleryStatus("Nie udalo sie wczytac wystawy: " + (error && error.message ? error.message : error)); return false; }
     }
 
@@ -42488,7 +42467,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (galleryExhibitionRuntime.switching || exhibitionId === getActiveGalleryExhibitionId()) return true;
         if (!options.force && !confirmGalleryDiscardUnsavedChanges("Switching exhibition")) return false;
         var client = window.gallerySupabase; if (!client) { notifyGalleryStatus("Supabase nie jest skonfigurowany."); return false; }
-        galleryExhibitionRuntime.switching = true; if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi();
+        galleryExhibitionRuntime.switching = true;
         var previousExhibition = galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition();
         var previousRuntimeState = serializeGalleryState();
         var previousBaseline = {
@@ -42517,7 +42496,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 } catch (rollbackError) { console.warn("Exhibition switch rollback failed:", rollbackError); }
             }
             notifyGalleryStatus("Nie udalo sie przelaczyc wystawy: " + galleryExhibitionRuntime.lastError); return false;
-        } finally { galleryExhibitionRuntime.switching = false; if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi(); }
+        } finally { galleryExhibitionRuntime.switching = false; }
     }
 
     function createGalleryExhibitionId() {
@@ -42534,7 +42513,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (galleryEditorLoginEnabled && !editorAuthenticated) { notifyGalleryStatus("Zaloguj sie jako edytor, aby utworzyc wystawe."); return null; }
         if (!confirmGalleryDiscardUnsavedChanges("Creating another exhibition")) return null;
         var client = window.gallerySupabase; if (!client) { notifyGalleryStatus("Supabase nie jest skonfigurowany."); return null; }
-        galleryExhibitionRuntime.creating = true; if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi();
+        galleryExhibitionRuntime.creating = true;
         var exhibitionId = createGalleryExhibitionId();
         var exhibition = normalizeGalleryExhibitionRecord({ id: exhibitionId, name: name, slug: createGalleryExhibitionSlug(name, exhibitionId), description: "", cover_path: null, is_published: false, sort_order: galleryExhibitionRuntime.catalog.length, storage_prefix: "exhibitions/" + exhibitionId, space_id: galleryActiveSpaceId });
         try {
@@ -42547,7 +42526,56 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (stateResponse.error) { try { await client.from("gallery_exhibitions").delete().eq("id", exhibition.id); } catch (rollbackError) {} throw stateResponse.error; }
             galleryExhibitionRuntime.catalogLoaded = false; await loadGalleryExhibitionCatalog(true); await switchGalleryExhibition(exhibition.id, { force: true }); return exhibition;
         } catch (error) { galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); console.warn("Create exhibition failed:", error); notifyGalleryStatus("Nie udalo sie utworzyc wystawy: " + galleryExhibitionRuntime.lastError); return null; }
-        finally { galleryExhibitionRuntime.creating = false; if (typeof updateGalleryExhibitionManagerUi === "function") updateGalleryExhibitionManagerUi(); }
+        finally { galleryExhibitionRuntime.creating = false; }
+    }
+
+    async function updateGalleryExhibitionMetadata(exhibitionId, patch) {
+        exhibitionId = normalizeGalleryRuntimeId(exhibitionId, getActiveGalleryExhibitionId());
+        patch = patch && typeof patch === "object" ? patch : {};
+        if (galleryEditorLoginEnabled && !editorAuthenticated) {
+            notifyGalleryStatus("Zaloguj sie jako edytor, aby zmienic dane wystawy.");
+            return null;
+        }
+        var client = window.gallerySupabase;
+        if (!client) return null;
+
+        var payload = {};
+        if (patch.name !== undefined) {
+            var nextName = String(patch.name || "").trim();
+            if (!nextName) throw new Error("Exhibition name cannot be empty.");
+            payload.name = nextName;
+        }
+        if (patch.description !== undefined) payload.description = String(patch.description || "");
+        if (patch.cover_path !== undefined) payload.cover_path = patch.cover_path ? String(patch.cover_path) : null;
+        if (patch.is_published !== undefined) payload.is_published = !!patch.is_published;
+        if (patch.sort_order !== undefined) payload.sort_order = Number(patch.sort_order) || 0;
+        if (Object.keys(payload).length === 0) return resolveGalleryExhibitionMetadata(client, exhibitionId);
+
+        var response = await client.from("gallery_exhibitions")
+            .update(payload)
+            .eq("id", exhibitionId)
+            .select("id, name, slug, description, cover_path, is_published, sort_order, storage_prefix, space_id, created_at, updated_at")
+            .limit(1);
+        if (response.error) throw response.error;
+        var rows = Array.isArray(response.data) ? response.data : (response.data ? [response.data] : []);
+        var updated = normalizeGalleryExhibitionRecord(rows[0]);
+        if (!updated) throw new Error("Updated exhibition metadata was not returned.");
+
+        var found = false;
+        galleryExhibitionRuntime.catalog = (galleryExhibitionRuntime.catalog || []).map(function (item) {
+            if (item && item.id === updated.id) { found = true; return updated; }
+            return item;
+        });
+        if (!found) galleryExhibitionRuntime.catalog.push(updated);
+        galleryExhibitionRuntime.catalog.sort(function (a, b) {
+            return (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+        });
+        galleryExhibitionRuntime.catalogLoaded = true;
+
+        if (updated.id === getActiveGalleryExhibitionId()) {
+            setActiveGalleryExhibitionContext(updated, { persistCurrentQueues: false, restoreQueues: false });
+        }
+        return Object.assign({}, updated);
     }
 
     async function saveGalleryStateToSupabase() {
@@ -42815,6 +42843,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getActive: function () { return galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition(); },
         list: function (force) { return loadGalleryExhibitionCatalog(!!force); },
         create: createGalleryExhibition,
+        updateMetadata: updateGalleryExhibitionMetadata,
         switchTo: switchGalleryExhibition,
         getSpace: function () { return cloneGalleryJson(gallerySpaceDefinition); },
         getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, lastError: galleryExhibitionRuntime.lastError }; }
@@ -42826,6 +42855,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return galleryEditorLoginEnabled;
         },
         isEditModeActive: function () {
+            return !!editMode;
+        },
+        setEditMode: function (enabled) {
+            var desired = !!enabled;
+            if (editMode !== desired && editButton && typeof editButton.click === "function") editButton.click();
             return !!editMode;
         },
         hasUnsavedChanges: hasGalleryUnsavedChanges,
@@ -42844,12 +42878,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getActiveExhibition: function () { return galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition(); },
         getExhibitions: function (force) { return loadGalleryExhibitionCatalog(!!force); },
         createExhibition: createGalleryExhibition,
+        updateExhibitionMetadata: updateGalleryExhibitionMetadata,
         switchExhibition: switchGalleryExhibition,
         getSpaceDefinition: function () { return cloneGalleryJson(gallerySpaceDefinition); },
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C7C8",
+                stage: "12C66C6C7C8B",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

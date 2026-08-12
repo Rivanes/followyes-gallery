@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Exhibition Platform — Admin Workspace</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d0c;
+      --panel: rgba(24, 27, 25, 0.92);
+      --panel-soft: rgba(255,255,255,.035);
+      --line: rgba(255,255,255,.10);
+      --line-strong: rgba(255,255,255,.18);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.57);
+      --accent: #9ab49b;
+      --accent-bg: rgba(125, 160, 127, .16);
+      --danger: #d18b8b;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { width:100%; min-height:100%; margin:0; background:var(--bg); color:var(--text); }
+    body { overflow:hidden; }
+    button, input, textarea { font: inherit; }
+    button { color:inherit; }
+    .hidden { display:none !important; }
+
+    #adminShell { height:100vh; display:grid; grid-template-rows:64px minmax(0,1fr); }
+    #adminTopbar {
+      display:flex; align-items:center; justify-content:space-between; gap:20px;
+      padding:0 22px; border-bottom:1px solid var(--line); background:rgba(13,15,14,.96); z-index:30;
+    }
+    .adminBrand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .adminBrandMark { width:30px; height:30px; border:1px solid var(--line-strong); border-radius:9px; display:grid; place-items:center; font-weight:800; font-size:11px; }
+    .adminBrandText strong { display:block; font-size:13px; letter-spacing:.07em; text-transform:uppercase; }
+    .adminBrandText span { display:block; margin-top:2px; color:var(--muted); font-size:11px; }
+    .topActions { display:flex; align-items:center; gap:8px; }
+    .topUser { color:var(--muted); font-size:12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .adminButton {
+      min-height:36px; padding:0 13px; border:1px solid var(--line-strong); border-radius:10px;
+      background:rgba(255,255,255,.055); cursor:pointer; font-weight:700; font-size:11px; letter-spacing:.04em;
+    }
+    .adminButton:hover { background:rgba(255,255,255,.09); }
+    .adminButton.primary { background:var(--accent-bg); border-color:rgba(154,180,155,.45); }
+    .adminButton.danger { color:#f0b5b5; }
+    .adminButton:disabled { opacity:.4; cursor:default; }
+
+    #adminBody { min-height:0; display:grid; grid-template-columns:360px minmax(0,1fr); }
+    #adminSidebar { min-height:0; overflow:auto; border-right:1px solid var(--line); background:rgba(17,19,18,.98); padding:18px; }
+    .workspaceSection { border:1px solid var(--line); border-radius:14px; background:var(--panel-soft); overflow:hidden; margin-bottom:14px; }
+    .sectionHead { padding:14px 14px 10px; display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+    .sectionHead h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+    .sectionHead p { margin:5px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+    .sectionBody { padding:0 14px 14px; }
+
+    #createExhibitionForm { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+    .adminInput, .adminTextarea {
+      width:100%; border:1px solid var(--line-strong); border-radius:10px; background:rgba(255,255,255,.055); color:var(--text); outline:none;
+    }
+    .adminInput { height:38px; padding:0 11px; }
+    .adminTextarea { min-height:92px; resize:vertical; padding:10px 11px; line-height:1.45; }
+    .adminInput:focus, .adminTextarea:focus { border-color:rgba(154,180,155,.58); box-shadow:0 0 0 3px rgba(154,180,155,.08); }
+
+    #exhibitionList { display:grid; gap:7px; max-height:280px; overflow:auto; padding-right:2px; }
+    .exhibitionRow {
+      width:100%; display:grid; grid-template-columns:48px minmax(0,1fr); gap:10px; align-items:center; text-align:left;
+      padding:7px; border:1px solid transparent; border-radius:10px; background:transparent; cursor:pointer;
+    }
+    .exhibitionRow:hover { background:rgba(255,255,255,.045); }
+    .exhibitionRow.active { border-color:rgba(154,180,155,.38); background:var(--accent-bg); }
+    .exhibitionThumb { width:48px; height:48px; border-radius:8px; border:1px solid var(--line); object-fit:cover; background:rgba(255,255,255,.035); }
+    .exhibitionMeta { min-width:0; }
+    .exhibitionMeta strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+    .exhibitionMeta span { display:block; margin-top:4px; color:var(--muted); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .statusDot { display:inline-block; width:6px; height:6px; border-radius:50%; background:#777; margin-right:5px; vertical-align:1px; }
+    .statusDot.published { background:#7fa982; }
+
+    #detailsForm { display:grid; gap:11px; }
+    .fieldLabel { display:grid; gap:6px; color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    .fieldMeta { color:var(--muted); font-size:10px; line-height:1.4; }
+    .inlineFields { display:grid; grid-template-columns:1fr 110px; gap:9px; }
+    .checkRow { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:38px; border:1px solid var(--line); border-radius:10px; padding:0 10px; }
+    .checkRow span { font-size:11px; color:var(--muted); }
+    .checkRow input { width:17px; height:17px; }
+
+    .posterCard { display:grid; grid-template-columns:94px minmax(0,1fr); gap:11px; align-items:start; }
+    #posterPreview { width:94px; aspect-ratio:4/5; object-fit:cover; border-radius:10px; border:1px solid var(--line-strong); background:#101210; }
+    .posterActions { display:grid; gap:7px; }
+    #posterFileInput { display:none; }
+
+    #workspaceMain { min-width:0; min-height:0; padding:18px; background:radial-gradient(circle at 30% 10%, rgba(255,255,255,.035), transparent 36%), #0b0d0c; }
+    #viewportCard { height:100%; min-height:0; display:grid; grid-template-rows:42px minmax(0,1fr); border:1px solid var(--line); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
+    #viewportToolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 12px; border-bottom:1px solid var(--line); background:rgba(20,22,21,.96); }
+    #viewportStatus { min-width:0; color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #viewportStatus strong { color:var(--text); }
+    #adminViewportStage { position:relative; min-width:0; min-height:0; overflow:hidden; isolation:isolate; }
+    #renderCanvas { display:block; width:100%; height:100%; outline:none; touch-action:none; }
+    #adminViewportStage > #saveStateButton { display:none; }
+    #galleryToast { position:fixed; right:20px; bottom:20px; z-index:10000; max-width:420px; display:none; padding:11px 14px; border:1px solid var(--line-strong); border-radius:10px; background:#171a18; font-size:12px; box-shadow:0 18px 50px rgba(0,0,0,.35); }
+    #startupError { position:absolute; inset:16px; display:none; z-index:60; place-items:center; padding:25px; border:1px solid rgba(209,139,139,.35); border-radius:12px; background:rgba(35,15,15,.92); color:#f0b5b5; text-align:center; }
+    .workspaceLoading { position:absolute; inset:0; z-index:45; display:grid; place-items:center; pointer-events:none; background:rgba(5,6,6,.72); backdrop-filter:blur(4px); }
+    .workspaceLoading.hidden { display:none; }
+    .loadingCard { padding:13px 16px; border:1px solid var(--line); border-radius:10px; background:#161918; color:var(--muted); font-size:11px; }
+
+    #authGate { position:fixed; inset:0; z-index:20000; display:none; place-items:center; background:#0b0d0c; }
+    #authGate.visible { display:grid; }
+    #adminLoginForm { width:min(390px, calc(100vw - 32px)); padding:22px; border:1px solid var(--line); border-radius:16px; background:#151817; box-shadow:0 40px 120px rgba(0,0,0,.4); }
+    #adminLoginForm h1 { margin:0 0 6px; font-size:19px; }
+    #adminLoginForm p { margin:0 0 18px; color:var(--muted); font-size:12px; line-height:1.5; }
+    #adminLoginForm .fieldLabel { margin-bottom:10px; }
+    #adminLoginError { display:none; margin:4px 0 12px; color:#f0aaaa; font-size:11px; }
+    .loginActions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+
+    @media (max-width: 980px) {
+      body { overflow:auto; }
+      #adminShell { min-height:100vh; height:auto; }
+      #adminBody { grid-template-columns:1fr; }
+      #adminSidebar { border-right:0; border-bottom:1px solid var(--line); max-height:none; }
+      #workspaceMain { height:720px; }
+    }
+  </style>
+</head>
+<body data-admin-workspace="true">
+  <div id="adminShell">
+    <header id="adminTopbar">
+      <div class="adminBrand">
+        <div class="adminBrandMark">EP</div>
+        <div class="adminBrandText"><strong>Admin Workspace</strong><span>Exhibition Platform</span></div>
+      </div>
+      <div class="topActions">
+        <span id="adminUser" class="topUser">Not authenticated</span>
+        <a class="adminButton" href="./index.html">PUBLIC PAGE</a>
+        <button id="logoutButton" class="adminButton danger" type="button">LOG OUT</button>
+      </div>
+    </header>
+
+    <div id="adminBody">
+      <aside id="adminSidebar">
+        <section class="workspaceSection">
+          <div class="sectionHead"><div><h2>Exhibitions</h2><p>Switch the active exhibition or create a new one in the current 3D Space.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div>
+          <div class="sectionBody">
+            <form id="createExhibitionForm">
+              <input id="newExhibitionName" class="adminInput" maxlength="120" placeholder="New exhibition name" autocomplete="off" />
+              <button id="createExhibitionButton" class="adminButton primary" type="submit">CREATE</button>
+            </form>
+            <div style="height:10px"></div>
+            <div id="exhibitionList"><div class="fieldMeta">Loading exhibition catalog…</div></div>
+          </div>
+        </section>
+
+        <section class="workspaceSection">
+          <div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata used by the admin workspace and the future public carousel.</p></div></div>
+          <div class="sectionBody">
+            <form id="detailsForm">
+              <label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required /></label>
+              <label class="fieldLabel">Description<textarea id="exhibitionDescription" class="adminTextarea" maxlength="4000" placeholder="Short exhibition description"></textarea></label>
+              <div class="inlineFields">
+                <label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly /></label>
+                <label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1" /></label>
+              </div>
+              <div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox" /></div>
+              <div class="fieldLabel">Poster / cover</div>
+              <div class="posterCard">
+                <img id="posterPreview" alt="Exhibition poster preview" />
+                <div class="posterActions">
+                  <button id="choosePosterButton" class="adminButton" type="button">UPLOAD / REPLACE</button>
+                  <button id="removePosterButton" class="adminButton danger" type="button">REMOVE</button>
+                  <div id="posterStatus" class="fieldMeta">No poster assigned.</div>
+                  <input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif" />
+                </div>
+              </div>
+              <div class="fieldMeta">Space: <strong id="exhibitionSpaceId">main-space</strong></div>
+              <button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button>
+            </form>
+          </div>
+        </section>
+      </aside>
+
+      <main id="workspaceMain">
+        <section id="viewportCard">
+          <div id="viewportToolbar">
+            <div id="viewportStatus">3D preview: <strong>starting…</strong></div>
+            <div class="fieldMeta">Scene editor stays inside this viewport.</div>
+          </div>
+          <div id="adminViewportStage">
+            <canvas id="renderCanvas"></canvas>
+            <button id="saveStateButton" type="button">Save changes</button>
+            <div id="workspaceLoading" class="workspaceLoading"><div class="loadingCard">Preparing 3D workspace…</div></div>
+            <div id="startupError"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="galleryToast"></div>
+
+  <div id="authGate">
+    <form id="adminLoginForm">
+      <h1>Admin Workspace</h1>
+      <p>Sign in with the editor account to manage exhibitions.</p>
+      <label class="fieldLabel">E-mail<input id="adminEmail" class="adminInput" type="email" autocomplete="username" required /></label>
+      <label class="fieldLabel">Password<input id="adminPassword" class="adminInput" type="password" autocomplete="current-password" required /></label>
+      <div id="adminLoginError"></div>
+      <div class="loginActions"><a class="adminButton" href="./index.html">BACK</a><button class="adminButton primary" type="submit">LOG IN</button></div>
+    </form>
+  </div>
+
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=stage12c66c6c7c8b_admin_workspace_20260812"></script>
+</body>
+</html>

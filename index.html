@@ -1177,6 +1177,7 @@
 
         <span id="authStatus">Public gallery</span>
         <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
+        <a id="adminWorkspaceButton" class="headerButton hidden" href="./admin.html">ADMIN</a>
         <button id="loginButton" class="headerButton">Log in</button>
         <button id="logoutButton" class="headerButton hidden">Log out</button>
       </div>
@@ -1759,7 +1760,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "12C66C6C7C8",
+              stage: "12C66C6C7C8B",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1818,7 +1819,7 @@
       });
 
       window.BerryboyBootGuard = {
-        stage: "12C66C6C7C8",
+        stage: "12C66C6C7C8B",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1832,6 +1833,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66c6c7c8_space_exhibition_split_20260812" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66c6c7c8b_admin_workspace_20260812" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

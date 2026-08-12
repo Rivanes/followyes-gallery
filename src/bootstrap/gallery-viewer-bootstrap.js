@@ -1,15 +1,15 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6C7C8
+  Exhibition Platform — Stage 12C66C6C7C8B
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c7c8_space_exhibition_split_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c7c8b_admin_workspace_20260812";
 
-const STAGE = "12C66C6C7C8";
-const ENGINE_CACHE_KEY = "stage12c66c6c7c8_space_exhibition_split_20260812";
+const STAGE = "12C66C6C7C8B";
+const ENGINE_CACHE_KEY = "stage12c66c6c7c8b_admin_workspace_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -25,6 +25,7 @@ const startupError = document.getElementById("startupError");
 const galleryToast = document.getElementById("galleryToast");
 const loginButton = document.getElementById("loginButton");
 const logoutButton = document.getElementById("logoutButton");
+const adminWorkspaceButton = document.getElementById("adminWorkspaceButton");
 const saveStateButton = document.getElementById("saveStateButton");
 const exploreBelowButton = document.getElementById("exploreBelowButton");
 const authStatus = document.getElementById("authStatus");
@@ -134,6 +135,7 @@ function updateAuthUi() {
   if (loginButton) loginButton.classList.toggle("hidden", isLoggedIn);
   if (logoutButton) logoutButton.classList.toggle("hidden", !isLoggedIn);
   if (saveStateButton) saveStateButton.classList.toggle("hidden", !isLoggedIn);
+  if (adminWorkspaceButton) adminWorkspaceButton.classList.toggle("hidden", !isLoggedIn);
 
   if (authStatus) {
     authStatus.textContent = isLoggedIn

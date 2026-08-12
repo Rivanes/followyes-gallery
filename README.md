@@ -1,40 +1,43 @@
-# Berryboy Art Gallery — Stage 12C66C6C7C8
+# Exhibition Platform — Stage 12C66C6C7C8B
 
-## Space / Exhibition Split + Multi-Exhibition
+## Admin Workspace / Multi-Exhibition
 
-Baza: **Stage 12C66C6C6 — Artwork Frame Runtime Performance**, po wcześniejszym cleanupie paczki.
+Baza: **Stage 12C66C6C7C8 — Space / Exhibition Split + Multi-Exhibition**.
 
-Ten Stage łączy C6C7 i C6C8: obecna fizyczna przestrzeń 3D zostaje oddzielona od danych wystawy, a Editor może tworzyć i przełączać wiele niezależnych wystaw w tej samej przestrzeni.
+Ten etap przenosi zarządzanie wystawami **poza scenę 3D**. Silnik nadal edytuje zawartość aktywnej wystawy, ale lista wystaw, tworzenie, przełączanie i metadane są obsługiwane przez osobny `admin.html`.
 
 ### Co się zmieniło
 
-- Aktualne modele budynku nie są już wpisane bezpośrednio w loader sceny. Definicja obecnego Space znajduje się w `src/config/gallery-space-config.js`.
-- `gallery_state` jest ładowany i zapisywany według aktywnego `exhibitionId`, zamiast stałego `main`.
-- Dotychczasowa wystawa pozostaje jako `main` i zachowuje obecny `gallery_state/main` oraz `gallery-artworks/main/*`.
-- Nowe wystawy dostają własny rekord `gallery_state` oraz Storage `gallery-artworks/exhibitions/<exhibitionId>/*`.
-- Biblioteka ramek nadal jest wspólna: `gallery-artworks/main/frames/*`.
-- Editor ma sekcję **EXHIBITIONS** z listą, tworzeniem i przełączaniem wystaw.
-- Przełączenie wystawy czyści tylko runtime wystawy i przywraca bazowy stan tej samej przestrzeni 3D; Space nie jest przeładowywany.
-- Startup obsługuje `?exhibition=<id>` — będzie to punkt wejścia dla karuzeli w kolejnym etapie.
+- Dodano osobny `admin.html` z układem: lista wystaw + dane wystawy + mniejszy viewport 3D.
+- Po zalogowaniu z publicznej strony użytkownik jest kierowany do Admin Workspace.
+- Editor 3D nie zawiera już sekcji **EXHIBITIONS** — panel sceny służy tylko do edycji aktywnej wystawy.
+- Admin Workspace pozwala tworzyć i przełączać wystawy bez przeładowywania obecnego Space.
+- Każda wystawa ma edytowalne: `name`, `description`, `is_published`, `sort_order` oraz poster/cover.
+- Poster jest zapisywany w Storage pod `<storage_prefix>/branding/posters/` i jego ścieżka trafia do `gallery_exhibitions.cover_path`.
+- `slug`, `space_id` i Storage prefix pozostają kontrolowane przez istniejący system C6C7/C6C8.
+- Silnik udostępnia programowe API dla Admin Workspace: przełączanie wystawy, aktualizacja metadanych i włączanie Edit Mode.
+- `?exhibition=<id>` nadal działa i zostaje przygotowane pod późniejszy publiczny carousel/index.
 
 ### Supabase
 
-Przy istniejącej bazie uruchom tylko:
+**Jeżeli uruchomiłeś już `01_STAGE_C6C7_C6C8_MULTI_EXHIBITION.sql`, ten etap nie wymaga nowych kolumn ani tabel.**
 
-`SUPABASE_SQL/01_STAGE_C6C7_C6C8_MULTI_EXHIBITION.sql`
+Możesz opcjonalnie uruchomić:
 
-Nie uruchamiaj `00_LEGACY_CURRENT.sql`, jeśli obecna konfiguracja już działa. Szczegóły są w `SUPABASE_SQL/README_FIRST.md`.
+`SUPABASE_SQL/03_STAGE_C6C7_C6C8B_ADMIN_WORKSPACE.sql`
+
+To bezpieczny schema guard — niczego nie przebudowuje, tylko sprawdza czy pola wymagane przez Admin Workspace istnieją.
 
 ### Test ręczny
 
-1. Po migracji SQL uruchom stronę i sprawdź istniejącą `Main Exhibition`.
-2. Zaloguj się do Editora, otwórz **EXHIBITIONS** i utwórz nową wystawę.
-3. Dodaj do niej kilka innych elementów i zapisz.
-4. Przełącz z powrotem na `Main Exhibition` — jej stan powinien wrócić bez zmian.
-5. Ponownie przełącz na nową wystawę — oba stany muszą pozostać całkowicie niezależne.
+1. Otwórz `index.html` i zaloguj się — powinno przekierować do `admin.html`.
+2. W Admin Workspace sprawdź listę wystaw i mniejszy viewport 3D.
+3. Utwórz nową wystawę i przełączaj się między nią a `Main Exhibition`.
+4. Ustaw nazwę, opis, kolejność, publikację oraz poster i zapisz metadane.
+5. Dodaj różne artworki do dwóch wystaw, zapisz sceny i sprawdź ponowne przełączanie.
 
 ### Walidacja
 
 `npm run check`
 
-uruchamia aktualny verifier, wszystkie wcześniejsze testy regresyjne oraz test C6C7/C6C8 multi-exhibition.
+Uruchamia aktualny verifier, wcześniejsze testy regresyjne, test Multi-Exhibition oraz nowy test Admin Workspace.
