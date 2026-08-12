@@ -1,50 +1,41 @@
-# Exhibition Platform — C6C8C3 Runtime Hygiene / Cache Versioning
+# Exhibition Platform — C6C8C4 Space Residency / Exhibition Delta Switch
 
-Aktualna baza rozwoju platformy wystaw po wdrożeniu Multi-Exhibition, Admin Workspace, Same-Runtime Admin i Egress Guard.
+C6C8C4 porządkuje przełączanie wystaw wewnątrz tego samego `space_id` bez ponownego przygotowywania budynku.
 
-## Co porządkuje C6C8C3
+## Główna zasada
 
-- Public Viewer nie zapisuje się już jako aktywna karta edytora tylko dlatego, że administrator jest zalogowany.
-- Heartbeat, dirty watcher i unload guard należą wyłącznie do aktywnego Admin Workspace.
-- Wejście/wyjście z Admina przełącza również politykę Artwork Full/Preview bez tworzenia nowej sceny.
-- Admin ma wspólną ochronę przed utratą zmian: stan sceny + formularz Exhibition Details.
-- Zamknięty inline Admin zawiesza licznik Asset Delivery, ResizeObserver i metadata unload guard; `resume` włącza je ponownie.
-- Fixed-path Space GLB mają kontrolowaną wersję cache. Zmiana `version` w `src/config/gallery-space-config.js` powoduje jednorazowe pobranie nowego pliku bez czyszczenia całego cache.
-- Ramki GLB dostają wersję delivery na podstawie metadanych Storage, więc podmieniona ramka nie powinna utknąć w starym persistent cache.
-- `Main Exhibition` nie jest już specjalnym wyjątkiem publikacji. Publiczny Viewer widzi tylko wystawy oznaczone `is_published = true`.
-- Jeśli żądana wystawa jest Draft, publiczny Viewer próbuje otworzyć pierwszą opublikowaną wystawę.
-- `PUBLIC PAGE` ma wymuszony wygląd przycisku dla wszystkich stanów linku.
+Jeżeli dwie wystawy używają tego samego `space_id`, warstwa **Space pozostaje rezydentna**:
 
-## Supabase — wymagany krok
+- Floor / Walls / Ceiling / Props nie są ponownie importowane,
+- statyczne kolizje budynku nie są przebudowywane przy każdym switchu,
+- cache world-bounds i segmentów Space nie jest czyszczony tylko dlatego, że zmienił się artwork/rzeźba,
+- nie wykonujemy już pełnego `resetGalleryRuntimeToBlankExhibition()` dla same-space switch.
 
-Jeżeli Multi-Exhibition jest już zainstalowane, uruchom **tylko**:
+Zmienia się wyłącznie warstwa Exhibition: artworky, rzeźby, Local Lights, wall presentation, lighting/visual state i dane wystawy. Globalne zależności są odświeżane **raz po zakończeniu delta switch**, zamiast wielokrotnie w trakcie reset/apply.
 
-`SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql`
+## Viewer ↔ Admin
 
-Ten SQL synchronizuje publiczny dostęp `gallery_state` i Storage z `gallery_exhibitions.is_published`. Wspólne ramki `gallery-artworks/main/frames/*` pozostają publiczne.
+Same-runtime Admin dalej używa tego samego Babylon `engine` i `scene`. Wejście do Edit Mode nie przebudowuje już Tour bezwarunkowo — jeśli roster/pozycje/order się nie zmieniły, istniejący Tour zostaje użyty.
+
+## Diagnostyka
+
+`GalleryApp.exhibitions.getDebug()` pokazuje m.in.:
+
+- `sameSpaceSwitchCount`,
+- `fullRuntimeResetCount`,
+- `lastSwitchMode`,
+- `lastSwitchDurationMs`,
+- `lastSwitchFromId` / `lastSwitchToId`.
+
+Dla przejścia pomiędzy wystawami w `main-space` oczekiwany `lastSwitchMode` to `same-space-delta`.
 
 ## Cache Space GLB
 
-W `src/config/gallery-space-config.js` każdy asset ma `version: 1`, a Space ma własne `version: 1`.
+Zasady C6C8C3 zostają bez zmian. `src/config/gallery-space-config.js` ma jawne `version` dla Space i jego assetów. Podmiana fixed-path GLB wymaga zwiększenia odpowiedniej wersji, bez czyszczenia całego persistent cache.
 
-Jeżeli podmienisz np. `Wall_segments.glb` pod tą samą ścieżką, zwiększ tylko:
+## Supabase
 
-```js
-walls: {
-  fileName: "Wall_segments.glb",
-  version: 2
-}
-```
-
-Nie trzeba czyścić całego cache użytkownika.
-
-## Pliki porządkowe
-
-- `tools/build-current.mjs` — jedyny aktualny build.
-- `tools/verify-current.mjs` — jedyny aktualny verifier.
-- `ENGINE_LOGIN_DISABLED.txt` — generowany testowy engine bez login gate.
-- historyczne testy regresyjne pozostają, ponieważ `npm run check` faktycznie je uruchamia.
-- usunięto historyczne pliki SQL typu `NO_SQL_REQUIRED` oraz stare Stage-specific build/verifier.
+**C6C8C4 nie wymaga nowego SQL.** Nadal obowiązuje migracja `SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql` z C6C8C3.
 
 ## Weryfikacja
 
@@ -52,4 +43,4 @@ Nie trzeba czyścić całego cache użytkownika.
 npm run check
 ```
 
-Musi przejść pełny zestaw regresji oraz `test:runtime-hygiene`.
+Pełny check obejmuje dotychczasowe regresje oraz `test:space-residency`.

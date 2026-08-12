@@ -1,16 +1,16 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C3
+  Exhibition Platform — Stage 12C66C6C8C4
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
-import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c4_space_residency_20260812";
+import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c4_space_residency_20260812";
 
-const STAGE = "12C66C6C8C3";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c3_runtime_hygiene_20260812";
+const STAGE = "12C66C6C8C4";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c4_space_residency_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 

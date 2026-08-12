@@ -107,6 +107,7 @@
   - Stage 12C66C6C8C1: Runtime Lifecycle / Admin Transition Fix — Exhibition/Save runtimes are initialized before state preload, public Viewer no longer owns editor dirty tracking or unload prompts, Viewer/Admin handoff uses confirmed published snapshots, Admin preview hydration uses the intended desktop concurrency, Full upgrades yield to Preview population, and active Exhibition is preserved when returning to the public page.
   - Stage 12C66C6C8C2: Same-Runtime Admin Workspace — authenticated Viewer→Admin transitions reuse the already-running Babylon engine, scene, GPU textures and Space instead of navigating to a second document; Admin can return to the public Viewer without rebuilding the scene, while direct admin.html remains supported.
   - Stage 12C66C6C8C3: Runtime Hygiene / Cache Versioning — editor heartbeat exists only while Admin Workspace is active, same-runtime Admin policies refresh on enter/exit, dirty scene state can be discarded without rebuilding the scene, Space/Frame fixed-path GLBs receive cache-busting versions, and public visibility of Main follows the same publication flag as every other Exhibition.
+  - Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch — switching Exhibitions inside the same space_id keeps the loaded building, static collision geometry and Space assets resident; only Exhibition-owned content/presentation is replaced, global refreshes are batched once, and entering Admin reuses a valid Tour instead of rebuilding it unconditionally.
 */
 
 
@@ -208,8 +209,8 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C1",
-        schema: "exhibition-platform-multi-exhibition.v4",
+        stage: "12C66C6C8C4",
+        schema: "exhibition-platform-multi-exhibition.v5",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
         active: null,
@@ -223,7 +224,15 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         spaceBaseline: null,
         stateCache: Object.create(null),
         stateCacheHits: 0,
-        stateCacheMisses: 0
+        stateCacheMisses: 0,
+        deltaSwitchActive: false,
+        sameSpaceSwitchCount: 0,
+        fullRuntimeResetCount: 0,
+        lastSwitchMode: "startup",
+        lastSwitchDurationMs: 0,
+        lastSwitchFromId: null,
+        lastSwitchToId: null,
+        lastSwitchSpaceId: galleryActiveSpaceId
     };
 
     if (!engine) {
@@ -3886,6 +3895,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    function refreshViewerExhibitionCollisionMeshes() {
+        if (viewerCollisionTargets.artworks) {
+            getActiveArtworks().forEach(function (artwork) {
+                registerViewerCollisionMesh(artwork, "artwork");
+            });
+        }
+
+        artSpheres.forEach(function (slot) {
+            if (!slot) return;
+            unregisterViewerCollisionMesh(slot);
+            if (slot.metadata && slot.metadata.sculptureMesh) unregisterViewerCollisionMesh(slot.metadata.sculptureMesh);
+            if (slot.metadata && slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.meshes) {
+                slot.metadata.model3dRuntime.meshes.forEach(function (mesh) { unregisterViewerCollisionMesh(mesh); });
+            }
+            if (viewerCollisionTargets.sculptures) refreshSculptureCollisionProxy(slot);
+            else disableSculptureCollisionProxy(slot);
+        });
+    }
+
     function serializeGroundCollisionVector(vector) {
         return vector ? { x: Number(vector.x), y: Number(vector.y), z: Number(vector.z) } : null;
     }
@@ -4780,7 +4808,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function markGalleryObjectsDirty(reason) {
         galleryObjectVersion += 1;
-        markLocalLightTargetCacheDirty(reason || "objectsDirty");
+        localLightTargetCacheVersion += 1;
+        clearLocalLightTargetMeshCacheForAll(reason || "objectsDirty");
+        localLightTargetDebugStats.lastReason = reason || "objectsDirty";
     }
 
     function markLocalLightTargetItemCacheDirty(item, reason) {
@@ -6769,7 +6799,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C3",
+        stage: "12C66C6C8C4",
         schema: "exhibition-asset-delivery.v2",
         desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
         desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
@@ -25775,7 +25805,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         sanitizeLocalLightGroups();
     }
 
-    function restoreLocalLightState(localLightState) {
+    function restoreLocalLightState(localLightState, options) {
+        options = options || {};
         if (!localLightState || !Array.isArray(localLightState.lights)) {
             return;
         }
@@ -25827,13 +25858,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             clearLocalLightSelection();
             applyVisualReflectionSettings(readVisualSettingsFromScene());
 
-            if (!galleryFastStartRuntime.stateApplyActive) {
+            if (!galleryFastStartRuntime.stateApplyActive && !options.deferGlobalRefresh) {
                 refreshAllCommonLocalLightTargets();
                 scheduleLoadTimeLocalLightRetarget("restoreLocalLightState", localLightLoadTimeRetargetDelayMs);
                 refreshAllLocalSpotShadows();
             }
 
-            updateLocalLightsUi();
+            if (!options.deferGlobalRefresh) updateLocalLightsUi();
         } finally {
             localLightStateRestoring = false;
         }
@@ -30669,7 +30700,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
-    function applyWallColorMaterialToSegment(wallMesh, material) {
+    function applyWallColorMaterialToSegment(wallMesh, material, options) {
+        options = options || {};
         if (!wallMesh || !material || !isPaintableWallSegmentMesh(wallMesh)) {
             return false;
         }
@@ -30697,10 +30729,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         wallMesh.metadata.wallSegmentPaintMode = "baseColorOnly";
 
         configureMeshMaterialForMainShadows(wallMesh);
-        scheduleCommonLightingMaterialSupport("wallPaintSegment");
-        markGallerySurfaceDirty("wallSegmentPainted");
-        markGalleryDraftDirty("wall-segment-painted");
-        updateEditHelpStatus();
+        if (!options.runtimeRestore) {
+            scheduleCommonLightingMaterialSupport("wallPaintSegment");
+            markGallerySurfaceDirty("wallSegmentPainted");
+            markGalleryDraftDirty("wall-segment-painted");
+            updateEditHelpStatus();
+        }
 
         return true;
     }
@@ -31196,7 +31230,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C3",
+            stage: "12C66C6C8C4",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -31344,7 +31378,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             updateEditHelpStatus();
             updateAlignmentPanel();
-            rebuildGalleryExhibitTour({ reason: "enter-edit-mode", recalculateAutoOrder: true, force: true });
+            ensureGalleryExhibitTourCurrent("enter-edit-mode");
             updateGalleryTourOrderUi();
         } else {
             resetViewerWASDMovementRuntime(true);
@@ -37496,7 +37530,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 loadedAt: pendingRuntime.loadedAt
             };
             if (galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
-            else { refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); hydrateSavedLocalLightTargetsForAll("model3d-loaded"); }
+            else { refreshViewerExhibitionCollisionMeshes(); refreshCommonLightingMaterialSupport(); hydrateSavedLocalLightTargetsForAll("model3d-loaded"); }
             updateViewerModePlaceholderVisibility();
             updateModel3dSlotUi();
             return true;
@@ -40332,6 +40366,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } finally { galleryExhibitTourRuntime.rebuilding=false; }
     }
 
+    function ensureGalleryExhibitTourCurrent(reason) {
+        var rosterSignature = computeGalleryExhibitRosterSignature();
+        var positionSignature = computeGalleryExhibitPositionSignature();
+        var orderSignature = computeGalleryExhibitOrderSignature();
+        var needsRebuild = galleryExhibitTourRuntime.dirty ||
+            galleryExhibitTourRuntime.rebuildRevision <= 0 ||
+            galleryExhibitTourRuntime.lastRosterSignature !== rosterSignature ||
+            galleryExhibitTourRuntime.lastPositionSignature !== positionSignature ||
+            galleryExhibitTourRuntime.lastOrderSignature !== orderSignature;
+        if (needsRebuild) {
+            return rebuildGalleryExhibitTour({ reason: reason || "ensure-current", recalculateAutoOrder: true, force: true });
+        }
+        refreshGalleryExhibitTourOrderBadges();
+        refreshGalleryExhibitTourDebugLines();
+        updateGalleryTourOrderUi();
+        return galleryExhibitTourRuntime.sequence;
+    }
+
     function scheduleGalleryExhibitTourRebuild(reason,options) {
         options=options||{}; galleryExhibitTourRuntime.dirty=true; if(galleryExhibitTourRuntime.rebuildTimer)clearTimeout(galleryExhibitTourRuntime.rebuildTimer);
         galleryExhibitTourRuntime.rebuildTimer=setTimeout(function(){galleryExhibitTourRuntime.rebuildTimer=null;rebuildGalleryExhibitTour({reason:reason||"scheduled",recalculateAutoOrder:!!options.recalculateAutoOrder,force:true});},Math.max(40,Number(options.delayMs)||180));
@@ -42227,7 +42279,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
-    function applyEditorState(editorState) {
+    function applyEditorState(editorState, options) {
+        options = options || {};
         if (!editorState || typeof editorState !== "object") {
             return;
         }
@@ -42236,7 +42289,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             selectedWallMaterial = wallColorMaterials[editorState.selectedWallMaterialName];
         }
 
-        if (Array.isArray(editorState.walls)) {
+        if (!options.skipWalls && Array.isArray(editorState.walls)) {
             editorState.walls.forEach(function (wallState) {
                 if (!wallState) {
                     return;
@@ -42261,7 +42314,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ) {
                     applyWallColorMaterialToSegment(
                         wallMesh,
-                        wallColorMaterials[colorName]
+                        wallColorMaterials[colorName],
+                        { runtimeRestore: true }
                     );
                 }
             });
@@ -42578,20 +42632,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
         }
 
-        refreshCommonLightingMaterialSupport();
-        refreshArtworkLightExclusions();
-        refreshPedestalLightIncludedMeshes();
+        if (!options.deferGlobalRefresh) {
+            refreshCommonLightingMaterialSupport();
+            refreshArtworkLightExclusions();
+            refreshPedestalLightIncludedMeshes();
 
-        if (!galleryFastStartRuntime.stateApplyActive) {
-            refreshAllCommonLocalLightTargets();
-            refreshAllLocalSpotShadows();
+            if (!galleryFastStartRuntime.stateApplyActive) {
+                refreshAllCommonLocalLightTargets();
+                refreshAllLocalSpotShadows();
+            }
+
+            updateEditHelpStatus();
+            updateAlignmentPanel();
+            updateFocusCameraUi();
+            rebuildGalleryExhibitTour({ reason: "editor-state-applied", recalculateAutoOrder: true, force: true });
+            updateGalleryTourOrderUi();
         }
-
-        updateEditHelpStatus();
-        updateAlignmentPanel();
-        updateFocusCameraUi();
-        rebuildGalleryExhibitTour({ reason: "editor-state-applied", recalculateAutoOrder: true, force: true });
-        updateGalleryTourOrderUi();
     }
 
     function cloneGalleryJson(value) {
@@ -42623,6 +42679,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function resetGalleryRuntimeToBlankExhibition() {
+        galleryExhibitionRuntime.fullRuntimeResetCount += 1;
+        galleryExhibitionRuntime.lastSwitchMode = "full-runtime-reset";
         var baseline = captureGallerySpaceBaseline();
         var previousSwitchingState = galleryExhibitionRuntime.switching;
         galleryExhibitionRuntime.switching = true;
@@ -42641,6 +42699,142 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             writeLightingPresets([]);
             refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); refreshArtworkLightExclusions(); refreshPedestalLightIncludedMeshes(); refreshAllCommonLocalLightTargets(); refreshAllLocalSpotShadows(); updateViewerModePlaceholderVisibility(); updateLocalLightsUi(); updateEditHelpStatus(); updateAlignmentPanel(); rebuildGalleryExhibitTour({ reason: "exhibition-runtime-reset", recalculateAutoOrder: true, force: true }); updateGalleryTourOrderUi();
         } finally { galleryExhibitionRuntime.switching = previousSwitchingState; }
+    }
+
+    function getGalleryExhibitionSpaceId(exhibition) {
+        return normalizeGalleryRuntimeId(exhibition && exhibition.space_id, galleryActiveSpaceId);
+    }
+
+    function areGalleryExhibitionsInSameSpace(firstExhibition, secondExhibition) {
+        return getGalleryExhibitionSpaceId(firstExhibition) === getGalleryExhibitionSpaceId(secondExhibition);
+    }
+
+    function getGalleryStateEditorSection(state) {
+        if (!state || typeof state !== "object") return {};
+        return state.editor && typeof state.editor === "object" ? state.editor : state;
+    }
+
+    function getGalleryTargetWallColorName(wallState) {
+        if (!wallState || typeof wallState !== "object") return null;
+        return normalizeWallColorName(
+            wallState.segmentColorName ||
+            wallState.colorName ||
+            (wallState.materialName && wallState.materialName.indexOf("WallColor_") === 0
+                ? wallState.materialName.replace("WallColor_", "")
+                : null)
+        );
+    }
+
+    function applyGalleryWallPresentationDelta(state) {
+        var baseline = captureGallerySpaceBaseline();
+        var editorState = getGalleryStateEditorSection(state);
+        var targetByName = Object.create(null);
+        if (Array.isArray(editorState.walls)) {
+            editorState.walls.forEach(function (wallState) {
+                if (wallState && wallState.name) targetByName[wallState.name] = wallState;
+            });
+        }
+
+        (wallMeshes || []).forEach(function (wallMesh) {
+            if (!wallMesh) return;
+            var wallState = targetByName[wallMesh.name] || null;
+            var targetColorName = getGalleryTargetWallColorName(wallState);
+            var currentColorName = normalizeWallColorName(
+                (wallMesh.metadata && wallMesh.metadata.wallSegmentColorName) ||
+                getWallColorNameFromMaterial(wallMesh.material)
+            );
+
+            if (targetColorName && wallColorMaterials[targetColorName] && isPaintableWallSegmentMesh(wallMesh)) {
+                if (currentColorName !== targetColorName) {
+                    applyWallColorMaterialToSegment(wallMesh, wallColorMaterials[targetColorName], { runtimeRestore: true });
+                }
+                return;
+            }
+
+            var baselineMaterial = baseline.wallMaterialRefs ? baseline.wallMaterialRefs[wallMesh.name] : null;
+            if (baselineMaterial && wallMesh.material !== baselineMaterial) {
+                wallMesh.material = baselineMaterial;
+                configureMeshMaterialForMainShadows(wallMesh);
+            }
+            wallMesh.metadata = wallMesh.metadata || {};
+            wallMesh.metadata.wallSegmentColorName = null;
+            wallMesh.metadata.wallSegmentPaintMode = null;
+            wallMesh.metadata.wallSegmentPaintedAt = null;
+        });
+    }
+
+    function clearGalleryExhibitionOwnedRuntime() {
+        closeGalleryInspect("same-space-exhibition-switch");
+        clearEditSelection();
+        (artworks || []).slice().forEach(function (artwork) { deleteArtworkRuntimeNoLights(artwork); });
+        deletedArtworkNames = [];
+        artworkCreateCounter = 0;
+        artworkAuthors = [];
+        (artSpheres || []).slice().forEach(function (slot) {
+            deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
+        });
+        deletedModel3dSlotNames = [];
+        galleryModel3dCreateCounter = 0;
+        setSculptureSelectionState([], null, null);
+        (localLightItems || []).slice().forEach(function (item) { disposeLocalLightItem(item); });
+        localLightItems = [];
+        selectedLocalLights = [];
+        localLightGroups = [[], [], [], [], [], [], [], []];
+        activeLocalGroupIndex = 0;
+        localLightCreateCounter = 0;
+        cleanDisabledLocalLightPool();
+        selectedWallMaterial = null;
+    }
+
+    function prepareGallerySameSpaceExhibitionDelta(state) {
+        galleryExhibitionRuntime.deltaSwitchActive = true;
+        clearGalleryExhibitionOwnedRuntime();
+        applyGalleryWallPresentationDelta(state);
+
+        var baseline = captureGallerySpaceBaseline();
+        var targetLighting = state && state.lighting ? state.lighting : baseline.lighting;
+        var targetVisual = state && state.visualSettings
+            ? normalizeVisualSettings(state.visualSettings)
+            : normalizeVisualSettings(baseline.visualSettings || visualDefaultSettings);
+        if (targetLighting) applyLightingSettings(cloneGalleryJson(targetLighting), true, true);
+        if (targetVisual) applyVisualSettings(targetVisual, true, true, { reason: "same-space-exhibition-delta" });
+        writeLightingPresets(state && Array.isArray(state.lightingPresets) ? state.lightingPresets : []);
+        updateLightingPresetRows();
+    }
+
+    function finalizeGallerySameSpaceExhibitionDelta(reason) {
+        refreshViewerExhibitionCollisionMeshes();
+        refreshCommonLightingMaterialSupport();
+        refreshArtworkLightExclusions();
+        refreshPedestalLightIncludedMeshes();
+        refreshAllCommonLocalLightTargets();
+        scheduleLoadTimeLocalLightRetarget("same-space-exhibition-delta", localLightLoadTimeRetargetDelayMs);
+        refreshAllLocalSpotShadows();
+        updateViewerModePlaceholderVisibility();
+        updateLocalLightsUi();
+        updateEditHelpStatus();
+        updateAlignmentPanel();
+        updateFocusCameraUi();
+        rebuildGalleryExhibitTour({ reason: reason || "same-space-exhibition-delta", recalculateAutoOrder: true, force: true });
+        updateGalleryTourOrderUi();
+        galleryExhibitionRuntime.deltaSwitchActive = false;
+    }
+
+    function applyGallerySameSpaceExhibitionState(state, reason) {
+        var applyResult = { ok: true, usedFallback: false };
+        try {
+            prepareGallerySameSpaceExhibitionDelta(state);
+            if (state && Object.keys(state).length > 0) {
+                applyResult = tryApplyGalleryStateSafely(state, {
+                    skipWalls: true,
+                    skipSpacePresentation: true,
+                    deferGlobalRefresh: true
+                });
+            }
+            return applyResult;
+        } finally {
+            if (galleryExhibitionRuntime.deltaSwitchActive) finalizeGallerySameSpaceExhibitionDelta(reason);
+        }
     }
 
     function serializeGalleryState() {
@@ -42668,7 +42862,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return 0;
     }
 
-    function applyGalleryState(state) {
+    function applyGalleryState(state, options) {
+        options = options || {};
         if (!state || typeof state !== "object") {
             return;
         }
@@ -42687,43 +42882,47 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 Array.isArray(editorState.spheres)
             )
         ) {
-            applyEditorState(editorState);
+            applyEditorState(editorState, options);
         }
 
-        if (state.lighting) {
-            applyLightingSettings(state.lighting, true, true);
-        }
+        if (!options.skipSpacePresentation) {
+            if (state.lighting) {
+                applyLightingSettings(state.lighting, true, true);
+            }
 
-        if (state.visualSettings) {
-            applyVisualSettings(normalizeVisualSettings(state.visualSettings), true, true);
-        } else {
-            applyVisualSettings(visualDefaultSettings, true, true);
-        }
+            if (state.visualSettings) {
+                applyVisualSettings(normalizeVisualSettings(state.visualSettings), true, true);
+            } else {
+                applyVisualSettings(visualDefaultSettings, true, true);
+            }
 
-        if (Array.isArray(state.lightingPresets)) {
-            writeLightingPresets(state.lightingPresets);
-            updateLightingPresetRows();
+            if (Array.isArray(state.lightingPresets)) {
+                writeLightingPresets(state.lightingPresets);
+                updateLightingPresetRows();
+            }
         }
 
         if (state.localLights) {
-            restoreLocalLightState(state.localLights);
+            restoreLocalLightState(state.localLights, { deferGlobalRefresh: !!options.deferGlobalRefresh });
         }
 
         if (state.editor || state.deletedArtworkNames) {
             applyDeletedArtworkNamesFromState(editorState);
         }
 
-        refreshCommonLightingMaterialSupport();
-        refreshArtworkLightExclusions();
-        refreshPedestalLightIncludedMeshes();
+        if (!options.deferGlobalRefresh) {
+            refreshCommonLightingMaterialSupport();
+            refreshArtworkLightExclusions();
+            refreshPedestalLightIncludedMeshes();
 
-        if (!galleryFastStartRuntime.stateApplyActive) {
-            refreshAllCommonLocalLightTargets();
-            scheduleLoadTimeLocalLightRetarget("applyGalleryState", localLightLoadTimeRetargetDelayMs);
-            refreshAllLocalSpotShadows();
+            if (!galleryFastStartRuntime.stateApplyActive) {
+                refreshAllCommonLocalLightTargets();
+                scheduleLoadTimeLocalLightRetarget("applyGalleryState", localLightLoadTimeRetargetDelayMs);
+                refreshAllLocalSpotShadows();
+            }
+
+            updateLocalLightsUi();
         }
-
-        updateLocalLightsUi();
     }
 
     function cloneStateWithoutAuthorLibrary(state) {
@@ -42765,9 +42964,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return clone;
     }
 
-    function tryApplyGalleryStateSafely(state) {
+    function tryApplyGalleryStateSafely(state, options) {
+        options = options || {};
         try {
-            applyGalleryState(state);
+            applyGalleryState(state, options);
             return {
                 ok: true,
                 usedFallback: false
@@ -42787,7 +42987,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         try {
             artworkAuthors = [];
-            applyGalleryState(fallbackState);
+            applyGalleryState(fallbackState, options);
             return {
                 ok: true,
                 usedFallback: true
@@ -42857,9 +43057,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 cacheGalleryExhibitionState(exhibition, state, { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: "switch-supabase" });
             }
             try { persistGalleryPendingStorageCleanupQueue(); } catch (error) {} try { persistGalleryPendingDraftUploads(); } catch (error) {}
+            var switchStartedAt = Date.now();
+            var sameSpaceSwitch = areGalleryExhibitionsInSameSpace(previousExhibition, exhibition);
             setActiveGalleryExhibitionContext(exhibition, { persistCurrentQueues: false, restoreQueues: true }); contextChanged = true;
-            resetGalleryRuntimeToBlankExhibition();
-            if (state && Object.keys(state).length > 0) { var applyResult = tryApplyGalleryStateSafely(state); if (!applyResult.ok) throw new Error("Saved exhibition state could not be applied."); }
+            if (sameSpaceSwitch) {
+                var deltaApplyResult = applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch");
+                if (!deltaApplyResult.ok) throw new Error("Saved exhibition state could not be applied.");
+                galleryExhibitionRuntime.sameSpaceSwitchCount += 1;
+                galleryExhibitionRuntime.lastSwitchMode = "same-space-delta";
+            } else {
+                resetGalleryRuntimeToBlankExhibition();
+                if (state && Object.keys(state).length > 0) { var applyResult = tryApplyGalleryStateSafely(state); if (!applyResult.ok) throw new Error("Saved exhibition state could not be applied."); }
+                galleryExhibitionRuntime.lastSwitchMode = "full-space-switch";
+            }
+            galleryExhibitionRuntime.lastSwitchDurationMs = Date.now() - switchStartedAt;
+            galleryExhibitionRuntime.lastSwitchFromId = previousExhibition && previousExhibition.id ? previousExhibition.id : null;
+            galleryExhibitionRuntime.lastSwitchToId = exhibition.id;
+            galleryExhibitionRuntime.lastSwitchSpaceId = getGalleryExhibitionSpaceId(exhibition);
             setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: state && Object.keys(state).length ? state : null, revision: getGalleryStateRevision(state), confirmed: true, serverRowExists: !!row, reason: "exhibition-switch-baseline" });
             cacheGalleryExhibitionState(exhibition, serializeGalleryState(), { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: cachedTarget ? "switch-cache-hit" : "switch-loaded" });
             globalThis.BerryboyArtGalleryLatestState = serializeGalleryState(); notifyGalleryStatus("Active exhibition: " + exhibition.name + (cachedTarget ? " (session cache)." : ".")); return true;
@@ -42867,7 +43081,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error); console.warn("Exhibition switch failed:", error);
             if (contextChanged && previousExhibition) {
                 try {
-                    setActiveGalleryExhibitionContext(previousExhibition, { persistCurrentQueues: false, restoreQueues: true }); resetGalleryRuntimeToBlankExhibition(); tryApplyGalleryStateSafely(previousRuntimeState);
+                    var rollbackFromExhibition = galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : null;
+                    var rollbackSameSpace = areGalleryExhibitionsInSameSpace(rollbackFromExhibition, previousExhibition);
+                    setActiveGalleryExhibitionContext(previousExhibition, { persistCurrentQueues: false, restoreQueues: true });
+                    if (rollbackSameSpace) applyGallerySameSpaceExhibitionState(previousRuntimeState, "same-space-exhibition-rollback");
+                    else { resetGalleryRuntimeToBlankExhibition(); tryApplyGalleryStateSafely(previousRuntimeState); }
                     setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: previousRuntimeState, revision: previousBaseline.publishedRevision, confirmed: previousBaseline.publishedStateConfirmed, serverRowExists: previousBaseline.publishedServerRowExists, reason: "exhibition-switch-rollback" });
                 } catch (rollbackError) { console.warn("Exhibition switch rollback failed:", rollbackError); }
             }
@@ -43234,7 +43452,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateMetadata: updateGalleryExhibitionMetadata,
         switchTo: switchGalleryExhibition,
         getSpace: function () { return cloneGalleryJson(gallerySpaceDefinition); },
-        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, lastError: galleryExhibitionRuntime.lastError }; }
+        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount, fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount, lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode, lastSwitchDurationMs: galleryExhibitionRuntime.lastSwitchDurationMs, lastSwitchFromId: galleryExhibitionRuntime.lastSwitchFromId, lastSwitchToId: galleryExhibitionRuntime.lastSwitchToId, lastSwitchSpaceId: galleryExhibitionRuntime.lastSwitchSpaceId, lastError: galleryExhibitionRuntime.lastError }; }
     };
 
     globalThis.GalleryApp = {
