@@ -1,112 +1,40 @@
-# Berryboy Art Gallery — Stage 12C66C6C6
+# Berryboy Art Gallery — Stage 12C66C6C7C8
 
-## Artwork Frame Runtime Performance
+## Space / Exhibition Split + Multi-Exhibition
 
-Baza: **Stage 12C66C6C2 — Mobile Memory Survival / Tiered Artwork Residency**.
+Baza: **Stage 12C66C6C6 — Artwork Frame Runtime Performance**, po wcześniejszym cleanupie paczki.
 
-### Nowy etap: ramki artworków
+Ten Stage łączy C6C7 i C6C8: obecna fizyczna przestrzeń 3D zostaje oddzielona od danych wystawy, a Editor może tworzyć i przełączać wiele niezależnych wystaw w tej samej przestrzeni.
 
-- Biblioteka ramek jest czytana automatycznie z `gallery-artworks/main/frames/`.
-- Każdy plik `.glb` w tym folderze pojawia się jako wariant w sekcji **FRAME** dla pojedynczo zaznaczonego artworku.
-- `NONE` usuwa ramkę.
-- Rama używa tego samego obliczenia aspect ratio i skali co artwork — nie ma osobnego systemu proporcji.
-- Skalowanie X/Y liczy się po wewnętrznym otworze ramy, nie po zewnętrznym bounding boxie.
-- Runtime cofa ramę w głąb tak, aby lepiej przykrywała krawędzie artworku.
-- Runtime dodaje wymagany obrót +180° wokół osi Z.
-- Po odczycie katalogu Storage GLB są prefetchowane do cache, aby wybór wariantu był szybszy.
-- GLB jest automatycznie centrowany, rozpoznawana jest jego najcieńsza oś, a następnie rama jest dopasowywana do szerokości/wysokości artworku.
-- Wybrana rama zapisuje się per artwork w `gallery_state` jako `frame`.
-- Frame bierze udział w pickingu, Inspect oraz targetowaniu Local Lights jako część artworku.
-- AssetContainer jest cache’owany, dzięki czemu wiele artworków może używać tego samego GLB bez ponownego pobierania modelu.
+### Co się zmieniło
 
+- Aktualne modele budynku nie są już wpisane bezpośrednio w loader sceny. Definicja obecnego Space znajduje się w `src/config/gallery-space-config.js`.
+- `gallery_state` jest ładowany i zapisywany według aktywnego `exhibitionId`, zamiast stałego `main`.
+- Dotychczasowa wystawa pozostaje jako `main` i zachowuje obecny `gallery_state/main` oraz `gallery-artworks/main/*`.
+- Nowe wystawy dostają własny rekord `gallery_state` oraz Storage `gallery-artworks/exhibitions/<exhibitionId>/*`.
+- Biblioteka ramek nadal jest wspólna: `gallery-artworks/main/frames/*`.
+- Editor ma sekcję **EXHIBITIONS** z listą, tworzeniem i przełączaniem wystaw.
+- Przełączenie wystawy czyści tylko runtime wystawy i przywraca bazowy stan tej samej przestrzeni 3D; Space nie jest przeładowywany.
+- Startup obsługuje `?exhibition=<id>` — będzie to punkt wejścia dla karuzeli w kolejnym etapie.
 
-### Optymalizacja C6C6
+### Supabase
 
-- Katalog `main/frames` zaczyna rozgrzewanie od razu po wejściu w Edit Mode.
-- Wszystkie warianty GLB są pobierane **równolegle**, zamiast jeden po drugim.
-- `AssetContainer` nadal jest cache’owany per URL — kolejne artworki nie pobierają ponownie tego samego GLB.
-- Po pierwszym użyciu wariantu cache’owane są także orientacja, środek i bazowe bounds ramy; kolejne przypięcia nie liczą ich od nowa.
-- Przypięcie ramy nie uruchamia już pełnego `refreshCommonLightingMaterialSupport()` po całej scenie. Konfigurowane są tylko materiały nowej ramy.
-- Przypięcie/usunięcie ramy nie uruchamia już pełnego `refreshAllCommonLocalLightTargets()`. Aktualizowane jest tylko członkostwo meshów ramy w już istniejących targetach Local Lights.
+Przy istniejącej bazie uruchom tylko:
 
-Testowe pliki Storage użyte przez ten etap mogą mieć np. nazwy `Classic_Oak.glb`, `Dark_Oak.glb`, `Gold.glb`. Nazwa przycisku jest generowana z nazwy pliku.
+`SUPABASE_SQL/01_STAGE_C6C7_C6C8_MULTI_EXHIBITION.sql`
 
----
+Nie uruchamiaj `00_LEGACY_CURRENT.sql`, jeśli obecna konfiguracja już działa. Szczegóły są w `SUPABASE_SQL/README_FIRST.md`.
 
-## Zachowana baza C6C2 — Mobile Memory Survival / Tiered Artwork Residency
+### Test ręczny
 
+1. Po migracji SQL uruchom stronę i sprawdź istniejącą `Main Exhibition`.
+2. Zaloguj się do Editora, otwórz **EXHIBITIONS** i utwórz nową wystawę.
+3. Dodaj do niej kilka innych elementów i zapisz.
+4. Przełącz z powrotem na `Main Exhibition` — jej stan powinien wrócić bez zmian.
+5. Ponownie przełącz na nową wystawę — oba stany muszą pozostać całkowicie niezależne.
 
-Celem tego etapu jest ustabilizowanie długiego zwiedzania galerii na telefonie bez powrotu do pustych ram i bez zmiany kanonicznego oświetlenia, odbić ani kolorystyki względem wersji PC.
+### Walidacja
 
-## Główne zmiany
+`npm run check`
 
-### Warstwowa rezydencja artworków
-
-- Każdy przypisany obraz zachowuje stale widoczny wariant Preview AVIF 768 px.
-- Tylko kontrolowana liczba najważniejszych obrazów utrzymuje wariant Full Mobile AVIF 2048 px.
-- Priorytet Full otrzymują: cel Inspect, Previous/Next, zaznaczone dzieło, obiekty widoczne w kadrze, aktualna strefa i najbliższe obrazy.
-- Po utracie priorytetu Full jest atomowo zastępowany Preview, a pełna tekstura zostaje zwolniona.
-- Rama nie jest wyłączana i nigdy nie pozostaje pusta.
-
-Budżety startowe:
-
-- Mobile High: 8 Full; w osadzonej przeglądarce maksymalnie 5.
-- Mobile Balanced: 6 Full; w osadzonej przeglądarce maksymalnie 5.
-- Mobile Safe: 4 Full; w osadzonej przeglądarce maksymalnie 4.
-
-### Czyszczenie pamięci sceny
-
-- Streamowane modele są usuwane ze wszystkich rejestrów casterów i receiverów cieni przed disposalem.
-- Rejestry cieni są czyszczone z nieaktualnych oraz dispose’owanych wpisów.
-- Nieaktywne mobilne generatory cieni Spot są rzeczywiście dispose’owane.
-- Po wyłączeniu SSAO zwalniany jest pipeline, Geometry Buffer i jego render targety.
-- Monitor Tour Order nie wykonuje cyklicznych obliczeń w Viewer Mode.
-
-### Mobilna diagnostyka bez konsoli
-
-Na telefonie w prawym górnym rogu pojawia się przycisk **DBG**. Panel oferuje:
-
-- **LIVE** — aktualne dane,
-- **FREEZE** — zatrzymany snapshot do wykonania screena,
-- **LAST** — ostatni zapis poprzedniej sesji,
-- **CLOSE** — zamknięcie panelu.
-
-Snapshot pokazuje między innymi profil, FPS, render buffer, liczbę Preview/Full, szacowaną pamięć artworków, kolejki, modele, tekstury, materiały, meshe, shadow registry, generatory cieni, SSAO i Geometry Buffer. Lekki snapshot jest zapisywany do localStorage co 2,2 sekundy oraz przy `pagehide`/ukryciu strony.
-
-## Zachowana zgodność wizualna
-
-Stage C6C2 nie zmienia kanonicznych ustawień:
-
-- Hemispheric i Directional Light,
-- `scene.environmentIntensity`,
-- odbić podłogi, ścian i sufitu,
-- roughness materiałów,
-- kolorów Local Lights,
-- ustawień zapisanych w `gallery_state`.
-
-Dalsze artworki mogą być chwilowo wyświetlane jako Preview 768 px zamiast Full 2048 px, ale pozostają widoczne. Obrazy w bieżącym kadrze i Inspect są promowane do Full.
-
-## Diagnostyka programistyczna
-
-```js
-BerryboyMobileSurvival.getSnapshot()
-BerryboyMobileSurvival.getLastSession()
-BerryboyMobileSurvival.open()
-BerryboyMobileSurvival.enforceResidency()
-
-BerryboyArtGalleryMobileQuality.getSurvivalSnapshot()
-BerryboyArtGalleryMobileQuality.openSurvivalPanel()
-```
-
-## Testy
-
-```bash
-npm run check
-```
-
-Testy automatyczne sprawdzają strukturę i zachowanie systemów, ale potwierdzenie braku zamknięcia strony wymaga długiego testu na rzeczywistych telefonach i osadzonych WebView.
-
-### C6C5 — Facing fix
-
-- Zachowuje wymagany obrót Z = 180°.
-- Dodaje lokalny obrót Y = 180° po normalizacji modelu, aby przód ramy był skierowany od ściany, a nie do ściany.
+uruchamia aktualny verifier, wszystkie wcześniejsze testy regresyjne oraz test C6C7/C6C8 multi-exhibition.
