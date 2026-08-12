@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C2
+  Exhibition Platform — Stage 12C66C6C8C3
   Persistent asset cache for public Storage delivery across Viewer/Admin navigation.
   Database/auth/API requests are never cached here.
 

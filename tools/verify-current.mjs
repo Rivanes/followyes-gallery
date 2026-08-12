@@ -1,0 +1,60 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const source=fs.readFileSync(new URL('../src/Gallery_V0_11.js',import.meta.url),'utf8');
+const minified=fs.readFileSync(new URL('../src/Gallery_V0_11.min.js',import.meta.url),'utf8');
+const index=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const bootstrap=fs.readFileSync(new URL('../src/bootstrap/gallery-viewer-bootstrap.js',import.meta.url),'utf8');
+const editorBootstrap=fs.readFileSync(new URL('../src/bootstrap/gallery-editor-bootstrap.js',import.meta.url),'utf8');
+const admin=fs.readFileSync(new URL('../admin.html',import.meta.url),'utf8');
+const adminBootstrap=fs.readFileSync(new URL('../src/bootstrap/admin-workspace-bootstrap.js',import.meta.url),'utf8');
+const worker=fs.readFileSync(new URL('../src/workers/gallery-avif-encoder-worker.js',import.meta.url),'utf8');
+const adapter=fs.readFileSync(new URL('../src/vendor/gallery-avif-encoder.mjs',import.meta.url),'utf8');
+const spaceConfig=fs.readFileSync(new URL('../src/config/gallery-space-config.js',import.meta.url),'utf8');
+const migration=fs.readFileSync(new URL('../SUPABASE_SQL/01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql',import.meta.url),'utf8');
+const currentMigration=fs.readFileSync(new URL('../SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql',import.meta.url),'utf8');
+const txt=fs.readFileSync(new URL('../ENGINE_LOGIN_DISABLED.txt',import.meta.url),'utf8');
+const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-bootstrap.js',import.meta.url),'utf8');
+const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
+
+function assert(c,m){if(!c)throw new Error(m)}
+function count(h,n){return h.split(n).length-1}
+function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
+function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
+
+assert(index.includes('stage: "12C66C6C8C3"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C3"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C3"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c3_runtime_hygiene_20260812'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c3_runtime_hygiene_20260812'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C3: Runtime Hygiene / Cache Versioning'),'Current source history missing');
+assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
+assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
+assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
+assert(count(source,'function resolveGalleryGroundMovement(')===1,'Unified collision resolver changed');
+assert(!source.includes('.moveWithCollisions('),'Native collision path returned');
+assert(source.includes('schema: "gallery-sculpture-core.v2"'),'Sculpture core missing');
+assert(source.includes('schema: "gallery-artwork-runtime.v1"'),'Artwork runtime missing');
+assert(source.includes('schema: "gallery-atomic-media-lifecycle.v1"'),'Atomic media lifecycle missing');
+assert(source.includes('schema: "gallery-mobile-quality-domains.v2"'),'Mobile quality domains missing');
+assert(source.includes('schema: "gallery-artwork-residency.v2"'),'Artwork residency missing');
+assert(source.includes('REPAIR MEDIA')&&source.includes('AUDIT & CLEAN MEDIA'),'Media recovery controls missing');
+assert(source.includes('var galleryAvifEncoderModuleUrl = "src/vendor/gallery-avif-encoder.mjs"'),'AVIF entrypoint missing');
+assert(worker.includes('import(moduleUrl)')&&adapter.includes('ImageEncoder'),'AVIF worker/adapter missing');
+assert(source.includes('function switchGalleryExhibition(')&&source.includes('function createGalleryExhibition('),'Multi-exhibition runtime missing');
+assert(!source.includes('.eq("id", "main")'),'Hard-coded gallery_state main query remains');
+assert(spaceConfig.includes('Floor_segment.glb')&&spaceConfig.includes('Wall_segments.glb')&&spaceConfig.includes('Ceiling.glb')&&spaceConfig.includes('Props.glb'),'Space assets missing');
+assert(spaceConfig.includes('version: 1'),'Space asset versioning missing');
+assert(migration.includes('create table if not exists public.gallery_exhibitions'),'Exhibition migration missing');
+assert(currentMigration.includes('(storage.foldername(name))[2] = \'frames\''),'Shared frame public exception missing');
+assert(admin.includes('id="adminViewportStage"')&&admin.includes('id="exhibitionList"'),'Direct Admin page missing');
+assert(source.includes('enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode')&&source.includes('exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode'),'Same-runtime engine mode API missing');
+assert(source.includes('discardUnsavedChanges: discardGalleryUnsavedChanges'),'Scene discard API missing');
+assert(bootstrap.includes('openInlineAdminWorkspace')&&bootstrap.includes('engine: activeEngine')&&bootstrap.includes('scene: activeScene'),'Viewer same-runtime handoff missing');
+assert(adminBootstrap.includes('inlineRuntimeContext.engine')&&adminBootstrap.includes('inlineRuntimeContext.scene'),'Admin inline runtime reuse missing');
+assert(adminBootstrap.includes('export async function suspendAdminWorkspace()'),'Admin suspend API missing');
+assert(admin.includes('.adminButton:visited')&&admin.includes('text-decoration:none'),'Public Page button style fix missing');
+assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes('exhibition-platform-assets-v1'),'Persistent asset cache missing');
+assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v2'),'Production runtime missing current hygiene changes');
+assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.BerryboyGallerySpaceDefinition ='),'Login-disabled test build missing');
+console.log('Current Exhibition Platform verifier passed.');

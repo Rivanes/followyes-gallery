@@ -1,21 +1,47 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C2
+  Exhibition Platform — Stage 12C66C6C8C3
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
-import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
+import { registerExhibitionAssetCache } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
 
-const STAGE = "12C66C6C8C2";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c2_same_runtime_admin_20260812";
+const STAGE = "12C66C6C8C3";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c3_runtime_hygiene_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
+
+async function resolvePublishedExhibitionId(requestedId) {
+  const requested = String(requestedId || "main").trim() || "main";
+  try {
+    const exact = await supabase.from("gallery_exhibitions")
+      .select("id")
+      .eq("id", requested)
+      .eq("is_published", true)
+      .limit(1);
+    if (!exact.error && Array.isArray(exact.data) && exact.data[0] && exact.data[0].id) {
+      return String(exact.data[0].id);
+    }
+
+    const fallback = await supabase.from("gallery_exhibitions")
+      .select("id")
+      .eq("is_published", true)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true })
+      .limit(1);
+    if (!fallback.error && Array.isArray(fallback.data) && fallback.data[0] && fallback.data[0].id) {
+      return String(fallback.data[0].id);
+    }
+  } catch (_error) {}
+  return requested;
+}
+
 const assetCacheReadyPromise = registerExhibitionAssetCache();
 
 function getRequestedExhibitionId() {
@@ -92,6 +118,7 @@ function ensureInlineAdminWorkspaceStyles() {
     #inlineAdminTopbar .topUser { color:rgba(255,255,255,.57); font-size:12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #inlineAdminWorkspace .adminButton { min-height:36px; padding:0 13px; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.055); color:rgba(255,255,255,.92) !important; cursor:pointer; font-weight:700; font-size:11px; letter-spacing:.04em; text-decoration:none !important; display:inline-flex; align-items:center; justify-content:center; }
     #inlineAdminWorkspace .adminButton:visited { color:rgba(255,255,255,.92) !important; }
+    #inlineAdminWorkspace #publicPageButton, #inlineAdminWorkspace #publicPageButton:link, #inlineAdminWorkspace #publicPageButton:visited, #inlineAdminWorkspace #publicPageButton:hover, #inlineAdminWorkspace #publicPageButton:active { color:rgba(255,255,255,.92) !important; text-decoration:none !important; }
     #inlineAdminWorkspace .adminButton:hover { background:rgba(255,255,255,.09); }
     #inlineAdminWorkspace .adminButton.primary { background:rgba(125,160,127,.16); border-color:rgba(154,180,155,.45); }
     #inlineAdminWorkspace .adminButton.danger { color:#f0b5b5 !important; }
@@ -166,11 +193,9 @@ function ensureInlineAdminWorkspaceDom() {
   document.body.appendChild(shell);
   const logout = document.getElementById("inlineAdminLogoutButton");
   if (logout) logout.addEventListener("click", async () => {
-    if (window.GalleryApp && window.GalleryApp.hasUnsavedChanges && window.GalleryApp.hasUnsavedChanges()) {
-      if (!window.confirm("You have unsaved changes. Log out anyway?")) return;
-    }
+    const closed = await closeInlineAdminWorkspace({ reason: "logout" });
+    if (!closed) return;
     await supabase.auth.signOut();
-    await closeInlineAdminWorkspace({ discardUnsaved: true, force: true });
   });
   inlineAdminWorkspaceMounted = true;
   return shell;
@@ -179,16 +204,31 @@ function ensureInlineAdminWorkspaceDom() {
 async function closeInlineAdminWorkspace(options = {}) {
   const shell = document.getElementById("inlineAdminWorkspace");
   if (!shell || !shell.classList.contains("active")) return true;
-  const dirty = window.GalleryApp && window.GalleryApp.hasUnsavedChanges ? window.GalleryApp.hasUnsavedChanges() : false;
+
+  const adminModule = inlineAdminModulePromise ? await inlineAdminModulePromise.catch(() => null) : null;
+  const metadataDirty = !!(adminModule && typeof adminModule.hasAdminMetadataUnsavedChanges === "function" && adminModule.hasAdminMetadataUnsavedChanges());
+  const sceneDirty = !!(window.GalleryApp && window.GalleryApp.hasUnsavedChanges ? window.GalleryApp.hasUnsavedChanges() : false);
   let discardUnsaved = options.discardUnsaved === true;
-  if (dirty && !discardUnsaved && !options.force) {
-    discardUnsaved = window.confirm("You have unsaved Admin changes. Discard them and return to the public Viewer?");
+
+  if ((metadataDirty || sceneDirty) && !discardUnsaved && !options.force) {
+    const action = options.reason === "logout" ? "log out" : "return to the public Viewer";
+    discardUnsaved = window.confirm(`You have unsaved Admin changes. Discard them and ${action}?`);
     if (!discardUnsaved) return false;
   }
+
+  if (discardUnsaved && metadataDirty && adminModule && typeof adminModule.discardAdminMetadataChanges === "function") {
+    adminModule.discardAdminMetadataChanges();
+  }
+
   if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
     const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved });
     if (!exited) return false;
   }
+
+  if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
+    await adminModule.suspendAdminWorkspace();
+  }
+
   const gallerySection = document.getElementById("gallerySection");
   if (gallerySection && gallerySectionHomeParent) {
     if (gallerySectionHomeNextSibling && gallerySectionHomeNextSibling.parentNode === gallerySectionHomeParent) gallerySectionHomeParent.insertBefore(gallerySection, gallerySectionHomeNextSibling);
@@ -651,10 +691,18 @@ async function startGalleryRuntime() {
 
     bootGuard.setPhase("scene", "Gallery scene");
     const requestedExhibitionId = getRequestedExhibitionId();
-    const navigationHandoff = readNavigationHandoff(requestedExhibitionId);
+    const publicExhibitionId = await resolvePublishedExhibitionId(requestedExhibitionId);
+    if (publicExhibitionId !== requestedExhibitionId) {
+      try {
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.set("exhibition", publicExhibitionId);
+        history.replaceState(null, "", nextUrl);
+      } catch (_error) {}
+    }
+    const navigationHandoff = readNavigationHandoff(publicExhibitionId);
     const scene = engineModule.createScene(engine, canvas, {
       spaceDefinition: gallerySpaceDefinition,
-      exhibitionId: requestedExhibitionId,
+      exhibitionId: publicExhibitionId,
       initialExhibitionSnapshot: navigationHandoff || null
     });
     activeScene = scene;

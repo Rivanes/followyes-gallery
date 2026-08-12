@@ -106,6 +106,7 @@
   - Stage 12C66C6C8C: Asset Residency / Egress Guard — artwork Full textures become proximity/Inspect-driven on desktop and mobile, Full residency is bounded globally, repeated Storage asset requests are expected to be served by the persistent browser asset cache across Viewer/Admin navigation, and poster uploads are normalized to a compact delivery asset.
   - Stage 12C66C6C8C1: Runtime Lifecycle / Admin Transition Fix — Exhibition/Save runtimes are initialized before state preload, public Viewer no longer owns editor dirty tracking or unload prompts, Viewer/Admin handoff uses confirmed published snapshots, Admin preview hydration uses the intended desktop concurrency, Full upgrades yield to Preview population, and active Exhibition is preserved when returning to the public page.
   - Stage 12C66C6C8C2: Same-Runtime Admin Workspace — authenticated Viewer→Admin transitions reuse the already-running Babylon engine, scene, GPU textures and Space instead of navigating to a second document; Admin can return to the public Viewer without rebuilding the scene, while direct admin.html remains supported.
+  - Stage 12C66C6C8C3: Runtime Hygiene / Cache Versioning — editor heartbeat exists only while Admin Workspace is active, same-runtime Admin policies refresh on enter/exit, dirty scene state can be discarded without rebuilding the scene, Space/Frame fixed-path GLBs receive cache-busting versions, and public visibility of Main follows the same publication flag as every other Exhibition.
 */
 
 
@@ -126,13 +127,31 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         return normalized ? normalized.slice(0, 96) : String(fallbackValue || "main");
     }
 
+    function appendGalleryAssetVersion(value, versionToken) {
+        var source = String(value || "");
+        var token = String(versionToken || "").trim();
+        if (!source || !token) return source;
+        var encoded = encodeURIComponent(token);
+        if (/[?&]v=[^&#]*/i.test(source)) {
+            return source.replace(/([?&])v=[^&#]*/i, "$1v=" + encoded);
+        }
+        var separator = source.indexOf("?") >= 0 ? "&" : "?";
+        return source + separator + "v=" + encoded;
+    }
+
     function requireGallerySpaceAsset(assetKey) {
         var assets = gallerySpaceDefinition && gallerySpaceDefinition.assets;
         var asset = assets && assets[assetKey];
         if (!asset || !asset.rootUrl || !asset.fileName) {
             throw new Error("Missing Space asset definition: " + assetKey + ".");
         }
-        return asset;
+        var spaceVersion = String(gallerySpaceDefinition.version || "1");
+        var assetVersion = String(asset.version || "1");
+        var cacheVersion = galleryActiveSpaceId + "-" + spaceVersion + "-" + assetKey + "-" + assetVersion;
+        return Object.assign({}, asset, {
+            cacheVersion: cacheVersion,
+            deliveryFileName: appendGalleryAssetVersion(asset.fileName, cacheVersion)
+        });
     }
 
     if (!gallerySpaceDefinition || !gallerySpaceDefinition.id || !gallerySpaceDefinition.assets) {
@@ -6750,14 +6769,28 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C",
-        schema: "exhibition-asset-delivery.v1",
+        stage: "12C66C6C8C3",
+        schema: "exhibition-asset-delivery.v2",
         desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
         desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
         mobileFullDistance: 9.5,
         desktopGraceMs: 14000,
         desktopVisibleGraceMs: 8000
     };
+
+    function syncGalleryArtworkEgressPolicyForWorkspaceMode(reason) {
+        galleryArtworkEgressPolicy.desktopFullTextures = galleryAdminWorkspaceMode ? 6 : 5;
+        galleryArtworkEgressPolicy.desktopFullDistance = galleryAdminWorkspaceMode ? 15 : 12.5;
+        if (typeof galleryArtworkResidencyRuntime !== "undefined" && galleryArtworkResidencyRuntime) {
+            galleryArtworkResidencyRuntime.lastWorkspacePolicyReason = reason || (galleryAdminWorkspaceMode ? "admin" : "viewer");
+            scheduleGalleryArtworkResidencyMaintenance(reason || "workspace-mode", 120, true);
+        }
+        return {
+            adminWorkspace: !!galleryAdminWorkspaceMode,
+            fullTextures: galleryArtworkEgressPolicy.desktopFullTextures,
+            fullDistance: galleryArtworkEgressPolicy.desktopFullDistance
+        };
+    }
 
     var galleryArtworkResidencyRuntime = {
         stage: "12C66C6C8C",
@@ -9601,7 +9634,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             storagePath: storagePath,
             fileName: fileName,
             label: String(frameState.label || getArtworkFrameLabelFromFileName(fileName) || fileName).trim(),
-            publicUrl: String(frameState.publicUrl || "").trim()
+            publicUrl: String(frameState.publicUrl || "").trim(),
+            cacheVersion: String(frameState.cacheVersion || "").trim()
         };
     }
 
@@ -9624,8 +9658,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function getArtworkFramePublicUrl(frameState) {
         frameState = normalizeArtworkFrameState(frameState);
         if (!frameState) return "";
-        if (frameState.publicUrl) return String(frameState.publicUrl);
-        return getPublicArtworkUrlFromPath(frameState.storagePath, frameState.storageBucket || galleryArtworkStorageBucket);
+        var baseUrl = frameState.publicUrl
+            ? String(frameState.publicUrl)
+            : getPublicArtworkUrlFromPath(frameState.storagePath, frameState.storageBucket || galleryArtworkStorageBucket);
+        return appendGalleryAssetVersion(baseUrl, frameState.cacheVersion);
     }
 
     async function loadGalleryArtworkFrameCatalog(force) {
@@ -9641,11 +9677,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryArtworkFrameCatalog = (files || [])
                 .filter(function (entry) { return !!(entry && entry.path && /\.glb$/i.test(entry.path)); })
                 .map(function (entry) {
+                    var metadata = entry && entry.metadata ? entry.metadata : {};
+                    var cacheVersion = String(
+                        entry.updated_at || entry.updatedAt || metadata.eTag || metadata.etag || metadata.lastModified || entry.id || ""
+                    ).trim();
                     return normalizeArtworkFrameState({
                         storageBucket: galleryArtworkStorageBucket,
                         storagePath: entry.path,
                         fileName: entry.name || entry.path.split("/").pop(),
-                        label: getArtworkFrameLabelFromFileName(entry.name || entry.path.split("/").pop())
+                        label: getArtworkFrameLabelFromFileName(entry.name || entry.path.split("/").pop()),
+                        cacheVersion: cacheVersion
                     });
                 })
                 .filter(Boolean)
@@ -14081,7 +14122,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     var nested = await listGalleryStorageFilesRecursively(bucketName, path, depth + 1);
                     files = files.concat(nested);
                 } else if (entry.name) {
-                    files.push({ path: path, name: entry.name, id: entry.id || null, metadata: entry.metadata || null });
+                    files.push({ path: path, name: entry.name, id: entry.id || null, metadata: entry.metadata || null, updated_at: entry.updated_at || null, created_at: entry.created_at || null });
                 }
             }
             if (entries.length < limit) break;
@@ -17435,9 +17476,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
             var rows = Array.isArray(response.data) ? response.data : [];
             galleryExhibitionRuntime.catalog = rows.map(normalizeGalleryExhibitionRecord).filter(Boolean);
-            if (!galleryExhibitionRuntime.catalog.some(function (item) { return item.id === "main"; })) {
-                galleryExhibitionRuntime.catalog.unshift(getGalleryFallbackMainExhibition());
-            }
             galleryExhibitionRuntime.catalogLoaded = true;
             galleryExhibitionRuntime.lastError = "";
             return galleryExhibitionRuntime.catalog.slice();
@@ -17464,8 +17502,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var rows = Array.isArray(response.data) ? response.data : [];
         var exhibition = normalizeGalleryExhibitionRecord(rows[0]);
         if (!exhibition) {
-            if (exhibitionId === "main") return getGalleryFallbackMainExhibition();
-            throw new Error("Exhibition not found: " + exhibitionId);
+            throw new Error("Exhibition not found or not published: " + exhibitionId);
+        }
+        if (galleryPublicViewerOnly && exhibition.is_published === false) {
+            throw new Error("Exhibition is not published: " + exhibitionId);
         }
         return exhibition;
     }
@@ -18613,8 +18653,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var now = Date.now();
         var registry = pruneGalleryActiveEditorTabs(readGalleryActiveEditorTabs(), now);
 
-        // Public Viewer tabs do not own editor drafts and must not pollute the active-editor registry.
-        if (!editorAuthenticated) {
+        // Only an active Admin Workspace owns editor drafts. A logged-in public Viewer
+        // is still a Viewer and must never pollute the active-editor registry.
+        if (!editorAuthenticated || !galleryAdminWorkspaceMode) {
             delete registry[gallerySaveIntegrityRuntime.tabId];
             writeGalleryActiveEditorTabs(registry);
             return registry;
@@ -18641,7 +18682,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (tabId === gallerySaveIntegrityRuntime.tabId) {
-            return true;
+            return !!(galleryAdminWorkspaceMode && editorAuthenticated);
         }
 
         var entry = readGalleryActiveEditorTabs()[tabId];
@@ -18686,6 +18727,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function startGalleryEditorTabHeartbeat() {
+        if (!galleryAdminWorkspaceMode || !editorAuthenticated) {
+            stopGalleryEditorTabHeartbeat(true);
+            return false;
+        }
         touchGalleryEditorTabHeartbeat();
 
         if (!gallerySaveIntegrityRuntime.heartbeatTimer) {
@@ -18694,6 +18739,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 gallerySaveIntegrityRuntime.heartbeatIntervalMs
             );
         }
+        return true;
     }
 
     startGalleryEditorTabHeartbeat();
@@ -31150,7 +31196,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C2",
+            stage: "12C66C6C8C3",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -31190,6 +31236,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return false;
     }
 
+    function discardGalleryUnsavedChanges(reason) {
+        if (!hasGalleryUnsavedChanges()) return true;
+        var publishedSnapshot = gallerySaveIntegrityRuntime.publishedStateSnapshot
+            ? cloneGalleryStateForIntegrity(gallerySaveIntegrityRuntime.publishedStateSnapshot)
+            : null;
+        if (!publishedSnapshot) return false;
+        applyGalleryState(publishedSnapshot);
+        setGalleryPublishedStateBaseline(publishedSnapshot, {
+            serverState: publishedSnapshot,
+            serverRowExists: gallerySaveIntegrityRuntime.publishedServerRowExists,
+            revision: gallerySaveIntegrityRuntime.publishedRevision,
+            confirmed: true,
+            reason: reason || "admin-discard"
+        });
+        return true;
+    }
+
     function enterGalleryAdminWorkspaceMode() {
         if (galleryAdminWorkspaceMode) {
             if (!editMode && editButton && typeof editButton.click === "function") editButton.click();
@@ -31198,6 +31261,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryAdminWorkspaceMode = true;
         galleryPublicViewerOnly = false;
+        syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-admin-enter");
+        startGalleryEditorTabHeartbeat();
         installGalleryAdminBeforeUnloadGuard();
         if (gallerySaveIntegrityRuntime.baselineReady) startGalleryDraftStateWatcher();
         if (editorAuthenticated && typeof warmGalleryArtworkFrameLibrary === "function") warmGalleryArtworkFrameLibrary();
@@ -31212,19 +31277,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (hasGalleryUnsavedChanges()) {
             if (!options.discardUnsaved) return false;
-            var publishedSnapshot = gallerySaveIntegrityRuntime.publishedStateSnapshot
-                ? cloneGalleryStateForIntegrity(gallerySaveIntegrityRuntime.publishedStateSnapshot)
-                : null;
-            if (publishedSnapshot) {
-                applyGalleryState(publishedSnapshot);
-                setGalleryPublishedStateBaseline(publishedSnapshot, {
-                    serverState: publishedSnapshot,
-                    serverRowExists: gallerySaveIntegrityRuntime.publishedServerRowExists,
-                    revision: gallerySaveIntegrityRuntime.publishedRevision,
-                    confirmed: true,
-                    reason: "same-runtime-admin-discard"
-                });
-            }
+            if (!discardGalleryUnsavedChanges("same-runtime-admin-discard")) return false;
         }
 
         if (editMode && editButton && typeof editButton.click === "function") {
@@ -31233,8 +31286,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         stopGalleryDraftStateWatcher();
         removeGalleryAdminBeforeUnloadGuard();
+        stopGalleryEditorTabHeartbeat(true);
         galleryAdminWorkspaceMode = false;
         galleryPublicViewerOnly = true;
+        syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-public-return");
         setEditorUiVisible(false);
         updateViewerModePlaceholderVisibility();
         return true;
@@ -31338,6 +31393,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 runGalleryFastStartIdleTask(rebuildWallColorSelectorTextures, 900);
             }
         }
+
+        if (galleryAdminWorkspaceMode && editorAuthenticated) startGalleryEditorTabHeartbeat();
+        else stopGalleryEditorTabHeartbeat(true);
 
         if (galleryEditorLoginEnabled && !editorAuthenticated && editMode) {
             editMode = false;
@@ -36999,7 +37057,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryPropsSpaceAsset = requireGallerySpaceAsset("props");
     var galleryCeilingSpaceAsset = requireGallerySpaceAsset("ceiling");
 
-    loadGalleryStartupAssetWithRetry("", galleryFloorSpaceAsset.rootUrl, galleryFloorSpaceAsset.fileName, scene,
+    loadGalleryStartupAssetWithRetry("", galleryFloorSpaceAsset.rootUrl, galleryFloorSpaceAsset.deliveryFileName, scene,
         function (meshes) {
             floorMeshes = meshes.filter(mesh => mesh.name !== "__root__");
             markGalleryGeometryDirty("floorImported");
@@ -37009,35 +37067,39 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             applyVisualReflectionSettings(readVisualSettingsFromScene()); refreshViewerCollisionMeshes(); refreshArtworkLightExclusions(); refreshPedestalLightIncludedMeshes();
             assetLoaded("floor");
         }, null,
-        function (scene, message, exception) { console.error("Floor Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryFloorSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("floor", true); }
+        function (scene, message, exception) { console.error("Floor Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryFloorSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("floor", true); },
+        ".glb"
     );
 
-    loadGalleryStartupAssetWithRetry("", galleryWallSpaceAsset.rootUrl, galleryWallSpaceAsset.fileName, scene,
+    loadGalleryStartupAssetWithRetry("", galleryWallSpaceAsset.rootUrl, galleryWallSpaceAsset.deliveryFileName, scene,
         function (meshes) {
             wallMeshes = meshes.filter(mesh => mesh.name !== "__root__"); markGalleryGeometryDirty("wallImported");
             wallMeshes.forEach(mesh => { mesh.isPickable = true; registerViewerCollisionMesh(mesh, "wall"); if (mesh.material) { configureMaterialForCommonLighting(mesh.material); configureMeshMaterialForMainShadows(mesh); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
             freezeStaticGalleryMeshes(wallMeshes, "wall"); console.log("Wall Space asset loaded", { spaceId: galleryActiveSpaceId, rootUrl: galleryWallSpaceAsset.rootUrl, file: galleryWallSpaceAsset.fileName, meshes: wallMeshes });
             refreshViewerCollisionMeshes(); refreshCommonLightingMaterialSupport(); assetLoaded("wall");
         }, null,
-        function (scene, message, exception) { console.error("Wall Space asset load failed:", { spaceId: galleryActiveSpaceId, rootUrl: galleryWallSpaceAsset.rootUrl, file: galleryWallSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("wall", true); }
+        function (scene, message, exception) { console.error("Wall Space asset load failed:", { spaceId: galleryActiveSpaceId, rootUrl: galleryWallSpaceAsset.rootUrl, file: galleryWallSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("wall", true); },
+        ".glb"
     );
 
-    loadGalleryStartupAssetWithRetry("", galleryPropsSpaceAsset.rootUrl, galleryPropsSpaceAsset.fileName, scene,
+    loadGalleryStartupAssetWithRetry("", galleryPropsSpaceAsset.rootUrl, galleryPropsSpaceAsset.deliveryFileName, scene,
         function (meshes) {
             meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
             markGalleryObjectsDirty("propsImported"); rebuildGalleryStreamingZones("props-imported"); propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); }); updateGalleryPropZoneActivation();
             if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true; else { refreshViewerCollisionMeshes(); hydrateSavedLocalLightTargetsForAll("props-imported"); }
             assetLoaded("props");
         }, null,
-        function (scene, message, exception) { console.error("Props Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryPropsSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("props", true); }
+        function (scene, message, exception) { console.error("Props Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryPropsSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("props", true); },
+        ".glb"
     );
 
-    loadGalleryStartupAssetWithRetry("", galleryCeilingSpaceAsset.rootUrl, galleryCeilingSpaceAsset.fileName, scene,
+    loadGalleryStartupAssetWithRetry("", galleryCeilingSpaceAsset.rootUrl, galleryCeilingSpaceAsset.deliveryFileName, scene,
         function (meshes) {
             meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && ceilingMeshes.indexOf(mesh) === -1) ceilingMeshes.push(mesh); registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: false }); });
             markGalleryGeometryDirty("ceilingImported"); freezeStaticGalleryMeshes(ceilingMeshes, "ceiling"); assetLoaded("ceiling");
         }, null,
-        function (scene, message, exception) { console.error("Ceiling Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryCeilingSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("ceiling", true); }
+        function (scene, message, exception) { console.error("Ceiling Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryCeilingSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("ceiling", true); },
+        ".glb"
     );
 
 
@@ -43196,6 +43258,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         },
         enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode,
         exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode,
+        discardUnsavedChanges: discardGalleryUnsavedChanges,
         hasUnsavedChanges: hasGalleryUnsavedChanges,
         confirmDiscardUnsavedChanges: confirmGalleryDiscardUnsavedChanges,
         setEditorLoginEnabled: function (isEnabled) {

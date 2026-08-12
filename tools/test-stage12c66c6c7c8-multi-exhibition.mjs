@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(root, 'src', 'Gallery_V0_11.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(root, 'src', 'bootstrap', 'gallery-viewer-bootstrap.js'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'src', 'config', 'gallery-space-config.js'), 'utf8');
-const sql = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '01_STAGE_C6C7_C6C8_MULTI_EXHIBITION.sql'), 'utf8');
+const sql = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql'), 'utf8');
 
 function expect(label, condition) {
   if (!condition) throw new Error(`Multi-exhibition invariant failed: ${label}`);
@@ -21,7 +21,7 @@ expect('Scene factory accepts external runtime options',
   source.includes('runtimeOptions.spaceDefinition') &&
   bootstrap.includes('spaceDefinition: gallerySpaceDefinition') &&
   bootstrap.includes('const requestedExhibitionId = getRequestedExhibitionId()') &&
-  bootstrap.includes('exhibitionId: requestedExhibitionId'));
+  bootstrap.includes('exhibitionId: publicExhibitionId'));
 
 expect('Current building GLBs live in external Space config',
   config.includes('Floor_segment.glb') && config.includes('Wall_segments.glb') &&

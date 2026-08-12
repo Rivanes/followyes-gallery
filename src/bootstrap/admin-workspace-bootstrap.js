@@ -1,13 +1,13 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C2 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C3 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c2_same_runtime_admin_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c3_runtime_hygiene_20260812";
 
-const STAGE = "12C66C6C8C2";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c2_same_runtime_admin_20260812";
+const STAGE = "12C66C6C8C3";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c3_runtime_hygiene_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -67,6 +67,11 @@ let toastTimer = 0;
 let assetCacheStatusSnapshot = null;
 let assetCacheStatusReadAt = 0;
 let assetDeliveryInterval = 0;
+let resizeCleanup = null;
+let workspaceActive = true;
+let metadataBaseline = "";
+let metadataDirty = false;
+let metadataBeforeUnloadInstalled = false;
 
 function showToast(message) {
   if (!message) return;
@@ -84,6 +89,105 @@ function updatePublicPageHref(exhibitionId) {
   if (!publicPageButton) return;
   const id = String(exhibitionId || "main").trim() || "main";
   publicPageButton.href = `./index.html?exhibition=${encodeURIComponent(id)}`;
+}
+
+function getMetadataDraftPayload() {
+  return {
+    name: exhibitionName ? exhibitionName.value.trim() : "",
+    description: exhibitionDescription ? exhibitionDescription.value : "",
+    is_published: !!(exhibitionPublished && exhibitionPublished.checked),
+    sort_order: Number(exhibitionSortOrder && exhibitionSortOrder.value) || 0
+  };
+}
+
+function getMetadataDraftFingerprint() {
+  return JSON.stringify(getMetadataDraftPayload());
+}
+
+function updateMetadataDirtyUi() {
+  if (!saveMetadataButton) return;
+  saveMetadataButton.dataset.saveState = metadataDirty ? "dirty" : "clean";
+  saveMetadataButton.textContent = metadataDirty ? "SAVE EXHIBITION DETAILS" : "DETAILS SAVED";
+}
+
+function syncMetadataDirtyState() {
+  metadataDirty = !!selectedExhibition && !!metadataBaseline && getMetadataDraftFingerprint() !== metadataBaseline;
+  updateMetadataDirtyUi();
+  return metadataDirty;
+}
+
+function setMetadataBaselineFromForm() {
+  metadataBaseline = selectedExhibition ? getMetadataDraftFingerprint() : "";
+  metadataDirty = false;
+  updateMetadataDirtyUi();
+}
+
+function discardMetadataDraft() {
+  if (!selectedExhibition) {
+    metadataBaseline = "";
+    metadataDirty = false;
+    updateMetadataDirtyUi();
+    return true;
+  }
+  setSelectedExhibition(selectedExhibition);
+  return true;
+}
+
+function hasSceneUnsavedChanges() {
+  return !!(window.GalleryApp && typeof window.GalleryApp.hasUnsavedChanges === "function"
+    ? window.GalleryApp.hasUnsavedChanges()
+    : sceneSaveState.dirty);
+}
+
+function hasAnyAdminUnsavedChanges() {
+  return !!(metadataDirty || hasSceneUnsavedChanges());
+}
+
+function discardAdminUnsavedChanges() {
+  if (metadataDirty) discardMetadataDraft();
+  if (hasSceneUnsavedChanges() && window.GalleryApp && typeof window.GalleryApp.discardUnsavedChanges === "function") {
+    return window.GalleryApp.discardUnsavedChanges("admin-workspace-discard");
+  }
+  return !hasSceneUnsavedChanges();
+}
+
+function confirmAndDiscardAdminChanges(message) {
+  syncMetadataDirtyState();
+  if (!hasAnyAdminUnsavedChanges()) return true;
+  if (!window.confirm(message || "You have unsaved Admin changes. Discard them?")) return false;
+  return discardAdminUnsavedChanges();
+}
+
+function onMetadataBeforeUnload(event) {
+  syncMetadataDirtyState();
+  if (!workspaceActive || !metadataDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+  return "";
+}
+
+function installMetadataBeforeUnload() {
+  if (metadataBeforeUnloadInstalled) return;
+  window.addEventListener("beforeunload", onMetadataBeforeUnload);
+  metadataBeforeUnloadInstalled = true;
+}
+
+function removeMetadataBeforeUnload() {
+  if (!metadataBeforeUnloadInstalled) return;
+  window.removeEventListener("beforeunload", onMetadataBeforeUnload);
+  metadataBeforeUnloadInstalled = false;
+}
+
+function startAssetDeliveryMonitoring() {
+  if (assetDeliveryInterval) window.clearInterval(assetDeliveryInterval);
+  assetDeliveryInterval = 0;
+  if (!workspaceActive) return;
+  assetDeliveryInterval = window.setInterval(updateAssetDeliveryStatus, 30000);
+}
+
+function stopAssetDeliveryMonitoring() {
+  if (assetDeliveryInterval) window.clearInterval(assetDeliveryInterval);
+  assetDeliveryInterval = 0;
 }
 
 async function getAssetCacheStatusThrottled(force = false) {
@@ -229,6 +333,7 @@ function setSelectedExhibition(record) {
   posterStatus.textContent = selectedExhibition.cover_path ? selectedExhibition.cover_path : "No poster assigned.";
   removePosterButton.disabled = !selectedExhibition.cover_path;
   updatePublicPageHref(selectedExhibition.id);
+  setMetadataBaselineFromForm();
   renderCatalog();
 }
 
@@ -251,9 +356,10 @@ async function selectAndSwitchExhibition(id) {
     setSelectedExhibition(target);
     return;
   }
+  if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return;
   viewportStatus.innerHTML = `3D preview: <strong>switching to ${target.name}…</strong>`;
   try {
-    const ok = await window.GalleryApp.switchExhibition(id);
+    const ok = await window.GalleryApp.switchExhibition(id, { force: true });
     if (!ok) return;
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
@@ -395,18 +501,31 @@ function waitForInteractionReady(timeoutMs = 120000) {
 }
 
 function installResize() {
+  if (resizeCleanup) resizeCleanup();
   let raf = 0;
+  let observer = null;
   const resize = () => {
-    if (raf) return;
-    raf = requestAnimationFrame(() => { raf = 0; if (engine) engine.resize(); });
+    if (!workspaceActive || raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; if (workspaceActive && engine) engine.resize(); });
   };
   window.addEventListener("resize", resize, { passive: true });
-  if (window.ResizeObserver) new ResizeObserver(resize).observe(el("adminViewportStage"));
+  if (window.ResizeObserver) {
+    observer = new ResizeObserver(resize);
+    const stage = el("adminViewportStage");
+    if (stage) observer.observe(stage);
+  }
+  resizeCleanup = () => {
+    window.removeEventListener("resize", resize);
+    if (observer) observer.disconnect();
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    resizeCleanup = null;
+  };
   resize();
 }
 
 async function updateAssetDeliveryStatus() {
-  if (!assetDeliveryStatus) return;
+  if (!workspaceActive || !assetDeliveryStatus) return;
   try {
     const cache = await getAssetCacheStatusThrottled(false);
     const delivery = window.GalleryApp && typeof window.GalleryApp.getAssetDeliveryDebug === "function"
@@ -453,8 +572,7 @@ async function startEngine(initialId, initialSnapshot) {
     if (engine && engine.resize) engine.resize();
     assetCacheStatusReadAt = 0;
     await updateAssetDeliveryStatus();
-    if (assetDeliveryInterval) window.clearInterval(assetDeliveryInterval);
-    assetDeliveryInterval = window.setInterval(updateAssetDeliveryStatus, 30000);
+    startAssetDeliveryMonitoring();
     return;
   }
 
@@ -484,8 +602,7 @@ async function startEngine(initialId, initialSnapshot) {
   syncSelectedFromCatalog(active.id);
   assetCacheStatusReadAt = 0;
   await updateAssetDeliveryStatus();
-  if (assetDeliveryInterval) window.clearInterval(assetDeliveryInterval);
-  assetDeliveryInterval = window.setInterval(updateAssetDeliveryStatus, 30000);
+  startAssetDeliveryMonitoring();
 }
 
 function updateSceneSaveButton() {
@@ -504,6 +621,7 @@ window.addEventListener("gallery-draft-state", (event) => {
 });
 
 window.addEventListener("gallery-exhibition-context-change", async (event) => {
+  if (!workspaceActive) return;
   const record = event.detail && event.detail.exhibition;
   if (!record) return;
   updateUrlExhibition(record.id);
@@ -516,6 +634,7 @@ window.addEventListener("gallery-exhibition-context-change", async (event) => {
 });
 
 window.addEventListener("gallery-status", (event) => {
+  if (!workspaceActive) return;
   const detail = event.detail || {};
   if (detail.message) showToast(detail.message);
 });
@@ -531,6 +650,9 @@ saveStateButton.addEventListener("click", async () => {
 });
 
 refreshExhibitionsButton.addEventListener("click", async () => {
+  syncMetadataDirtyState();
+  if (metadataDirty && !window.confirm("Exhibition details have unsaved changes. Discard them and refresh the list?")) return;
+  if (metadataDirty) discardMetadataDraft();
   setBusy(refreshExhibitionsButton, true);
   try { await fetchCatalog(); if (selectedExhibition) syncSelectedFromCatalog(selectedExhibition.id); }
   catch (error) { showToast(error.message || String(error)); }
@@ -541,6 +663,7 @@ createExhibitionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = newExhibitionName.value.trim();
   if (!name || !window.GalleryApp) return;
+  if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and create a new exhibition?")) return;
   setBusy(createExhibitionButton, true);
   try {
     const created = await window.GalleryApp.createExhibition(name);
@@ -558,12 +681,7 @@ detailsForm.addEventListener("submit", async (event) => {
   if (!selectedExhibition) return;
   setBusy(saveMetadataButton, true);
   try {
-    const updated = await saveMetadata({
-      name: exhibitionName.value.trim(),
-      description: exhibitionDescription.value,
-      is_published: exhibitionPublished.checked,
-      sort_order: Number(exhibitionSortOrder.value) || 0
-    });
+    const updated = await saveMetadata(getMetadataDraftPayload());
     const localUpdated = upsertLocalCatalogRecord(updated || selectedExhibition);
     setSelectedExhibition(localUpdated);
     showToast("Exhibition details saved.");
@@ -571,7 +689,14 @@ detailsForm.addEventListener("submit", async (event) => {
   finally { setBusy(saveMetadataButton, false); }
 });
 
-choosePosterButton.addEventListener("click", () => posterFileInput.click());
+choosePosterButton.addEventListener("click", () => {
+  syncMetadataDirtyState();
+  if (metadataDirty) {
+    showToast("Save Exhibition Details before changing the poster.");
+    return;
+  }
+  posterFileInput.click();
+});
 posterFileInput.addEventListener("change", async () => {
   const file = posterFileInput.files && posterFileInput.files[0];
   posterFileInput.value = "";
@@ -582,40 +707,46 @@ posterFileInput.addEventListener("change", async () => {
   finally { setBusy(choosePosterButton, false); }
 });
 removePosterButton.addEventListener("click", async () => {
+  syncMetadataDirtyState();
+  if (metadataDirty) {
+    showToast("Save Exhibition Details before removing the poster.");
+    return;
+  }
   setBusy(removePosterButton, true);
   try { await removePoster(); }
   catch (error) { showToast(error.message || String(error)); }
   finally { setBusy(removePosterButton, false); }
 });
 
+[exhibitionName, exhibitionDescription, exhibitionSortOrder].forEach((field) => {
+  if (field) field.addEventListener("input", syncMetadataDirtyState);
+});
+if (exhibitionPublished) exhibitionPublished.addEventListener("change", syncMetadataDirtyState);
+
 if (publicPageButton) {
   publicPageButton.addEventListener("click", async (event) => {
+    event.preventDefault();
     const active = window.GalleryApp && typeof window.GalleryApp.getActiveExhibition === "function"
       ? window.GalleryApp.getActiveExhibition()
       : selectedExhibition;
     updatePublicPageHref(active && active.id ? active.id : "main");
 
+    if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and return to the public Viewer?")) return;
+
     if (inlineWorkspaceMode && inlineRuntimeContext && typeof inlineRuntimeContext.close === "function") {
-      event.preventDefault();
-      await inlineRuntimeContext.close();
+      await inlineRuntimeContext.close({ discardUnsaved: true, force: true });
       return;
     }
 
-    // Never hand an unpublished draft to the public Viewer. If the workspace is clean,
-    // the confirmed state can be handed over to skip a redundant database state read.
-    const dirty = window.GalleryApp && typeof window.GalleryApp.hasUnsavedChanges === "function"
-      ? window.GalleryApp.hasUnsavedChanges()
-      : sceneSaveState.dirty;
-    if (!dirty && window.GalleryApp && typeof window.GalleryApp.createNavigationHandoff === "function") {
+    if (window.GalleryApp && typeof window.GalleryApp.createNavigationHandoff === "function") {
       try { window.GalleryApp.createNavigationHandoff(); } catch (_error) {}
     }
+    location.href = publicPageButton.href;
   });
 }
 
 if (!inlineWorkspaceMode && logoutButton) logoutButton.addEventListener("click", async () => {
-  if (window.GalleryApp && window.GalleryApp.hasUnsavedChanges && window.GalleryApp.hasUnsavedChanges()) {
-    if (!window.confirm("You have unsaved 3D scene changes. Log out anyway?")) return;
-  }
+  if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and log out?")) return;
   await supabase.auth.signOut();
   location.href = "./index.html";
 });
@@ -638,6 +769,8 @@ if (adminLoginForm) adminLoginForm.addEventListener("submit", async (event) => {
 
 async function initializeWorkspace() {
   if (!session) return;
+  workspaceActive = true;
+  installMetadataBeforeUnload();
   adminUser.textContent = session.user && session.user.email ? session.user.email : "Editor";
   window.galleryEditorAuthenticated = true;
   try {
@@ -682,9 +815,28 @@ if (inlineWorkspaceMode && inlineRuntimeContext.session) {
   }
 }
 
+export async function suspendAdminWorkspace() {
+  workspaceActive = false;
+  stopAssetDeliveryMonitoring();
+  removeMetadataBeforeUnload();
+  if (resizeCleanup) resizeCleanup();
+  return true;
+}
+
+export function hasAdminMetadataUnsavedChanges() {
+  return syncMetadataDirtyState();
+}
+
+export function discardAdminMetadataChanges() {
+  return discardMetadataDraft();
+}
+
 export async function resumeAdminWorkspace() {
   if (!session && inlineRuntimeContext && inlineRuntimeContext.session) session = inlineRuntimeContext.session;
   if (!session) return false;
+  workspaceActive = true;
+  installMetadataBeforeUnload();
+  installResize();
   if (window.GalleryApp && typeof window.GalleryApp.enterAdminWorkspaceMode === "function") {
     window.GalleryApp.enterAdminWorkspaceMode();
   }
@@ -698,5 +850,6 @@ export async function resumeAdminWorkspace() {
     viewportStatus.innerHTML = `3D preview: <strong>${active.name}</strong>`;
   }
   await updateAssetDeliveryStatus();
+  startAssetDeliveryMonitoring();
   return true;
 }

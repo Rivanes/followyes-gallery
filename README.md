@@ -1,68 +1,55 @@
-# Exhibition Platform — Stage 12C66C6C8C2
+# Exhibition Platform — C6C8C3 Runtime Hygiene / Cache Versioning
 
-## Runtime Lifecycle / Admin Transition Fix
+Aktualna baza rozwoju platformy wystaw po wdrożeniu Multi-Exhibition, Admin Workspace, Same-Runtime Admin i Egress Guard.
 
-- Save/Exhibition runtimes initialize before startup state preload, eliminating the empty-first-load Main Exhibition race after Viewer → Admin handoff.
-- Public Viewer does not start editor dirty tracking and does not register an editor `beforeunload` warning.
-- Viewer/Admin navigation handoff prefers the confirmed published Exhibition snapshot instead of incidental live Viewer runtime state.
-- Admin preview hydration uses the intended desktop preview concurrency; automatic Full upgrades wait for Preview population unless Inspect explicitly requests Full.
-- `PUBLIC PAGE` preserves the active Exhibition and clean Admin → Viewer navigation can reuse the short-lived state handoff.
-- Persistent asset cache now uses a stable cache name and locally migrates previous stage cache entries instead of flushing them on every application stage.
-- Cache statistics are throttled; Admin no longer rescans Cache Storage every 8 seconds.
+## Co porządkuje C6C8C3
 
-## Asset Residency / Egress Guard
+- Public Viewer nie zapisuje się już jako aktywna karta edytora tylko dlatego, że administrator jest zalogowany.
+- Heartbeat, dirty watcher i unload guard należą wyłącznie do aktywnego Admin Workspace.
+- Wejście/wyjście z Admina przełącza również politykę Artwork Full/Preview bez tworzenia nowej sceny.
+- Admin ma wspólną ochronę przed utratą zmian: stan sceny + formularz Exhibition Details.
+- Zamknięty inline Admin zawiesza licznik Asset Delivery, ResizeObserver i metadata unload guard; `resume` włącza je ponownie.
+- Fixed-path Space GLB mają kontrolowaną wersję cache. Zmiana `version` w `src/config/gallery-space-config.js` powoduje jednorazowe pobranie nowego pliku bez czyszczenia całego cache.
+- Ramki GLB dostają wersję delivery na podstawie metadanych Storage, więc podmieniona ramka nie powinna utknąć w starym persistent cache.
+- `Main Exhibition` nie jest już specjalnym wyjątkiem publikacji. Publiczny Viewer widzi tylko wystawy oznaczone `is_published = true`.
+- Jeśli żądana wystawa jest Draft, publiczny Viewer próbuje otworzyć pierwszą opublikowaną wystawę.
+- `PUBLIC PAGE` ma wymuszony wygląd przycisku dla wszystkich stanów linku.
 
-Baza: **C6C7/C6C8B1 — Public Viewer / Admin Edit Gate**.
+## Supabase — wymagany krok
 
-Ten etap ogranicza powtarzające się pobieranie ciężkich assetów i automatyczne ładowanie wszystkich pełnych obrazów.
+Jeżeli Multi-Exhibition jest już zainstalowane, uruchom **tylko**:
 
-### Co się zmieniło
+`SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql`
 
-- Artwork zawsze startuje od lekkiego `Preview`.
-- `Full` nie jest już automatycznie ładowany dla wszystkich obrazów na desktopie. Promocja do Full jest zależna od odległości, widoczności, aktywnej strefy i Inspect/Edit.
-- Liczba jednocześnie rezydujących pełnych tekstur jest ograniczona także na desktopie.
-- Po odejściu od obrazu runtime może wrócić do Preview, ale pobrany wcześniej plik pozostaje w trwałym cache przeglądarki.
-- Dodano `asset-cache-sw.js`: publiczne GLB/AVIF/WebP/JPG/PNG/KTX2 ze Storage są cache-first i współdzielone między `index.html` i `admin.html`.
-- Service Worker deduplikuje równoległe requesty tego samego URL.
-- Viewer → Admin przekazuje aktywną wystawę i jej aktualny opublikowany stan przez krótki `sessionStorage` handoff, więc Admin nie musi od razu ponownie pobierać tego samego `gallery_state`.
-- Przełączone już w tej sesji wystawy dostają in-memory state cache. Powrót A → B → A nie wymaga ponownego SELECT stanu, dopóki cache nie zostanie jawnie odświeżony lub strona nie zostanie przeładowana.
-- Space nadal pozostaje załadowany podczas przełączania wystaw.
-- `Save` zapisuje istniejący runtime; po zapisie nie następuje ponowne ładowanie sceny ani assetów.
-- Nowe postery są przed uploadem zmniejszane do maks. 1400 px i kodowane jako WebP, zamiast wysyłania ciężkiego pliku źródłowego do przyszłej karuzeli.
-- Admin Workspace pokazuje status `Asset delivery` z liczbą Full/Preview i wpisami trwałego cache.
+Ten SQL synchronizuje publiczny dostęp `gallery_state` i Storage z `gallery_exhibitions.is_published`. Wspólne ramki `gallery-artworks/main/frames/*` pozostają publiczne.
 
-### Ważne
+## Cache Space GLB
 
-Pierwsze pobranie konkretnego assetu nadal kosztuje transfer. Zysk pojawia się przy:
+W `src/config/gallery-space-config.js` każdy asset ma `version: 1`, a Space ma własne `version: 1`.
 
-- oglądaniu tylko części dzieł z bliska,
-- ponownym użyciu tego samego GLB/obrazu/ramy,
-- przejściu Viewer ↔ Admin,
-- ponownym wejściu do wcześniej otwieranej wystawy podczas tej samej sesji.
+Jeżeli podmienisz np. `Wall_segments.glb` pod tą samą ścieżką, zwiększ tylko:
 
-### Supabase
+```js
+walls: {
+  fileName: "Wall_segments.glb",
+  version: 2
+}
+```
 
-**C6C8C nie wymaga nowej migracji SQL.** Struktura C6C7/C6C8 pozostaje bez zmian.
+Nie trzeba czyścić całego cache użytkownika.
 
-W `SUPABASE_SQL/04_STAGE_C6C8C_NO_SQL_REQUIRED.sql` znajduje się tylko marker dokumentacyjny.
+## Pliki porządkowe
 
-### Test ręczny
+- `tools/build-current.mjs` — jedyny aktualny build.
+- `tools/verify-current.mjs` — jedyny aktualny verifier.
+- `ENGINE_LOGIN_DISABLED.txt` — generowany testowy engine bez login gate.
+- historyczne testy regresyjne pozostają, ponieważ `npm run check` faktycznie je uruchamia.
+- usunięto historyczne pliki SQL typu `NO_SQL_REQUIRED` oraz stare Stage-specific build/verifier.
 
-1. Otwórz publiczną wystawę i przejdź się po galerii. Dalekie obrazy powinny pozostawać Preview; Full ma pojawiać się dopiero przy podejściu/Inspect.
-2. Otwórz Admin Workspace dla tej samej wystawy. Space i media mogą zostać zainicjalizowane ponownie w Babylonie, ale ciężkie URL-e powinny być obsługiwane z persistent browser cache zamiast ponownie ze Storage.
-3. W Adminie przełącz `Main → Test → Main`. Drugi powrót do Main powinien użyć session state cache.
-4. Wgraj duży poster i sprawdź status — zapisany plik powinien być zoptymalizowanym `.webp` do 1400 px.
-5. `npm run check` musi przejść w całości.
+## Weryfikacja
 
-## C6C8C1 / SQL
+```bash
+npm run check
+```
 
-C6C8C1 **nie wymaga kolejnej migracji bazy danych**. `SUPABASE_SQL/05_STAGE_C6C8C1_NO_SQL_REQUIRED.sql` jest wyłącznie markerem kontrolnym.
-
-## C6C8C2 / Same-Runtime Admin Workspace
-
-- `EDIT MODE` na publicznym Viewerze nie przechodzi już do drugiego dokumentu i nie tworzy nowego Babylon Engine.
-- Ten sam `engine`, `scene`, Space, modele i tekstury GPU są przenoszone layoutem do Admin Workspace.
-- `PUBLIC PAGE` wraca do Viewera bez przeładowania sceny.
-- `admin.html` pozostaje jako bezpośredni / awaryjny punkt wejścia do panelu.
-- Link `PUBLIC PAGE` ma jawnie ustawiony styl przycisku, także po odwiedzeniu.
-- Stage nie wymaga migracji SQL.
+Musi przejść pełny zestaw regresji oraz `test:runtime-hygiene`.

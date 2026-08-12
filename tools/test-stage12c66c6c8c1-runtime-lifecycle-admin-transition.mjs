@@ -57,10 +57,10 @@ expect('Public Page keeps active exhibition and clean admin creates handoff',
   adminHtml.includes('id="publicPageButton"') &&
   admin.includes('updatePublicPageHref(selectedExhibition.id)') &&
   admin.includes('window.GalleryApp.createNavigationHandoff()') &&
-  admin.includes('if (!dirty && window.GalleryApp'));
+  admin.includes('confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and return to the public Viewer?")'));
 
 expect('Cache stats polling is throttled instead of rescanning every 8 seconds',
-  admin.includes('window.setInterval(updateAssetDeliveryStatus, 30000)') &&
+  admin.includes('function startAssetDeliveryMonitoring()') && admin.includes('window.setInterval(updateAssetDeliveryStatus, 30000)') &&
   cacheBootstrap.includes('now - statusMemoAt < 60000') &&
   serviceWorker.includes('now - statsMemoAt < 60000'));
 

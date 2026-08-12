@@ -1,7 +1,12 @@
 /*
   Exhibition Platform — current Space definition.
-  Stage 12C66C6C8C2 keeps the physical 3D Space from Exhibition content.
-  The engine consumes this object and no longer hard-codes the current building GLBs.
+  Stage 12C66C6C8C3 keeps physical Space assets outside Exhibition state.
+
+  CACHE VERSION RULE:
+  - Increase `version` when any fixed-path Space GLB is replaced in Storage.
+  - You can also increase only an individual asset `version`.
+  The engine adds this version to the delivery URL, so the persistent cache keeps
+  unchanged assets while a deliberately replaced GLB is fetched exactly once.
 */
 
 export const gallerySpaceDefinition = Object.freeze({
@@ -12,21 +17,25 @@ export const gallerySpaceDefinition = Object.freeze({
     floor: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Floor_segment.glb",
+      version: 1,
       required: true
     }),
     walls: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Wall_segments.glb",
+      version: 1,
       required: true
     }),
     props: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Props.glb",
+      version: 1,
       required: false
     }),
     ceiling: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Ceiling.glb",
+      version: 1,
       required: true
     })
   })
