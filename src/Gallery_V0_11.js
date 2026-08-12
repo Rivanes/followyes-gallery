@@ -97,6 +97,7 @@
   - Stage 12C66C6C2: Canonical Visual State / Mobile Lighting & Reflection Parity — ustawienia zapisywane w gallery_state są kanoniczne i niezależne od urządzenia, profile mobilne tylko raz wyprowadzają runtime post-process, odbicia i environment response pozostają zgodne z PC, Messenger startuje od Balanced, a DPR/resize ma jednego właściciela.
   - Stage 12C66C6C2: Mobile Memory Survival / Tiered Artwork Residency — wszystkie ramy zachowują stale widoczny Preview, tylko kontrolowany zestaw dzieł rezyduje jako Full 2048, a pełne tekstury, modele, cienie i SSAO są rzeczywiście zwalniane. Mobilny przycisk DBG pokazuje LIVE/FREEZE/LAST SESSION bez konsoli.
   - Stage 12C66C6C3: Artwork Frame Library — GLB variants are read from gallery-artworks/main/frames, assigned per artwork, follow the existing aspect/transform runtime, persist in gallery_state, participate in picking/Inspect and artwork-targeted local lighting.
+  - Stage 12C66C6C4: Artwork Frame Fit / Seating / Warm Cache — frames fit by their detected INNER opening (not outer bounds), seat flush around the artwork front edge, receive the required local Z +180° orientation, and catalog GLBs are warmed in parallel after Storage discovery.
 */
 
 
@@ -9339,6 +9340,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryArtworkFrameCatalogLoaded = false;
     var galleryArtworkFrameCatalogLoading = null;
     var galleryArtworkFrameAssetContainerCache = {};
+    var galleryArtworkFrameCatalogWarmupPromise = null;
 
     function getGalleryArtworkFrameStoragePrefix() {
         return String(galleryArtworkStoragePrefix || "main").replace(/^\/+|\/+$/g, "") + "/" + galleryArtworkFrameStorageFolder;
@@ -9405,6 +9407,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 .filter(Boolean)
                 .sort(function (a, b) { return a.label.localeCompare(b.label); });
             galleryArtworkFrameCatalogLoaded = true;
+            warmGalleryArtworkFrameCatalog();
             return galleryArtworkFrameCatalog.slice();
         })().finally(function () {
             galleryArtworkFrameCatalogLoading = null;
@@ -9497,6 +9500,100 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return galleryArtworkFrameAssetContainerCache[key];
     }
 
+    function warmGalleryArtworkFrameCatalog() {
+        if (galleryArtworkFrameCatalogWarmupPromise) return galleryArtworkFrameCatalogWarmupPromise;
+        var urls = (galleryArtworkFrameCatalog || [])
+            .map(getArtworkFramePublicUrl)
+            .filter(Boolean)
+            .filter(function (url, index, array) { return array.indexOf(url) === index; });
+        if (!urls.length) return Promise.resolve([]);
+
+        // C6C4: Download + parse shared frame GLBs once, in parallel, as soon as the
+        // Storage catalog is known. Choosing a frame later only instantiates cached data.
+        galleryArtworkFrameCatalogWarmupPromise = Promise.all(urls.map(function (url) {
+            return getGalleryCachedArtworkFrameContainer(url).catch(function (error) {
+                console.warn("Artwork frame warm-cache warning:", url, error);
+                return null;
+            });
+        })).finally(function () {
+            galleryArtworkFrameCatalogWarmupPromise = null;
+        });
+        return galleryArtworkFrameCatalogWarmupPromise;
+    }
+
+    function getArtworkFrameTriangleLineIntersections(meshes, axis) {
+        var values = [];
+        var positionKind = BABYLON.VertexBuffer && BABYLON.VertexBuffer.PositionKind
+            ? BABYLON.VertexBuffer.PositionKind
+            : "position";
+        var epsilon = 1e-7;
+
+        function addEdgeIntersection(a, b) {
+            var crossA = axis === "x" ? a.y : a.x;
+            var crossB = axis === "x" ? b.y : b.x;
+            var valueA = axis === "x" ? a.x : a.y;
+            var valueB = axis === "x" ? b.x : b.y;
+
+            if (Math.abs(crossA) <= epsilon && Math.abs(crossB) <= epsilon) {
+                values.push(valueA, valueB);
+                return;
+            }
+            if ((crossA > epsilon && crossB > epsilon) || (crossA < -epsilon && crossB < -epsilon)) return;
+            var denominator = crossA - crossB;
+            if (Math.abs(denominator) <= epsilon) return;
+            var t = crossA / denominator;
+            if (t < -epsilon || t > 1 + epsilon) return;
+            values.push(valueA + (valueB - valueA) * t);
+        }
+
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.getVerticesData || !mesh.getIndices) return;
+            var positions = mesh.getVerticesData(positionKind);
+            var indices = mesh.getIndices();
+            if (!positions || !indices || indices.length < 3) return;
+            mesh.computeWorldMatrix(true);
+            var world = mesh.getWorldMatrix();
+
+            function vertexAt(index) {
+                var offset = index * 3;
+                return BABYLON.Vector3.TransformCoordinates(
+                    new BABYLON.Vector3(positions[offset], positions[offset + 1], positions[offset + 2]),
+                    world
+                );
+            }
+
+            for (var i = 0; i + 2 < indices.length; i += 3) {
+                var a = vertexAt(indices[i]);
+                var b = vertexAt(indices[i + 1]);
+                var c = vertexAt(indices[i + 2]);
+                addEdgeIntersection(a, b);
+                addEdgeIntersection(b, c);
+                addEdgeIntersection(c, a);
+            }
+        });
+
+        return values.filter(function (value) { return isFinite(value); });
+    }
+
+    function detectArtworkFrameInnerOpening(meshes, bounds) {
+        if (!bounds || !bounds.size) return null;
+
+        function openingFrom(values, outerSize) {
+            var minGap = Math.max(outerSize * 0.01, 0.0001);
+            var negative = values.filter(function (v) { return v < -minGap; }).sort(function (a, b) { return b - a; });
+            var positive = values.filter(function (v) { return v > minGap; }).sort(function (a, b) { return a - b; });
+            if (!negative.length || !positive.length) return null;
+            var opening = positive[0] - negative[0];
+            if (!isFinite(opening) || opening <= outerSize * 0.08 || opening >= outerSize * 0.98) return null;
+            return opening;
+        }
+
+        var width = openingFrom(getArtworkFrameTriangleLineIntersections(meshes, "x"), Math.abs(bounds.size.x));
+        var height = openingFrom(getArtworkFrameTriangleLineIntersections(meshes, "y"), Math.abs(bounds.size.y));
+        if (!width || !height) return null;
+        return { width: width, height: height };
+    }
+
     function instantiateArtworkFrameContainer(container, artwork) {
         if (!container || !container.instantiateModelsToScene) return null;
         var prefix = (artwork && artwork.name ? artwork.name : "Artwork") + "_Frame_";
@@ -9545,16 +9642,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var initialBounds = getArtworkFrameMeshBounds(meshes);
         orientationRoot.rotation.copyFrom(getArtworkFrameOrientationForBounds(initialBounds));
+        // C6C4: exported frame convention requires a local Z half-turn.
+        orientationRoot.rotation.z += Math.PI;
         orientationRoot.computeWorldMatrix(true);
         var orientedBounds = getArtworkFrameMeshBounds(meshes);
         if (orientedBounds) {
-            orientationRoot.position.subtractInPlace(orientedBounds.center);
+            // Center the opening in X/Y, but seat the BACK face of the GLB on local Z=0.
+            // This avoids the previous half-depth floating offset and gives us a stable
+            // surface reference for every frame thickness.
+            orientationRoot.position.x -= orientedBounds.center.x;
+            orientationRoot.position.y -= orientedBounds.center.y;
+            orientationRoot.position.z -= orientedBounds.min.z;
             orientationRoot.computeWorldMatrix(true);
         }
         var centeredBounds = getArtworkFrameMeshBounds(meshes) || orientedBounds || initialBounds;
+        var detectedOpening = detectArtworkFrameInnerOpening(meshes, centeredBounds);
         var referenceWidth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.x)) : 1;
         var referenceHeight = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.y)) : 1;
         var referenceDepth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.z)) : 0.04;
+        var referenceOpeningWidth = detectedOpening ? Math.max(0.0001, detectedOpening.width) : referenceWidth;
+        var referenceOpeningHeight = detectedOpening ? Math.max(0.0001, detectedOpening.height) : referenceHeight;
 
         var runtime = {
             root: root,
@@ -9567,7 +9674,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             frameState: Object.assign({}, frameState),
             referenceWidth: referenceWidth,
             referenceHeight: referenceHeight,
-            referenceDepth: referenceDepth
+            referenceDepth: referenceDepth,
+            referenceOpeningWidth: referenceOpeningWidth,
+            referenceOpeningHeight: referenceOpeningHeight
         };
         artwork.metadata = artwork.metadata || {};
         artwork.metadata.artworkFrameRuntime = runtime;
@@ -9587,14 +9696,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var targetWidth = Math.max(0.0001, baseDimensions.width * transformState.scale);
             var targetHeight = Math.max(0.0001, baseDimensions.height * transformState.scale);
 
-            runtime.scaleRoot.scaling.x = targetWidth / Math.max(0.0001, runtime.referenceWidth || 1);
-            runtime.scaleRoot.scaling.y = targetHeight / Math.max(0.0001, runtime.referenceHeight || 1);
+            // C6C4: fit the artwork to the detected INNER opening, never to the outer frame bounds.
+            runtime.scaleRoot.scaling.x = targetWidth / Math.max(0.0001, runtime.referenceOpeningWidth || runtime.referenceWidth || 1);
+            runtime.scaleRoot.scaling.y = targetHeight / Math.max(0.0001, runtime.referenceOpeningHeight || runtime.referenceHeight || 1);
             runtime.scaleRoot.scaling.z = 1;
 
             var normal = getArtworkVisualNormal(artwork);
             var position = artwork.getAbsolutePosition ? artwork.getAbsolutePosition() : artwork.position;
             var artworkDepthScale = artwork.scaling && isFinite(artwork.scaling.z) ? Math.abs(artwork.scaling.z) : 1;
-            var offset = (artworkDepth * artworkDepthScale * 0.5) + artworkImagePlaneSurfaceEpsilon + ((runtime.referenceDepth || 0.04) * 0.5) + galleryArtworkFrameSurfaceEpsilon;
+            // C6C4: orientationRoot's back face is normalized to local Z=0. Place that
+            // back face directly on the artwork front surface with a tiny overlap, so the
+            // frame wraps/hides the grey artwork edge instead of floating in front of it.
+            var artworkFrontOffset = artworkDepth * artworkDepthScale * 0.5;
+            var seatingOverlap = Math.min(galleryArtworkFrameSurfaceEpsilon, artworkFrontOffset * 0.25);
+            var offset = artworkFrontOffset + artworkImagePlaneSurfaceEpsilon - seatingOverlap;
 
             runtime.root.parent = null;
             runtime.root.position.copyFrom(position.add(normal.scale(offset)));
