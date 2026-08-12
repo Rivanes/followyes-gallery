@@ -19,7 +19,7 @@ assert(bootstrap.includes('stage12c66c6c4_artwork_frame_fit_20260812'),'C6C4 cac
 assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c4_artwork_frame_fit_20260812'),'Index cache key missing');
 assert(editorBootstrap.includes('Stage 12C66C6C4'),'Editor bootstrap label missing');
 assert(source.includes('Stage 12C66C6C2: Mobile Memory Survival / Tiered Artwork Residency'),'Base source history missing');
-assert(source.includes('Stage 12C66C6C4: Artwork Frame Fit / Seating / Warm Cache'),'C6C4 source history missing');
+assert(source.includes('Stage 12C66C6C4: Artwork Frame Fit / Prefetch'),'C6C4 source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');

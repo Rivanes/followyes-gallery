@@ -2,7 +2,7 @@
   "name": "berryboy-art-gallery-stage12c66c6c4-artwork-frame-fit",
   "version": "0.11.66-c6c4",
   "private": true,
-  "description": "Berryboy Art Gallery — Stage 12C66C6C4 / Artwork Frame Fit / Seating / Warm Cache",
+  "description": "Berryboy Art Gallery — Stage 12C66C6C4 / Artwork Frame Fit / Prefetch / Offset / Z Rotation",
   "type": "module",
   "scripts": {
     "build": "node tools/build-stage12c66c6c4.mjs",
@@ -21,10 +21,11 @@
     "test:atomic-media": "node tools/test-stage12c66c6c-atomic-media.mjs",
     "test:media-recovery": "node tools/test-stage12c66c6c-media-recovery.mjs",
     "test:mobile-quality": "node tools/test-stage12c66c6c-mobile-quality-domains.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit",
     "test:author-reconciliation": "node tools/test-stage12c66c6c-author-reconciliation.mjs",
     "test:canonical-visual": "node tools/test-stage12c66c6c1-canonical-visual-state.mjs",
     "test:memory-survival": "node tools/test-stage12c66c6c2-mobile-memory-survival.mjs",
-    "test:artwork-frames": "node tools/test-stage12c66c6c4-artwork-frames.mjs"
+    "test:artwork-frames": "node tools/test-stage12c66c6c3-artwork-frames.mjs",
+    "test:artwork-frame-fit": "node tools/test-stage12c66c6c4-artwork-frame-fit.mjs"
   }
 }
