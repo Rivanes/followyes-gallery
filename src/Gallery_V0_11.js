@@ -98,6 +98,8 @@
   - Stage 12C66C6C2: Mobile Memory Survival / Tiered Artwork Residency — wszystkie ramy zachowują stale widoczny Preview, tylko kontrolowany zestaw dzieł rezyduje jako Full 2048, a pełne tekstury, modele, cienie i SSAO są rzeczywiście zwalniane. Mobilny przycisk DBG pokazuje LIVE/FREEZE/LAST SESSION bez konsoli.
   - Stage 12C66C6C3: Artwork Frame Library — GLB variants are read from gallery-artworks/main/frames, assigned per artwork, follow the existing aspect/transform runtime, persist in gallery_state, participate in picking/Inspect and artwork-targeted local lighting.
   - Stage 12C66C6C4: Artwork Frame Fit / Prefetch — frame GLBs are prefetched after Storage catalog read, scaling uses the frame inner opening instead of the outer mesh bounds, depth offset seats the frame over the artwork edges, and runtime adds the required 180° Z rotation.
+  - Stage 12C66C6C5: Artwork Frame Facing Fix — adds a local 180° Y facing flip after frame normalization so the decorative/front side faces away from the wall while preserving the required 180° Z in-plane rotation.
+  - Stage 12C66C6C6: Artwork Frame Runtime Performance — frame GLBs warm in parallel on Edit entry, per-variant geometry descriptors are cached after first use, and frame assignment updates only the new frame materials/local-light membership instead of rescanning the whole gallery.
 */
 
 
@@ -9330,7 +9332,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
-    // STAGE 12C66C6C4 - ARTWORK FRAME FIT / PREFETCH
+    // STAGE 12C66C6C5 - ARTWORK FRAME FACING FIX
     // Frames are shared GLBs stored in gallery-artworks/main/frames.
     // One frame runtime belongs to one artwork. The frame follows the artwork's
     // already-authoritative aspect/transform calculation; no second aspect system exists.
@@ -9351,6 +9353,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryArtworkFrameCatalogLoading = null;
     var galleryArtworkFrameCatalogPrefetchStarted = false;
     var galleryArtworkFrameAssetContainerCache = {};
+    var galleryArtworkFrameRuntimeDescriptorCache = {};
+    var galleryArtworkFrameWarmupPromise = null;
 
     function getGalleryArtworkFrameStoragePrefix() {
         return String(galleryArtworkStoragePrefix || "main").replace(/^\/+|\/+$/g, "") + "/" + galleryArtworkFrameStorageFolder;
@@ -9385,21 +9389,35 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function prefetchGalleryArtworkFrameCatalogAssets(catalog) {
-        if (galleryArtworkFrameCatalogPrefetchStarted) return;
+        if (galleryArtworkFrameCatalogPrefetchStarted) return galleryArtworkFrameWarmupPromise;
         galleryArtworkFrameCatalogPrefetchStarted = true;
         var queue = Array.isArray(catalog) ? catalog.slice() : [];
-
-        for (var i = 0; i < queue.length; i++) {
-            var entry = normalizeArtworkFrameState(queue[i]);
-            if (!entry) continue;
+        var tasks = queue.map(function (rawEntry) {
+            var entry = normalizeArtworkFrameState(rawEntry);
+            if (!entry) return Promise.resolve(null);
             var publicUrl = entry.publicUrl || getArtworkFramePublicUrl(entry);
-            if (!publicUrl) continue;
-            try {
-                await getGalleryCachedArtworkFrameContainer(publicUrl);
-            } catch (error) {
+            if (!publicUrl) return Promise.resolve(null);
+            return getGalleryCachedArtworkFrameContainer(publicUrl).catch(function (error) {
                 console.warn("Artwork frame prefetch warning:", entry.label || entry.fileName || entry.storagePath, error);
-            }
-        }
+                return null;
+            });
+        });
+
+        galleryArtworkFrameWarmupPromise = Promise.all(tasks).finally(function () {
+            galleryArtworkFrameWarmupPromise = null;
+        });
+        return galleryArtworkFrameWarmupPromise;
+    }
+
+    function warmGalleryArtworkFrameLibrary() {
+        return loadGalleryArtworkFrameCatalog(false)
+            .then(function (catalog) {
+                return prefetchGalleryArtworkFrameCatalogAssets(catalog);
+            })
+            .catch(function (error) {
+                console.warn("Artwork frame library warmup warning:", error);
+                return null;
+            });
     }
 
     function getArtworkFrameLabelFromFileName(fileName) {
@@ -9575,13 +9593,83 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, false);
     }
 
+    function getArtworkFrameRuntimeDescriptorKey(frameState) {
+        var key = getArtworkFrameCatalogKey(frameState);
+        return key || String(getArtworkFramePublicUrl(frameState) || "").toLowerCase();
+    }
+
+    function applyArtworkFrameRuntimeDescriptor(orientationRoot, descriptor) {
+        if (!orientationRoot || !descriptor) return false;
+        orientationRoot.rotation.set(
+            Number(descriptor.rotationX) || 0,
+            Number(descriptor.rotationY) || 0,
+            Number(descriptor.rotationZ) || 0
+        );
+        orientationRoot.position.set(
+            Number(descriptor.positionX) || 0,
+            Number(descriptor.positionY) || 0,
+            Number(descriptor.positionZ) || 0
+        );
+        orientationRoot.computeWorldMatrix(true);
+        return true;
+    }
+
+    function configureArtworkFrameMeshesForLighting(meshes) {
+        var configuredMaterials = [];
+        (meshes || []).forEach(function (mesh) {
+            if (!mesh || !mesh.material) return;
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.galleryLightBudgetRole = "artwork";
+            mesh.material.metadata = mesh.material.metadata || {};
+            mesh.material.metadata.galleryLightBudgetRoleOverride = "artwork";
+            if (configuredMaterials.indexOf(mesh.material) === -1) {
+                configuredMaterials.push(mesh.material);
+                configureMaterialForCommonLighting(mesh.material, mesh);
+            }
+        });
+    }
+
+    function syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, reason) {
+        if (!artwork) return;
+        var previous = Array.isArray(previousFrameMeshes) ? previousFrameMeshes.slice() : [];
+        var runtime = artwork.metadata && artwork.metadata.artworkFrameRuntime
+            ? artwork.metadata.artworkFrameRuntime
+            : null;
+        var nextFrameMeshes = runtime && Array.isArray(runtime.meshes) ? runtime.meshes : [];
+        var imagePlane = artwork.metadata ? artwork.metadata.imagePlane : null;
+
+        localLightItems.forEach(function (item) {
+            if (!item || item.softDeleted || !item.light) return;
+            var current = Array.isArray(item.light.includedOnlyMeshes) ? item.light.includedOnlyMeshes.slice() : [];
+            var hadArtworkTarget = current.indexOf(artwork) !== -1 || (imagePlane && current.indexOf(imagePlane) !== -1);
+            var hadPreviousFrameTarget = previous.some(function (mesh) { return current.indexOf(mesh) !== -1; });
+            var next = current.filter(function (mesh) {
+                if (!mesh) return false;
+                if (previous.indexOf(mesh) !== -1) return false;
+                return !(
+                    mesh.metadata &&
+                    mesh.metadata.isArtworkFrameMesh &&
+                    mesh.metadata.parentArtworkName === artwork.name
+                );
+            });
+
+            if (hadArtworkTarget || hadPreviousFrameTarget) {
+                nextFrameMeshes.forEach(function (mesh) { addMeshUnique(next, mesh); });
+            }
+
+            setLocalLightIncludedMeshesIfChanged(item, next, reason || "artworkFrameIncremental");
+        });
+    }
+
     function createArtworkFrameRuntimeFromInstance(artwork, frameState, instance, generation) {
         if (!artwork || !instance) return null;
         var root = new BABYLON.TransformNode(artwork.name + "_FrameRoot_" + generation, scene);
         var scaleRoot = new BABYLON.TransformNode(artwork.name + "_FrameScale_" + generation, scene);
+        var facingRoot = new BABYLON.TransformNode(artwork.name + "_FrameFacing_" + generation, scene);
         var orientationRoot = new BABYLON.TransformNode(artwork.name + "_FrameOrientation_" + generation, scene);
         scaleRoot.parent = root;
-        orientationRoot.parent = scaleRoot;
+        facingRoot.parent = scaleRoot;
+        orientationRoot.parent = facingRoot;
 
         var rootNodes = Array.isArray(instance.rootNodes) ? instance.rootNodes : [];
         rootNodes.forEach(function (node) {
@@ -9613,18 +9701,51 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mesh.receiveShadows = true;
         });
 
-        var initialBounds = getArtworkFrameMeshBounds(meshes);
-        orientationRoot.rotation.copyFrom(getArtworkFrameOrientationForBounds(initialBounds));
-        orientationRoot.computeWorldMatrix(true);
-        var orientedBounds = getArtworkFrameMeshBounds(meshes);
-        if (orientedBounds) {
-            orientationRoot.position.subtractInPlace(orientedBounds.center);
+        configureArtworkFrameMeshesForLighting(meshes);
+
+        var descriptorKey = getArtworkFrameRuntimeDescriptorKey(frameState);
+        var descriptor = descriptorKey ? galleryArtworkFrameRuntimeDescriptorCache[descriptorKey] : null;
+        var outerWidth = 1;
+        var outerHeight = 1;
+        var outerDepth = 0.04;
+
+        if (descriptor) {
+            applyArtworkFrameRuntimeDescriptor(orientationRoot, descriptor);
+            outerWidth = descriptor.outerWidth;
+            outerHeight = descriptor.outerHeight;
+            outerDepth = descriptor.outerDepth;
+        } else {
+            var initialBounds = getArtworkFrameMeshBounds(meshes);
+            orientationRoot.rotation.copyFrom(getArtworkFrameOrientationForBounds(initialBounds));
             orientationRoot.computeWorldMatrix(true);
+            var orientedBounds = getArtworkFrameMeshBounds(meshes);
+            if (orientedBounds) {
+                orientationRoot.position.subtractInPlace(orientedBounds.center);
+                orientationRoot.computeWorldMatrix(true);
+            }
+            var centeredBounds = getArtworkFrameMeshBounds(meshes) || orientedBounds || initialBounds;
+            outerWidth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.x)) : 1;
+            outerHeight = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.y)) : 1;
+            outerDepth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.z)) : 0.04;
+
+            descriptor = {
+                rotationX: orientationRoot.rotation.x,
+                rotationY: orientationRoot.rotation.y,
+                rotationZ: orientationRoot.rotation.z,
+                positionX: orientationRoot.position.x,
+                positionY: orientationRoot.position.y,
+                positionZ: orientationRoot.position.z,
+                outerWidth: outerWidth,
+                outerHeight: outerHeight,
+                outerDepth: outerDepth
+            };
+            if (descriptorKey) galleryArtworkFrameRuntimeDescriptorCache[descriptorKey] = descriptor;
         }
-        var centeredBounds = getArtworkFrameMeshBounds(meshes) || orientedBounds || initialBounds;
-        var outerWidth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.x)) : 1;
-        var outerHeight = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.y)) : 1;
-        var outerDepth = centeredBounds && centeredBounds.size ? Math.max(0.0001, Math.abs(centeredBounds.size.z)) : 0.04;
+
+        // C6C5: the GLB front was facing the wall. Flip around local Y, not Z:
+        // local Z is the frame depth/normal, so Y=180 reverses front/back.
+        facingRoot.rotation.y = Math.PI;
+        facingRoot.computeWorldMatrix(true);
         var calibration = getArtworkFrameCalibration(frameState);
         var referenceWidth = Math.max(0.0001, outerWidth * calibration.innerWidthRatio);
         var referenceHeight = Math.max(0.0001, outerHeight * calibration.innerHeightRatio);
@@ -9633,6 +9754,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var runtime = {
             root: root,
             scaleRoot: scaleRoot,
+            facingRoot: facingRoot,
             orientationRoot: orientationRoot,
             rootNodes: rootNodes,
             meshes: meshes,
@@ -9700,6 +9822,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         artwork.metadata = artwork.metadata || {};
         var normalizedState = normalizeArtworkFrameState(frameState);
         var generation = nextArtworkFrameLoadGeneration(artwork);
+        var previousFrameMeshes = artwork.metadata.artworkFrameRuntime && Array.isArray(artwork.metadata.artworkFrameRuntime.meshes)
+            ? artwork.metadata.artworkFrameRuntime.meshes.slice()
+            : [];
         disposeArtworkFrameRuntime(artwork);
         artwork.metadata.artworkFrame = normalizedState;
         artwork.metadata.artworkFrameLoading = false;
@@ -9707,7 +9832,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!normalizedState) {
             markGalleryObjectBoundsDirty(artwork);
             scheduleGalleryInspectRefreshForTarget(artwork, "artwork-frame-removed");
-            refreshAllCommonLocalLightTargets();
+            syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, "artworkFrameRemoved");
             if (!options.silent && options.markDirty !== false) markGalleryDraftDirty("artwork-frame-removed");
             if (typeof updateArtworkFrameUi === "function") updateArtworkFrameUi();
             return true;
@@ -9760,8 +9885,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             artwork.metadata.artworkFrameLoading = false;
-            refreshCommonLightingMaterialSupport();
-            refreshAllCommonLocalLightTargets();
+            syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, "artworkFrameLoaded");
             markGalleryObjectBoundsDirty(artwork);
             scheduleGalleryInspectRefreshForTarget(artwork, "artwork-frame-loaded");
             if (!options.silent && options.markDirty !== false) markGalleryDraftDirty("artwork-frame-changed");
@@ -9771,6 +9895,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } catch (error) {
             if (artwork && artwork.metadata && getArtworkFrameLoadGeneration(artwork) === generation) {
                 artwork.metadata.artworkFrameLoading = false;
+                syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, "artworkFrameLoadFailed");
             }
             console.warn("Artwork frame load failed:", normalizedState, error);
             if (!options.silent) notifyGalleryStatus("Nie udalo sie wczytac ramy GLB: " + normalizedState.label + ".");
@@ -30662,6 +30787,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (editMode) {
             resetViewerWASDMovementRuntime(true);
             setEditorUiVisible(true);
+            warmGalleryArtworkFrameLibrary();
 
             refreshMobileViewerMode();
             updateViewerCollisionMode();

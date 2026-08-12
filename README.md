@@ -1,6 +1,6 @@
-# Berryboy Art Gallery — Stage 12C66C6C4
+# Berryboy Art Gallery — Stage 12C66C6C6
 
-## Artwork Frame Fit / Prefetch / Offset / Z Rotation
+## Artwork Frame Runtime Performance
 
 Baza: **Stage 12C66C6C2 — Mobile Memory Survival / Tiered Artwork Residency**.
 
@@ -18,6 +18,16 @@ Baza: **Stage 12C66C6C2 — Mobile Memory Survival / Tiered Artwork Residency**.
 - Wybrana rama zapisuje się per artwork w `gallery_state` jako `frame`.
 - Frame bierze udział w pickingu, Inspect oraz targetowaniu Local Lights jako część artworku.
 - AssetContainer jest cache’owany, dzięki czemu wiele artworków może używać tego samego GLB bez ponownego pobierania modelu.
+
+
+### Optymalizacja C6C6
+
+- Katalog `main/frames` zaczyna rozgrzewanie od razu po wejściu w Edit Mode.
+- Wszystkie warianty GLB są pobierane **równolegle**, zamiast jeden po drugim.
+- `AssetContainer` nadal jest cache’owany per URL — kolejne artworki nie pobierają ponownie tego samego GLB.
+- Po pierwszym użyciu wariantu cache’owane są także orientacja, środek i bazowe bounds ramy; kolejne przypięcia nie liczą ich od nowa.
+- Przypięcie ramy nie uruchamia już pełnego `refreshCommonLightingMaterialSupport()` po całej scenie. Konfigurowane są tylko materiały nowej ramy.
+- Przypięcie/usunięcie ramy nie uruchamia już pełnego `refreshAllCommonLocalLightTargets()`. Aktualizowane jest tylko członkostwo meshów ramy w już istniejących targetach Local Lights.
 
 Testowe pliki Storage użyte przez ten etap mogą mieć np. nazwy `Classic_Oak.glb`, `Dark_Oak.glb`, `Gold.glb`. Nazwa przycisku jest generowana z nazwy pliku.
 
@@ -95,3 +105,8 @@ npm run check
 ```
 
 Testy automatyczne sprawdzają strukturę i zachowanie systemów, ale potwierdzenie braku zamknięcia strony wymaga długiego testu na rzeczywistych telefonach i osadzonych WebView.
+
+### C6C5 — Facing fix
+
+- Zachowuje wymagany obrót Z = 180°.
+- Dodaje lokalny obrót Y = 180° po normalizacji modelu, aby przód ramy był skierowany od ściany, a nie do ściany.
