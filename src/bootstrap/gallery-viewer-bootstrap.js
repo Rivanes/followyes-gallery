@@ -1,17 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C10
+  Exhibition Platform — Stage 12C66C6C8C11
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
 
-const STAGE = "12C66C6C8C10";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
+const STAGE = "12C66C6C8C11";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c11_guaranteed_preview_fill_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 

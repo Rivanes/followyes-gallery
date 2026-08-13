@@ -114,6 +114,7 @@
   - Stage 12C66C6C8C8: Stable Texture Residency / No-Thrash Streaming — Preview/Full quality changes are idle/Inspect-gated, workspace mode changes never rebalance textures, downgrade-to-Preview cannot immediately requeue Full, and a hard residency ceiling with hysteresis replaces distance-driven texture ping-pong.
   - Stage 12C66C6C8C9: Scene Isolation + True Readiness — Exhibition ownership is enforced by scene-wide owner sweeps so detached/orphan nodes cannot leak between layers; static Space materials are GPU-warmed before interaction, transition guards wait for foreground readiness, and long-main-thread work is observed while optional hydration yields cooperatively.
   - Stage 12C66C6C8C10: Startup Critical Path + Background Hydration Budget — interactive readiness waits only for the static Space shell and a bounded foreground artwork set; sculpture/model hydration and non-active-zone artwork previews leave the critical path, background work is single-slice, motion-aware and idle-budgeted, and Space GPU warmup is cached and compiled in small cooperative batches.
+  - Stage 12C66C6C8C11: Guaranteed Preview Fill — every assigned artwork Preview belongs to the foreground readiness gate, all required Preview textures start immediately with bounded decode concurrency, gray artwork placeholders cannot be exposed by normal startup/switch readiness, while Full textures and sculpture/model hydration remain idle/background work.
 */
 
 
@@ -215,7 +216,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C10",
+        stage: "12C66C6C8C11",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -277,11 +278,14 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         lastLongTaskDurationMs: 0,
         spaceGpuWarmup: { runs: 0, compiled: 0, skipped: 0, failed: 0, batches: 0, lastMs: 0, lastReason: null, lastAt: 0 },
         startupCriticalPath: {
-            stage: "12C66C6C8C10",
-            schema: "gallery-startup-critical-path.v1",
-            foregroundArtworkLimit: galleryDeviceProfile && galleryDeviceProfile.mobile ? 4 : 6,
+            stage: "12C66C6C8C11",
+            schema: "gallery-startup-critical-path.v2",
+            previewGateMode: "all-assigned-preview",
             foregroundArtworkSelected: 0,
             foregroundArtworkLoaded: 0,
+            requiredPreviewCount: 0,
+            readyPreviewCount: 0,
+            missingPreviewCount: 0,
             foregroundBudgetKey: null,
             initialInteractiveReadyMs: 0,
             lastForegroundReadyMs: 0,
@@ -289,7 +293,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
             lastReadyAt: 0
         },
         backgroundHydration: {
-            stage: "12C66C6C8C10",
+            stage: "12C66C6C8C11",
             schema: "gallery-background-hydration-budget.v1",
             slices: 0,
             artworkStarts: 0,
@@ -6869,7 +6873,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C10",
+        stage: "12C66C6C8C11",
         schema: "exhibition-asset-delivery.v4",
         // C6C8C8: Viewer and Admin share one texture policy. A UI mode transition must never
         // change Full/Preview residency or trigger a texture rebalance by itself.
@@ -6902,7 +6906,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var galleryArtworkResidencyRuntime = {
-        stage: "12C66C6C8C10",
+        stage: "12C66C6C8C11",
         schema: "gallery-artwork-residency.v3",
         enabled: true,
         desiredFullIds: Object.create(null),
@@ -16343,7 +16347,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryStartupWatchdogMs = 120000;
     var galleryStartupFinalizeDebug = {
         stage: "12C65E",
-        startupOrder: "critical-shell_then_state_then_current-zone-critical_then_interaction-ready_then_nearby_then_deferred",
+        startupOrder: "critical-shell_then_state_then_all-assigned-preview_then_interaction-ready_then_models-full-background",
         stateLoadFinishedAt: null,
         artworkTextureWait: null,
         finalLightStartedAt: null,
@@ -16964,7 +16968,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryZoneStreamingRuntime.lastReason = reason || "memory-budget-tiered-artwork-models";
     }
 
-    // C6C8C10 — STARTUP CRITICAL PATH / BACKGROUND HYDRATION BUDGET
+    // C6C8C10/C6C8C11 — STARTUP CRITICAL PATH / GUARANTEED PREVIEW FILL / BACKGROUND HYDRATION BUDGET
     function isGalleryBackgroundHydrationMotionActive() {
         if (isDraggingArtwork || isDraggingSphere) return true;
         if (desktopViewerMiddleLookActive || mobileLookActive) return true;
@@ -17019,27 +17023,84 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return index >= 0 ? galleryFastStartRuntime.deferredArtworkLoads.splice(index, 1)[0] : null;
     }
 
+    function getGalleryActiveArtworkPreviewPresenceSnapshot() {
+        var required = 0;
+        var ready = 0;
+        var loading = 0;
+        var missing = [];
+        (artworks || []).forEach(function (artwork) {
+            if (!artwork || !artwork.metadata || isArtworkDeleted(artwork) || !isGalleryEntityOwnerActive(artwork)) return;
+            var imageState = artwork.metadata.artworkImage;
+            if (!imageState || !getArtworkImageUrlFromState(imageState)) return;
+            required += 1;
+            var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+            var imagePlane = artwork.metadata.imagePlane || null;
+            var materialReady = !!(artwork.metadata.imageMaterial && imagePlane && imagePlane.material === artwork.metadata.imageMaterial);
+            var planeReady = materialReady && (!imagePlane.isEnabled || imagePlane.isEnabled());
+            if (planeReady) {
+                ready += 1;
+                return;
+            }
+            if (stream.loading) {
+                loading += 1;
+                return;
+            }
+            missing.push(ensureArtworkIdentity(artwork));
+        });
+        return {
+            required: required,
+            ready: ready,
+            loading: loading,
+            missing: missing.length,
+            missingIds: missing
+        };
+    }
+
+    function queueGalleryMissingRequiredPreviews(reason) {
+        var queued = 0;
+        (artworks || []).forEach(function (artwork) {
+            if (!artwork || !artwork.metadata || isArtworkDeleted(artwork) || !isGalleryEntityOwnerActive(artwork)) return;
+            var imageState = artwork.metadata.artworkImage;
+            if (!imageState || !getArtworkImageUrlFromState(imageState)) return;
+            var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
+            var imagePlane = artwork.metadata.imagePlane || null;
+            var materialReady = !!(artwork.metadata.imageMaterial && imagePlane && imagePlane.material === artwork.metadata.imageMaterial);
+            if (materialReady || stream.loading) return;
+            var artworkId = ensureArtworkIdentity(artwork);
+            var hasCurrentQueueEntry = (galleryFastStartRuntime.deferredArtworkLoads || []).some(function (entry) {
+                return !!(entry && entry.artworkId === artworkId && isGalleryArtworkQueueEntryCurrent(entry));
+            });
+            if (stream.queued && !hasCurrentQueueEntry) stream.queued = false;
+            if (hasCurrentQueueEntry) return;
+            if (queueArtworkForGalleryStreaming(artwork, reason || "required-preview-fill")) queued += 1;
+        });
+        return queued;
+    }
+
     function prepareGalleryForegroundArtworkBudget(reason) {
         var criticalPath = galleryExhibitionRuntime.startupCriticalPath;
         var contextKey = getActiveGalleryExhibitionId() + ":" + String(Number(galleryExhibitionRuntime.transitionEpoch) || 0);
-        if (criticalPath.foregroundBudgetKey === contextKey) return criticalPath.foregroundArtworkSelected;
+        queueGalleryMissingRequiredPreviews(reason || "required-preview-fill");
         var queue = galleryFastStartRuntime.deferredArtworkLoads || [];
         sortGalleryStreamingQueue(queue, "artwork");
-        queue.forEach(function (entry) { if (entry) entry.foregroundCritical = false; });
-        var limit = Math.max(2, Number(criticalPath.foregroundArtworkLimit) || (galleryDeviceProfile.mobile ? 4 : 6));
         var selected = 0;
-        // Only the nearest current-zone previews can hold the transition gate. Everything else
-        // stays queued and is promoted when its zone becomes active after interaction.
+
+        // C6C8C11: every assigned Preview is foreground-critical. The queue still uses
+        // bounded texture concurrency, but no assigned artwork may remain gray after Ready.
         queue.forEach(function (entry) {
-            if (selected >= limit || !entry || !isGalleryArtworkQueueEntryCurrent(entry)) return;
-            var tier = refreshGalleryStreamingEntryClassification(entry, "artwork");
-            if (tier !== "critical") return;
+            if (!entry || !isGalleryArtworkQueueEntryCurrent(entry)) return;
+            refreshGalleryStreamingEntryClassification(entry, "artwork");
             entry.foregroundCritical = true;
-            entry.foregroundReason = reason || "startup-critical-path";
+            entry.foregroundReason = reason || "guaranteed-preview-fill";
             selected += 1;
         });
+
+        var presence = getGalleryActiveArtworkPreviewPresenceSnapshot();
         criticalPath.foregroundArtworkSelected = selected;
         criticalPath.foregroundArtworkLoaded = 0;
+        criticalPath.requiredPreviewCount = presence.required;
+        criticalPath.readyPreviewCount = presence.ready;
+        criticalPath.missingPreviewCount = presence.missing + presence.loading;
         criticalPath.foregroundBudgetKey = contextKey;
         return selected;
     }
@@ -17437,7 +17498,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         function pumpForegroundArtwork() {
-            var launchLimit = Math.max(1, Math.min(2, getGalleryFastStartPreviewTextureConcurrency()));
+            var launchLimit = Math.max(1, Math.min(6, getGalleryFastStartPreviewTextureConcurrency()));
             var pendingTextures = getGalleryCriticalPendingTextureCount();
             while (pendingTextures < launchLimit) {
                 var artworkEntry = takeGalleryForegroundArtworkEntry();
@@ -17448,7 +17509,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 previewState._galleryStreamingTier = "critical";
                 galleryZoneStreamingRuntime.criticalArtworkStarted += 1;
                 galleryExhibitionRuntime.startupCriticalPath.foregroundArtworkLoaded += 1;
-                applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "C6C8C10 foreground artwork preview");
+                applyArtworkImageStateSafely(artworkEntry.artwork, previewState, "C6C8C11 guaranteed artwork preview");
                 pendingTextures = getGalleryCriticalPendingTextureCount();
             }
         }
@@ -17466,10 +17527,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             finishForegroundDrain();
         }
 
-        runGalleryFastStartIdleTask(function () {
+        // Required Preview fill is foreground work, not idle/background work.
+        // Give the loader one paint, then start immediately with bounded concurrency.
+        yieldGalleryForegroundFrame(0).then(function () {
             pumpForegroundArtwork();
             waitForForegroundArtwork();
-        }, 90);
+        });
     }
 
     function isGalleryViewerTextureStreamingMotionBlocked() {
@@ -17733,7 +17796,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function waitForGalleryStartupPostStateSettle(reason) {
         galleryStartupFinalizeDebug.stateLoadFinishedAt = Date.now();
         galleryStartupFinalizeDebug.artworkTextureWait = {
-            reason: reason || "12C65E-current-zone-streaming-gate",
+            reason: reason || "C6C8C11-guaranteed-preview-gate",
             status: "waiting-for-visible-content",
             elapsedMs: 0,
             pendingCount: Object.keys(galleryStartupArtworkTextureDebug.pending || {}).length
@@ -17741,7 +17804,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         updateGalleryLoaderStatus(
             "Preparing gallery...",
-            "Saved state is ready. The current gallery zone is prepared first; nearby and deferred assets stream after entry."
+            "Saved state is ready. Every assigned artwork Preview is being prepared before entry; Full textures and models stay in the background."
         );
 
         return Promise.resolve(galleryStartupFinalizeDebug.artworkTextureWait);
@@ -18322,12 +18385,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getGalleryForegroundPendingSnapshot() {
+        var previewPresence = getGalleryActiveArtworkPreviewPresenceSnapshot();
+        galleryExhibitionRuntime.startupCriticalPath.requiredPreviewCount = previewPresence.required;
+        galleryExhibitionRuntime.startupCriticalPath.readyPreviewCount = previewPresence.ready;
+        galleryExhibitionRuntime.startupCriticalPath.missingPreviewCount = previewPresence.missing + previewPresence.loading;
         return {
             hydrationActive: !!galleryExhibitionRuntime.hydrationActive,
             switching: !!galleryExhibitionRuntime.switching,
             foregroundArtworkQueue: countGalleryForegroundArtworkQueue(),
             criticalTextures: getGalleryCriticalPendingTextureCount(),
             visibleTextures: Object.keys(galleryStartupVisibleTextureDebug.pending || {}).length,
+            requiredPreviews: previewPresence.required,
+            readyPreviews: previewPresence.ready,
+            loadingPreviews: previewPresence.loading,
+            missingPreviews: previewPresence.missing,
             backgroundArtworkQueue: galleryFastStartRuntime.deferredArtworkLoads.length,
             backgroundModelQueue: galleryFastStartRuntime.deferredModelLoads.length,
             backgroundModelActive: Number(galleryFastStartRuntime.modelLoadActiveCount) || 0
@@ -18336,7 +18407,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function isGalleryForegroundPending(snapshot) {
         snapshot = snapshot || getGalleryForegroundPendingSnapshot();
-        return !!(snapshot.hydrationActive || snapshot.switching || snapshot.foregroundArtworkQueue > 0 || snapshot.criticalTextures > 0 || snapshot.visibleTextures > 0);
+        return !!(
+            snapshot.hydrationActive ||
+            snapshot.switching ||
+            snapshot.foregroundArtworkQueue > 0 ||
+            snapshot.criticalTextures > 0 ||
+            snapshot.visibleTextures > 0 ||
+            snapshot.loadingPreviews > 0 ||
+            snapshot.missingPreviews > 0 ||
+            snapshot.readyPreviews < snapshot.requiredPreviews
+        );
     }
 
     async function waitForGalleryForegroundQuietFrames(maxWaitMs) {
@@ -18386,7 +18466,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             sweepGalleryInactiveExhibitionOwners(activeId, "foreground-ready-start");
             prepareGalleryForegroundArtworkBudget(reason || "foreground-ready");
             if (!galleryFastStartRuntime.backgroundDrainActive && countGalleryForegroundArtworkQueue() > 0) {
-                drainGalleryFastStartBackgroundQueue("C6C8C10-foreground-ready-prime");
+                drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-prime");
             }
             await yieldGalleryForegroundFrame(0);
             var warmup = await runGallerySpaceGpuWarmup(reason || "foreground-ready");
@@ -18394,8 +18474,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var pendingTimeoutMs = Math.max(1200, Number(options.pendingTimeoutMs) || 7000);
             var snapshot = getGalleryForegroundPendingSnapshot();
             while (isGalleryForegroundPending(snapshot)) {
-                if (!galleryFastStartRuntime.backgroundDrainActive && snapshot.foregroundArtworkQueue > 0) {
-                    drainGalleryFastStartBackgroundQueue("C6C8C10-foreground-ready");
+                if (!galleryFastStartRuntime.backgroundDrainActive && (snapshot.foregroundArtworkQueue > 0 || snapshot.missingPreviews > 0)) {
+                    if (snapshot.missingPreviews > 0) prepareGalleryForegroundArtworkBudget(reason || "foreground-ready-requeue");
+                    drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-ready");
                 }
                 var now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
                 if (now - pendingStartedAt >= pendingTimeoutMs) break;
@@ -18403,6 +18484,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 sweepGalleryInactiveExhibitionOwners(activeId, "foreground-ready-poll");
                 snapshot = getGalleryForegroundPendingSnapshot();
             }
+
+            // C6C8C11 hard presence contract: normal transition timeout may never expose
+            // an assigned artwork as a gray placeholder. Give Preview delivery a dedicated
+            // retry window; a real broken asset becomes an explicit readiness error.
+            var previewRetryStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+            var requiredPreviewTimeoutMs = Math.max(5000, Number(options.requiredPreviewTimeoutMs) || 15000);
+            while (snapshot.readyPreviews < snapshot.requiredPreviews || snapshot.loadingPreviews > 0 || snapshot.missingPreviews > 0) {
+                prepareGalleryForegroundArtworkBudget(reason || "required-preview-hard-gate");
+                if (!galleryFastStartRuntime.backgroundDrainActive && countGalleryForegroundArtworkQueue() > 0) {
+                    drainGalleryFastStartBackgroundQueue("C6C8C11-required-preview-hard-gate");
+                }
+                await yieldGalleryForegroundFrame(55);
+                sweepGalleryInactiveExhibitionOwners(activeId, "required-preview-hard-gate");
+                snapshot = getGalleryForegroundPendingSnapshot();
+                var previewNow = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+                if (previewNow - previewRetryStartedAt >= requiredPreviewTimeoutMs) break;
+            }
+            if (snapshot.readyPreviews < snapshot.requiredPreviews || snapshot.loadingPreviews > 0 || snapshot.missingPreviews > 0) {
+                var previewError = new Error("Artwork Preview readiness failed: " + snapshot.readyPreviews + "/" + snapshot.requiredPreviews + " ready, " + snapshot.missingPreviews + " missing.");
+                galleryExhibitionRuntime.lastError = previewError.message;
+                updateGalleryLoaderStatus("Artwork previews are not ready.", previewError.message);
+                throw previewError;
+            }
+
             sweepGalleryInactiveExhibitionOwners(activeId, "foreground-ready-final-sweep");
             var quietTimeoutMs = Math.max(2400, Number(options.quietTimeoutMs) || 5200);
             var quiet = await waitForGalleryForegroundQuietFrames(quietTimeoutMs);
@@ -18455,11 +18560,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var pendingCriticalTextures = getGalleryCriticalPendingTextureCount();
         var pendingVisibleTextures = Object.keys(galleryStartupVisibleTextureDebug.pending || {}).length;
         var foregroundArtworkQueue = countGalleryForegroundArtworkQueue();
+        var previewPresence = getGalleryActiveArtworkPreviewPresenceSnapshot();
         var snapshot = {
             stateApplied: !!galleryFastStartRuntime.stateApplied,
             artworkQueue: foregroundArtworkQueue,
             artworkQueueTotal: galleryFastStartRuntime.deferredArtworkLoads.length,
             artworkPreviewDrainComplete: !!galleryFastStartRuntime.artworkPreviewDrainComplete,
+            requiredPreviews: previewPresence.required,
+            readyPreviews: previewPresence.ready,
+            loadingPreviews: previewPresence.loading,
+            missingPreviews: previewPresence.missing,
             modelQueue: galleryFastStartRuntime.deferredModelLoads.length,
             modelActive: galleryFastStartRuntime.modelLoadActiveCount,
             modelDrainComplete: !!galleryFastStartRuntime.modelDrainComplete,
@@ -18477,13 +18587,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             warmupComplete: !!galleryFastStartRuntime.interactionWarmupComplete,
             backgroundHydration: cloneGalleryJson(galleryExhibitionRuntime.backgroundHydration)
         };
-        // C6C8C10: models and non-foreground previews are explicitly background work.
+        // C6C8C11: every assigned artwork must already have Preview (or Full) before Ready.
+        // Models remain background work and do not block interaction.
         snapshot.heavyReady = !!(
             snapshot.stateApplied &&
             snapshot.artworkQueue === 0 &&
             snapshot.artworkPreviewDrainComplete &&
             snapshot.pendingTextures === 0 &&
             snapshot.pendingVisibleTextures === 0 &&
+            snapshot.requiredPreviews === snapshot.readyPreviews &&
+            snapshot.loadingPreviews === 0 &&
+            snapshot.missingPreviews === 0 &&
             snapshot.criticalDrainComplete
         );
         snapshot.ready = !!(snapshot.heavyReady && snapshot.finalizationComplete && snapshot.warmupComplete);
@@ -18554,6 +18668,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!snapshot.artworkPreviewDrainComplete) blockers.push("criticalArtworkPreviews");
         if (snapshot.pendingTextures > 0) blockers.push("foregroundArtworkTextures:" + snapshot.pendingTextures);
         if (snapshot.pendingVisibleTextures > 0) blockers.push("visibleTextures:" + snapshot.pendingVisibleTextures);
+        if (snapshot.readyPreviews < snapshot.requiredPreviews) blockers.push("requiredPreviews:" + snapshot.readyPreviews + "/" + snapshot.requiredPreviews);
+        if (snapshot.loadingPreviews > 0) blockers.push("loadingPreviews:" + snapshot.loadingPreviews);
+        if (snapshot.missingPreviews > 0) blockers.push("missingPreviews:" + snapshot.missingPreviews);
         if (!snapshot.criticalDrainComplete) blockers.push("criticalZoneDrain");
         return blockers;
     }
@@ -18567,10 +18684,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionFinalizationComplete = false;
         galleryFastStartRuntime.interactionFinalizationResult = null;
         galleryFastStartRuntime.interactionWarmupComplete = false;
-        setGalleryInteractionReady(false, reason || "12C65E-current-zone-critical-gate");
+        setGalleryInteractionReady(false, reason || "C6C8C11-guaranteed-preview-gate");
 
-        // Optional static Props stay deferred until the current-zone critical gate is complete.
-        drainGalleryFastStartBackgroundQueue("12C65E-current-zone-critical");
+        // Optional static Props/models stay deferred; assigned artwork Preview is foreground-critical.
+        drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-gate");
 
         if (galleryFastStartRuntime.interactionGateWatchdogTimer) {
             clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
@@ -18596,7 +18713,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (!galleryFastStartRuntime.backgroundDrainActive && (
                 countGalleryForegroundArtworkQueue() > 0
             )) {
-                drainGalleryFastStartBackgroundQueue("C6C8C10-foreground-startup-gate-resume");
+                drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-startup-resume");
             }
 
             if (!snapshot.heavyReady) {
@@ -18605,7 +18722,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             if (!galleryFastStartRuntime.interactionFinalizationComplete) {
-                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("12C65E-current-zone-batch-finalization");
+                galleryFastStartRuntime.interactionFinalizationResult = runGalleryFastStartFinalizationNow("C6C8C11-preview-batch-finalization");
                 galleryFastStartRuntime.interactionFinalizationComplete = true;
             }
 
@@ -18623,9 +18740,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
                     galleryFastStartRuntime.interactionGateWatchdogTimer = null;
                 }
-                setGalleryInteractionReady(true, "C6C8C10-startup-critical-path-ready");
-                startGalleryZoneStreamingRuntime("C6C8C10-interaction-ready");
-                scheduleGalleryFastStartFullArtworkDrainWhenIdle("C6C8C10-current-zone-full-textures", 900);
+                setGalleryInteractionReady(true, "C6C8C11-guaranteed-preview-ready");
+                startGalleryZoneStreamingRuntime("C6C8C11-interaction-ready");
+                scheduleGalleryFastStartFullArtworkDrainWhenIdle("C6C8C11-current-zone-full-textures", 900);
+            }).catch(function (error) {
+                galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error || "foreground readiness failed");
+                galleryFastStartRuntime.interactionGateActive = false;
+                updateGalleryLoaderStatus("Gallery is waiting for artwork previews.", galleryExhibitionRuntime.lastError);
+                console.error("C6C8C11 foreground readiness error:", error);
             });
         }
 
@@ -18648,7 +18770,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.viewerReady = true;
         galleryFastStartRuntime.viewerReadyAt = Date.now();
         galleryFastStartRuntime.interactionReady = false;
-        galleryStartupFinalizeDebug.finalLightMode = "12C65E-current-zone-streaming-gate";
+        galleryStartupFinalizeDebug.finalLightMode = "C6C8C11-guaranteed-preview-gate";
 
         // The page-level startup gate remains visible until the real interaction-ready signal.
         // The original instructional popup is shown by the public bootstrap only after that signal.
@@ -31792,7 +31914,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C10",
+            stage: "12C66C6C8C11",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -44926,7 +45048,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C10",
+                stage: "12C66C6C8C11",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -44950,7 +45072,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C10",
+                stage: "12C66C6C8C11",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -44978,7 +45100,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C10",
+                stage: "12C66C6C8C11",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,
