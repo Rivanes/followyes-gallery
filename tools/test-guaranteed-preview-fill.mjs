@@ -35,8 +35,8 @@ function extract(name) {
   throw new Error(`Unterminated ${name}`);
 }
 
-expect('package stage', pkg.version.includes('c6c8c12'));
-expect('runtime stage', source.includes('stage: "12C66C6C8C12"'));
+expect('package stage', pkg.version.includes('c6c8c13'));
+expect('runtime stage', source.includes('stage: "12C66C6C8C13"'));
 expect('all assigned Preview policy', source.includes('previewGateMode: "all-assigned-preview"'));
 
 const budget = extract('prepareGalleryForegroundArtworkBudget');

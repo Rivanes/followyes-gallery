@@ -1,14 +1,20 @@
-# C6C8C12 — Hard Space Visual Ready
+# C6C8C13 — Instant Workspace Mode Switch
 
-This build hardens the visual Space shell before interaction.
+This build makes same-runtime Admin ↔ Public transitions presentation-only.
 
-- Floor, Walls, Ceiling **and Props** are critical startup Space assets.
-- Props are resident Space geometry; zone streaming no longer hides/re-enables them after entry.
-- GPU warmup runs **per visual mesh**, including every `Wall_segment_*`, rather than once per shared material.
-- Warmup verifies `material.isReady(mesh)` and retries once; a failed required Space shader keeps the loader up with a diagnostic instead of exposing a hole.
-- All assigned artwork Preview guarantees from C6C8C11 remain unchanged.
-- Full artwork textures, sculpture/model hydration and Tour remain background work.
+- Clean **Admin → Public Page** no longer marks the gallery foreground as not-ready.
+- Clean same-runtime return no longer waits for Space GPU warmup, Preview readiness, owner sweep or quiet-frame readiness again.
+- The current Babylon Engine, Scene, Space, Exhibition layer, textures, lights and resident assets remain untouched.
+- Owner sweep and canonical Space integrity checks still run, but as a deferred idle/background audit after the UI switch.
+- If the scene actually has unsaved changes or foreground readiness is not safe, the previous guarded fallback remains available.
+- Network diagnostics begin asynchronously and never delay the visible mode switch.
+- Admin delivery telemetry refresh is also asynchronous on resume.
+- C6C8C12 Hard Space Visual Ready and C6C8C11 Guaranteed Preview Fill remain unchanged.
 
-**No new Supabase SQL is required for C6C8C12.**
+Expected normal path:
+
+`Admin → Public Page` → UI/camera switch → canvas resize next frame → background integrity audit.
+
+There is **no new Supabase SQL** for C6C8C13.
 
 Run `npm run check` before deployment.

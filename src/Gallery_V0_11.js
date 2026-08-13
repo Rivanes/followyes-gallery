@@ -116,6 +116,7 @@
   - Stage 12C66C6C8C10: Startup Critical Path + Background Hydration Budget — interactive readiness waits only for the static Space shell and a bounded foreground artwork set; sculpture/model hydration and non-active-zone artwork previews leave the critical path, background work is single-slice, motion-aware and idle-budgeted, and Space GPU warmup is cached and compiled in small cooperative batches.
   - Stage 12C66C6C8C11: Guaranteed Preview Fill — every assigned artwork Preview belongs to the foreground readiness gate, all required Preview textures start immediately with bounded decode concurrency, gray artwork placeholders cannot be exposed by normal startup/switch readiness, while Full textures and sculpture/model hydration remain idle/background work.
   - Stage 12C66C6C8C12: Hard Space Visual Ready — Props join the critical Space shell, static Space props remain resident instead of zone-popping, and GPU warmup compiles/verifies every visual Space mesh (including every Wall_segment_*) before interaction so camera turns cannot expose first-use shader holes.
+  - Stage 12C66C6C8C13: Instant Workspace Mode Switch — same-runtime Admin↔Public transitions preserve foreground readiness and touch only UI/camera controls; owner sweeps and Space integrity checks move to idle background audits so returning to Public does not re-run gallery readiness work.
 */
 
 
@@ -217,7 +218,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C12",
+        stage: "12C66C6C8C13",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -250,6 +251,11 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         lastResidentLayerAction: "startup",
         lastResidentLayerId: null,
         lastModeTransition: null,
+        workspaceModeFastPathCount: 0,
+        workspaceModeAuditRuns: 0,
+        workspaceModeAuditFailures: 0,
+        workspaceModeAuditPending: false,
+        workspaceModeAuditLast: null,
         transitionEpoch: 0,
         hydrationActive: false,
         hydrationExhibitionId: null,
@@ -32071,10 +32077,65 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return true;
     }
 
+    var galleryWorkspaceModeAuditHandle = null;
+    var galleryWorkspaceModeAuditToken = 0;
+
+    function scheduleGalleryWorkspaceModeBackgroundAudit(reason) {
+        galleryWorkspaceModeAuditToken += 1;
+        var token = galleryWorkspaceModeAuditToken;
+        galleryExhibitionRuntime.workspaceModeAuditPending = true;
+
+        if (galleryWorkspaceModeAuditHandle !== null) {
+            try {
+                if (typeof cancelIdleCallback === "function") cancelIdleCallback(galleryWorkspaceModeAuditHandle);
+                else clearTimeout(galleryWorkspaceModeAuditHandle);
+            } catch (error) {}
+            galleryWorkspaceModeAuditHandle = null;
+        }
+
+        var runAudit = function () {
+            galleryWorkspaceModeAuditHandle = null;
+            if (token !== galleryWorkspaceModeAuditToken) return;
+            var startedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+            var result = {
+                ok: true,
+                reason: reason || "workspace-mode-background-audit",
+                exhibitionId: getActiveGalleryExhibitionId(),
+                at: Date.now(),
+                durationMs: 0
+            };
+            try {
+                sweepGalleryInactiveExhibitionOwners(getActiveGalleryExhibitionId(), "workspace-mode-idle-orphan-sweep");
+                verifyGalleryCanonicalSpaceIntegrity("workspace-mode-idle-space-integrity");
+                galleryExhibitionRuntime.workspaceModeAuditRuns += 1;
+            } catch (error) {
+                galleryExhibitionRuntime.workspaceModeAuditRuns += 1;
+                galleryExhibitionRuntime.workspaceModeAuditFailures += 1;
+                galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error);
+                result.ok = false;
+                result.error = galleryExhibitionRuntime.lastError;
+                console.error("C6C8C13 workspace background audit warning:", error);
+            } finally {
+                var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+                result.durationMs = Math.round(Math.max(0, finishedAt - startedAt) * 10) / 10;
+                galleryExhibitionRuntime.workspaceModeAuditPending = false;
+                galleryExhibitionRuntime.workspaceModeAuditLast = result;
+            }
+        };
+
+        if (typeof requestIdleCallback === "function") {
+            galleryWorkspaceModeAuditHandle = requestIdleCallback(runAudit, { timeout: 1800 });
+        } else {
+            galleryWorkspaceModeAuditHandle = setTimeout(runAudit, 320);
+        }
+    }
+
     function setGallerySameRuntimeModeState(targetEditMode, reason) {
-        markGalleryForegroundNotReady(reason || "workspace-mode-transition");
+        // C6C8C13: Admin ↔ Public is not a gallery transition. The Engine, Scene,
+        // Space, Exhibition layer, textures, lights and foreground readiness stay intact.
+        // Do not mark foreground dirty and do not run scene-wide integrity work on the click path.
         var startedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
-        var modeSpaceIntegrityBefore = captureGallerySpaceIntegritySnapshot("before-workspace-mode-transition");
+        var previousEditMode = !!editMode;
         editMode = !!targetEditMode;
         if (document.body) document.body.classList.toggle("gallery-edit-mode-active", editMode);
         configureCameraPointerButtons();
@@ -32100,16 +32161,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateViewerModePlaceholderVisibility();
         }
 
-        sweepGalleryInactiveExhibitionOwners(getActiveGalleryExhibitionId(), "workspace-mode-orphan-sweep");
-        verifyGallerySpaceIntegrity(modeSpaceIntegrityBefore, "after-workspace-mode-transition");
-        verifyGalleryCanonicalSpaceIntegrity("canonical-after-workspace-mode-transition");
+        galleryExhibitionRuntime.workspaceModeFastPathCount += 1;
+        scheduleGalleryWorkspaceModeBackgroundAudit(reason || "same-runtime-ui-only");
         var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         galleryExhibitionRuntime.lastModeTransition = {
             type: "workspace-mode",
-            from: editMode ? "public" : "admin",
+            from: previousEditMode ? "admin" : "public",
             to: editMode ? "admin" : "public",
-            mode: "same-runtime-ui-only",
+            mode: "instant-workspace-ui-only",
             residentHit: true,
+            foregroundPreserved: true,
+            auditDeferred: true,
             durationMs: Math.round(Math.max(0, finishedAt - startedAt) * 10) / 10,
             at: Date.now()
         };
@@ -45113,7 +45175,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateMetadata: updateGalleryExhibitionMetadata,
         switchTo: switchGalleryExhibition,
         getSpace: function () { return cloneGalleryJson(gallerySpaceDefinition); },
-        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount, fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount, residentLayerCount: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length, residentLayerIds: Object.keys(galleryExhibitionRuntime.layerResidency || {}), residentLayerHits: galleryExhibitionRuntime.residentLayerHits, residentLayerMisses: galleryExhibitionRuntime.residentLayerMisses, residentLayerParks: galleryExhibitionRuntime.residentLayerParks, residentLayerEvictions: galleryExhibitionRuntime.residentLayerEvictions, maxParkedLayers: galleryExhibitionRuntime.maxParkedLayers, lastResidentLayerAction: galleryExhibitionRuntime.lastResidentLayerAction, lastResidentLayerId: galleryExhibitionRuntime.lastResidentLayerId, lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode, lastSwitchDurationMs: galleryExhibitionRuntime.lastSwitchDurationMs, lastSwitchFromId: galleryExhibitionRuntime.lastSwitchFromId, lastSwitchToId: galleryExhibitionRuntime.lastSwitchToId, lastSwitchSpaceId: galleryExhibitionRuntime.lastSwitchSpaceId, lastModeTransition: galleryExhibitionRuntime.lastModeTransition, transitionEpoch: galleryExhibitionRuntime.transitionEpoch, hydrationActive: galleryExhibitionRuntime.hydrationActive, hydrationExhibitionId: galleryExhibitionRuntime.hydrationExhibitionId, ownershipViolations: galleryExhibitionRuntime.ownershipViolations, blockedSpaceDisposals: galleryExhibitionRuntime.blockedSpaceDisposals, lastSpaceIntegrity: galleryExhibitionRuntime.lastSpaceIntegrity ? cloneGalleryJson(galleryExhibitionRuntime.lastSpaceIntegrity) : null, lastHydrationProfile: galleryExhibitionRuntime.lastHydrationProfile ? cloneGalleryJson(galleryExhibitionRuntime.lastHydrationProfile) : null, ownerSweepLast: galleryExhibitionRuntime.ownerSweepLast ? cloneGalleryJson(galleryExhibitionRuntime.ownerSweepLast) : null, ownerSweepRuns: galleryExhibitionRuntime.ownerSweepRuns, orphanSweepDetections: galleryExhibitionRuntime.orphanSweepDetections, staleOwnerCallbacksBlocked: galleryExhibitionRuntime.staleOwnerCallbacksBlocked, foregroundReady: galleryExhibitionRuntime.foregroundReady, foregroundReadinessLast: galleryExhibitionRuntime.foregroundReadinessLast ? cloneGalleryJson(galleryExhibitionRuntime.foregroundReadinessLast) : null, spaceGpuWarmup: cloneGalleryJson(galleryExhibitionRuntime.spaceGpuWarmup), longTaskCount: galleryExhibitionRuntime.longTaskCount, longTaskDurationMs: galleryExhibitionRuntime.longTaskDurationMs, cooperativeYields: galleryExhibitionRuntime.cooperativeYields, lastError: galleryExhibitionRuntime.lastError }; }
+        getDebug: function () { return { stage: galleryExhibitionRuntime.stage, schema: galleryExhibitionRuntime.schema, activeId: getActiveGalleryExhibitionId(), storagePrefix: galleryArtworkStoragePrefix, spaceId: galleryActiveSpaceId, catalogLoaded: galleryExhibitionRuntime.catalogLoaded, catalogCount: galleryExhibitionRuntime.catalog.length, switching: galleryExhibitionRuntime.switching, creating: galleryExhibitionRuntime.creating, stateCacheEntries: Object.keys(galleryExhibitionRuntime.stateCache).length, stateCacheHits: galleryExhibitionRuntime.stateCacheHits, stateCacheMisses: galleryExhibitionRuntime.stateCacheMisses, sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount, fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount, residentLayerCount: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length, residentLayerIds: Object.keys(galleryExhibitionRuntime.layerResidency || {}), residentLayerHits: galleryExhibitionRuntime.residentLayerHits, residentLayerMisses: galleryExhibitionRuntime.residentLayerMisses, residentLayerParks: galleryExhibitionRuntime.residentLayerParks, residentLayerEvictions: galleryExhibitionRuntime.residentLayerEvictions, maxParkedLayers: galleryExhibitionRuntime.maxParkedLayers, lastResidentLayerAction: galleryExhibitionRuntime.lastResidentLayerAction, lastResidentLayerId: galleryExhibitionRuntime.lastResidentLayerId, lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode, lastSwitchDurationMs: galleryExhibitionRuntime.lastSwitchDurationMs, lastSwitchFromId: galleryExhibitionRuntime.lastSwitchFromId, lastSwitchToId: galleryExhibitionRuntime.lastSwitchToId, lastSwitchSpaceId: galleryExhibitionRuntime.lastSwitchSpaceId, lastModeTransition: galleryExhibitionRuntime.lastModeTransition, workspaceModeFastPathCount: galleryExhibitionRuntime.workspaceModeFastPathCount, workspaceModeAuditRuns: galleryExhibitionRuntime.workspaceModeAuditRuns, workspaceModeAuditFailures: galleryExhibitionRuntime.workspaceModeAuditFailures, workspaceModeAuditPending: galleryExhibitionRuntime.workspaceModeAuditPending, workspaceModeAuditLast: galleryExhibitionRuntime.workspaceModeAuditLast ? cloneGalleryJson(galleryExhibitionRuntime.workspaceModeAuditLast) : null, transitionEpoch: galleryExhibitionRuntime.transitionEpoch, hydrationActive: galleryExhibitionRuntime.hydrationActive, hydrationExhibitionId: galleryExhibitionRuntime.hydrationExhibitionId, ownershipViolations: galleryExhibitionRuntime.ownershipViolations, blockedSpaceDisposals: galleryExhibitionRuntime.blockedSpaceDisposals, lastSpaceIntegrity: galleryExhibitionRuntime.lastSpaceIntegrity ? cloneGalleryJson(galleryExhibitionRuntime.lastSpaceIntegrity) : null, lastHydrationProfile: galleryExhibitionRuntime.lastHydrationProfile ? cloneGalleryJson(galleryExhibitionRuntime.lastHydrationProfile) : null, ownerSweepLast: galleryExhibitionRuntime.ownerSweepLast ? cloneGalleryJson(galleryExhibitionRuntime.ownerSweepLast) : null, ownerSweepRuns: galleryExhibitionRuntime.ownerSweepRuns, orphanSweepDetections: galleryExhibitionRuntime.orphanSweepDetections, staleOwnerCallbacksBlocked: galleryExhibitionRuntime.staleOwnerCallbacksBlocked, foregroundReady: galleryExhibitionRuntime.foregroundReady, foregroundReadinessLast: galleryExhibitionRuntime.foregroundReadinessLast ? cloneGalleryJson(galleryExhibitionRuntime.foregroundReadinessLast) : null, spaceGpuWarmup: cloneGalleryJson(galleryExhibitionRuntime.spaceGpuWarmup), longTaskCount: galleryExhibitionRuntime.longTaskCount, longTaskDurationMs: galleryExhibitionRuntime.longTaskDurationMs, cooperativeYields: galleryExhibitionRuntime.cooperativeYields, lastError: galleryExhibitionRuntime.lastError }; }
     };
 
     globalThis.GalleryApp = {
@@ -45135,6 +45197,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         isAdminWorkspaceMode: function () {
             return !!galleryAdminWorkspaceMode;
         },
+        canUseInstantWorkspaceModeSwitch: function () {
+            return !!galleryExhibitionRuntime.foregroundReady &&
+                !galleryExhibitionRuntime.hydrationActive &&
+                !galleryExhibitionRuntime.switching;
+        },
         enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode,
         exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode,
         discardUnsavedChanges: discardGalleryUnsavedChanges,
@@ -45152,7 +45219,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C12",
+                stage: "12C66C6C8C13",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -45176,7 +45243,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C12",
+                stage: "12C66C6C8C13",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -45204,7 +45271,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C12",
+                stage: "12C66C6C8C13",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

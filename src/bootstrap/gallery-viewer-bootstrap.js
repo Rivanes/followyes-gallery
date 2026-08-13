@@ -1,17 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C12 — Hard Space Visual Ready
+  Exhibition Platform — Stage 12C66C6C8C13 — Instant Workspace Mode Switch
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
 
-const STAGE = "12C66C6C8C12";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c12_hard_space_visual_ready_20260813";
+const STAGE = "12C66C6C8C13";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -65,7 +65,8 @@ function publishTransitionNetworkDiagnostic(record) {
   return record;
 }
 
-async function finishModeTransitionDiagnostic(before, startedAt, fromLabel, toLabel) {
+async function finishModeTransitionDiagnostic(beforeOrPromise, startedAt, fromLabel, toLabel) {
+  const before = await Promise.resolve(beforeOrPromise).catch(() => null);
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   await new Promise((resolve) => setTimeout(resolve, 120));
   const after = await getExhibitionAssetDeliveryStats().catch(() => null);
@@ -74,13 +75,29 @@ async function finishModeTransitionDiagnostic(before, startedAt, fromLabel, toLa
     type: "workspace-mode",
     from: fromLabel,
     to: toLabel,
-    mode: "same-runtime-ui-only",
+    mode: "instant-workspace-ui-only",
     durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
     network: delta,
     zeroStorageNetwork: delta.supabaseNetworkFetches === 0,
     at: Date.now()
   });
 }
+
+function canUseInstantWorkspaceModeSwitch() {
+  if (!activeEngine || !activeScene || !window.GalleryApp) return false;
+  if (typeof window.GalleryApp.canUseInstantWorkspaceModeSwitch === "function") {
+    try { return window.GalleryApp.canUseInstantWorkspaceModeSwitch() === true; } catch (_error) {}
+  }
+  if (typeof window.GalleryApp.getForegroundReadiness === "function") {
+    try {
+      const readiness = window.GalleryApp.getForegroundReadiness();
+      return !!(readiness && readiness.ready);
+    } catch (_error) {}
+  }
+  return false;
+}
+
+let inlineWorkspaceModeSwitchActive = false;
 
 function getRequestedExhibitionId() {
   try { const params = new URLSearchParams(window.location.search); return (params.get("exhibition") || "main").trim() || "main"; } catch (error) { return "main"; }
@@ -242,6 +259,7 @@ function ensureInlineAdminWorkspaceDom() {
 async function closeInlineAdminWorkspace(options = {}) {
   const shell = document.getElementById("inlineAdminWorkspace");
   if (!shell || !shell.classList.contains("active")) return true;
+  if (inlineWorkspaceModeSwitchActive) return false;
 
   const adminModule = inlineAdminModulePromise ? await inlineAdminModulePromise.catch(() => null) : null;
   const metadataDirty = !!(adminModule && typeof adminModule.hasAdminMetadataUnsavedChanges === "function" && adminModule.hasAdminMetadataUnsavedChanges());
@@ -255,15 +273,26 @@ async function closeInlineAdminWorkspace(options = {}) {
   }
 
   if (isTransitionGuardActive()) return false;
+  inlineWorkspaceModeSwitchActive = true;
   const activeBefore = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
-  const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
+  const transitionBeforePromise = getExhibitionAssetDeliveryStats().catch(() => null);
   const transitionStartedAt = performance.now();
-  const guardToken = await beginTransitionGuard({
-    title: "Returning to Public Page…",
-    detail: "Keeping the current 3D scene and exhibition in memory.",
-    minVisibleMs: 150
-  });
-  if (!guardToken) return false;
+
+  // C6C8C13: a clean, already-ready same-runtime scene returns to Public as a pure UI move.
+  // No full-page loader, no readiness invalidation and no foreground revalidation.
+  const instantFastPath = !sceneDirty && canUseInstantWorkspaceModeSwitch();
+  let guardToken = null;
+  if (!instantFastPath) {
+    guardToken = await beginTransitionGuard({
+      title: "Returning to Public Page…",
+      detail: "Finishing pending gallery work before returning to Viewer.",
+      minVisibleMs: 120
+    });
+    if (!guardToken) {
+      inlineWorkspaceModeSwitchActive = false;
+      return false;
+    }
+  }
 
   try {
     if (discardUnsaved && metadataDirty && adminModule && typeof adminModule.discardAdminMetadataChanges === "function") {
@@ -292,24 +321,31 @@ async function closeInlineAdminWorkspace(options = {}) {
       url.searchParams.set("exhibition", active && active.id ? active.id : "main");
       history.replaceState(null, "", url);
     } catch (_error) {}
+
+    // Resize on the next frame after the canvas returns to its public container.
     window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
-    if (window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
-      await window.GalleryApp.waitForForegroundReady("admin-to-public", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
+
+    // Only the fallback path waits for readiness; the normal fast path preserves it.
+    if (!instantFastPath && window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
+      await window.GalleryApp.waitForForegroundReady("admin-to-public-fallback", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
     }
+
     void finishModeTransitionDiagnostic(
-      transitionBefore,
+      transitionBeforePromise,
       transitionStartedAt,
       `Admin:${active && active.id ? active.id : "main"}`,
       `Public:${active && active.id ? active.id : "main"}`
     ).catch(() => null);
     return true;
   } finally {
-    await endTransitionGuard(guardToken);
+    if (guardToken) await endTransitionGuard(guardToken);
+    inlineWorkspaceModeSwitchActive = false;
   }
 }
 
 async function openInlineAdminWorkspace(exhibitionId) {
-  if (!currentSession || isTransitionGuardActive()) return false;
+  if (!currentSession || isTransitionGuardActive() || inlineWorkspaceModeSwitchActive) return false;
+  const foregroundReadyBeforeOpen = canUseInstantWorkspaceModeSwitch();
   const guardToken = await beginTransitionGuard({
     title: "Opening Admin Workspace…",
     detail: "Reusing the live 3D scene — no building reload.",
@@ -347,8 +383,8 @@ async function openInlineAdminWorkspace(exhibitionId) {
     const adminModule = await inlineAdminModulePromise;
     if (adminModule && typeof adminModule.resumeAdminWorkspace === "function") await adminModule.resumeAdminWorkspace();
     window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
-    if (window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
-      await window.GalleryApp.waitForForegroundReady("public-to-admin", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
+    if (!foregroundReadyBeforeOpen && window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
+      await window.GalleryApp.waitForForegroundReady("public-to-admin-fallback", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
     }
     return true;
   } finally {

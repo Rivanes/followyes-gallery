@@ -23,12 +23,12 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C12"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C12"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C12"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c12_hard_space_visual_ready_20260813'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C12: Hard Space Visual Ready'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C13"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C13"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C13"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c13_instant_workspace_mode_switch_20260813'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -62,7 +62,11 @@ assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes
 assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v3'),'Production runtime missing current hygiene changes');
 assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.BerryboyGallerySpaceDefinition ='),'Login-disabled test build missing');
 assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.includes('function restoreGalleryExhibitionLayer('),'Exhibition layer residency missing');
-assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('same-runtime-ui-only'),'Zero-reload mode transition missing');
+assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('instant-workspace-ui-only'),'Instant zero-reload mode transition missing');
+assert(source.includes('function scheduleGalleryWorkspaceModeBackgroundAudit(')&&source.includes('requestIdleCallback(runAudit'),'Deferred workspace integrity audit missing');
+assert(source.includes('canUseInstantWorkspaceModeSwitch: function ()')&&source.includes('foregroundPreserved: true'),'Workspace fast-path safety API missing');
+assert(bootstrap.includes('const instantFastPath = !sceneDirty && canUseInstantWorkspaceModeSwitch()')&&!bootstrap.includes('waitForForegroundReady("admin-to-public"'),'Admin→Public still blocks on foreground readiness');
+assert(adminBootstrap.includes('void updateAssetDeliveryStatus().catch(() => null)'),'Admin telemetry still blocks workspace resume');
 assert(admin.includes('id="networkDiagnostics"')&&adminBootstrap.includes('getExhibitionAssetDeliveryStats'),'Admin network diagnostics missing');
 assert(assetCacheSw.includes('EXHIBITION_ASSET_DELIVERY_STATS')&&assetCacheSw.includes('supabaseNetworkFetches'),'Storage delivery instrumentation missing');
 assert(transitionGuard.includes('beginTransitionGuard')&&transitionGuard.includes('endTransitionGuard')&&transitionGuard.includes('epTransitionSpinner'),'Transition guard module missing');
@@ -82,7 +86,7 @@ assert(adminBootstrap.includes('move-block')&&adminBootstrap.includes('thrash'),
 assert(source.includes('function sweepGalleryInactiveExhibitionOwners(')&&source.includes('active-context-change'),'C6C8C9 owner-driven orphan sweep missing');
 assert(source.includes('function waitForGalleryForegroundReady(')&&source.includes('function runGallerySpaceGpuWarmup('),'C6C8C9 true foreground readiness/GPU warmup missing');
 assert(source.includes('PerformanceObserver')&&source.includes('entryTypes: ["longtask"]'),'C6C8C9 long-task observer missing');
-assert(bootstrap.includes('waitForForegroundReady("admin-to-public"')&&bootstrap.includes('waitForForegroundReady("public-to-admin"'),'C6C8C9 Viewer/Admin guard readiness wait missing');
+assert(bootstrap.includes('admin-to-public-fallback')&&bootstrap.includes('public-to-admin-fallback')&&bootstrap.includes('canUseInstantWorkspaceModeSwitch'),'C6C8C13 workspace readiness fast/fallback path missing');
 assert(adminBootstrap.includes('waitForForegroundReady(`switch:${fromId}->${id}`'),'C6C8C9 exhibition switch readiness wait missing');
 assert(source.includes('function prepareGalleryForegroundArtworkBudget(')&&source.includes('previewGateMode: "all-assigned-preview"'),'C6C8C11 all-assigned Preview gate missing');
 assert(source.includes('function getGalleryBackgroundHydrationPauseReason(')&&source.includes('model-idle-budget'),'C6C8C10 motion-aware background budget missing');

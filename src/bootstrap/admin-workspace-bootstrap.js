@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C12 Admin Workspace / Hard Space Visual Ready
+  Exhibition Platform — Stage 12C66C6C8C13 Admin Workspace / Instant Workspace Mode Switch
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
 
-const STAGE = "12C66C6C8C12";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c12_hard_space_visual_ready_20260813";
+const STAGE = "12C66C6C8C13";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -979,7 +979,9 @@ export async function resumeAdminWorkspace() {
     if (catalog.length) syncSelectedFromCatalog(active.id);
     viewportStatus.innerHTML = `3D preview: <strong>${active.name}</strong>`;
   }
-  await updateAssetDeliveryStatus();
+  // C6C8C13: diagnostics are not part of the workspace mode critical path.
+  // Paint the Admin shell first and refresh delivery telemetry asynchronously.
+  void updateAssetDeliveryStatus().catch(() => null);
   startAssetDeliveryMonitoring();
   return true;
 }
