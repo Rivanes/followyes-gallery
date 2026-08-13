@@ -118,6 +118,7 @@
   - Stage 12C66C6C8C12: Hard Space Visual Ready — Props join the critical Space shell, static Space props remain resident instead of zone-popping, and GPU warmup compiles/verifies every visual Space mesh (including every Wall_segment_*) before interaction so camera turns cannot expose first-use shader holes.
   - Stage 12C66C6C8C13: Instant Workspace Mode Switch — same-runtime Admin↔Public transitions preserve foreground readiness and touch only UI/camera controls; owner sweeps and Space integrity checks move to idle background audits so returning to Public does not re-run gallery readiness work.
   - Stage 12C66C6C8C14: Zero-Work Public Return — clean Admin→Public transitions no longer run full placeholder/sculpture visual refreshes or selection UI rebuilds; viewer presentation toggles only existing nodes, collision proxies are reused without bounds recomputation, and any repair work is deferred/chunked after the public frame is visible.
+  - Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview — PUBLIC PAGE becomes an in-memory preview of the current Admin draft: unsaved scene state is not discarded or reapplied, the same live scene is shown immediately, and returning to Admin resumes the preserved draft while unload protection remains active.
 */
 
 
@@ -128,6 +129,9 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     var runtimeOptions = runtimeOptionsArg && typeof runtimeOptionsArg === "object" ? runtimeOptionsArg : {};
     var galleryAdminWorkspaceMode = runtimeOptions.adminWorkspace === true;
     var galleryPublicViewerOnly = !galleryAdminWorkspaceMode;
+    // C6C8C15: when Admin temporarily previews the public presentation, keep the
+    // in-memory scene draft alive without keeping Edit/Admin UI active.
+    var galleryAdminDraftPreviewActive = false;
     var gallerySpaceDefinition = runtimeOptions.spaceDefinition || globalThis.BerryboyGallerySpaceDefinition || null;
 
     function normalizeGalleryRuntimeId(value, fallbackValue) {
@@ -219,7 +223,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C14",
+        stage: "12C66C6C8C15",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -32165,7 +32169,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
 
     function hasGalleryUnsavedChanges() {
-        if (!galleryAdminWorkspaceMode) {
+        // C6C8C15: a draft remains a draft while the Admin shell is hidden in
+        // same-runtime Public Preview. Do not pretend it is clean merely because
+        // galleryAdminWorkspaceMode is temporarily false.
+        if (!galleryAdminWorkspaceMode && !galleryAdminDraftPreviewActive) {
             return false;
         }
         return !!(
@@ -32194,7 +32201,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var publishedSnapshot = cachedPublished && cachedPublished.state && typeof cachedPublished.state === "object"
             ? cloneGalleryJson(cachedPublished.state)
             : (gallerySaveIntegrityRuntime.publishedStateSnapshot ? cloneGalleryJson(gallerySaveIntegrityRuntime.publishedStateSnapshot) : null);
-        var handoffState = galleryAdminWorkspaceMode && hasGalleryUnsavedChanges()
+        var handoffState = (galleryAdminWorkspaceMode || galleryAdminDraftPreviewActive) && hasGalleryUnsavedChanges()
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
@@ -32205,7 +32212,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             state: handoffState,
             updatedAt: cachedPublished ? cachedPublished.updatedAt || null : null,
             rowExists: cachedPublished ? cachedPublished.rowExists !== false : (gallerySaveIntegrityRuntime ? gallerySaveIntegrityRuntime.publishedServerRowExists !== false : true),
-            source: galleryAdminWorkspaceMode ? "admin" : "public-viewer",
+            source: galleryAdminWorkspaceMode ? "admin" : (galleryAdminDraftPreviewActive ? "admin-draft-preview" : "public-viewer"),
             spaceId: galleryActiveSpaceId
         };
         try {
@@ -32355,11 +32362,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryExhibitionRuntime.workspaceModeFastPathCount += 1;
         scheduleGalleryWorkspaceModeBackgroundAudit(reason || "same-runtime-ui-only");
         var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        var persistentDraftPreview = !editMode && reason === "persistent-draft-public-preview";
         galleryExhibitionRuntime.lastModeTransition = {
             type: "workspace-mode",
             from: previousEditMode ? "admin" : "public",
             to: editMode ? "admin" : "public",
-            mode: editMode ? "instant-workspace-ui-only" : "zero-work-public-return",
+            mode: editMode ? "instant-workspace-ui-only" : (persistentDraftPreview ? "persistent-draft-public-preview" : "zero-work-public-return"),
+            draftPreserved: persistentDraftPreview,
             residentHit: true,
             foregroundPreserved: true,
             auditDeferred: true,
@@ -32380,6 +32389,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return !!editMode;
         }
 
+        // C6C8C15: returning from Public Preview reuses the exact draft currently
+        // resident in the scene. No published snapshot is applied and no draft flag
+        // is cleared.
+        galleryAdminDraftPreviewActive = false;
         galleryAdminWorkspaceMode = true;
         galleryPublicViewerOnly = false;
         syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-admin-enter");
@@ -32396,18 +32409,36 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         options = options || {};
         if (!galleryAdminWorkspaceMode) return true;
 
-        if (hasGalleryUnsavedChanges()) {
+        var preserveDraft = options.preserveDraft === true;
+        var sceneDraftDirty = hasGalleryUnsavedChanges();
+
+        if (sceneDraftDirty && !preserveDraft) {
             if (!options.discardUnsaved) return false;
             if (!discardGalleryUnsavedChanges("same-runtime-admin-discard")) return false;
+            sceneDraftDirty = false;
         }
 
-        if (editMode) setGallerySameRuntimeModeState(false, "same-runtime-public-return");
+        if (editMode) {
+            setGallerySameRuntimeModeState(
+                false,
+                preserveDraft && sceneDraftDirty ? "persistent-draft-public-preview" : "same-runtime-public-return"
+            );
+        }
+
         stopGalleryDraftStateWatcher();
-        removeGalleryAdminBeforeUnloadGuard();
         stopGalleryEditorTabHeartbeat(true);
         galleryAdminWorkspaceMode = false;
         galleryPublicViewerOnly = true;
-        syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-public-return");
+        galleryAdminDraftPreviewActive = !!(preserveDraft && sceneDraftDirty);
+
+        // A preserved scene draft must still protect the tab from accidental close.
+        // The existing guard now understands draft-preview mode; otherwise remove it.
+        if (galleryAdminDraftPreviewActive) installGalleryAdminBeforeUnloadGuard();
+        else removeGalleryAdminBeforeUnloadGuard();
+
+        syncGalleryArtworkEgressPolicyForWorkspaceMode(
+            galleryAdminDraftPreviewActive ? "persistent-draft-public-preview" : "same-runtime-public-return"
+        );
         return true;
     }
 
@@ -32537,7 +32568,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
 
     function installGalleryAdminBeforeUnloadGuard() {
-        if (!galleryAdminWorkspaceMode) return false;
+        if (!galleryAdminWorkspaceMode && !galleryAdminDraftPreviewActive) return false;
         registerGalleryDomEvent("galleryUnsavedBeforeUnload", window, "beforeunload", function (event) {
             if (!hasGalleryUnsavedChanges()) return;
             event.preventDefault();
@@ -45392,6 +45423,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         isAdminWorkspaceMode: function () {
             return !!galleryAdminWorkspaceMode;
         },
+        isDraftPreviewActive: function () {
+            return !!galleryAdminDraftPreviewActive;
+        },
         canUseInstantWorkspaceModeSwitch: function () {
             return !!galleryExhibitionRuntime.foregroundReady &&
                 !galleryExhibitionRuntime.hydrationActive &&
@@ -45414,7 +45448,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C14",
+                stage: "12C66C6C8C15",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -45438,7 +45472,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C14",
+                stage: "12C66C6C8C15",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -45466,11 +45500,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C14",
+                stage: "12C66C6C8C15",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,
                 dirty: gallerySaveIntegrityRuntime.dirty,
+                draftPreviewActive: !!galleryAdminDraftPreviewActive,
                 reason: gallerySaveIntegrityRuntime.dirtyReason,
                 revision: gallerySaveIntegrityRuntime.publishedRevision,
                 saveInFlight: gallerySaveIntegrityRuntime.saveInFlight,

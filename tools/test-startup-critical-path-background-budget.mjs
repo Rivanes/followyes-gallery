@@ -10,8 +10,8 @@ function extract(name) {
   for(let i=brace;i<source.length;i++){const c=source[i],n=source[i+1]||'';if(state==='c'){if(c==='"'||c==="'"||c==='`'){state='s';quote=c}else if(c==='/'&&n==='/'){state='l';i++}else if(c==='/'&&n==='*'){state='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return source.slice(start,i+1)}else if(state==='s'){if(c==='\\')i++;else if(c===quote)state='c'}else if(state==='l'&&c==='\n')state='c';else if(state==='b'&&c==='*'&&n==='/'){state='c';i++;}}
   throw new Error(`Unterminated ${name}`);
 }
-expect('package stage', pkg.version.includes('c6c8c14'));
-expect('runtime stage', source.includes('stage: "12C66C6C8C14"') && source.includes('exhibition-platform-multi-exhibition.v10'));
+expect('package stage', pkg.version.includes('c6c8c15'));
+expect('runtime stage', source.includes('stage: "12C66C6C8C15"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect('foreground Preview gate upgraded by C6C8C11', source.includes('previewGateMode: "all-assigned-preview"') && source.includes('function prepareGalleryForegroundArtworkBudget('));
 const pending = extract('getGalleryForegroundPendingSnapshot');
 expect('models not foreground blockers', !pending.includes('criticalModelQueue') && !pending.includes('modelActive:') && pending.includes('backgroundModelQueue'));

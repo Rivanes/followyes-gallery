@@ -24,10 +24,13 @@ expect('Save and Exhibition runtimes initialize before startup state preload',
   source.split('var gallerySaveIntegrityRuntime = {').length - 1 === 1 &&
   source.split('var galleryExhibitionRuntime = {').length - 1 === 1);
 
-expect('Public Viewer cannot become dirty and owns no editor beforeunload guard',
-  source.includes('function hasGalleryUnsavedChanges() {\n        if (!galleryAdminWorkspaceMode)') &&
+expect('Public Viewer cannot create a draft; only an existing Admin draft-preview keeps unload protection',
+  source.includes('function hasGalleryUnsavedChanges() {') &&
+  source.includes('if (!galleryAdminWorkspaceMode && !galleryAdminDraftPreviewActive)') &&
   source.includes('function markGalleryDraftDirty(reason) {\n        if (!galleryAdminWorkspaceMode)') &&
-  source.includes('function installGalleryAdminBeforeUnloadGuard()') && source.includes('if (galleryAdminWorkspaceMode) {\n        installGalleryAdminBeforeUnloadGuard();'));
+  source.includes('function installGalleryAdminBeforeUnloadGuard()') &&
+  source.includes('if (!galleryAdminWorkspaceMode && !galleryAdminDraftPreviewActive) return false;') &&
+  source.includes('if (galleryAdminWorkspaceMode) {\n        installGalleryAdminBeforeUnloadGuard();'));
 
 expect('Public baseline does not start editor draft watcher',
   source.includes('if (galleryAdminWorkspaceMode) {\n            startGalleryDraftStateWatcher();') &&
@@ -54,11 +57,12 @@ expect('Automatic Full upgrades wait only for active-zone Preview population',
   source.includes('queuedTier === "critical" || queuedTier === "nearby"') &&
   source.includes('if (previewPopulationPending && !entry.inspectPriority)'));
 
-expect('Public Page keeps active exhibition and clean admin creates handoff',
+expect('Public Page keeps active exhibition and preserves draft instead of discarding it',
   adminHtml.includes('id="publicPageButton"') &&
   admin.includes('updatePublicPageHref(selectedExhibition.id)') &&
   admin.includes('window.GalleryApp.createNavigationHandoff()') &&
-  admin.includes('confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and return to the public Viewer?")'));
+  admin.includes('inlineRuntimeContext.close({ preserveDraft: true, reason: "public-preview" })') &&
+  !admin.includes('Discard them and return to the public Viewer?'));
 
 expect('Cache stats polling is throttled instead of rescanning every 8 seconds',
   admin.includes('function startAssetDeliveryMonitoring()') && admin.includes('window.setInterval(updateAssetDeliveryStatus, 30000)') &&

@@ -1,17 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C14 — Zero-Work Public Return
+  Exhibition Platform — Stage 12C66C6C8C15 — Persistent Draft / Instant Public Preview
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
 
-const STAGE = "12C66C6C8C14";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c14_zero_work_public_return_20260813";
+const STAGE = "12C66C6C8C15";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c15_persistent_draft_public_preview_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -85,13 +85,14 @@ async function finishModeTransitionDiagnostic(beforeOrPromise, startedAt, fromLa
 
 
 function publishInstantWorkspaceModeDiagnostic(startedAt, fromLabel, toLabel, engineRecord) {
-  // C6C8C14: never query the Service Worker on the click path. The Asset Delivery
+  // C6C8C15: never query the Service Worker on the click path. The Asset Delivery
   // panel keeps session-level network telemetry; this record measures UI latency only.
   return publishTransitionNetworkDiagnostic({
     type: "workspace-mode",
     from: fromLabel,
     to: toLabel,
-    mode: "zero-work-public-return",
+    mode: engineRecord && engineRecord.mode ? engineRecord.mode : "zero-work-public-return",
+    draftPreserved: !!(engineRecord && engineRecord.draftPreserved),
     durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
     engineDurationMs: engineRecord && Number.isFinite(Number(engineRecord.durationMs))
       ? Number(engineRecord.durationMs)
@@ -286,9 +287,12 @@ async function closeInlineAdminWorkspace(options = {}) {
   const adminModule = inlineAdminModulePromise ? await inlineAdminModulePromise.catch(() => null) : null;
   const metadataDirty = !!(adminModule && typeof adminModule.hasAdminMetadataUnsavedChanges === "function" && adminModule.hasAdminMetadataUnsavedChanges());
   const sceneDirty = !!(window.GalleryApp && window.GalleryApp.hasUnsavedChanges ? window.GalleryApp.hasUnsavedChanges() : false);
+  const preserveDraft = options.preserveDraft === true;
   let discardUnsaved = options.discardUnsaved === true;
 
-  if ((metadataDirty || sceneDirty) && !discardUnsaved && !options.force) {
+  // C6C8C15: PUBLIC PAGE is a live preview of the current draft, not a discard action.
+  // Only destructive exits (logout/explicit discard) still ask for confirmation.
+  if ((metadataDirty || sceneDirty) && !preserveDraft && !discardUnsaved && !options.force) {
     const action = options.reason === "logout" ? "log out" : "return to the public Viewer";
     discardUnsaved = window.confirm(`You have unsaved Admin changes. Discard them and ${action}?`);
     if (!discardUnsaved) return false;
@@ -299,9 +303,9 @@ async function closeInlineAdminWorkspace(options = {}) {
   const activeBefore = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
   const transitionStartedAt = performance.now();
 
-  // C6C8C14: clean Admin→Public is a zero-work UI return. Do not even request
-  // Service Worker delivery stats until after the public frame is visible.
-  const instantFastPath = !sceneDirty && canUseInstantWorkspaceModeSwitch();
+  // C6C8C15: a preserved dirty draft is just as reusable as a clean scene.
+  // No published snapshot, network check or foreground rebuild belongs on this path.
+  const instantFastPath = (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch();
   const transitionBeforePromise = instantFastPath
     ? null
     : getExhibitionAssetDeliveryStats().catch(() => null);
@@ -325,7 +329,7 @@ async function closeInlineAdminWorkspace(options = {}) {
     }
 
     if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
-      const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved });
+      const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved, preserveDraft });
       if (!exited) return false;
     }
 
@@ -340,7 +344,7 @@ async function closeInlineAdminWorkspace(options = {}) {
 
     // Admin housekeeping is not allowed to delay the public frame.
     if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
-      const suspendPromise = adminModule.suspendAdminWorkspace();
+      const suspendPromise = adminModule.suspendAdminWorkspace({ preserveDraft });
       if (!instantFastPath) await suspendPromise;
       else void Promise.resolve(suspendPromise).catch(() => null);
     }

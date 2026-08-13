@@ -26,8 +26,8 @@ function extractFunction(name) {
   throw new Error(`unterminated ${name}`);
 }
 
-expect('package identity', pkg.version.includes('c6c8c14'));
-expect('source stage identity', source.includes('stage: "12C66C6C8C14"'));
+expect('package identity', pkg.version.includes('c6c8c15'));
+expect('source stage identity', source.includes('stage: "12C66C6C8C15"'));
 expect('residency schema v3', source.includes('schema: "gallery-artwork-residency.v3"'));
 expect('workspace-independent Full budget', source.includes('desktopFullTextures: 6') && source.includes('desktopHardFullTextures: 8'));
 

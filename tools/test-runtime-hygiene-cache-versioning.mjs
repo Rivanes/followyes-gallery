@@ -23,7 +23,7 @@ expect('Public Viewer cannot register itself as an active editor heartbeat',
 expect('Same-runtime workspace switches the egress policy on Admin enter and public return',
   source.includes('function syncGalleryArtworkEgressPolicyForWorkspaceMode(') &&
   source.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-admin-enter")') &&
-  source.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode("same-runtime-public-return")'));
+  source.includes('galleryAdminDraftPreviewActive ? "persistent-draft-public-preview" : "same-runtime-public-return"'));
 
 expect('Engine can discard a dirty scene without rebuilding the Space',
   source.includes('function discardGalleryUnsavedChanges(reason)') &&
@@ -36,12 +36,12 @@ expect('Admin metadata owns a real dirty baseline and is included in transition 
   admin.includes('hasAdminMetadataUnsavedChanges') &&
   admin.includes('discardAdminMetadataChanges'));
 
-expect('Hidden inline Admin suspends timer, resize observer and metadata unload guard',
-  admin.includes('export async function suspendAdminWorkspace()') &&
+expect('Hidden inline Admin suspends timer/resize work while preserving unload guard only for a live metadata draft preview',
+  admin.includes('export async function suspendAdminWorkspace(options = {})') &&
   admin.includes('stopAssetDeliveryMonitoring();') &&
-  admin.includes('removeMetadataBeforeUnload();') &&
+  admin.includes('if (!metadataDraftPreviewActive) removeMetadataBeforeUnload();') &&
   admin.includes('if (resizeCleanup) resizeCleanup();') &&
-  viewer.includes('adminModule.suspendAdminWorkspace'));
+  viewer.includes('adminModule.suspendAdminWorkspace({ preserveDraft })'));
 
 expect('Fixed-path Space GLBs use explicit cache versions',
   space.includes('version: 1') &&

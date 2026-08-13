@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C14 Admin Workspace / Zero-Work Public Return
+  Exhibition Platform — Stage 12C66C6C8C15 Admin Workspace / Persistent Draft Public Preview
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
 
-const STAGE = "12C66C6C8C14";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c14_zero_work_public_return_20260813";
+const STAGE = "12C66C6C8C15";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c15_persistent_draft_public_preview_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -74,6 +74,7 @@ let workspaceActive = true;
 let metadataBaseline = "";
 let metadataDirty = false;
 let metadataBeforeUnloadInstalled = false;
+let metadataDraftPreviewActive = false;
 
 function formatDeliveryBytes(bytes) {
   const value = Math.max(0, Number(bytes) || 0);
@@ -255,7 +256,7 @@ function confirmAndDiscardAdminChanges(message) {
 
 function onMetadataBeforeUnload(event) {
   syncMetadataDirtyState();
-  if (!workspaceActive || !metadataDirty) return;
+  if ((!workspaceActive && !metadataDraftPreviewActive) || !metadataDirty) return;
   event.preventDefault();
   event.returnValue = "";
   return "";
@@ -853,21 +854,18 @@ if (publicPageButton) {
       ? window.GalleryApp.getActiveExhibition()
       : selectedExhibition;
     updatePublicPageHref(active && active.id ? active.id : "main");
+    syncMetadataDirtyState();
 
-    if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and return to the public Viewer?")) return;
-
+    // C6C8C15: PUBLIC PAGE is a non-destructive preview. The live scene draft and
+    // metadata form stay in memory and return untouched when Admin is reopened.
     if (inlineWorkspaceMode && inlineRuntimeContext && typeof inlineRuntimeContext.close === "function") {
-      await inlineRuntimeContext.close({ discardUnsaved: true, force: true });
+      await inlineRuntimeContext.close({ preserveDraft: true, reason: "public-preview" });
       return;
     }
 
+    // Direct admin.html cannot keep the same JS heap, but the scene handoff carries
+    // the unsaved scene state instead of discarding it before navigation.
     if (isTransitionGuardActive()) return;
-    const guardToken = await beginTransitionGuard({
-      title: "Opening Public Page…",
-      detail: "Passing the current exhibition to the Viewer.",
-      minVisibleMs: 150
-    });
-    if (!guardToken) return;
     if (window.GalleryApp && typeof window.GalleryApp.createNavigationHandoff === "function") {
       try { window.GalleryApp.createNavigationHandoff(); } catch (_error) {}
     }
@@ -945,10 +943,13 @@ if (inlineWorkspaceMode && inlineRuntimeContext.session) {
   }
 }
 
-export async function suspendAdminWorkspace() {
+export async function suspendAdminWorkspace(options = {}) {
+  syncMetadataDirtyState();
+  metadataDraftPreviewActive = options.preserveDraft === true && metadataDirty;
   workspaceActive = false;
   stopAssetDeliveryMonitoring();
-  removeMetadataBeforeUnload();
+  if (!metadataDraftPreviewActive) removeMetadataBeforeUnload();
+  else installMetadataBeforeUnload();
   if (resizeCleanup) resizeCleanup();
   return true;
 }
@@ -964,6 +965,8 @@ export function discardAdminMetadataChanges() {
 export async function resumeAdminWorkspace() {
   if (!session && inlineRuntimeContext && inlineRuntimeContext.session) session = inlineRuntimeContext.session;
   if (!session) return false;
+  const preserveMetadataDraft = metadataDraftPreviewActive && metadataDirty;
+  metadataDraftPreviewActive = false;
   workspaceActive = true;
   installMetadataBeforeUnload();
   installResize();
@@ -976,8 +979,11 @@ export async function resumeAdminWorkspace() {
     : selectedExhibition;
   if (active) {
     updateUrlExhibition(active.id);
-    if (catalog.length) syncSelectedFromCatalog(active.id);
+    const sameDraftExhibition = preserveMetadataDraft && selectedExhibition && selectedExhibition.id === active.id;
+    if (catalog.length && !sameDraftExhibition) syncSelectedFromCatalog(active.id);
+    else if (catalog.length) renderCatalog();
     viewportStatus.innerHTML = `3D preview: <strong>${active.name}</strong>`;
+    if (sameDraftExhibition) syncMetadataDirtyState();
   }
   // C6C8C13: diagnostics are not part of the workspace mode critical path.
   // Paint the Admin shell first and refresh delivery telemetry asynchronously.

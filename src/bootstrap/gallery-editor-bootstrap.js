@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C14 Edit Auth Bridge / Admin Workspace Only
+  Exhibition Platform — Stage 12C66C6C8C15 Edit Auth Bridge / Persistent Draft Public Preview
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
