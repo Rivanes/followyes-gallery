@@ -1,17 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C8
+  Exhibition Platform — Stage 12C66C6C8C9
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
 
-const STAGE = "12C66C6C8C8";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+const STAGE = "12C66C6C8C9";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -293,6 +293,9 @@ async function closeInlineAdminWorkspace(options = {}) {
       history.replaceState(null, "", url);
     } catch (_error) {}
     window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+    if (window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
+      await window.GalleryApp.waitForForegroundReady("admin-to-public", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
+    }
     void finishModeTransitionDiagnostic(
       transitionBefore,
       transitionStartedAt,
@@ -344,6 +347,9 @@ async function openInlineAdminWorkspace(exhibitionId) {
     const adminModule = await inlineAdminModulePromise;
     if (adminModule && typeof adminModule.resumeAdminWorkspace === "function") await adminModule.resumeAdminWorkspace();
     window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+    if (window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
+      await window.GalleryApp.waitForForegroundReady("public-to-admin", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
+    }
     return true;
   } finally {
     await endTransitionGuard(guardToken);

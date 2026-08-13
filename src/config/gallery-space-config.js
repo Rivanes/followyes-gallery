@@ -1,6 +1,6 @@
 /*
   Exhibition Platform — current Space definition.
-  Stage 12C66C6C8C8 keeps physical Space assets resident while Exhibitions inside the same Space are switched by delta.
+  Stage 12C66C6C8C9 keeps the physical Space resident, owner-isolates Exhibition layers, and GPU-warms the static shell before foreground interaction.
 
   CACHE VERSION RULE:
   - Increase `version` when any fixed-path Space GLB is replaced in Storage.

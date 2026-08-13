@@ -70,6 +70,9 @@ const context = {
     generatedIds: 0, invalidatedLoads: 0, staleCallbacksIgnored: 0, queuesCleared: 0,
     atomicSwaps: 0, lastReason: 'initial'
   },
+  galleryExhibitionRuntime: { staleOwnerCallbacksBlocked: 0 },
+  isGalleryEntityOwnerActive: () => true,
+  setGalleryOwnedEntityDisabled: () => false,
   galleryKtx2Runtime: { successfulLoads: 0, fallbackLoads: 0, lastError: null },
   BABYLON: {
     StandardMaterial: FakeMaterial,

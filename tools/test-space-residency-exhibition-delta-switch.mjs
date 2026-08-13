@@ -45,14 +45,14 @@ const finalizeFn = extractFunction('finalizeGallerySameSpaceExhibitionDelta');
 const objectDirtyFn = extractFunction('markGalleryObjectsDirty');
 const editTourHelper = extractFunction('ensureGalleryExhibitTourCurrent');
 
-expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "12C66C6C8C8"') && pkg.version.includes('c6c8c8'));
+expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "12C66C6C8C9"') && pkg.version.includes('c6c8c9'));
 expect('Switch explicitly compares source and target space_id', switchFn.includes('areGalleryExhibitionsInSameSpace(previousExhibition, exhibition)'));
 expect('Same-space cold switch uses delta state and resident return has a dedicated resume path', switchFn.includes('applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch")') && switchFn.includes('lastSwitchMode = "same-space-delta-load"') && switchFn.includes('lastSwitchMode = "resident-layer-resume"'));
 expect('Full reset remains only as fallback for a real Space change', switchFn.includes('else {\n                resetGalleryRuntimeToBlankExhibition();'));
 expect('Delta apply suppresses duplicated wall/presentation/global refresh work', deltaFn.includes('skipWalls: true') && deltaFn.includes('skipSpacePresentation: true') && deltaFn.includes('deferGlobalRefresh: true'));
 expect('Same-space finalization refreshes only Exhibition collisions before one global batch', finalizeFn.includes('refreshViewerExhibitionCollisionMeshes();') && !finalizeFn.includes('refreshViewerCollisionMeshes();'));
 expect('Object changes no longer clear resident Space static world-bounds cache', !objectDirtyFn.includes('markLocalLightTargetCacheDirty') && objectDirtyFn.includes('clearLocalLightTargetMeshCacheForAll'));
-expect('Edit/Admin entry reuses a valid Tour instead of unconditional rebuild', source.includes('ensureGalleryExhibitTourCurrent("enter-edit-mode")') && editTourHelper.includes('needsRebuild'));
+expect('Edit/Admin entry does not unconditionally rebuild Tour paths', !source.includes('ensureGalleryExhibitTourCurrent("enter-edit-mode")') && !source.includes('ensureGalleryExhibitTourCurrent("same-runtime-admin-enter")') && editTourHelper.includes('needsRebuild'));
 expect('Same-runtime Viewer/Admin path is still present', viewer.includes('engine: activeEngine') && viewer.includes('scene: activeScene'));
 expect('Debug counters expose residency behavior', source.includes('sameSpaceSwitchCount: galleryExhibitionRuntime.sameSpaceSwitchCount') && source.includes('fullRuntimeResetCount: galleryExhibitionRuntime.fullRuntimeResetCount'));
 

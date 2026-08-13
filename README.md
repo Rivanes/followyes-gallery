@@ -1,3 +1,11 @@
+# C6C8C9 — Scene Isolation / True Readiness
+
+Current cleanup stage combines **Owner-Driven Layer Isolation / Orphan Sweep** with **True Readiness / Space GPU Warmup / Cooperative Hydration**. Inactive Exhibition-owned scene nodes are disabled by ownership rather than only by runtime references, stale async artwork callbacks cannot revive parked layers, and resident frame/model trees restore their owned descendants without reviving foreign orphan nodes.
+
+The loading/transition guard now waits for foreground-critical queues, static Space material/shader warmup and stable frames before releasing input. Structural hydration yields around its heavy phases so the browser gets paint opportunities. Automatic Tour/path precomputation was removed from startup and Admin entry; saved order/badges remain available immediately and expensive paths are built only when actually requested. This prevents deferred Tour work from freezing the page after the loader disappears.
+
+Admin diagnostics expose foreground readiness, Space GPU warmup, orphan-sweep detections and long-task counters. **No new Supabase SQL is required for C6C8C9.**
+
 # C6C8C8 — Stable Texture Residency / No-Thrash Streaming
 
 Current production package for the Exhibition Platform.

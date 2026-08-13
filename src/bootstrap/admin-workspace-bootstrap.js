@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C8 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C9 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
 
-const STAGE = "12C66C6C8C8";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+const STAGE = "12C66C6C8C9";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -147,8 +147,17 @@ async function updateNetworkDiagnosticsStatus() {
       ? `CPU: prepare ${Math.round(Number(hydration.prepareMs) || 0)} · hydrate ${Math.round(Number(hydration.hydrateMs) || 0)} · finalize ${Math.round(Number(hydration.finalizeMs) || 0)} ms`
       : "CPU: waiting";
     const spacePart = integrity ? `Space ${integrity.ok ? "OK" : "FAIL"}` : "Space guard ready";
-    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${spacePart}`;
-    networkDiagnostics.title = "Storage is measured by the local Service Worker. CPU phases include C6C8C7 atomic hydration; texture counters come from C6C8C8 stable residency. Space OK means canonical wall/floor/ceiling/prop references survived the transition.";
+    const foreground = window.GalleryApp && typeof window.GalleryApp.getForegroundReadiness === "function"
+      ? window.GalleryApp.getForegroundReadiness()
+      : null;
+    const fgLast = foreground && foreground.last;
+    const warmup = foreground && foreground.spaceGpuWarmup;
+    const owner = foreground && foreground.ownerSweep;
+    const foregroundPart = foreground
+      ? `FG ${foreground.ready ? "ready" : "busy"} · GPU ${Math.round(Number(warmup && warmup.lastMs) || 0)} ms · orphan ${Number(owner && owner.detected) || 0} · long ${Number(foreground.longTasks) || 0}`
+      : "FG pending";
+    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${foregroundPart} | ${spacePart}`;
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C9 FG readiness waits for critical active-zone work, warms static Space materials on the GPU, owner-sweeps inactive Exhibition nodes and observes main-thread long tasks before removing the transition guard.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }
@@ -451,6 +460,9 @@ async function selectAndSwitchExhibition(id) {
   try {
     const ok = await window.GalleryApp.switchExhibition(id, { force: true });
     if (!ok) return;
+    if (typeof window.GalleryApp.waitForForegroundReady === "function") {
+      await window.GalleryApp.waitForForegroundReady(`switch:${fromId}->${id}`, { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
+    }
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
     viewportStatus.innerHTML = `3D preview: <strong>${target.name}</strong>`;

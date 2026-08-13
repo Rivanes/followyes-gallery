@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — C6C8C6 Transition Guard / Loading Feedback
+  Exhibition Platform — C6C8C9 Transition Guard / True Foreground Readiness
   One full-page interaction lock shared by Public Viewer and Admin Workspace.
 */
 

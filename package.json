@@ -1,8 +1,8 @@
 {
-  "name": "exhibition-platform-stable-texture-residency-no-thrash",
-  "version": "0.11.66-c6c8c8",
+  "name": "exhibition-platform-scene-isolation-true-readiness",
+  "version": "0.11.66-c6c8c9",
   "private": true,
-  "description": "Exhibition Platform — Stable Texture Residency / No-Thrash Streaming / Scene Ownership / Egress diagnostics",
+  "description": "Exhibition Platform — Owner-Driven Layer Isolation / Orphan Sweep / True Readiness / Space GPU Warmup / Cooperative Hydration",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
@@ -21,7 +21,7 @@
     "test:atomic-media": "node tools/test-stage12c66c6c-atomic-media.mjs",
     "test:media-recovery": "node tools/test-stage12c66c6c-media-recovery.mjs",
     "test:mobile-quality": "node tools/test-stage12c66c6c-mobile-quality-domains.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency && npm run test:scene-isolation-readiness",
     "test:author-reconciliation": "node tools/test-stage12c66c6c-author-reconciliation.mjs",
     "test:canonical-visual": "node tools/test-stage12c66c6c1-canonical-visual-state.mjs",
     "test:memory-survival": "node tools/test-stage12c66c6c2-mobile-memory-survival.mjs",
@@ -40,6 +40,7 @@
     "test:exhibition-residency": "node tools/test-exhibition-residency-zero-reload.mjs",
     "test:transition-guard": "node tools/test-transition-guard-loading-feedback.mjs",
     "test:scene-ownership": "node tools/test-scene-ownership-atomic-hydration.mjs",
-    "test:stable-texture-residency": "node tools/test-stable-texture-residency-no-thrash.mjs"
+    "test:stable-texture-residency": "node tools/test-stable-texture-residency-no-thrash.mjs",
+    "test:scene-isolation-readiness": "node tools/test-scene-isolation-true-readiness.mjs"
   }
 }

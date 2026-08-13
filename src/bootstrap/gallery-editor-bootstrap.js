@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C8 Edit Auth Bridge / Admin Workspace Only
+  Exhibition Platform — Stage 12C66C6C8C9 Edit Auth Bridge / Admin Workspace Only
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 
