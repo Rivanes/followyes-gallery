@@ -1,6 +1,6 @@
 /*
   Exhibition Platform — current Space definition.
-  Stage 12C66C6C8C11 keeps the physical Space resident and GPU-warmed while every assigned artwork Preview is guaranteed before foreground interaction.
+  Stage 12C66C6C8C12 treats Floor, Walls, Ceiling and Props as one hard visual Space shell and warms every visual mesh before foreground interaction.
 
   CACHE VERSION RULE:
   - Increase `version` when any fixed-path Space GLB is replaced in Storage.
@@ -30,7 +30,7 @@ export const gallerySpaceDefinition = Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Props.glb",
       version: 1,
-      required: false
+      required: true
     }),
     ceiling: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",

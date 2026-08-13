@@ -30,7 +30,7 @@ const propLod=extractFunction(source,'configureGalleryPropStreamingLod');
 assert(!modelLod.includes('addLODLevel') && !propLod.includes('addLODLevel'),'Null LOD remains active');
 assert(modelLod.includes('galleryNullLodDisabled') && propLod.includes('galleryNullLodDisabled'),'LOD disable contract missing');
 const props=extractFunction(source,'updateGalleryPropZoneActivation');
-assert(props.includes('isGalleryPropProtectedByView') && props.includes('galleryLastVisibleAt'),'Frustum/grace protection missing');
+assert(props.includes('gallerySpaceAlwaysResident') && props.includes('mesh.setEnabled(true)'),'C6C8C12 resident Space-prop contract missing');
 const priority=extractFunction(source,'canGalleryPriorityFullArtworkBypassMovement');
 assert(priority.includes('if (!entry || !entry.inspectPriority) return false;')&&!priority.includes('entry.tier !== "critical"'),'C6C8C8 movement bypass must be Inspect-only');
 const fullDrain=extractFunction(source,'drainGalleryFastStartFullArtworkQueue');

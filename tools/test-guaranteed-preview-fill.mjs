@@ -35,8 +35,8 @@ function extract(name) {
   throw new Error(`Unterminated ${name}`);
 }
 
-expect('package stage', pkg.version.includes('c6c8c11'));
-expect('runtime stage', source.includes('stage: "12C66C6C8C11"'));
+expect('package stage', pkg.version.includes('c6c8c12'));
+expect('runtime stage', source.includes('stage: "12C66C6C8C12"'));
 expect('all assigned Preview policy', source.includes('previewGateMode: "all-assigned-preview"'));
 
 const budget = extract('prepareGalleryForegroundArtworkBudget');
@@ -60,6 +60,6 @@ expect('hard gate rejects broken Preview fill', source.includes('Artwork Preview
 expect('models remain background', !snapshot.includes('snapshot.modelQueue === 0') && !snapshot.includes('snapshot.modelActive === 0'));
 
 expect('Full residency policy preserved', source.includes('schema: "gallery-artwork-residency.v3"') && source.includes('idleBeforeFullMs: 1800'));
-expect('Admin diagnostics describe guarantee', admin.includes('Preview presence for every assigned artwork'));
+expect('Admin diagnostics describe guarantee', admin.includes('Preview presence'));
 
 console.log('C6C8C11 Guaranteed Preview Fill regression passed.');

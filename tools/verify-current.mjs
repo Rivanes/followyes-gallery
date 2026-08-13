@@ -23,12 +23,12 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C11"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C11"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C11"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c11_guaranteed_preview_fill_20260813'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C11: Guaranteed Preview Fill'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C12"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C12"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C12"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c12_hard_space_visual_ready_20260813'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C12: Hard Space Visual Ready'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -86,9 +86,14 @@ assert(bootstrap.includes('waitForForegroundReady("admin-to-public"')&&bootstrap
 assert(adminBootstrap.includes('waitForForegroundReady(`switch:${fromId}->${id}`'),'C6C8C9 exhibition switch readiness wait missing');
 assert(source.includes('function prepareGalleryForegroundArtworkBudget(')&&source.includes('previewGateMode: "all-assigned-preview"'),'C6C8C11 all-assigned Preview gate missing');
 assert(source.includes('function getGalleryBackgroundHydrationPauseReason(')&&source.includes('model-idle-budget'),'C6C8C10 motion-aware background budget missing');
-assert(source.includes('gallerySpaceGpuWarmMaterialCache')&&source.includes('Promise.all(pairs.slice(i, i + batchSize)'),'C6C8C10 cached batched Space GPU warmup missing');
-assert(adminBootstrap.includes('BG slices')&&adminBootstrap.includes('Preview presence for every assigned artwork'),'C6C8C11 Admin Preview diagnostics missing');
+assert(source.includes('gallerySpaceGpuWarmMeshCache')&&source.includes('Promise.all(list.slice(i, i + batchSize)'),'C6C8C12 cached batched per-mesh Space GPU warmup missing');
+assert(adminBootstrap.includes('BG slices')&&adminBootstrap.includes('Preview presence'),'C6C8C11 Admin Preview diagnostics missing');
 assert(source.includes('function getGalleryActiveArtworkPreviewPresenceSnapshot(')&&source.includes('function queueGalleryMissingRequiredPreviews('),'C6C8C11 Preview presence/requeue helpers missing');
 assert(source.includes('snapshot.requiredPreviews === snapshot.readyPreviews')&&source.includes('snapshot.missingPreviews === 0'),'C6C8C11 readiness does not guarantee Preview fill');
 assert(source.includes('Math.min(6, getGalleryFastStartPreviewTextureConcurrency())'),'C6C8C11 Preview concurrency path missing');
+assert(source.includes('var galleryCriticalAssetNames = ["floor", "wall", "props", "ceiling"]'),'C6C8C12 Props are not part of the critical Space shell');
+assert(source.includes('function getGallerySpaceGpuWarmupRevision(')&&source.includes('{ kind: "wall", meshes: wallMeshes }')&&source.includes('{ kind: "prop", meshes: propMeshes }'),'C6C8C12 per-mesh Space warmup missing');
+assert(source.includes('gallerySpaceAlwaysResident = true')&&source.includes('freezeStaticGalleryMeshes(propMeshes, "prop")'),'C6C8C12 resident Props contract missing');
+assert(source.includes('warmup.ok !== true')&&source.includes('Space visual warmup failed for:'),'C6C8C12 hard visual warmup gate missing');
+
 console.log('Current Exhibition Platform verifier passed.');

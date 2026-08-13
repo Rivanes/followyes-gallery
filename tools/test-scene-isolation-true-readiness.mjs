@@ -7,8 +7,8 @@ const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.ur
 
 function expect(label, value) { if (!value) throw new Error(`C6C8C9 regression: ${label}`); }
 
-expect("package stage", pkg.version.includes("c6c8c11"));
-expect("runtime stage", source.includes('stage: "12C66C6C8C11"') && source.includes('exhibition-platform-multi-exhibition.v10'));
+expect("package stage", pkg.version.includes("c6c8c12"));
+expect("runtime stage", source.includes('stage: "12C66C6C8C12"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect("owner scene scan", source.includes("function getGallerySceneOwnerEntities(") && source.includes("scene.transformNodes") && source.includes("scene.lights"));
 expect("inactive owner sweep", source.includes("function sweepGalleryInactiveExhibitionOwners(") && source.includes("active-context-change") && source.includes("post-hydration-orphan-sweep"));
 expect("stale artwork callback gate", source.includes("inactive-owner-texture-loaded") && source.includes("staleOwnerCallbacksBlocked"));
@@ -22,7 +22,7 @@ expect("readiness retries unstable foreground", source.includes("quietRetry") &&
 expect("foreground bounded artwork queue", source.includes("function getGalleryForegroundPendingSnapshot(") && source.includes("foregroundArtworkQueue") && source.includes("backgroundModelQueue"));
 expect("quiet frame gate", source.includes("function waitForGalleryForegroundQuietFrames(") && source.includes("stable >= 6"));
 expect("long task observer", source.includes("PerformanceObserver") && source.includes('entryTypes: ["longtask"]'));
-expect("startup true readiness", source.includes('setGalleryInteractionReady(true, "C6C8C11-guaranteed-preview-ready")'));
+expect("startup true readiness", source.includes('setGalleryInteractionReady(true, "C6C8C12-hard-space-visual-ready")'));
 expect("switch cooperative yield", source.includes("await yieldGalleryForegroundFrame(0)") && source.includes('markGalleryForegroundNotReady("exhibition-switch-start")'));
 expect("viewer mode guards wait", viewer.includes('waitForForegroundReady("admin-to-public"') && viewer.includes('waitForForegroundReady("public-to-admin"'));
 expect("exhibition switch guard waits", admin.includes('waitForForegroundReady(`switch:${fromId}->${id}`'));

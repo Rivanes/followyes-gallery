@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C11 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C12 Admin Workspace / Hard Space Visual Ready
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c11_guaranteed_preview_fill_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c12_hard_space_visual_ready_20260813";
 
-const STAGE = "12C66C6C8C11";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c11_guaranteed_preview_fill_20260813";
+const STAGE = "12C66C6C8C12";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c12_hard_space_visual_ready_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -162,7 +162,7 @@ async function updateNetworkDiagnosticsStatus() {
       ? `BG slices ${Number(background.slices) || 0} · art ${Number(background.artworkStarts) || 0} · model ${Number(background.modelStarts) || 0} · pauses ${Number(background.motionPauses) || 0}`
       : "BG waiting";
     networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${foregroundPart} | ${backgroundPart} | ${spacePart}`;
-    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C11 foreground readiness requires Preview presence for every assigned artwork before interaction. Full textures and sculpture/model hydration remain background-budgeted and motion-aware.";
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C12 requires the full static Space shell (Walls/Floor/Ceiling/Props), per-mesh GPU warmup and Preview presence before interaction. Full textures and sculpture/model hydration remain background-budgeted and motion-aware.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }

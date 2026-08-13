@@ -115,6 +115,7 @@
   - Stage 12C66C6C8C9: Scene Isolation + True Readiness — Exhibition ownership is enforced by scene-wide owner sweeps so detached/orphan nodes cannot leak between layers; static Space materials are GPU-warmed before interaction, transition guards wait for foreground readiness, and long-main-thread work is observed while optional hydration yields cooperatively.
   - Stage 12C66C6C8C10: Startup Critical Path + Background Hydration Budget — interactive readiness waits only for the static Space shell and a bounded foreground artwork set; sculpture/model hydration and non-active-zone artwork previews leave the critical path, background work is single-slice, motion-aware and idle-budgeted, and Space GPU warmup is cached and compiled in small cooperative batches.
   - Stage 12C66C6C8C11: Guaranteed Preview Fill — every assigned artwork Preview belongs to the foreground readiness gate, all required Preview textures start immediately with bounded decode concurrency, gray artwork placeholders cannot be exposed by normal startup/switch readiness, while Full textures and sculpture/model hydration remain idle/background work.
+  - Stage 12C66C6C8C12: Hard Space Visual Ready — Props join the critical Space shell, static Space props remain resident instead of zone-popping, and GPU warmup compiles/verifies every visual Space mesh (including every Wall_segment_*) before interaction so camera turns cannot expose first-use shader holes.
 */
 
 
@@ -216,7 +217,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C11",
+        stage: "12C66C6C8C12",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -278,7 +279,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         lastLongTaskDurationMs: 0,
         spaceGpuWarmup: { runs: 0, compiled: 0, skipped: 0, failed: 0, batches: 0, lastMs: 0, lastReason: null, lastAt: 0 },
         startupCriticalPath: {
-            stage: "12C66C6C8C11",
+            stage: "12C66C6C8C12",
             schema: "gallery-startup-critical-path.v2",
             previewGateMode: "all-assigned-preview",
             foregroundArtworkSelected: 0,
@@ -293,7 +294,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
             lastReadyAt: 0
         },
         backgroundHydration: {
-            stage: "12C66C6C8C11",
+            stage: "12C66C6C8C12",
             schema: "gallery-background-hydration-budget.v1",
             slices: 0,
             artworkStarts: 0,
@@ -826,12 +827,12 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
 
     installGalleryMobileRenderResolutionViewportOwner();
 
-    // Props remain deferred by the single startup gate, but this queue is no longer mobile-specific.
+    // Optional startup deferral remains generic for future Space assets. C6C8C12 has no deferred Space asset: Props are critical.
     var galleryStartupDeferredOptionalAssetImports = [];
     var galleryStartupDeferredOptionalAssetsReleased = false;
 
     function shouldGalleryDeferOptionalStartupAsset(assetName) {
-        return assetName === "props";
+        return galleryOptionalAssetNames.indexOf(assetName) !== -1;
     }
 
     function queueGalleryStartupDeferredOptionalAssetImport(assetName, run) {
@@ -6873,7 +6874,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C11",
+        stage: "12C66C6C8C12",
         schema: "exhibition-asset-delivery.v4",
         // C6C8C8: Viewer and Admin share one texture policy. A UI mode transition must never
         // change Full/Preview residency or trigger a texture rebalance by itself.
@@ -6906,7 +6907,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     var galleryArtworkResidencyRuntime = {
-        stage: "12C66C6C8C11",
+        stage: "12C66C6C8C12",
         schema: "gallery-artwork-residency.v3",
         enabled: true,
         desiredFullIds: Object.create(null),
@@ -16335,8 +16336,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // STAGE 12C65A - SINGLE STARTUP GATE / BATCHED FINALIZATION
     // Critical shell and saved state open the intro; one gate then drains previews/models/Props and finalizes global systems once.
     var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
-    var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
-    var galleryOptionalAssetNames = ["props"];
+    var galleryCriticalAssetNames = ["floor", "wall", "props", "ceiling"];
+    var galleryOptionalAssetNames = [];
     var assetsToLoad = galleryCriticalAssetNames.length;
     var assetsLoaded = 0;
     var galleryWebStateLoadedOnce = false;
@@ -16347,7 +16348,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryStartupWatchdogMs = 120000;
     var galleryStartupFinalizeDebug = {
         stage: "12C65E",
-        startupOrder: "critical-shell_then_state_then_all-assigned-preview_then_interaction-ready_then_models-full-background",
+        startupOrder: "hard-space-shell_then_state_then_all-assigned-preview_then_space-visual-warmup_then_interaction-ready_then_models-full-background",
         stateLoadFinishedAt: null,
         artworkTextureWait: null,
         finalLightStartedAt: null,
@@ -16899,18 +16900,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return false;
     }
     function updateGalleryPropZoneActivation() {
+        // C6C8C12: Props are part of the physical Space shell, not streamed Exhibition content.
+        // They stay resident/enabled after the critical import so a camera turn can never reveal
+        // a late prop pop-in. Heavy user sculpture/model slots remain background-streamed separately.
         var now = Date.now();
-        var profile = getGalleryMobileQualityProfileDefinition(galleryDeviceProfile.currentQualityProfile);
-        var alwaysVisible = !!(profile.streaming && profile.streaming.propsAlwaysVisible);
         (propMeshes || []).forEach(function (mesh) {
             if (!mesh || mesh.name === "__root__") return;
             configureGalleryPropStreamingLod(mesh);
-            var zoneId = getGalleryStreamingZoneIdForObject(mesh);
-            var protectedByView = isGalleryPropProtectedByView(mesh);
-            if (protectedByView) mesh.metadata.galleryLastVisibleAt = now;
-            var visibleGrace = now - Number(mesh.metadata.galleryLastVisibleAt || 0) < 2800;
-            var active = !galleryDeviceProfile.mobile || alwaysVisible || isGalleryStreamingZoneActive(zoneId) || protectedByView || visibleGrace;
-            if (mesh.setEnabled && mesh.isEnabled && mesh.isEnabled() !== active) mesh.setEnabled(active);
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.gallerySpaceAlwaysResident = true;
+            mesh.metadata.galleryLastVisibleAt = now;
+            if (mesh.setEnabled && (!mesh.isEnabled || !mesh.isEnabled())) mesh.setEnabled(true);
         });
     }
 
@@ -17228,7 +17228,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (galleryZoneStreamingRuntime.started) return;
         galleryZoneStreamingRuntime.started = true;
         refreshGalleryStreamingBudgetsFromQuality(galleryDeviceProfile.currentQualityProfile, "streaming-start");
-        releaseGalleryStartupDeferredOptionalAssetImports("12C65E-interaction-ready-nearby-stream");
+        releaseGalleryStartupDeferredOptionalAssetImports("C6C8C12-post-ready-future-optionals");
         rebuildGalleryStreamingZones(reason || "streaming-start");
         refreshGalleryCurrentStreamingZone(reason || "streaming-start", true);
         (artworks || []).forEach(function (artwork) { getGalleryStreamingZoneIdForObject(artwork); });
@@ -18316,41 +18316,94 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
-    var gallerySpaceGpuWarmMaterialCache = typeof WeakSet !== "undefined" ? new WeakSet() : null;
+    // C6C8C12 — HARD SPACE VISUAL READY
+    // Cache the exact mesh+material+visual revision, not merely the material object.
+    // Shared wall materials can require a different compiled effect for another Wall_segment_*
+    // (mesh attributes / light defines / shadows), so every visual Space mesh must be warmed once.
+    var gallerySpaceGpuWarmMeshCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+
+    function getGallerySpaceGpuWarmupRevision(mesh, material) {
+        var materialId = material && (material.uniqueId != null ? material.uniqueId : material.id || material.name || "material");
+        return [
+            materialId,
+            Number(galleryGeometryVersion) || 0,
+            Number(gallerySurfaceVersion) || 0,
+            Number(localLightTargetCacheVersion) || 0,
+            scene && scene.lights ? scene.lights.length : 0,
+            mesh && mesh.receiveShadows ? 1 : 0
+        ].join("|");
+    }
+
+    function isGallerySpaceGpuWarmMeshCached(mesh, material, revision) {
+        if (!gallerySpaceGpuWarmMeshCache || !mesh) return false;
+        var cached = gallerySpaceGpuWarmMeshCache.get(mesh);
+        return !!(cached && cached.material === material && cached.revision === revision);
+    }
+
+    function setGallerySpaceGpuWarmMeshCached(mesh, material, revision) {
+        if (!gallerySpaceGpuWarmMeshCache || !mesh) return;
+        gallerySpaceGpuWarmMeshCache.set(mesh, { material: material, revision: revision, warmedAt: Date.now() });
+    }
 
     function getGallerySpaceGpuWarmupPairs() {
         var pairs = [];
-        var seen = [];
-        [wallMeshes, floorMeshes, ceilingMeshes].forEach(function (collection) {
-            (collection || []).forEach(function (mesh) {
-                if (!mesh || (mesh.isDisposed && mesh.isDisposed()) || !mesh.material) return;
+        [
+            { kind: "wall", meshes: wallMeshes },
+            { kind: "floor", meshes: floorMeshes },
+            { kind: "ceiling", meshes: ceilingMeshes },
+            { kind: "prop", meshes: propMeshes }
+        ].forEach(function (entry) {
+            (entry.meshes || []).forEach(function (mesh) {
+                if (!mesh || mesh.name === "__root__" || (mesh.isDisposed && mesh.isDisposed()) || !mesh.material) return;
                 var material = mesh.material;
-                if (seen.indexOf(material) !== -1) return;
-                seen.push(material);
-                pairs.push({ mesh: mesh, material: material, cached: !!(gallerySpaceGpuWarmMaterialCache && gallerySpaceGpuWarmMaterialCache.has(material)) });
+                var revision = getGallerySpaceGpuWarmupRevision(mesh, material);
+                pairs.push({
+                    kind: entry.kind,
+                    mesh: mesh,
+                    material: material,
+                    revision: revision,
+                    cached: isGallerySpaceGpuWarmMeshCached(mesh, material, revision)
+                });
             });
         });
         return pairs;
     }
 
     async function compileGallerySpaceGpuWarmupPair(pair) {
-        if (!pair || !pair.mesh || !pair.material) return { compiled: false, failed: false, skipped: true };
-        if (pair.cached) return { compiled: false, failed: false, skipped: true };
+        if (!pair || !pair.mesh || !pair.material) return { compiled: false, failed: false, skipped: true, kind: pair && pair.kind };
+        if (pair.cached) return { compiled: false, failed: false, skipped: true, kind: pair.kind };
         try {
+            if (pair.mesh.setEnabled && pair.mesh.isEnabled && !pair.mesh.isEnabled()) pair.mesh.setEnabled(true);
             if (pair.mesh.computeWorldMatrix) pair.mesh.computeWorldMatrix(true);
+
+            var compileState = "ready";
             if (typeof pair.material.forceCompilationAsync === "function") {
-                await Promise.race([
-                    pair.material.forceCompilationAsync(pair.mesh, { useInstances: false }),
-                    new Promise(function (resolve) { setTimeout(resolve, 1800); })
+                compileState = await Promise.race([
+                    Promise.resolve(pair.material.forceCompilationAsync(pair.mesh, { useInstances: false })).then(function () { return "ready"; }),
+                    new Promise(function (resolve) { setTimeout(function () { resolve("timeout"); }, 2200); })
                 ]);
-            } else if (typeof pair.material.isReady === "function") {
-                pair.material.isReady(pair.mesh, true);
+                if (compileState === "timeout") {
+                    return { compiled: false, failed: true, timeout: true, skipped: false, kind: pair.kind, mesh: pair.mesh.name };
+                }
             }
-            if (gallerySpaceGpuWarmMaterialCache) gallerySpaceGpuWarmMaterialCache.add(pair.material);
-            return { compiled: true, failed: false, skipped: false };
+
+            var verified = true;
+            if (typeof pair.material.isReady === "function") {
+                try { verified = !!pair.material.isReady(pair.mesh, false); } catch (readyError) { verified = false; }
+            }
+            if (!verified) {
+                return { compiled: false, failed: true, verificationFailed: true, skipped: false, kind: pair.kind, mesh: pair.mesh.name };
+            }
+
+            setGallerySpaceGpuWarmMeshCached(pair.mesh, pair.material, pair.revision);
+            pair.mesh.metadata = pair.mesh.metadata || {};
+            pair.mesh.metadata.gallerySpaceVisualWarm = true;
+            pair.mesh.metadata.gallerySpaceVisualWarmAt = Date.now();
+            pair.mesh.metadata.gallerySpaceVisualWarmRevision = pair.revision;
+            return { compiled: true, failed: false, skipped: false, kind: pair.kind, mesh: pair.mesh.name };
         } catch (error) {
-            console.warn("C6C8C10 Space GPU warmup warning:", pair.mesh && pair.mesh.name, error);
-            return { compiled: false, failed: true, skipped: false };
+            console.warn("C6C8C12 Space GPU warmup warning:", pair.mesh && pair.mesh.name, error);
+            return { compiled: false, failed: true, skipped: false, kind: pair.kind, mesh: pair.mesh && pair.mesh.name };
         }
     }
 
@@ -18361,19 +18414,43 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var skipped = 0;
         var failed = 0;
         var batches = 0;
-        var batchSize = galleryDeviceProfile.mobile ? 1 : 3;
+        var byKind = { wall: 0, floor: 0, ceiling: 0, prop: 0 };
+        var failedPairs = [];
+        // Keep compilation cooperative. All wall segments are included, but work is spread across frames.
+        var batchSize = galleryDeviceProfile.mobile ? 2 : 5;
         galleryExhibitionRuntime.spaceGpuWarmup.runs += 1;
-        galleryExhibitionRuntime.spaceGpuWarmup.lastReason = reason || "foreground-ready";
-        for (var i = 0; i < pairs.length; i += batchSize) {
-            await yieldGalleryForegroundFrame(0);
-            var results = await Promise.all(pairs.slice(i, i + batchSize).map(compileGallerySpaceGpuWarmupPair));
-            batches += 1;
-            results.forEach(function (result) {
-                if (result.compiled) compiled += 1;
-                else if (result.failed) failed += 1;
-                else skipped += 1;
-            });
+        galleryExhibitionRuntime.spaceGpuWarmup.lastReason = reason || "hard-space-visual-ready";
+
+        async function compileBatchList(list) {
+            for (var i = 0; i < list.length; i += batchSize) {
+                await yieldGalleryForegroundFrame(0);
+                var results = await Promise.all(list.slice(i, i + batchSize).map(compileGallerySpaceGpuWarmupPair));
+                batches += 1;
+                results.forEach(function (result, resultIndex) {
+                    var original = list[i + resultIndex];
+                    if (result.compiled) {
+                        compiled += 1;
+                        if (result.kind && byKind[result.kind] != null) byKind[result.kind] += 1;
+                    } else if (result.failed) {
+                        failed += 1;
+                        if (original) failedPairs.push(original);
+                    } else skipped += 1;
+                });
+            }
         }
+
+        await compileBatchList(pairs);
+
+        // One explicit retry after another painted frame. A transient first-use compile must not
+        // become a visible hole, but a genuinely broken shader should block Ready with diagnostics.
+        if (failedPairs.length) {
+            var retryPairs = failedPairs.slice();
+            failedPairs.length = 0;
+            failed = 0;
+            await yieldGalleryForegroundFrame(80);
+            await compileBatchList(retryPairs);
+        }
+
         var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         galleryExhibitionRuntime.spaceGpuWarmup.compiled += compiled;
         galleryExhibitionRuntime.spaceGpuWarmup.skipped += skipped;
@@ -18381,7 +18458,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryExhibitionRuntime.spaceGpuWarmup.batches += batches;
         galleryExhibitionRuntime.spaceGpuWarmup.lastMs = Math.round(Math.max(0, finishedAt - startedAt) * 10) / 10;
         galleryExhibitionRuntime.spaceGpuWarmup.lastAt = Date.now();
-        return { compiled: compiled, skipped: skipped, failed: failed, batches: batches, total: pairs.length, ms: galleryExhibitionRuntime.spaceGpuWarmup.lastMs };
+        galleryExhibitionRuntime.spaceGpuWarmup.lastTotal = pairs.length;
+        galleryExhibitionRuntime.spaceGpuWarmup.lastByKind = byKind;
+        galleryExhibitionRuntime.spaceGpuWarmup.lastFailedMeshes = failedPairs.map(function (pair) { return pair && pair.mesh ? pair.mesh.name : "unknown"; });
+        galleryExhibitionRuntime.spaceGpuWarmup.lastOk = failedPairs.length === 0;
+        return {
+            ok: failedPairs.length === 0,
+            compiled: compiled,
+            skipped: skipped,
+            failed: failedPairs.length,
+            failedMeshes: galleryExhibitionRuntime.spaceGpuWarmup.lastFailedMeshes.slice(),
+            byKind: byKind,
+            batches: batches,
+            total: pairs.length,
+            ms: galleryExhibitionRuntime.spaceGpuWarmup.lastMs
+        };
     }
 
     function getGalleryForegroundPendingSnapshot() {
@@ -18469,7 +18560,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-prime");
             }
             await yieldGalleryForegroundFrame(0);
-            var warmup = await runGallerySpaceGpuWarmup(reason || "foreground-ready");
+            var warmup = await runGallerySpaceGpuWarmup(reason || "C6C8C12-hard-space-visual-ready");
+            if (!warmup || warmup.ok !== true) {
+                var failedSpaceMeshes = warmup && warmup.failedMeshes ? warmup.failedMeshes.join(", ") : "unknown";
+                var spaceWarmupError = new Error("Space visual warmup failed for: " + failedSpaceMeshes);
+                galleryExhibitionRuntime.lastError = spaceWarmupError.message;
+                updateGalleryLoaderStatus("Preparing gallery walls and Space props...", spaceWarmupError.message);
+                throw spaceWarmupError;
+            }
             var pendingStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
             var pendingTimeoutMs = Math.max(1200, Number(options.pendingTimeoutMs) || 7000);
             var snapshot = getGalleryForegroundPendingSnapshot();
@@ -18577,7 +18675,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             pendingTextures: pendingCriticalTextures,
             pendingTexturesTotal: pendingTextures,
             pendingVisibleTextures: pendingVisibleTextures,
-            propsSettled: true,
+            propsSettled: !!galleryAssetLoadDebug.loaded.props && !galleryAssetLoadDebug.failed.props && getGalleryAssetMeshCount("props") > 0,
             propsLoaded: !!galleryAssetLoadDebug.loaded.props,
             propsFailed: !!galleryAssetLoadDebug.failed.props,
             criticalZoneId: galleryZoneStreamingRuntime.currentZoneId,
@@ -18598,6 +18696,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             snapshot.requiredPreviews === snapshot.readyPreviews &&
             snapshot.loadingPreviews === 0 &&
             snapshot.missingPreviews === 0 &&
+            snapshot.propsSettled &&
             snapshot.criticalDrainComplete
         );
         snapshot.ready = !!(snapshot.heavyReady && snapshot.finalizationComplete && snapshot.warmupComplete);
@@ -18671,6 +18770,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (snapshot.readyPreviews < snapshot.requiredPreviews) blockers.push("requiredPreviews:" + snapshot.readyPreviews + "/" + snapshot.requiredPreviews);
         if (snapshot.loadingPreviews > 0) blockers.push("loadingPreviews:" + snapshot.loadingPreviews);
         if (snapshot.missingPreviews > 0) blockers.push("missingPreviews:" + snapshot.missingPreviews);
+        if (!snapshot.propsSettled) blockers.push("props");
         if (!snapshot.criticalDrainComplete) blockers.push("criticalZoneDrain");
         return blockers;
     }
@@ -18684,10 +18784,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionFinalizationComplete = false;
         galleryFastStartRuntime.interactionFinalizationResult = null;
         galleryFastStartRuntime.interactionWarmupComplete = false;
-        setGalleryInteractionReady(false, reason || "C6C8C11-guaranteed-preview-gate");
+        setGalleryInteractionReady(false, reason || "C6C8C12-hard-space-visual-ready-gate");
 
-        // Optional static Props/models stay deferred; assigned artwork Preview is foreground-critical.
-        drainGalleryFastStartBackgroundQueue("C6C8C11-guaranteed-preview-gate");
+        // C6C8C12: the complete static Space shell (including Props) and assigned artwork Preview are foreground-critical. Models remain background work.
+        drainGalleryFastStartBackgroundQueue("C6C8C12-hard-space-visual-ready-gate");
 
         if (galleryFastStartRuntime.interactionGateWatchdogTimer) {
             clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
@@ -18740,8 +18840,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     clearTimeout(galleryFastStartRuntime.interactionGateWatchdogTimer);
                     galleryFastStartRuntime.interactionGateWatchdogTimer = null;
                 }
-                setGalleryInteractionReady(true, "C6C8C11-guaranteed-preview-ready");
-                startGalleryZoneStreamingRuntime("C6C8C11-interaction-ready");
+                setGalleryInteractionReady(true, "C6C8C12-hard-space-visual-ready");
+                startGalleryZoneStreamingRuntime("C6C8C12-interaction-ready");
                 scheduleGalleryFastStartFullArtworkDrainWhenIdle("C6C8C11-current-zone-full-textures", 900);
             }).catch(function (error) {
                 galleryExhibitionRuntime.lastError = error && error.message ? error.message : String(error || "foreground readiness failed");
@@ -18770,7 +18870,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.viewerReady = true;
         galleryFastStartRuntime.viewerReadyAt = Date.now();
         galleryFastStartRuntime.interactionReady = false;
-        galleryStartupFinalizeDebug.finalLightMode = "C6C8C11-guaranteed-preview-gate";
+        galleryStartupFinalizeDebug.finalLightMode = "C6C8C12-hard-space-visual-ready-gate";
 
         // The page-level startup gate remains visible until the real interaction-ready signal.
         // The original instructional popup is shown by the public bootstrap only after that signal.
@@ -18998,7 +19098,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, status) {
         updateGalleryLoaderStatus(
             "Loading " + (assetName || "asset") + " " + attempt + " / " + maxAttempts + "...",
-            status || "Retry-safe startup import. Critical assets are walls, floor and ceiling."
+            status || "Retry-safe startup import. Critical Space assets are walls, floor, ceiling and props."
         );
     }
 
@@ -31914,7 +32014,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C11",
+            stage: "12C66C6C8C12",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -37848,7 +37948,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         function (meshes) {
             meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); tagGallerySpaceNode(mesh, "prop"); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
             registerGallerySpaceIntegrityBaseline("prop", propMeshes);
-            markGalleryObjectsDirty("propsImported"); rebuildGalleryStreamingZones("props-imported"); propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); }); updateGalleryPropZoneActivation();
+            markGalleryObjectsDirty("propsImported");
+            freezeStaticGalleryMeshes(propMeshes, "prop");
+            propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); if (mesh && mesh.setEnabled) mesh.setEnabled(true); });
+            rebuildGalleryStreamingZones("props-imported");
+            updateGalleryPropZoneActivation();
             if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true; else { refreshViewerCollisionMeshes(); hydrateSavedLocalLightTargetsForAll("props-imported"); }
             assetLoaded("props");
         }, null,
@@ -45048,7 +45152,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C11",
+                stage: "12C66C6C8C12",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -45072,7 +45176,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C11",
+                stage: "12C66C6C8C12",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -45100,7 +45204,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C11",
+                stage: "12C66C6C8C12",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

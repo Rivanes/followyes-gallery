@@ -1,8 +1,8 @@
 {
-  "name": "exhibition-platform-guaranteed-preview-fill",
-  "version": "0.11.66-c6c8c11",
+  "name": "exhibition-platform-hard-space-visual-ready",
+  "version": "0.11.66-c6c8c12",
   "private": true,
-  "description": "Exhibition Platform — Guaranteed Preview Fill / all assigned Preview textures before interaction / Full and models stay background-budgeted",
+  "description": "Exhibition Platform \u2014 Hard Space Visual Ready / critical Props + per-mesh Space GPU warmup + guaranteed artwork Preview before interaction",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
@@ -21,7 +21,7 @@
     "test:atomic-media": "node tools/test-stage12c66c6c-atomic-media.mjs",
     "test:media-recovery": "node tools/test-stage12c66c6c-media-recovery.mjs",
     "test:mobile-quality": "node tools/test-stage12c66c6c-mobile-quality-domains.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency && npm run test:scene-isolation-readiness && npm run test:startup-critical-path && npm run test:guaranteed-preview-fill",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency && npm run test:scene-isolation-readiness && npm run test:startup-critical-path && npm run test:guaranteed-preview-fill && npm run test:hard-space-visual-ready",
     "test:author-reconciliation": "node tools/test-stage12c66c6c-author-reconciliation.mjs",
     "test:canonical-visual": "node tools/test-stage12c66c6c1-canonical-visual-state.mjs",
     "test:memory-survival": "node tools/test-stage12c66c6c2-mobile-memory-survival.mjs",
@@ -43,6 +43,7 @@
     "test:stable-texture-residency": "node tools/test-stable-texture-residency-no-thrash.mjs",
     "test:scene-isolation-readiness": "node tools/test-scene-isolation-true-readiness.mjs",
     "test:startup-critical-path": "node tools/test-startup-critical-path-background-budget.mjs",
-    "test:guaranteed-preview-fill": "node tools/test-guaranteed-preview-fill.mjs"
+    "test:guaranteed-preview-fill": "node tools/test-guaranteed-preview-fill.mjs",
+    "test:hard-space-visual-ready": "node tools/test-hard-space-visual-ready.mjs"
   }
 }
