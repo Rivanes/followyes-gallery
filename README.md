@@ -1,36 +1,9 @@
-# C6C8C9 — Scene Isolation / True Readiness
+# C6C8C10 — Startup Critical Path / Background Hydration Budget
 
-Current cleanup stage combines **Owner-Driven Layer Isolation / Orphan Sweep** with **True Readiness / Space GPU Warmup / Cooperative Hydration**. Inactive Exhibition-owned scene nodes are disabled by ownership rather than only by runtime references, stale async artwork callbacks cannot revive parked layers, and resident frame/model trees restore their owned descendants without reviving foreign orphan nodes.
+This stage keeps the C6C8C9 scene-isolation and True Readiness foundation, but removes optional work from the interactive critical path. The transition/startup gate now waits for the resident static Space, Space GPU/material warmup, visible startup textures and a bounded set of the nearest current-zone artwork Preview textures. Sculpture/model GLB hydration and the remaining artwork previews no longer block interaction.
 
-The loading/transition guard now waits for foreground-critical queues, static Space material/shader warmup and stable frames before releasing input. Structural hydration yields around its heavy phases so the browser gets paint opportunities. Automatic Tour/path precomputation was removed from startup and Admin entry; saved order/badges remain available immediately and expensive paths are built only when actually requested. This prevents deferred Tour work from freezing the page after the loader disappears.
+After interaction, hydration is budgeted in cooperative slices. Artwork Preview work runs one item per slice only for the current/nearby zones. Heavy model work starts at most one model after a longer idle window. Camera movement, look, drag and recent user activity pause background hydration, preventing background decode/GLB work from intentionally competing with active navigation. Deferred-zone artwork stays queued until its zone becomes relevant instead of being hydrated just to make Network `Finish` reach zero.
 
-Admin diagnostics expose foreground readiness, Space GPU warmup, orphan-sweep detections and long-task counters. **No new Supabase SQL is required for C6C8C9.**
+Space GPU warmup is cached per material and compiled in small desktop batches, so same-Space Exhibition and Admin/Public transitions do not repeatedly warm already prepared materials. Admin diagnostics now expose foreground-ready time and background slice/artwork/model/pause counters.
 
-# C6C8C8 — Stable Texture Residency / No-Thrash Streaming
-
-Current production package for the Exhibition Platform.
-
-## What changed
-- Normal artwork Preview loads no longer enqueue a Full texture automatically.
-- Full quality is selected only for current residency targets and starts after ~1.8 s of viewer inactivity; explicit Inspect remains priority.
-- Visible/critical artwork can no longer bypass the movement lock just because it is close to the camera.
-- Admin ↔ Public mode changes use one shared texture policy and do not trigger a residency rebalance.
-- Full textures use hysteresis: a soft target budget selects new candidates, while a higher hard ceiling allows already-loaded Full textures to remain resident.
-- Full → Preview downgrade happens only at the hard ceiling, only while idle, only for old undesired textures, and with downgrade/re-entry cooldowns.
-- A Preview created by a residency downgrade is explicitly forbidden from immediately re-enqueueing Full.
-- Admin Asset Delivery diagnostics now show Full upgrades, downgrades, movement blocks and prevented thrash.
-
-## What was intentionally not changed
-- Sculpture/model streaming is unchanged in this Stage.
-- C6C8C7 Scene Ownership / Atomic Exhibition Hydration remains the base lifecycle.
-- The persistent asset cache remains `exhibition-platform-assets-v1`, so heavy cached assets are not intentionally invalidated.
-
-## SQL
-No new SQL is required for C6C8C8. Keep the existing `SUPABASE_SQL` folder as the project database reference.
-
-## Verification
-Run:
-
-```bash
-npm run check
-```
+**No new Supabase SQL is required for C6C8C10.** Existing `SUPABASE_SQL` remains unchanged.

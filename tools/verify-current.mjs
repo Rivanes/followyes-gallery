@@ -23,12 +23,12 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C9"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C9"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C9"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c9_scene_isolation_true_readiness_20260813'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C9: Scene Isolation + True Readiness'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C10"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C10"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C10"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c10_startup_critical_path_background_budget_20260813'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C10: Startup Critical Path + Background Hydration Budget'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -84,4 +84,8 @@ assert(source.includes('function waitForGalleryForegroundReady(')&&source.includ
 assert(source.includes('PerformanceObserver')&&source.includes('entryTypes: ["longtask"]'),'C6C8C9 long-task observer missing');
 assert(bootstrap.includes('waitForForegroundReady("admin-to-public"')&&bootstrap.includes('waitForForegroundReady("public-to-admin"'),'C6C8C9 Viewer/Admin guard readiness wait missing');
 assert(adminBootstrap.includes('waitForForegroundReady(`switch:${fromId}->${id}`'),'C6C8C9 exhibition switch readiness wait missing');
+assert(source.includes('function prepareGalleryForegroundArtworkBudget(')&&source.includes('foregroundArtworkLimit'),'C6C8C10 bounded foreground artwork budget missing');
+assert(source.includes('function getGalleryBackgroundHydrationPauseReason(')&&source.includes('model-idle-budget'),'C6C8C10 motion-aware background budget missing');
+assert(source.includes('gallerySpaceGpuWarmMaterialCache')&&source.includes('Promise.all(pairs.slice(i, i + batchSize)'),'C6C8C10 cached batched Space GPU warmup missing');
+assert(adminBootstrap.includes('BG slices')&&adminBootstrap.includes('bounded foreground Preview set'),'C6C8C10 Admin background diagnostics missing');
 console.log('Current Exhibition Platform verifier passed.');

@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C9 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C10 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
 
-const STAGE = "12C66C6C8C9";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c9_scene_isolation_true_readiness_20260813";
+const STAGE = "12C66C6C8C10";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c10_startup_critical_path_background_budget_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -153,11 +153,16 @@ async function updateNetworkDiagnosticsStatus() {
     const fgLast = foreground && foreground.last;
     const warmup = foreground && foreground.spaceGpuWarmup;
     const owner = foreground && foreground.ownerSweep;
+    const critical = foreground && foreground.startupCriticalPath;
+    const background = foreground && foreground.backgroundHydration;
     const foregroundPart = foreground
-      ? `FG ${foreground.ready ? "ready" : "busy"} · GPU ${Math.round(Number(warmup && warmup.lastMs) || 0)} ms · orphan ${Number(owner && owner.detected) || 0} · long ${Number(foreground.longTasks) || 0}`
+      ? `FG ${foreground.ready ? "ready" : "busy"} · ready ${Math.round(Number(critical && critical.lastForegroundReadyMs) || 0)} ms · GPU ${Math.round(Number(warmup && warmup.lastMs) || 0)} ms · orphan ${Number(owner && owner.detected) || 0} · long ${Number(foreground.longTasks) || 0}`
       : "FG pending";
-    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${foregroundPart} | ${spacePart}`;
-    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C9 FG readiness waits for critical active-zone work, warms static Space materials on the GPU, owner-sweeps inactive Exhibition nodes and observes main-thread long tasks before removing the transition guard.";
+    const backgroundPart = background
+      ? `BG slices ${Number(background.slices) || 0} · art ${Number(background.artworkStarts) || 0} · model ${Number(background.modelStarts) || 0} · pauses ${Number(background.motionPauses) || 0}`
+      : "BG waiting";
+    networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${foregroundPart} | ${backgroundPart} | ${spacePart}`;
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C10 foreground readiness waits only for Space plus a bounded foreground Preview set. Models and non-active-zone artwork hydration are background-budgeted, one slice at a time, and pause while the user is active.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }

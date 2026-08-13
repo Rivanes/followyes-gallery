@@ -44,13 +44,14 @@ expect('Invalid/missing handoff state falls through to remote state load',
   source.includes('var handoffHasState = !!(handoff.state && typeof handoff.state === "object");') &&
   source.includes('handoffExhibition.id === galleryRequestedExhibitionId && handoffHasState'));
 
-expect('Admin Preview queue uses full desktop preview concurrency while public keeps conservative cap',
-  source.includes('var requestedArtworkConcurrency = Math.max(1, Number(galleryDeviceProfile.previewTextureConcurrency) || 2);') &&
-  source.includes('var artworkConcurrency = galleryAdminWorkspaceMode') &&
-  source.includes('Math.min(3, requestedArtworkConcurrency)'));
+expect('Preview hydration is superseded by one-slice active-zone background budget',
+  source.includes('function pumpGalleryZoneStreamingQueues(reason)') &&
+  source.includes('takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredArtworkLoads, "artwork", ["critical", "nearby"])') &&
+  source.includes('budgetRuntime.artworkStarts += 1'));
 
-expect('Automatic Full upgrades yield until Preview population is done',
-  source.includes('var previewPopulationPending = galleryFastStartRuntime.deferredArtworkLoads.some(isGalleryArtworkQueueEntryCurrent)') &&
+expect('Automatic Full upgrades wait only for active-zone Preview population',
+  source.includes('var previewPopulationPending = galleryFastStartRuntime.deferredArtworkLoads.some(function (queuedEntry)') &&
+  source.includes('queuedTier === "critical" || queuedTier === "nearby"') &&
   source.includes('if (previewPopulationPending && !entry.inspectPriority)'));
 
 expect('Public Page keeps active exhibition and clean admin creates handoff',

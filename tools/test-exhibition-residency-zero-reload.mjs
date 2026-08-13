@@ -43,7 +43,7 @@ const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 
-expect('Current runtime/package identity is C6C8C5', source.includes('stage: "12C66C6C8C9"') && pkg.version.includes('c6c8c9'));
+expect('Current runtime/package identity is C6C8C5', source.includes('stage: "12C66C6C8C10"') && pkg.version.includes('c6c8c10'));
 expect('Recently visited Exhibition layers have a residency registry', source.includes('layerResidency: Object.create(null)') && source.includes('residentLayerHits'));
 expect('Switch parks a clean same-Space layer instead of disposing it', switchFn.includes('parkActiveGalleryExhibitionLayer(previousExhibition, previousRuntimeState)') && parkFn.includes('setGalleryArtworkResidentEnabled(artwork, false'));
 expect('Resident target is restored from RAM/GPU', switchFn.includes('restoreGalleryExhibitionLayer(exhibition.id)') && switchFn.includes('lastSwitchMode = "resident-layer-resume"') && restoreFn.includes('artworks = layer.artworks'));
