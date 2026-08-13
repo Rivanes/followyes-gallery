@@ -32,7 +32,7 @@ assert(modelLod.includes('galleryNullLodDisabled') && propLod.includes('galleryN
 const props=extractFunction(source,'updateGalleryPropZoneActivation');
 assert(props.includes('isGalleryPropProtectedByView') && props.includes('galleryLastVisibleAt'),'Frustum/grace protection missing');
 const priority=extractFunction(source,'canGalleryPriorityFullArtworkBypassMovement');
-assert(priority.includes('isGalleryArtworkEntryVisibleForPriority')&&priority.includes('priorityFullUpgradeMinimumAgeMs'),'Visible artwork priority upgrade missing');
+assert(priority.includes('if (!entry || !entry.inspectPriority) return false;')&&!priority.includes('entry.tier !== "critical"'),'C6C8C8 movement bypass must be Inspect-only');
 const fullDrain=extractFunction(source,'drainGalleryFastStartFullArtworkQueue');
 assert(fullDrain.includes('priorityOverride')&&fullDrain.includes('aVisible'),'Full artwork queue is not visibility-prioritized');
 const budget=extractFunction(source,'maintainGalleryStreamingMemoryBudget');

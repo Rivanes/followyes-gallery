@@ -51,9 +51,11 @@ const busyContext = {
   viewerMovementVelocity: { length: () => 0 },
   viewerMoveKeys: {},
   transition: false,
-  isGalleryInspectCameraTransitionActive: () => busyContext.transition
+  isGalleryInspectCameraTransitionActive: () => busyContext.transition,
+  galleryArtworkEgressPolicy: { idleBeforeFullMs: 1800 }
 };
 vm.createContext(busyContext);
+vm.runInContext(extractFunction(source, 'isGalleryViewerTextureStreamingMotionBlocked'), busyContext);
 vm.runInContext(extractFunction(source, 'isGalleryViewerBusyForFullArtworkUpgrade'), busyContext);
 assert.equal(busyContext.isGalleryViewerBusyForFullArtworkUpgrade(), false, 'Idle viewer should allow a Full upgrade');
 busyContext.transition = true;

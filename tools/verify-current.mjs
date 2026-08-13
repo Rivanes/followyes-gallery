@@ -23,12 +23,12 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C7"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C7"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C7"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812'),'Index cache key missing');
-assert(source.includes('Stage 12C66C6C8C7: Scene Ownership / Atomic Exhibition Hydration'),'Current source history missing');
+assert(index.includes('stage: "12C66C6C8C8"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C8"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C8"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812'),'Index cache key missing');
+assert(source.includes('Stage 12C66C6C8C8: Stable Texture Residency / No-Thrash Streaming'),'Current source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
@@ -38,7 +38,7 @@ assert(source.includes('schema: "gallery-sculpture-core.v2"'),'Sculpture core mi
 assert(source.includes('schema: "gallery-artwork-runtime.v1"'),'Artwork runtime missing');
 assert(source.includes('schema: "gallery-atomic-media-lifecycle.v1"'),'Atomic media lifecycle missing');
 assert(source.includes('schema: "gallery-mobile-quality-domains.v2"'),'Mobile quality domains missing');
-assert(source.includes('schema: "gallery-artwork-residency.v2"'),'Artwork residency missing');
+assert(source.includes('schema: "gallery-artwork-residency.v3"'),'Artwork residency missing');
 assert(source.includes('REPAIR MEDIA')&&source.includes('AUDIT & CLEAN MEDIA'),'Media recovery controls missing');
 assert(source.includes('var galleryAvifEncoderModuleUrl = "src/vendor/gallery-avif-encoder.mjs"'),'AVIF entrypoint missing');
 assert(worker.includes('import(moduleUrl)')&&adapter.includes('ImageEncoder'),'AVIF worker/adapter missing');
@@ -59,7 +59,7 @@ assert(adminBootstrap.includes('inlineRuntimeContext.engine')&&adminBootstrap.in
 assert(adminBootstrap.includes('export async function suspendAdminWorkspace()'),'Admin suspend API missing');
 assert(admin.includes('.adminButton:visited')&&admin.includes('text-decoration:none'),'Public Page button style fix missing');
 assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes('exhibition-platform-assets-v1'),'Persistent asset cache missing');
-assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v2'),'Production runtime missing current hygiene changes');
+assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v3'),'Production runtime missing current hygiene changes');
 assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.BerryboyGallerySpaceDefinition ='),'Login-disabled test build missing');
 assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.includes('function restoreGalleryExhibitionLayer('),'Exhibition layer residency missing');
 assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('same-runtime-ui-only'),'Zero-reload mode transition missing');
@@ -73,4 +73,10 @@ assert(transitionGuard.includes('setTimeout(resolve, 34)'),'C6C8C7 transition pa
 assert(bootstrap.includes('Returning to Public Page…')&&bootstrap.includes('Opening Admin Workspace…'),'Viewer/Admin same-runtime transition feedback missing');
 assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Keeping the current 3D Space resident.'),'Exhibition switch loading feedback missing');
 assert(adminBootstrap.includes('void captureExhibitionTransitionDiagnostic'),'Diagnostics still block the visible exhibition transition');
+assert(source.includes('schema: "gallery-artwork-residency.v3"'),'C6C8C8 residency schema missing');
+assert(source.includes('function isGalleryViewerTextureStreamingMotionBlocked('),'C6C8C8 movement gate missing');
+assert(source.includes('desktopHardFullTextures: 8')&&source.includes('fullReentryCooldownMs: 18000'),'C6C8C8 hysteresis policy missing');
+assert(source.includes('if (!entry || !entry.inspectPriority) return false;'),'Critical/visible movement bypass still active');
+assert(source.includes('_galleryNoAutoFullQueue = true')&&source.includes('preview-auto-full-suppressed'),'Downgrade anti-thrash guard missing');
+assert(adminBootstrap.includes('move-block')&&adminBootstrap.includes('thrash'),'C6C8C8 diagnostics missing');
 console.log('Current Exhibition Platform verifier passed.');

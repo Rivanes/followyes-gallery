@@ -111,6 +111,7 @@
   - Stage 12C66C6C8C5: Exhibition Residency / Zero-Reload Mode Transition — clean same-Space Exhibitions are parked as disabled Babylon layers instead of disposed, recently visited layers resume from RAM/GPU, Admin↔Public mode changes avoid collision/tour rebuilds, and transition/network diagnostics expose whether a switch generated Storage traffic.
   - Stage 12C66C6C8C6: Transition Guard / Loading Feedback — Exhibition and Admin↔Public transitions show one full-page interaction lock before synchronous Babylon work begins, preventing click/scroll spam while preserving the zero-reload/resident runtime paths.
   - Stage 12C66C6C8C7: Scene Ownership / Atomic Exhibition Hydration — Space nodes have immutable ownership barriers and canonical integrity checks; Exhibition layers park complete owned runtime, stale light callbacks are owner-scoped, first-load state hydration is batched, heavy Tour/light work is deferred after the visible transition paint.
+  - Stage 12C66C6C8C8: Stable Texture Residency / No-Thrash Streaming — Preview/Full quality changes are idle/Inspect-gated, workspace mode changes never rebalance textures, downgrade-to-Preview cannot immediately requeue Full, and a hard residency ceiling with hysteresis replaces distance-driven texture ping-pong.
 */
 
 
@@ -212,8 +213,8 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C7",
-        schema: "exhibition-platform-multi-exhibition.v7",
+        stage: "12C66C6C8C8",
+        schema: "exhibition-platform-multi-exhibition.v8",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
         active: null,
@@ -6821,32 +6822,41 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The same bounded owner now applies on desktop and mobile so a public visit never
     // hydrates every 3072px artwork merely because the viewer stayed on the page.
     var galleryArtworkEgressPolicy = {
-        stage: "12C66C6C8C7",
-        schema: "exhibition-asset-delivery.v3",
-        desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5,
-        desktopFullDistance: galleryAdminWorkspaceMode ? 15 : 12.5,
+        stage: "12C66C6C8C8",
+        schema: "exhibition-asset-delivery.v4",
+        // C6C8C8: Viewer and Admin share one texture policy. A UI mode transition must never
+        // change Full/Preview residency or trigger a texture rebalance by itself.
+        desktopFullTextures: 6,
+        desktopHardFullTextures: 8,
+        desktopFullDistance: 13.5,
         mobileFullDistance: 9.5,
-        desktopGraceMs: 14000,
-        desktopVisibleGraceMs: 8000
+        desktopGraceMs: 45000,
+        desktopVisibleGraceMs: 12000,
+        fullReentryCooldownMs: 18000,
+        downgradeCooldownMs: 12000,
+        idleBeforeFullMs: 1800
     };
 
     function syncGalleryArtworkEgressPolicyForWorkspaceMode(reason) {
-        galleryArtworkEgressPolicy.desktopFullTextures = galleryAdminWorkspaceMode ? 6 : 5;
-        galleryArtworkEgressPolicy.desktopFullDistance = galleryAdminWorkspaceMode ? 15 : 12.5;
+        // Same-runtime Admin/Public is presentation-only for texture streaming.
+        // Do not schedule residency maintenance here: that previously caused Full ↔ Preview
+        // swaps solely because the workspace UI changed mode.
         if (typeof galleryArtworkResidencyRuntime !== "undefined" && galleryArtworkResidencyRuntime) {
             galleryArtworkResidencyRuntime.lastWorkspacePolicyReason = reason || (galleryAdminWorkspaceMode ? "admin" : "viewer");
-            scheduleGalleryArtworkResidencyMaintenance(reason || "workspace-mode", 120, true);
+            galleryArtworkResidencyRuntime.workspaceModeNoRebalanceCount += 1;
         }
         return {
             adminWorkspace: !!galleryAdminWorkspaceMode,
             fullTextures: galleryArtworkEgressPolicy.desktopFullTextures,
-            fullDistance: galleryArtworkEgressPolicy.desktopFullDistance
+            hardFullTextures: galleryArtworkEgressPolicy.desktopHardFullTextures,
+            fullDistance: galleryArtworkEgressPolicy.desktopFullDistance,
+            textureRebalance: false
         };
     }
 
     var galleryArtworkResidencyRuntime = {
-        stage: "12C66C6C8C",
-        schema: "gallery-artwork-residency.v2",
+        stage: "12C66C6C8C8",
+        schema: "gallery-artwork-residency.v3",
         enabled: true,
         desiredFullIds: Object.create(null),
         desiredFullOrder: [],
@@ -6862,6 +6872,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         fullPromotions: 0,
         previewDowngrades: 0,
         preventedFullLoads: 0,
+        blockedWhileMoving: 0,
+        thrashPrevented: 0,
+        workspaceModeNoRebalanceCount: 0,
+        lastDowngradeAt: 0,
         estimatedArtworkMiB: 0,
         estimatedFullMiB: 0,
         estimatedPreviewMiB: 0,
@@ -6900,6 +6914,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             definition.fullGraceMs = galleryArtworkEgressPolicy.desktopGraceMs;
             definition.visibleGraceMs = galleryArtworkEgressPolicy.desktopVisibleGraceMs;
         }
+        definition.reentryCooldownMs = galleryArtworkEgressPolicy.fullReentryCooldownMs;
+        definition.downgradeCooldownMs = galleryArtworkEgressPolicy.downgradeCooldownMs;
         return definition;
     }
 
@@ -6914,6 +6930,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         if (galleryDeviceProfile.lowMemory) budget = Math.min(budget, 4);
         return budget;
+    }
+
+    function getGalleryArtworkFullResidencyHardLimit() {
+        var baseBudget = getGalleryArtworkFullResidencyBudget();
+        if (!isGalleryDeviceProfileMobile()) {
+            return Math.max(baseBudget, Math.floor(Number(galleryArtworkEgressPolicy.desktopHardFullTextures) || 8));
+        }
+        // Mobile still gets a small hysteresis reserve, but low-memory devices remain strict.
+        if (galleryDeviceProfile.lowMemory) return Math.max(baseBudget, Math.min(5, baseBudget + 1));
+        return Math.max(baseBudget, Math.min(8, baseBudget + 2));
     }
 
     function getGalleryArtworkTextureFromMesh(artwork) {
@@ -7035,6 +7061,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!artwork || isArtworkDeleted(artwork)) return false;
         var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
         if (stream.textureState === "full" || stream.loading) return false;
+        var inspectPriority = !!(galleryInspectRuntime && galleryInspectRuntime.target === artwork);
+        if (!inspectPriority && Number(stream.fullReentryBlockedUntil || 0) > Date.now()) {
+            galleryArtworkResidencyRuntime.thrashPrevented += 1;
+            recordGalleryArtworkResidencyEvent("full-reentry-blocked", artwork, reason || "cooldown", { until: Number(stream.fullReentryBlockedUntil || 0) });
+            return false;
+        }
         var imageState = getArtworkImageState(artwork);
         if (!imageState || !hasGalleryArtworkPreviewVariant(imageState)) return false;
         var id = ensureArtworkIdentity(artwork);
@@ -7045,7 +7077,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             artwork: artwork,
             imageState: cloneGalleryFastStartState(imageState),
             queuedAt: Date.now(),
-            inspectPriority: !!(galleryInspectRuntime && galleryInspectRuntime.target === artwork),
+            inspectPriority: inspectPriority,
             priorityReason: reason || "residency"
         });
         return true;
@@ -7064,7 +7096,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         previewState._galleryFastStartPreferPreview = true;
         previewState._galleryTextureOnlyUpgrade = true;
         previewState._galleryResidencyDowngrade = true;
+        previewState._galleryNoAutoFullQueue = true;
         previewState._galleryStreamingTier = getGalleryStreamingTierForObject(artwork);
+        stream.lastDowngradeStartedAt = Date.now();
         galleryArtworkResidencyRuntime.downgradeActive = true;
         galleryArtworkResidencyRuntime.downgradeArtworkId = artworkId;
         recordGalleryArtworkResidencyEvent("full-to-preview-start", artwork, reason || "budget");
@@ -7072,13 +7106,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryArtworkResidencyRuntime.downgradeActive = false;
             galleryArtworkResidencyRuntime.downgradeArtworkId = null;
             if (!result || !result.failed) {
+                var settledAt = Date.now();
+                stream.lastDowngradedAt = settledAt;
+                stream.fullReentryBlockedUntil = settledAt + Math.max(1000, Number(galleryArtworkEgressPolicy.fullReentryCooldownMs) || 18000);
+                galleryArtworkResidencyRuntime.lastDowngradeAt = settledAt;
                 galleryArtworkResidencyRuntime.previewDowngrades += 1;
-                recordGalleryArtworkResidencyEvent("full-to-preview-complete", artwork, reason || "budget");
+                recordGalleryArtworkResidencyEvent("full-to-preview-complete", artwork, reason || "hard-cap", { reentryBlockedUntil: stream.fullReentryBlockedUntil });
             } else {
                 recordGalleryArtworkResidencyEvent("full-to-preview-failed", artwork, reason || "budget");
             }
-            scheduleGalleryArtworkResidencyMaintenance("downgrade-settled", 180, true);
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle("downgrade-settled", 220);
+            scheduleGalleryArtworkResidencyMaintenance("downgrade-settled", 600, true);
         };
         return !!applyArtworkImageStateSafely(artwork, previewState, "12C66C6C8C full-to-preview");
     }
@@ -7088,29 +7125,49 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var refreshed = refreshGalleryArtworkResidencyDesired(reason || "residency", !!force);
         var now = Date.now();
         var definition = getGalleryArtworkResidencyDefinition();
+        var hardLimit = getGalleryArtworkFullResidencyHardLimit();
         var assigned = getActiveArtworks().filter(function (artwork) { return !!getArtworkImageState(artwork); });
         var fullEntries = assigned.filter(function (artwork) {
             return artwork.metadata && artwork.metadata.galleryStreaming && artwork.metadata.galleryStreaming.textureState === "full";
         });
-        var undesired = fullEntries.filter(function (artwork) { return !isGalleryArtworkFullResidencyDesired(artwork); }).sort(function (a, b) {
-            var sa = a.metadata.galleryStreaming || {};
-            var sb = b.metadata.galleryStreaming || {};
-            return Number(sa.residencyPriority || 0) - Number(sb.residencyPriority || 0);
+        var desiredMissingFull = assigned.some(function (entryArtwork) {
+            var entryStream = entryArtwork.metadata && entryArtwork.metadata.galleryStreaming ? entryArtwork.metadata.galleryStreaming : {};
+            return isGalleryArtworkFullResidencyDesired(entryArtwork) && entryStream.textureState !== "full" && !entryStream.loading;
         });
-        if (!galleryArtworkResidencyRuntime.downgradeActive && undesired.length) {
-            var candidate = undesired[0];
-            var stream = candidate.metadata.galleryStreaming || {};
-            var loadedAge = now - Number(stream.textureLoadedAt || 0);
-            var visibleAge = now - Number(stream.lastVisibleAt || 0);
-            var desiredMissingFull = assigned.some(function (entryArtwork) {
-                var entryStream = entryArtwork.metadata && entryArtwork.metadata.galleryStreaming ? entryArtwork.metadata.galleryStreaming : {};
-                return isGalleryArtworkFullResidencyDesired(entryArtwork) && entryStream.textureState !== "full";
-            });
-            var hardOverBudget = fullEntries.length > refreshed.budget || (fullEntries.length >= refreshed.budget && desiredMissingFull);
-            if (hardOverBudget || (loadedAge >= definition.fullGraceMs && visibleAge >= definition.visibleGraceMs)) {
-                downgradeGalleryArtworkToPreview(candidate, hardOverBudget ? "hard-full-budget" : (reason || "residency-budget"));
+
+        // C6C8C8 hysteresis: distance/visibility alone never downgrades a Full texture.
+        // We evict only at the hard resident ceiling, only while the viewer is idle, and
+        // only from an old, undesired Full texture. This breaks Preview ↔ Full ping-pong.
+        var needsHardEviction = fullEntries.length > hardLimit || (fullEntries.length >= hardLimit && desiredMissingFull);
+        if (!galleryArtworkResidencyRuntime.downgradeActive && needsHardEviction) {
+            var userBusy = typeof isGalleryViewerTextureStreamingMotionBlocked === "function" && isGalleryViewerTextureStreamingMotionBlocked();
+            var downgradeCooldownActive = now - Number(galleryArtworkResidencyRuntime.lastDowngradeAt || 0) < Math.max(1000, Number(definition.downgradeCooldownMs) || 12000);
+            if (!userBusy && !downgradeCooldownActive) {
+                var candidates = fullEntries.filter(function (artwork) {
+                    if (isGalleryArtworkFullResidencyDesired(artwork)) return false;
+                    if (galleryInspectRuntime && (galleryInspectRuntime.target === artwork || galleryInspectRuntime.previousTarget === artwork || galleryInspectRuntime.nextTarget === artwork)) return false;
+                    var stream = artwork.metadata.galleryStreaming || {};
+                    var loadedAge = now - Number(stream.textureLoadedAt || 0);
+                    var visibleAge = now - Number(stream.lastVisibleAt || 0);
+                    return loadedAge >= Math.max(12000, Number(definition.fullGraceMs) || 45000) && visibleAge >= Math.max(4000, Number(definition.visibleGraceMs) || 12000);
+                }).sort(function (a, b) {
+                    var sa = a.metadata.galleryStreaming || {};
+                    var sb = b.metadata.galleryStreaming || {};
+                    var distanceA = Number(sa.residencyDistance || 0);
+                    var distanceB = Number(sb.residencyDistance || 0);
+                    if (distanceA !== distanceB) return distanceB - distanceA;
+                    return Number(sa.textureLoadedAt || 0) - Number(sb.textureLoadedAt || 0);
+                });
+                if (candidates.length) {
+                    downgradeGalleryArtworkToPreview(candidates[0], "hard-residency-ceiling");
+                } else {
+                    galleryArtworkResidencyRuntime.thrashPrevented += 1;
+                }
+            } else if (userBusy) {
+                galleryArtworkResidencyRuntime.thrashPrevented += 1;
             }
         }
+
         assigned.forEach(function (artwork) {
             var stream = artwork.metadata.galleryStreaming = artwork.metadata.galleryStreaming || {};
             if (isGalleryArtworkFullResidencyDesired(artwork) && stream.textureState !== "full" && !stream.loading) {
@@ -7153,6 +7210,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             loading: loading,
             budget: getGalleryArtworkFullResidencyBudget(),
             effectiveBudget: galleryArtworkResidencyRuntime.effectiveBudget || getGalleryArtworkFullResidencyBudget(),
+            hardLimit: getGalleryArtworkFullResidencyHardLimit(),
             fullMiB: mib(bytesFull),
             previewMiB: mib(bytesPreview),
             otherMiB: mib(bytesOther),
@@ -7394,7 +7452,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             residencyCounters: {
                 promotions: galleryArtworkResidencyRuntime.fullPromotions,
                 downgrades: galleryArtworkResidencyRuntime.previewDowngrades,
-                preventedFullLoads: galleryArtworkResidencyRuntime.preventedFullLoads
+                preventedFullLoads: galleryArtworkResidencyRuntime.preventedFullLoads,
+                blockedWhileMoving: galleryArtworkResidencyRuntime.blockedWhileMoving,
+                thrashPrevented: galleryArtworkResidencyRuntime.thrashPrevented,
+                workspaceModeNoRebalance: galleryArtworkResidencyRuntime.workspaceModeNoRebalanceCount
             }
         };
     }
@@ -13341,16 +13402,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     artwork.metadata.galleryStreaming.residencyBytes = typeof estimateGalleryTextureBytes === "function" ? estimateGalleryTextureBytes(texture) : 0;
                     if (isGalleryKtx2Url(imageUrl)) galleryKtx2Runtime.successfulLoads += 1;
                     if (normalizedState._galleryFastStartPreferPreview) {
-                        scheduleGalleryFastStartFullArtworkUpgrade({
-                            key: artworkId,
-                            artworkId: artworkId,
-                            generation: loadGeneration,
-                            artwork: artwork,
-                            imageState: normalizedState,
-                            queuedAt: Date.now()
-                        });
+                        var previewWasDowngrade = !!normalizedState._galleryResidencyDowngrade || !!normalizedState._galleryNoAutoFullQueue;
+                        var previewInspectPriority = !!(galleryInspectRuntime && galleryInspectRuntime.target === artwork);
+                        if (previewWasDowngrade) {
+                            galleryArtworkResidencyRuntime.thrashPrevented += 1;
+                            recordGalleryArtworkResidencyEvent("preview-auto-full-suppressed", artwork, "downgrade-cooldown");
+                        } else if (previewInspectPriority) {
+                            scheduleGalleryFastStartFullArtworkUpgrade({
+                                key: artworkId,
+                                artworkId: artworkId,
+                                generation: loadGeneration,
+                                artwork: artwork,
+                                imageState: normalizedState,
+                                queuedAt: Date.now(),
+                                inspectPriority: true,
+                                priorityReason: "inspect-preview-ready"
+                            });
+                        }
                     }
-                    if (typeof scheduleGalleryArtworkResidencyMaintenance === "function") scheduleGalleryArtworkResidencyMaintenance("texture-loaded", 160, false);
+                    // Normal Preview textures do not automatically create a Full queue entry.
+                    // Residency maintenance selects only nearby/eligible targets after the viewer is idle.
+                    if (typeof scheduleGalleryArtworkResidencyMaintenance === "function") scheduleGalleryArtworkResidencyMaintenance("texture-loaded", 220, false);
                 } finally {
                     settleArtworkLoad(false, { reason: "texture-loaded", streamingTier: normalizedState._galleryStreamingTier || null, ktx2: isGalleryKtx2Url(imageUrl) });
                 }
@@ -16986,6 +17058,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             device: isGalleryDeviceProfileMobile() ? "mobile" : "desktop",
             fullDistance: isGalleryDeviceProfileMobile() ? galleryArtworkEgressPolicy.mobileFullDistance : galleryArtworkEgressPolicy.desktopFullDistance,
             fullBudget: getGalleryArtworkFullResidencyBudget(),
+            hardFullLimit: getGalleryArtworkFullResidencyHardLimit(),
             desiredFullIds: galleryArtworkResidencyRuntime.desiredFullOrder.slice(),
             queuedPreview: galleryFastStartRuntime.deferredArtworkLoads.length,
             queuedFull: galleryFastStartRuntime.deferredFullArtworkLoads.length,
@@ -17003,7 +17076,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 lastId: galleryExhibitionRuntime.lastResidentLayerId
             },
             lastTransition: galleryExhibitionRuntime.lastModeTransition,
-            policy: "preview-first-proximity-full-cache-backed + exhibition-layer-residency"
+            textureStability: {
+                fullUpgrades: galleryArtworkResidencyRuntime.fullPromotions,
+                downgrades: galleryArtworkResidencyRuntime.previewDowngrades,
+                blockedWhileMoving: galleryArtworkResidencyRuntime.blockedWhileMoving,
+                thrashPrevented: galleryArtworkResidencyRuntime.thrashPrevented,
+                workspaceModeNoRebalance: galleryArtworkResidencyRuntime.workspaceModeNoRebalanceCount,
+                idleBeforeFullMs: galleryArtworkEgressPolicy.idleBeforeFullMs,
+                reentryCooldownMs: galleryArtworkEgressPolicy.fullReentryCooldownMs,
+                downgradeCooldownMs: galleryArtworkEgressPolicy.downgradeCooldownMs
+            },
+            policy: "stable-preview-idle-full-no-thrash + exhibition-layer-residency"
         };
     }
 
@@ -17139,6 +17222,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function scheduleGalleryFastStartFullArtworkUpgrade(entry) {
         if (!entry || !entry.artwork || !entry.imageState || !isGalleryArtworkQueueEntryCurrent(entry)) return;
         if (!hasGalleryArtworkPreviewVariant(entry.imageState)) return;
+        var stream = entry.artwork.metadata.galleryStreaming = entry.artwork.metadata.galleryStreaming || {};
+        var inspectPriority = !!entry.inspectPriority || !!(galleryInspectRuntime && galleryInspectRuntime.target === entry.artwork);
+        if (!inspectPriority && !isGalleryArtworkFullResidencyDesired(entry.artwork)) {
+            galleryArtworkResidencyRuntime.preventedFullLoads += 1;
+            return;
+        }
+        if (!inspectPriority && Number(stream.fullReentryBlockedUntil || 0) > Date.now()) {
+            galleryArtworkResidencyRuntime.thrashPrevented += 1;
+            return;
+        }
         var artworkId = entry.artworkId || ensureArtworkIdentity(entry.artwork);
         var generation = Number(entry.generation) || getArtworkTextureLoadGeneration(entry.artwork);
         var existingIndex = galleryFastStartRuntime.deferredFullArtworkLoads.findIndex(function (queuedEntry) {
@@ -17244,6 +17337,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, 120);
     }
 
+    function isGalleryViewerTextureStreamingMotionBlocked() {
+        if (isDraggingArtwork || isDraggingSphere) return true;
+        if (desktopViewerMiddleLookActive || mobileLookActive) return true;
+        if (mobileJoystickActive || mobileCanvasMoveActive) return true;
+        if (editMoveKeys && (editMoveKeys.w || editMoveKeys.a || editMoveKeys.s || editMoveKeys.d || editMoveKeys.space)) return true;
+        if (viewerMovementVelocity && viewerMovementVelocity.length && viewerMovementVelocity.length() > 0.035) return true;
+        if (viewerMoveKeys && (viewerMoveKeys.w || viewerMoveKeys.a || viewerMoveKeys.s || viewerMoveKeys.d)) return true;
+        var idleDelay = Math.max(1200, Number(galleryArtworkEgressPolicy.idleBeforeFullMs) || galleryFastStartRuntime.fullArtworkIdleDelayMs || 1800);
+        if (Date.now() - (galleryFastStartRuntime.lastViewerActivityAt || 0) < idleDelay) return true;
+        return false;
+    }
+
     function isGalleryViewerBusyForFullArtworkUpgrade() {
         if (!galleryFastStartRuntime.viewerReady || !galleryFastStartRuntime.interactionReady) return true;
         if (!editMode && !viewerIntroOverlayMovementUnlocked) return true;
@@ -17251,14 +17356,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (typeof document !== "undefined" && document.hidden) return true;
         if (typeof isGalleryInspectCameraTransitionActive === "function" && isGalleryInspectCameraTransitionActive()) return true;
         if (galleryInspectRuntime && galleryInspectRuntime.opening) return true;
-        if (isDraggingArtwork || isDraggingSphere) return true;
-        if (desktopViewerMiddleLookActive || mobileLookActive) return true;
-        if (mobileJoystickActive || mobileCanvasMoveActive) return true;
-        if (editMoveKeys && (editMoveKeys.w || editMoveKeys.a || editMoveKeys.s || editMoveKeys.d || editMoveKeys.space)) return true;
-        if (viewerMovementVelocity && viewerMovementVelocity.length && viewerMovementVelocity.length() > 0.035) return true;
-        if (viewerMoveKeys && (viewerMoveKeys.w || viewerMoveKeys.a || viewerMoveKeys.s || viewerMoveKeys.d)) return true;
-        if (Date.now() - (galleryFastStartRuntime.lastViewerActivityAt || 0) < galleryFastStartRuntime.fullArtworkIdleDelayMs) return true;
-        return false;
+        return isGalleryViewerTextureStreamingMotionBlocked();
     }
 
     function isGalleryArtworkEntryVisibleForPriority(entry) {
@@ -17277,15 +17375,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function canGalleryPriorityFullArtworkBypassMovement(entry) {
-        if (!entry || !isGalleryArtworkEntryVisibleForPriority(entry)) return false;
-        if (entry.tier !== "critical" && !entry.inspectPriority) return false;
+        // C6C8C8: only explicit Inspect may bypass the normal idle gate. Merely being
+        // visible/critical is not allowed to start a large AVIF decode while walking.
+        if (!entry || !entry.inspectPriority) return false;
         if (typeof document !== "undefined" && document.hidden) return false;
         if (typeof isGalleryInspectCameraTransitionActive === "function" && isGalleryInspectCameraTransitionActive()) return false;
         if (galleryInspectRuntime && galleryInspectRuntime.opening) return false;
         if (isDraggingArtwork || isDraggingSphere || desktopViewerMiddleLookActive || mobileLookActive) return false;
-        var now = Date.now();
-        if (now - Number(entry.queuedAt || now) < galleryFastStartRuntime.priorityFullUpgradeMinimumAgeMs && !entry.inspectPriority) return false;
-        if (now - Number(galleryFastStartRuntime.lastPriorityFullUpgradeAt || 0) < galleryFastStartRuntime.priorityFullUpgradeCooldownMs) return false;
         return true;
     }
 
@@ -17338,14 +17434,26 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         var residencyMemory = getGalleryArtworkResidencyMemorySnapshot();
         var alreadyFull = entry.artwork && entry.artwork.metadata && entry.artwork.metadata.galleryStreaming && entry.artwork.metadata.galleryStreaming.textureState === "full";
-        if (!alreadyFull && residencyMemory.full >= residencyMemory.effectiveBudget) {
-            enforceGalleryArtworkResidencyBudget("full-capacity", true);
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle("full-wait-for-preview-downgrade", 260);
+        if (!alreadyFull && residencyMemory.full >= residencyMemory.hardLimit && !entry.inspectPriority) {
+            enforceGalleryArtworkResidencyBudget("full-hard-capacity", true);
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle("full-wait-for-hard-capacity", 600);
             return;
         }
+        // Inspect is an explicit quality request. It may temporarily exceed the soft/hard
+        // background residency ceiling; normal idle maintenance trims old Full textures later.
         var priorityOverride = canGalleryPriorityFullArtworkBypassMovement(entry);
-        if (galleryFastStartRuntime.backgroundDrainActive || (isGalleryViewerBusyForFullArtworkUpgrade() && !priorityOverride)) {
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-queue", priorityOverride ? 100 : 180);
+        var viewerBusy = isGalleryViewerBusyForFullArtworkUpgrade();
+        if (galleryFastStartRuntime.backgroundDrainActive || (viewerBusy && !priorityOverride)) {
+            if (viewerBusy && !priorityOverride && entry.artwork && entry.artwork.metadata) {
+                var stream = entry.artwork.metadata.galleryStreaming = entry.artwork.metadata.galleryStreaming || {};
+                var now = Date.now();
+                if (now - Number(stream.lastFullBlockedAt || 0) > 750) {
+                    stream.lastFullBlockedAt = now;
+                    galleryArtworkResidencyRuntime.blockedWhileMoving += 1;
+                    recordGalleryArtworkResidencyEvent("full-blocked-until-idle", entry.artwork, reason || "viewer-active");
+                }
+            }
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-wait-for-idle", priorityOverride ? 100 : 260);
             return;
         }
         galleryFastStartRuntime.deferredFullArtworkLoads.splice(entryIndex, 1);
@@ -17361,11 +17469,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         fullState._galleryArtworkOnLoadSettled = function (result) {
             galleryFastStartRuntime.backgroundDrainActive = false;
             if (!result || !result.failed) {
+                var stream = entry.artwork && entry.artwork.metadata ? (entry.artwork.metadata.galleryStreaming = entry.artwork.metadata.galleryStreaming || {}) : null;
+                if (stream) {
+                    stream.lastPromotedAt = Date.now();
+                    stream.fullReentryBlockedUntil = 0;
+                }
                 galleryArtworkResidencyRuntime.fullPromotions += 1;
                 recordGalleryArtworkResidencyEvent("preview-to-full-complete", entry.artwork, reason || "full-artwork-upgrade");
             }
-            enforceGalleryArtworkResidencyBudget("full-load-settled", true);
-            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-upgrade", 140);
+            enforceGalleryArtworkResidencyBudget("full-load-settled", false);
+            scheduleGalleryFastStartFullArtworkDrainWhenIdle(reason || "full-artwork-upgrade", 320);
         };
         runGalleryFastStartIdleTask(function () {
             if (!isGalleryArtworkQueueEntryCurrent(entry)) {
@@ -31302,7 +31415,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ? serializeGalleryState()
             : (publishedSnapshot || serializeGalleryState());
         var payload = {
-            stage: "12C66C6C8C7",
+            stage: "12C66C6C8C8",
             schema: "exhibition-navigation-handoff.v1",
             createdAt: Date.now(),
             exhibition: exhibition,
@@ -44275,7 +44388,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C7",
+                stage: "12C66C6C8C8",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -44306,7 +44419,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C7",
+                stage: "12C66C6C8C8",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C7 Admin Workspace / Same-Runtime Viewer Transition
+  Exhibition Platform — Stage 12C66C6C8C8 Admin Workspace / Same-Runtime Viewer Transition
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
 
-const STAGE = "12C66C6C8C7";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c7_scene_ownership_atomic_hydration_20260812";
+const STAGE = "12C66C6C8C8";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c8_stable_texture_residency_no_thrash_20260812";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -148,7 +148,7 @@ async function updateNetworkDiagnosticsStatus() {
       : "CPU: waiting";
     const spacePart = integrity ? `Space ${integrity.ok ? "OK" : "FAIL"}` : "Space guard ready";
     networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${spacePart}`;
-    networkDiagnostics.title = "Storage is measured by the local Service Worker. CPU phases come from C6C8C7 atomic hydration. Space OK means canonical wall/floor/ceiling/prop references survived the transition.";
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. CPU phases include C6C8C7 atomic hydration; texture counters come from C6C8C8 stable residency. Space OK means canonical wall/floor/ceiling/prop references survived the transition.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }
@@ -630,7 +630,11 @@ async function updateAssetDeliveryStatus() {
     const textureText = residency ? `${residency.full || 0}/${delivery.fullBudget || residency.effectiveBudget || 0} Full · ${residency.preview || 0} Preview` : "Preview-first";
     const exhibitionResidency = delivery && delivery.exhibitionResidency ? delivery.exhibitionResidency : null;
     const layerText = exhibitionResidency ? `${exhibitionResidency.parked || 0} parked exhibition layer${exhibitionResidency.parked === 1 ? "" : "s"}` : "layer residency ready";
-    assetDeliveryStatus.textContent = `Asset delivery: ${textureText} · ${cacheText} · ${layerText}`;
+    const stability = delivery && delivery.textureStability ? delivery.textureStability : null;
+    const stabilityText = stability
+      ? `stable ↑${stability.fullUpgrades || 0} ↓${stability.downgrades || 0} · move-block ${stability.blockedWhileMoving || 0} · thrash ${stability.thrashPrevented || 0}`
+      : "stable streaming";
+    assetDeliveryStatus.textContent = `Asset delivery: ${textureText} · ${cacheText} · ${layerText} · ${stabilityText}`;
     await updateNetworkDiagnosticsStatus();
   } catch (_error) {
     assetDeliveryStatus.textContent = "Asset delivery: Preview-first / proximity Full";

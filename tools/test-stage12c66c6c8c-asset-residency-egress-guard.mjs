@@ -16,9 +16,9 @@ function expect(label, condition) {
 }
 
 expect('Asset residency is global, not mobile-only',
-  source.includes('schema: "gallery-artwork-residency.v2"') &&
+  source.includes('schema: "gallery-artwork-residency.v3"') &&
   source.includes('enabled: true') &&
-  source.includes('desktopFullTextures: galleryAdminWorkspaceMode ? 6 : 5'));
+  source.includes('desktopFullTextures: 6') && source.includes('desktopHardFullTextures: 8'));
 
 expect('Full textures require proximity or explicit protection',
   source.includes('function isGalleryArtworkFullEgressEligible') &&

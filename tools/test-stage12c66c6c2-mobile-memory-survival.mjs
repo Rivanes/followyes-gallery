@@ -3,7 +3,7 @@ const source=fs.readFileSync(new URL('../src/Gallery_V0_11.js',import.meta.url),
 function assert(c,m){if(!c)throw new Error(m)}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if('"\'`'.includes(c)){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(source.includes('schema: "gallery-artwork-residency.v2"'),'Residency runtime missing');
+assert(source.includes('schema: "gallery-artwork-residency.v3"'),'Residency runtime missing');
 for(const value of ['fullTextures: 8','fullTextures: 6','fullTextures: 4']) assert(source.includes(value),`Missing residency budget ${value}`);
 assert(source.includes('embeddedFullTextures: 5')&&source.includes('embeddedFullTextures: 4'),'Embedded-browser budgets missing');
 assert(!source.includes('artwork textures are permanent residents once assigned'),'Permanent Full residency returned');
@@ -19,7 +19,7 @@ const priorityFn=extractFunction(source,'getGalleryArtworkResidencyPriority');
 for(const signal of ['galleryInspectRuntime.target','previousTarget','nextTarget','isGalleryArtworkVisibleForResidency','getGalleryStreamingTierForObject']) assert(priorityFn.includes(signal),`Residency priority missing ${signal}`);
 const drain=extractFunction(source,'drainGalleryFastStartFullArtworkQueue');
 assert(drain.includes('isGalleryArtworkFullResidencyDesired'),'Full queue ignores residency admission');
-assert(drain.includes('full-wait-for-preview-downgrade'),'Full queue can exceed budget');
+assert(drain.includes('full-wait-for-hard-capacity')&&drain.includes('residencyMemory.hardLimit'),'Full queue does not respect the hard residency ceiling');
 assert(source.includes('berryboy_mobile_survival_last_snapshot_v1'),'Last-session snapshot storage missing');
 for(const label of ['"DBG"','"LIVE"','"FREEZE"','"LAST"','"CLOSE"']) assert(source.includes(label),`On-screen diagnostic control missing ${label}`);
 assert(source.includes('schema: "gallery-mobile-survival-snapshot.v1"'),'Survival snapshot schema missing');
