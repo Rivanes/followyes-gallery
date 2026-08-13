@@ -41,8 +41,8 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('c6c8c15'));
-expect('current runtime stage', source.includes('stage: "12C66C6C8C15"'));
+expect('current package stage', pkg.version.includes('c6c8c16'));
+expect('current runtime stage', source.includes('stage: "12C66C6C8C16"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
 expect('mode switch avoids synchronous owner sweep', !modeFn.includes('sweepGalleryInactiveExhibitionOwners('));

@@ -119,6 +119,7 @@
   - Stage 12C66C6C8C13: Instant Workspace Mode Switch — same-runtime Admin↔Public transitions preserve foreground readiness and touch only UI/camera controls; owner sweeps and Space integrity checks move to idle background audits so returning to Public does not re-run gallery readiness work.
   - Stage 12C66C6C8C14: Zero-Work Public Return — clean Admin→Public transitions no longer run full placeholder/sculpture visual refreshes or selection UI rebuilds; viewer presentation toggles only existing nodes, collision proxies are reused without bounds recomputation, and any repair work is deferred/chunked after the public frame is visible.
   - Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview — PUBLIC PAGE becomes an in-memory preview of the current Admin draft: unsaved scene state is not discarded or reapplied, the same live scene is shown immediately, and returning to Admin resumes the preserved draft while unload protection remains active.
+  - Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh — mobile intro keeps Start exploring pinned outside the scrollable instructions, Inspect navigation floats on the popup edge without stealing metadata width, and the desktop floor cursor uses a smaller/thinner low-glow SDF ring and lighter click ripple.
 */
 
 
@@ -223,7 +224,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C15",
+        stage: "12C66C6C8C16",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -15735,7 +15736,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     var galleryFloorCursorRing = null;
     var galleryFloorCursorRingMaterial = null;
     var galleryFloorCursorPulseStartedAt = 0;
-    var galleryFloorCursorPulseDurationMs = 520;
+    var galleryFloorCursorPulseDurationMs = 420;
     var galleryFloorCursorFramePending = false;
     var galleryFloorCursorLastEvent = null;
     var galleryFloorCursorHoverVisible = false;
@@ -15851,7 +15852,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             #berryboyViewerIntroCard {
                 width: min(760px, calc(100vw - 34px));
                 max-height: min(88vh, 760px);
-                overflow: auto;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
                 border-radius: 28px;
                 padding: 26px;
                 box-sizing: border-box;
@@ -15863,6 +15866,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 transform: translateY(10px) scale(0.985);
                 opacity: 0;
                 animation: berryboyIntroCardIn 540ms cubic-bezier(.19,1,.22,1) forwards;
+            }
+
+            .berryboyIntroScrollable {
+                min-height: 0;
+                overflow: auto;
+                overscroll-behavior: contain;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: thin;
+            }
+
+            .berryboyIntroFooter {
+                flex: 0 0 auto;
+                padding-top: 18px;
             }
 
             #berryboyViewerIntroCard h1 {
@@ -16056,7 +16072,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             #berryboyIntroStart {
                 width: 100%;
-                margin-top: 18px;
+                margin-top: 0;
                 border: 0;
                 border-radius: 18px;
                 padding: 15px 18px;
@@ -16111,9 +16127,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             @media (max-width: 720px) {
+                #berryboyViewerIntroOverlay {
+                    align-items: stretch;
+                    padding:
+                        max(10px, env(safe-area-inset-top))
+                        max(10px, env(safe-area-inset-right))
+                        max(10px, env(safe-area-inset-bottom))
+                        max(10px, env(safe-area-inset-left));
+                }
+
                 #berryboyViewerIntroCard {
-                    padding: 18px;
+                    align-self: center;
+                    width: min(100%, 760px);
+                    max-height: calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+                    padding: 18px 18px 14px;
                     border-radius: 22px;
+                }
+
+                .berryboyIntroScrollable {
+                    padding-right: 2px;
+                }
+
+                .berryboyIntroFooter {
+                    margin: 0 -2px -2px;
+                    padding: 12px 2px 2px;
+                    border-top: 1px solid rgba(255,255,255,0.09);
+                    background: linear-gradient(to bottom, rgba(18,18,18,0.12), rgba(18,18,18,0.72) 42%);
+                    backdrop-filter: blur(12px);
+                    -webkit-backdrop-filter: blur(12px);
                 }
 
                 .berryboyIntroGrid {
@@ -16239,6 +16280,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             viewerIntroOverlay.id = "berryboyViewerIntroOverlay";
             viewerIntroOverlay.innerHTML = `
                 <div id="berryboyViewerIntroCard" role="dialog" aria-modal="true" aria-label="Viewer controls">
+                    <div class="berryboyIntroScrollable">
                     <h1>Explore the gallery</h1>
 
                     <p class="berryboyDesktopOnly">Move through the space with WASD or left-click the floor. Choose how you want to rotate the camera.</p>
@@ -16302,8 +16344,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                             </button>
                         </div>
                     </div>
+                    </div>
 
-                    <button id="berryboyIntroStart" type="button">Start exploring</button>
+                    <div class="berryboyIntroFooter">
+                        <button id="berryboyIntroStart" type="button">Start exploring</button>
+                    </div>
                 </div>
             `;
 
@@ -22515,7 +22560,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 display: block !important;
                 min-height: 94px !important;
                 max-height: inherit !important;
-                padding: 14px 114px 14px 58px !important;
+                padding: 14px 16px 14px 58px !important;
                 border-radius: 23px !important;
                 overflow: visible !important;
             }
@@ -22573,15 +22618,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             #galleryInspectNavigation {
                 position: absolute !important;
                 left: auto !important;
-                right: 12px !important;
-                top: 50% !important;
+                right: 8px !important;
+                top: calc(0px - (var(--gallery-inspect-navigation-size) * 0.46)) !important;
                 bottom: auto !important;
                 width: auto !important;
                 height: var(--gallery-inspect-navigation-size) !important;
                 display: flex !important;
                 align-items: center !important;
-                gap: 7px !important;
-                transform: translateY(-50%) !important;
+                gap: 6px !important;
+                transform: none !important;
                 opacity: 0;
                 visibility: hidden;
             }
@@ -22603,10 +22648,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 display: grid !important;
                 place-items: center !important;
                 border-radius: 50% !important;
-                background: rgba(255, 255, 255, 0.075) !important;
+                background: rgba(16, 21, 20, 0.68) !important;
+                border-color: rgba(255, 255, 255, 0.20) !important;
                 box-shadow:
                     inset 0 1px 0 rgba(255, 255, 255, 0.10),
-                    0 8px 18px rgba(0, 0, 0, 0.18) !important;
+                    0 6px 16px rgba(0, 0, 0, 0.16) !important;
+                backdrop-filter: blur(14px) saturate(1.04) !important;
+                -webkit-backdrop-filter: blur(14px) saturate(1.04) !important;
                 transform: none !important;
             }
 
@@ -22657,7 +22705,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             #galleryArtworkInfoPopup .gallery-artwork-info-popup-inner {
                 min-height: 88px !important;
-                padding: 12px 100px 12px 54px !important;
+                padding: 12px 14px 12px 54px !important;
                 border-radius: 21px !important;
             }
 
@@ -22666,8 +22714,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             #galleryInspectNavigation {
-                right: 10px !important;
-                gap: 6px !important;
+                right: 7px !important;
+                gap: 5px !important;
             }
         }
 
@@ -34038,19 +34086,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             "  return 1.0 - smoothstep(halfWidth - softness, halfWidth + softness, radial);",
             "}",
             "void main(void) {",
-            "  float darkHalo = softRing(0.275, 0.041, 0.010) * baseAlpha * 0.56;",
-            "  float brightCore = softRing(0.275, 0.018, 0.008) * baseAlpha;",
-            "  float glow = softRing(0.275, 0.070, 0.016) * baseAlpha * 0.15;",
+            "  float darkHalo = softRing(0.278, 0.018, 0.011) * baseAlpha * 0.22;",
+            "  float brightCore = softRing(0.278, 0.0085, 0.006) * baseAlpha * 0.88;",
+            "  float glow = softRing(0.278, 0.034, 0.014) * baseAlpha * 0.08;",
             "  float pulse = 0.0;",
             "  if (pulseProgress >= 0.0 && pulseProgress <= 1.0) {",
             "    float eased = 1.0 - pow(1.0 - pulseProgress, 3.0);",
-            "    float pulseRadius = 0.275 + eased * 0.155;",
-            "    pulse = softRing(pulseRadius, 0.017, 0.010) * pow(1.0 - pulseProgress, 1.35) * 0.96;",
+            "    float pulseRadius = 0.278 + eased * 0.115;",
+            "    pulse = softRing(pulseRadius, 0.009, 0.008) * pow(1.0 - pulseProgress, 1.55) * 0.68;",
             "  }",
             "  float alpha = max(max(darkHalo, glow), max(brightCore, pulse));",
             "  if (alpha < 0.003) discard;",
             "  float brightShare = clamp(max(brightCore, pulse) / max(alpha, 0.001), 0.0, 1.0);",
-            "  vec3 color = mix(vec3(0.035, 0.040, 0.050), vec3(1.0, 1.0, 1.0), brightShare);",
+            "  vec3 color = mix(vec3(0.12, 0.13, 0.15), vec3(0.98, 0.98, 0.97), brightShare);",
             "  gl_FragColor = vec4(color, alpha);",
             "}"
         ].join("\n");
@@ -34086,7 +34134,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryFloorCursorRing = BABYLON.MeshBuilder.CreatePlane(
             "GalleryFloorCursorSdfPlane",
-            { size: 0.92, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+            { size: 0.78, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
             scene
         );
         galleryFloorCursorRing.material = galleryFloorCursorRingMaterial;
@@ -34101,7 +34149,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!point) return false;
         var ring = getOrCreateGalleryFloorCursorRing();
         ring.position.copyFrom(point);
-        ring.position.y += 0.018;
+        ring.position.y += 0.012;
         ring.rotationQuaternion = null;
         ring.rotation.x = Math.PI * 0.5;
         ring.rotation.y = 0;
@@ -34186,7 +34234,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryFloorCursorHoverVisible = true;
         setGalleryFloorCursorWorldPosition(pick.pickedPoint);
-        galleryFloorCursorRingMaterial.setFloat("baseAlpha", 0.96);
+        galleryFloorCursorRingMaterial.setFloat("baseAlpha", 0.78);
     }
 
     function scheduleGalleryFloorCursorRingUpdate(event) {
@@ -45448,7 +45496,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C15",
+                stage: "12C66C6C8C16",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -45472,7 +45520,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C15",
+                stage: "12C66C6C8C16",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -45500,7 +45548,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C15",
+                stage: "12C66C6C8C16",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

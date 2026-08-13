@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C15 Edit Auth Bridge / Persistent Draft Public Preview
+  Exhibition Platform — Stage 12C66C6C8C16 Edit Auth Bridge / Mobile UI Polish
   Editor/auth bootstrap is loaded only for an existing editor session or after the public user requests login.
 */
 

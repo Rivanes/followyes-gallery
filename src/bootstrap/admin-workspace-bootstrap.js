@@ -1,14 +1,14 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C15 Admin Workspace / Persistent Draft Public Preview
+  Exhibition Platform — Stage 12C66C6C8C16 Admin Workspace / Persistent Draft Public Preview
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
 
-const STAGE = "12C66C6C8C15";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c15_persistent_draft_public_preview_20260813";
+const STAGE = "12C66C6C8C16";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;

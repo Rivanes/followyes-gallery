@@ -38,8 +38,8 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('c6c8c15'));
-expect('runtime identity', source.includes('stage: "12C66C6C8C15"'));
+expect('package identity', pkg.version.includes('c6c8c16'));
+expect('runtime identity', source.includes('stage: "12C66C6C8C16"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 
 expect('PUBLIC PAGE uses non-destructive inline preview',

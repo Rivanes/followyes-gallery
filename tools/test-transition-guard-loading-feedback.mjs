@@ -5,7 +5,7 @@ const admin = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.j
 const guard = fs.readFileSync(new URL('src/bootstrap/transition-guard.js', root), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('package.json', root), 'utf8'));
 function expect(label, ok){ if(!ok) throw new Error(`FAIL: ${label}`); console.log(`OK: ${label}`); }
-expect('current package keeps transition guard regression coverage', pkg.version.includes('c6c8c15') && viewer.includes('const STAGE = "12C66C6C8C15"') && admin.includes('const STAGE = "12C66C6C8C15"'));
+expect('current package keeps transition guard regression coverage', pkg.version.includes('c6c8c16') && viewer.includes('const STAGE = "12C66C6C8C16"') && admin.includes('const STAGE = "12C66C6C8C16"'));
 expect('shared full-page guard exists', guard.includes('position:fixed; inset:0') && guard.includes('z-index:2147483000') && guard.includes('epTransitionSpinner'));
 expect('guard blocks wheel/touch/keyboard interaction', guard.includes('document.addEventListener("wheel"') && guard.includes('document.addEventListener("touchmove"') && guard.includes('document.addEventListener("keydown"'));
 expect('guard paints before transition work', guard.includes('await waitForPaint()'));

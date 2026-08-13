@@ -40,14 +40,14 @@ function sha(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-// The accepted Stage 12C66A1 popup must remain byte-identical.
+// C6C8C16 intentionally changes the accepted mobile intro layout; lock the new approved functions byte-for-byte.
 assert.equal(
   sha(extractFunction(source, 'createViewerIntroOverlayStyles')),
-  '93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6'
+  '01c01b3e1a1e12f44802a2f375e78fe59acadd0f478d666871ba179098cf3d5f'
 );
 assert.equal(
   sha(extractFunction(source, 'showViewerIntroOverlay')),
-  'fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537'
+  '3e555d80b26ee44188f21107cd265cb603ff601cbf51cdebf8bce95d4d00d09e'
 );
 
 // Babylon and the engine are deferred until the explicit click.
@@ -176,4 +176,4 @@ function createBootHarness() {
   assert.equal(ids.get('galleryBootMessage').textContent, 'Reload the page and try again.');
 }
 
-console.log('Stage 12C66C6A1 startup and original-popup tests passed.');
+console.log('Stage 12C66C6A1 startup and current-popup regression tests passed.');

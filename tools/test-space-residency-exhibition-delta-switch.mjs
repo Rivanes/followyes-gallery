@@ -45,7 +45,7 @@ const finalizeFn = extractFunction('finalizeGallerySameSpaceExhibitionDelta');
 const objectDirtyFn = extractFunction('markGalleryObjectsDirty');
 const editTourHelper = extractFunction('ensureGalleryExhibitTourCurrent');
 
-expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "12C66C6C8C15"') && pkg.version.includes('c6c8c15'));
+expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "12C66C6C8C16"') && pkg.version.includes('c6c8c16'));
 expect('Switch explicitly compares source and target space_id', switchFn.includes('areGalleryExhibitionsInSameSpace(previousExhibition, exhibition)'));
 expect('Same-space cold switch uses delta state and resident return has a dedicated resume path', switchFn.includes('applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch")') && switchFn.includes('lastSwitchMode = "same-space-delta-load"') && switchFn.includes('lastSwitchMode = "resident-layer-resume"'));
 expect('Full reset remains only as fallback for a real Space change', switchFn.includes('else {\n                resetGalleryRuntimeToBlankExhibition();'));

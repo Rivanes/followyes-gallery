@@ -23,17 +23,18 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C15"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C15"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C15"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c15_persistent_draft_public_preview_20260813'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c15_persistent_draft_public_preview_20260813'),'Index cache key missing');
+assert(index.includes('stage: "12C66C6C8C16"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "12C66C6C8C16"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "12C66C6C8C16"'),'Admin stage identity missing');
+assert(bootstrap.includes('stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813'),'Index cache key missing');
 assert(source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'),'C6C8C13 source history missing');
 assert(source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'),'C6C8C14 source history missing');
-assert(source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'),'Current C6C8C15 source history missing');
+assert(source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'),'C6C8C15 source history missing');
+assert(source.includes('Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh'),'Current C6C8C16 source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
-assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='93595efee4b7f720f32b5a8b739f6212bcea793ed8bdc88e939ea243b74262d6','Accepted intro CSS changed');
-assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='fb4b8f6a0b72653489b10564492ffad9f52ba461bf67cb1992bd21e655aaf537','Accepted intro behavior changed');
+assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='01c01b3e1a1e12f44802a2f375e78fe59acadd0f478d666871ba179098cf3d5f','Accepted C6C8C16 intro CSS changed');
+assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='3e555d80b26ee44188f21107cd265cb603ff601cbf51cdebf8bce95d4d00d09e','Accepted C6C8C16 intro behavior changed');
 assert(count(source,'function resolveGalleryGroundMovement(')===1,'Unified collision resolver changed');
 assert(!source.includes('.moveWithCollisions('),'Native collision path returned');
 assert(source.includes('schema: "gallery-sculpture-core.v2"'),'Sculpture core missing');

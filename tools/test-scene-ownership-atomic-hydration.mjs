@@ -32,7 +32,7 @@ function extractFunction(text, name) {
   throw new Error(`Unterminated ${name}`);
 }
 
-expect('stage identity', source.includes('stage: "12C66C6C8C15"') && source.includes('exhibition-platform-multi-exhibition.v10'));
+expect('stage identity', source.includes('stage: "12C66C6C8C16"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect('space ownership tagging', source.includes('tagGallerySpaceCollection(wallMeshes, "wall")') && source.includes('registerGallerySpaceIntegrityBaseline("wall", wallMeshes)'));
 expect('canonical Space integrity guard', source.includes('function verifyGalleryCanonicalSpaceIntegrity(') && source.includes('canonical-after-exhibition-switch-'));
 expect('Space ancestor roots are owned and integrity checked', source.includes('function tagGallerySpaceAncestorChain(') && source.includes('entry.ancestors || []'));

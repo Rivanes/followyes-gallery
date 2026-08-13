@@ -39,8 +39,8 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('c6c8c15'));
-expect('runtime stage', source.includes('stage: "12C66C6C8C15"'));
+expect('package stage', pkg.version.includes('c6c8c16'));
+expect('runtime stage', source.includes('stage: "12C66C6C8C16"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
 expect('public branch uses fast logical selection clear', modeFn.includes('clearGalleryEditSelectionFastForWorkspaceReturn()'));
