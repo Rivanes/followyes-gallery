@@ -7,8 +7,8 @@ const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.ur
 
 function expect(label, value) { if (!value) throw new Error(`C6C8C9 regression: ${label}`); }
 
-expect("package stage", pkg.version.includes("c6c8c13"));
-expect("runtime stage", source.includes('stage: "12C66C6C8C13"') && source.includes('exhibition-platform-multi-exhibition.v10'));
+expect("package stage", pkg.version.includes("c6c8c14"));
+expect("runtime stage", source.includes('stage: "12C66C6C8C14"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect("owner scene scan", source.includes("function getGallerySceneOwnerEntities(") && source.includes("scene.transformNodes") && source.includes("scene.lights"));
 expect("inactive owner sweep", source.includes("function sweepGalleryInactiveExhibitionOwners(") && source.includes("active-context-change") && source.includes("post-hydration-orphan-sweep"));
 expect("stale artwork callback gate", source.includes("inactive-owner-texture-loaded") && source.includes("staleOwnerCallbacksBlocked"));

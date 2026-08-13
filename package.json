@@ -1,8 +1,8 @@
 {
-  "name": "exhibition-platform-instant-workspace-mode-switch",
-  "version": "0.11.66-c6c8c13",
+  "name": "exhibition-platform-zero-work-public-return",
+  "version": "0.11.66-c6c8c14",
   "private": true,
-  "description": "Exhibition Platform — Instant Workspace Mode Switch / UI-only Admin↔Public fast path with deferred integrity audits",
+  "description": "Exhibition Platform — Zero-Work Public Return / instant clean Admin→Public UI switch with deferred sculpture collision repair",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
@@ -21,7 +21,7 @@
     "test:atomic-media": "node tools/test-stage12c66c6c-atomic-media.mjs",
     "test:media-recovery": "node tools/test-stage12c66c6c-media-recovery.mjs",
     "test:mobile-quality": "node tools/test-stage12c66c6c-mobile-quality-domains.mjs",
-    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency && npm run test:scene-isolation-readiness && npm run test:startup-critical-path && npm run test:guaranteed-preview-fill && npm run test:hard-space-visual-ready && npm run test:instant-workspace-mode-switch",
+    "check": "npm run build && npm run syntax && npm run verify && npm run test:save-integrity && npm run test:startup && npm run test:image-validation && npm run test:collision && npm run test:sculpture-core && npm run test:artwork-lifecycle && npm run test:artwork-async-swap && npm run test:inspect-isolation && npm run test:mobile-inspect-ui && npm run test:avif-pipeline && npm run test:atomic-media && npm run test:media-recovery && npm run test:mobile-quality && npm run test:author-reconciliation && npm run test:canonical-visual && npm run test:memory-survival && npm run test:artwork-frames && npm run test:artwork-frame-fit && npm run test:artwork-frame-facing && npm run test:artwork-frame-performance && npm run test:multi-exhibition && npm run test:admin-workspace && npm run test:public-admin-edit-gate && npm run test:asset-residency-egress && npm run test:runtime-lifecycle-admin-transition && npm run test:same-runtime-admin && npm run test:runtime-hygiene && npm run test:space-residency && npm run test:exhibition-residency && npm run test:transition-guard && npm run test:scene-ownership && npm run test:stable-texture-residency && npm run test:scene-isolation-readiness && npm run test:startup-critical-path && npm run test:guaranteed-preview-fill && npm run test:hard-space-visual-ready && npm run test:instant-workspace-mode-switch && npm run test:zero-work-public-return",
     "test:author-reconciliation": "node tools/test-stage12c66c6c-author-reconciliation.mjs",
     "test:canonical-visual": "node tools/test-stage12c66c6c1-canonical-visual-state.mjs",
     "test:memory-survival": "node tools/test-stage12c66c6c2-mobile-memory-survival.mjs",
@@ -45,6 +45,7 @@
     "test:startup-critical-path": "node tools/test-startup-critical-path-background-budget.mjs",
     "test:guaranteed-preview-fill": "node tools/test-guaranteed-preview-fill.mjs",
     "test:hard-space-visual-ready": "node tools/test-hard-space-visual-ready.mjs",
-    "test:instant-workspace-mode-switch": "node tools/test-instant-workspace-mode-switch.mjs"
+    "test:instant-workspace-mode-switch": "node tools/test-instant-workspace-mode-switch.mjs",
+    "test:zero-work-public-return": "node tools/test-zero-work-public-return.mjs"
   }
 }

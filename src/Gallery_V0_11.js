@@ -117,6 +117,7 @@
   - Stage 12C66C6C8C11: Guaranteed Preview Fill — every assigned artwork Preview belongs to the foreground readiness gate, all required Preview textures start immediately with bounded decode concurrency, gray artwork placeholders cannot be exposed by normal startup/switch readiness, while Full textures and sculpture/model hydration remain idle/background work.
   - Stage 12C66C6C8C12: Hard Space Visual Ready — Props join the critical Space shell, static Space props remain resident instead of zone-popping, and GPU warmup compiles/verifies every visual Space mesh (including every Wall_segment_*) before interaction so camera turns cannot expose first-use shader holes.
   - Stage 12C66C6C8C13: Instant Workspace Mode Switch — same-runtime Admin↔Public transitions preserve foreground readiness and touch only UI/camera controls; owner sweeps and Space integrity checks move to idle background audits so returning to Public does not re-run gallery readiness work.
+  - Stage 12C66C6C8C14: Zero-Work Public Return — clean Admin→Public transitions no longer run full placeholder/sculpture visual refreshes or selection UI rebuilds; viewer presentation toggles only existing nodes, collision proxies are reused without bounds recomputation, and any repair work is deferred/chunked after the public frame is visible.
 */
 
 
@@ -218,7 +219,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     };
 
     var galleryExhibitionRuntime = {
-        stage: "12C66C6C8C13",
+        stage: "12C66C6C8C14",
         schema: "exhibition-platform-multi-exhibition.v10",
         defaultExhibitionId: "main",
         activeId: galleryActiveExhibitionId,
@@ -31974,6 +31975,183 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+
+    // C6C8C14 — ZERO-WORK PUBLIC RETURN
+    // Workspace mode changes reuse the live Scene. The clean Admin→Public click path
+    // must never recalculate sculpture bounds/collision proxies or rebuild editor UI.
+    // Only presentation flags that are actually different between Edit and Viewer are
+    // changed synchronously; defensive repairs run later in small idle chunks.
+    var galleryWorkspacePublicRepairHandle = null;
+    var galleryWorkspacePublicRepairQueue = [];
+
+    function clearGalleryEditSelectionFastForWorkspaceReturn() {
+        selectedArtworks.slice().forEach(function (artwork) {
+            if (!artwork) return;
+            try { if (artwork.disableEdgesRendering) artwork.disableEdgesRendering(); } catch (error) {}
+            try { hideArtworkSelectionGlow(artwork); } catch (error) {}
+        });
+        selectedArtworks = [];
+        primaryArtwork = null;
+        referenceArtwork = null;
+        activeArtwork = null;
+        selectedArtwork = null;
+        isDraggingArtwork = false;
+
+        selectedSculptures.slice().forEach(function (slot) {
+            try { clearModel3dSlotSelectionGlow(slot); } catch (error) {}
+        });
+        setSculptureSelectionState([], null, null);
+        isDraggingSphere = false;
+
+        selectedLocalLights.slice().forEach(function (item) {
+            if (item) item.selected = false;
+        });
+        selectedLocalLights = [];
+        selectedWallMaterial = null;
+
+        clearEditMoveKeys();
+        dragMoved = false;
+        lastArtworkClickTime = 0;
+        lastArtworkClickMesh = null;
+        lastSculptureClickTime = 0;
+        lastSculptureClickSlot = null;
+        if (artworkAlignPanel) artworkAlignPanel.style.display = "none";
+    }
+
+    function enableExistingSculptureCollisionProxyForViewer(slot) {
+        if (!slot || !slot.metadata || !viewerCollisionTargets.sculptures) return false;
+        var proxy = slot.metadata.sculptureCollisionProxy;
+        if (!proxy || (proxy.isDisposed && proxy.isDisposed())) return false;
+        try {
+            proxy.setEnabled(true);
+            proxy.isVisible = true;
+            proxy.visibility = gallerySculptureCollisionDebugVisible ? 0.32 : 0;
+            proxy.isPickable = false;
+            proxy.checkCollisions = false;
+            var slotId = normalizeModel3dSlotId(slot.metadata.model3dSlotId);
+            if (slotId && gallerySculptureCoreRuntime.colliderRegistry[slotId]) {
+                gallerySculptureCoreRuntime.colliderRegistry[slotId].active = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function applyGalleryViewerPresentationFastPath() {
+        var hiddenArtworkPlaceholders = 0;
+        var hiddenLightHelpers = 0;
+        var reusedSculptureProxies = 0;
+        var missingSculptureProxies = [];
+
+        var active = typeof getActiveArtworks === "function" ? getActiveArtworks() : artworks;
+        active.forEach(function (artwork) {
+            if (!artwork) return;
+            var hasImage = hasArtworkViewerImage(artwork);
+            if (!hasImage || isArtworkDeleted(artwork)) {
+                hiddenArtworkPlaceholders += setEditorOnlyMeshVisible(artwork, false, false) ? 1 : 0;
+            } else {
+                // The artwork mesh/image are already resident and visible in Edit Mode.
+                // Avoid touching textures/materials here; only keep viewer picking valid.
+                artwork.isPickable = true;
+                if (artwork.metadata && artwork.metadata.imagePlane) {
+                    var imagePlane = artwork.metadata.imagePlane;
+                    if (imagePlane && !(imagePlane.isDisposed && imagePlane.isDisposed())) {
+                        imagePlane.isPickable = true;
+                    }
+                }
+            }
+        });
+
+        localLightItems.forEach(function (item) {
+            if (!item) return;
+            hiddenLightHelpers += setLocalLightEditorMeshVisibility(item.markerMesh, false);
+            hiddenLightHelpers += setLocalLightEditorMeshVisibility(item.helperMesh, false);
+            hiddenLightHelpers += setLocalLightEditorMeshVisibility(item.targetMesh, false);
+            hiddenLightHelpers += setLocalLightEditorMeshVisibility(item.rootNode, false);
+            if (item.helperMeshes && item.helperMeshes.length) {
+                item.helperMeshes.forEach(function (mesh) {
+                    hiddenLightHelpers += setLocalLightEditorMeshVisibility(mesh, false);
+                });
+            }
+        });
+
+        artSpheres.forEach(function (slot) {
+            if (!slot || !slot.metadata) return;
+            var placeholder = getModel3dSlotPlaceholderMesh(slot);
+            if (placeholder && !(placeholder.isDisposed && placeholder.isDisposed())) {
+                setEditorOnlyMeshVisible(placeholder, false, false);
+            }
+            if (enableExistingSculptureCollisionProxyForViewer(slot)) {
+                reusedSculptureProxies += 1;
+            } else if ((slot.metadata.model3d || hasLoadedModel3dRuntime(slot)) && viewerCollisionTargets.sculptures) {
+                missingSculptureProxies.push(slot);
+            }
+        });
+
+        viewerPlaceholderVisibilityDebug.mode = "viewer";
+        viewerPlaceholderVisibilityDebug.emptyArtworksHidden = hiddenArtworkPlaceholders;
+        viewerPlaceholderVisibilityDebug.localLightMeshesHidden = hiddenLightHelpers;
+        viewerPlaceholderVisibilityDebug.zeroWorkPublicReturn = true;
+        viewerPlaceholderVisibilityDebug.reusedSculptureProxies = reusedSculptureProxies;
+        viewerPlaceholderVisibilityDebug.deferredSculptureProxyRepairs = missingSculptureProxies.length;
+
+        return {
+            hiddenArtworkPlaceholders: hiddenArtworkPlaceholders,
+            hiddenLightHelpers: hiddenLightHelpers,
+            reusedSculptureProxies: reusedSculptureProxies,
+            missingSculptureProxies: missingSculptureProxies
+        };
+    }
+
+    function scheduleGalleryWorkspacePublicReturnDeferredRepair(slots, reason) {
+        galleryWorkspacePublicRepairQueue = (slots || []).filter(function (slot) {
+            return !!slot && artSpheres.indexOf(slot) !== -1;
+        });
+
+        if (galleryWorkspacePublicRepairHandle !== null) return;
+
+        var runNext = function (deadline) {
+            galleryWorkspacePublicRepairHandle = null;
+            if (galleryAdminWorkspaceMode || editMode) {
+                galleryWorkspacePublicRepairQueue = [];
+                return;
+            }
+
+            var budget = 1;
+            if (deadline && typeof deadline.timeRemaining === "function") {
+                budget = Math.max(1, Math.min(2, Math.floor(deadline.timeRemaining() / 4)));
+            }
+
+            while (budget > 0 && galleryWorkspacePublicRepairQueue.length) {
+                var slot = galleryWorkspacePublicRepairQueue.shift();
+                try {
+                    if (slot && !(slot.isDisposed && slot.isDisposed())) refreshSculptureCollisionProxy(slot);
+                } catch (error) {
+                    console.warn("C6C8C14 deferred sculpture proxy repair warning:", error);
+                }
+                budget -= 1;
+            }
+
+            if (galleryWorkspacePublicRepairQueue.length) {
+                if (typeof requestIdleCallback === "function") {
+                    galleryWorkspacePublicRepairHandle = requestIdleCallback(runNext, { timeout: 1400 });
+                } else {
+                    galleryWorkspacePublicRepairHandle = setTimeout(function () { runNext(null); }, 60);
+                }
+            }
+        };
+
+        if (galleryWorkspacePublicRepairQueue.length) {
+            if (typeof requestIdleCallback === "function") {
+                galleryWorkspacePublicRepairHandle = requestIdleCallback(runNext, { timeout: 1400 });
+            } else {
+                galleryWorkspacePublicRepairHandle = setTimeout(function () { runNext(null); }, 60);
+            }
+        }
+    }
+
+
     function updateViewerModePlaceholderVisibility() {
         viewerPlaceholderVisibilityDebug.mode = editMode ? "edit" : "viewer";
 
@@ -32131,9 +32309,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function setGallerySameRuntimeModeState(targetEditMode, reason) {
-        // C6C8C13: Admin ↔ Public is not a gallery transition. The Engine, Scene,
-        // Space, Exhibition layer, textures, lights and foreground readiness stay intact.
-        // Do not mark foreground dirty and do not run scene-wide integrity work on the click path.
+        // C6C8C14: a clean Admin ↔ Public transition is a presentation switch only.
+        // Public return performs no scene-wide visual refresh, no sculpture bounds scan
+        // and no collision-proxy rebuild on the click path.
         var startedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         var previousEditMode = !!editMode;
         editMode = !!targetEditMode;
@@ -32141,9 +32319,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         configureCameraPointerButtons();
         resetViewerWASDMovementRuntime(true);
         closeGalleryInspect(reason || "same-runtime-mode-transition");
-        clearEditSelection();
+
+        var presentationResult = null;
+        var selectionStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
 
         if (editMode) {
+            // Public→Admin is already fast enough and can keep the complete editor refresh.
+            clearEditSelection();
             setEditorUiVisible(true);
             setMobileViewerUiVisible(false);
             if (mobileViewerEnabled) attachGalleryCameraControl();
@@ -32152,15 +32334,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             refreshGalleryExhibitTourOrderBadges();
             updateGalleryTourOrderUi();
         } else {
+            // Admin→Public: clear only logical selection state and selected glows.
+            // Do not rebuild hidden editor panels that are about to disappear.
+            clearGalleryEditSelectionFastForWorkspaceReturn();
             restoreCameraToDefaultViewerWalkHeight("sameRuntimePublicReturn");
             setEditorUiVisible(false);
+            presentationResult = applyGalleryViewerPresentationFastPath();
             if (mobileViewerEnabled) {
                 camera.detachControl(canvas);
                 setMobileViewerUiVisible(true);
             }
-            updateViewerModePlaceholderVisibility();
+            // Only genuinely missing proxies are repaired later, one at a time.
+            scheduleGalleryWorkspacePublicReturnDeferredRepair(
+                presentationResult ? presentationResult.missingSculptureProxies : [],
+                reason || "same-runtime-public-return"
+            );
         }
 
+        var selectionFinishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
         galleryExhibitionRuntime.workspaceModeFastPathCount += 1;
         scheduleGalleryWorkspaceModeBackgroundAudit(reason || "same-runtime-ui-only");
         var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
@@ -32168,10 +32359,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             type: "workspace-mode",
             from: previousEditMode ? "admin" : "public",
             to: editMode ? "admin" : "public",
-            mode: "instant-workspace-ui-only",
+            mode: editMode ? "instant-workspace-ui-only" : "zero-work-public-return",
             residentHit: true,
             foregroundPreserved: true,
             auditDeferred: true,
+            collisionProxyRebuildsOnClickPath: 0,
+            reusedSculptureProxies: presentationResult ? presentationResult.reusedSculptureProxies : 0,
+            deferredSculptureProxyRepairs: presentationResult ? presentationResult.missingSculptureProxies.length : 0,
+            corePresentationMs: Math.round(Math.max(0, selectionFinishedAt - selectionStartedAt) * 10) / 10,
             durationMs: Math.round(Math.max(0, finishedAt - startedAt) * 10) / 10,
             at: Date.now()
         };
@@ -45219,7 +45414,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getSceneOwnershipDebug: function () {
             var integrity = captureGallerySpaceIntegritySnapshot("debug-api");
             return {
-                stage: "12C66C6C8C13",
+                stage: "12C66C6C8C14",
                 activeExhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 transitionEpoch: galleryExhibitionRuntime.transitionEpoch,
@@ -45243,7 +45438,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         waitForForegroundReady: waitForGalleryForegroundReady,
         getForegroundReadiness: function () {
             return {
-                stage: "12C66C6C8C13",
+                stage: "12C66C6C8C14",
                 ready: !!galleryExhibitionRuntime.foregroundReady,
                 reason: galleryExhibitionRuntime.foregroundReadyReason,
                 at: galleryExhibitionRuntime.foregroundReadyAt,
@@ -45271,7 +45466,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         getDraftStatus: function () {
             checkGalleryDraftStateNow("gallery-app-status");
             return {
-                stage: "12C66C6C8C13",
+                stage: "12C66C6C8C14",
                 exhibitionId: getActiveGalleryExhibitionId(),
                 spaceId: galleryActiveSpaceId,
                 storagePrefix: galleryArtworkStoragePrefix,

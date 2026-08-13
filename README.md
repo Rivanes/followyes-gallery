@@ -1,20 +1,26 @@
-# C6C8C13 — Instant Workspace Mode Switch
+# C6C8C14 — Zero-Work Public Return
 
-This build makes same-runtime Admin ↔ Public transitions presentation-only.
+This stage is a narrow runtime cleanup on top of C6C8C13.
 
-- Clean **Admin → Public Page** no longer marks the gallery foreground as not-ready.
-- Clean same-runtime return no longer waits for Space GPU warmup, Preview readiness, owner sweep or quiet-frame readiness again.
-- The current Babylon Engine, Scene, Space, Exhibition layer, textures, lights and resident assets remain untouched.
-- Owner sweep and canonical Space integrity checks still run, but as a deferred idle/background audit after the UI switch.
-- If the scene actually has unsaved changes or foreground readiness is not safe, the previous guarded fallback remains available.
-- Network diagnostics begin asynchronously and never delay the visible mode switch.
-- Admin delivery telemetry refresh is also asynchronous on resume.
-- C6C8C12 Hard Space Visual Ready and C6C8C11 Guaranteed Preview Fill remain unchanged.
+## What changed
 
-Expected normal path:
+- Clean **Admin → Public Page** is now a true UI-only return.
+- The click path no longer calls the full `updateViewerModePlaceholderVisibility()` pipeline.
+- Sculpture collision proxies are **reused as-is**; bounds are not recalculated on return.
+- Only missing collision proxies are repaired later, one at a time in idle time.
+- Edit selection is cleared with a lightweight logical reset instead of rebuilding hidden editor panels.
+- Service Worker / network diagnostic reads do not start on the click path.
+- Space, Exhibition, artwork textures, models, lights and GPU state stay resident.
+- The safety fallback remains for dirty/discarded state.
 
-`Admin → Public Page` → UI/camera switch → canvas resize next frame → background integrity audit.
+## SQL
 
-There is **no new Supabase SQL** for C6C8C13.
+There is **no new Supabase SQL** for C6C8C14.
 
-Run `npm run check` before deployment.
+## Validation
+
+Run:
+
+```bash
+npm run check
+```

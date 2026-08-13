@@ -6,8 +6,8 @@ const source = fs.readFileSync(path.join(root, 'src/Gallery_V0_11.js'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'src/config/gallery-space-config.js'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 function expect(label, value) { if (!value) throw new Error(`C6C8C12 regression: ${label}`); }
-expect('package stage', pkg.version.includes('c6c8c13'));
-expect('runtime stage', source.includes('stage: "12C66C6C8C13"'));
+expect('package stage', pkg.version.includes('c6c8c14'));
+expect('runtime stage', source.includes('stage: "12C66C6C8C14"'));
 expect('props required in Space config', /props:[\s\S]*?fileName: "Props\.glb"[\s\S]*?required: true/.test(config));
 expect('props part of critical shell', source.includes('var galleryCriticalAssetNames = ["floor", "wall", "props", "ceiling"]'));
 expect('no current optional Space assets', source.includes('var galleryOptionalAssetNames = [];'));

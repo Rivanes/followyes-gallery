@@ -1,17 +1,17 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C13 — Instant Workspace Mode Switch
+  Exhibition Platform — Stage 12C66C6C8C14 — Zero-Work Public Return
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The accepted engine-owned instructional popup is shown unchanged after true interaction readiness.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c14_zero_work_public_return_20260813";
 
-const STAGE = "12C66C6C8C13";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c13_instant_workspace_mode_switch_20260813";
+const STAGE = "12C66C6C8C14";
+const ENGINE_CACHE_KEY = "stage12c66c6c8c14_zero_work_public_return_20260813";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -79,6 +79,28 @@ async function finishModeTransitionDiagnostic(beforeOrPromise, startedAt, fromLa
     durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
     network: delta,
     zeroStorageNetwork: delta.supabaseNetworkFetches === 0,
+    at: Date.now()
+  });
+}
+
+
+function publishInstantWorkspaceModeDiagnostic(startedAt, fromLabel, toLabel, engineRecord) {
+  // C6C8C14: never query the Service Worker on the click path. The Asset Delivery
+  // panel keeps session-level network telemetry; this record measures UI latency only.
+  return publishTransitionNetworkDiagnostic({
+    type: "workspace-mode",
+    from: fromLabel,
+    to: toLabel,
+    mode: "zero-work-public-return",
+    durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    engineDurationMs: engineRecord && Number.isFinite(Number(engineRecord.durationMs))
+      ? Number(engineRecord.durationMs)
+      : null,
+    corePresentationMs: engineRecord && Number.isFinite(Number(engineRecord.corePresentationMs))
+      ? Number(engineRecord.corePresentationMs)
+      : null,
+    networkMeasuredOnClickPath: false,
+    zeroStorageNetwork: null,
     at: Date.now()
   });
 }
@@ -275,12 +297,15 @@ async function closeInlineAdminWorkspace(options = {}) {
   if (isTransitionGuardActive()) return false;
   inlineWorkspaceModeSwitchActive = true;
   const activeBefore = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : null;
-  const transitionBeforePromise = getExhibitionAssetDeliveryStats().catch(() => null);
   const transitionStartedAt = performance.now();
 
-  // C6C8C13: a clean, already-ready same-runtime scene returns to Public as a pure UI move.
-  // No full-page loader, no readiness invalidation and no foreground revalidation.
+  // C6C8C14: clean Admin→Public is a zero-work UI return. Do not even request
+  // Service Worker delivery stats until after the public frame is visible.
   const instantFastPath = !sceneDirty && canUseInstantWorkspaceModeSwitch();
+  const transitionBeforePromise = instantFastPath
+    ? null
+    : getExhibitionAssetDeliveryStats().catch(() => null);
+
   let guardToken = null;
   if (!instantFastPath) {
     guardToken = await beginTransitionGuard({
@@ -304,10 +329,7 @@ async function closeInlineAdminWorkspace(options = {}) {
       if (!exited) return false;
     }
 
-    if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
-      await adminModule.suspendAdminWorkspace();
-    }
-
+    // Move the already-running canvas back first. No network, no Scene rebuild.
     const gallerySection = document.getElementById("gallerySection");
     if (gallerySection && gallerySectionHomeParent) {
       if (gallerySectionHomeNextSibling && gallerySectionHomeNextSibling.parentNode === gallerySectionHomeParent) gallerySectionHomeParent.insertBefore(gallerySection, gallerySectionHomeNextSibling);
@@ -315,6 +337,14 @@ async function closeInlineAdminWorkspace(options = {}) {
     }
     shell.classList.remove("active");
     document.body.classList.remove("inline-admin-workspace-active");
+
+    // Admin housekeeping is not allowed to delay the public frame.
+    if (adminModule && typeof adminModule.suspendAdminWorkspace === "function") {
+      const suspendPromise = adminModule.suspendAdminWorkspace();
+      if (!instantFastPath) await suspendPromise;
+      else void Promise.resolve(suspendPromise).catch(() => null);
+    }
+
     const active = window.GalleryApp && window.GalleryApp.getActiveExhibition ? window.GalleryApp.getActiveExhibition() : activeBefore;
     try {
       const url = new URL(location.href);
@@ -322,20 +352,34 @@ async function closeInlineAdminWorkspace(options = {}) {
       history.replaceState(null, "", url);
     } catch (_error) {}
 
-    // Resize on the next frame after the canvas returns to its public container.
-    window.requestAnimationFrame(() => { if (activeEngine) activeEngine.resize(); });
+    window.requestAnimationFrame(() => {
+      if (activeEngine) activeEngine.resize();
+      if (instantFastPath) {
+        const engineRecord = window.GalleryApp && typeof window.GalleryApp.getExhibitionRuntimeDebug === "function"
+          ? (window.GalleryApp.getExhibitionRuntimeDebug().lastModeTransition || null)
+          : null;
+        publishInstantWorkspaceModeDiagnostic(
+          transitionStartedAt,
+          `Admin:${active && active.id ? active.id : "main"}`,
+          `Public:${active && active.id ? active.id : "main"}`,
+          engineRecord
+        );
+      }
+    });
 
-    // Only the fallback path waits for readiness; the normal fast path preserves it.
+    // Fallback only: scene changed/discarded and must really revalidate foreground.
     if (!instantFastPath && window.GalleryApp && typeof window.GalleryApp.waitForForegroundReady === "function") {
       await window.GalleryApp.waitForForegroundReady("admin-to-public-fallback", { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
     }
 
-    void finishModeTransitionDiagnostic(
-      transitionBeforePromise,
-      transitionStartedAt,
-      `Admin:${active && active.id ? active.id : "main"}`,
-      `Public:${active && active.id ? active.id : "main"}`
-    ).catch(() => null);
+    if (!instantFastPath) {
+      void finishModeTransitionDiagnostic(
+        transitionBeforePromise,
+        transitionStartedAt,
+        `Admin:${active && active.id ? active.id : "main"}`,
+        `Public:${active && active.id ? active.id : "main"}`
+      ).catch(() => null);
+    }
     return true;
   } finally {
     if (guardToken) await endTransitionGuard(guardToken);
