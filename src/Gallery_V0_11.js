@@ -120,6 +120,7 @@
   - Stage 12C66C6C8C14: Zero-Work Public Return — clean Admin→Public transitions no longer run full placeholder/sculpture visual refreshes or selection UI rebuilds; viewer presentation toggles only existing nodes, collision proxies are reused without bounds recomputation, and any repair work is deferred/chunked after the public frame is visible.
   - Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview — PUBLIC PAGE becomes an in-memory preview of the current Admin draft: unsaved scene state is not discarded or reapplied, the same live scene is shown immediately, and returning to Admin resumes the preserved draft while unload protection remains active.
   - Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh — mobile intro keeps Start exploring pinned outside the scrollable instructions, Inspect navigation floats on the popup edge without stealing metadata width, and the desktop floor cursor uses a smaller/thinner low-glow SDF ring and lighter click ripple.
+  - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
 
@@ -16020,6 +16021,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         criticalArtworkFinished: 0,
         criticalModelStarted: 0,
         criticalModelFinished: 0,
+        criticalModelFastLaneStarted: 0,
+        criticalModelFastLaneFinished: 0,
+        lastCriticalModelFastLaneAt: 0,
+        lastCriticalModelFastLaneSlot: null,
         nearbyArtworkStarted: 0,
         nearbyModelStarted: 0,
         deferredArtworkLoadsAvoided: 0,
@@ -16642,6 +16647,74 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return selected;
     }
 
+    // C6C8C20 — CURRENT-ZONE MODEL FAST LANE
+    // Once the gallery is genuinely interaction-ready, a sculpture/model that belongs to
+    // the camera's current streaming zone must not wait for the generic motion-aware
+    // background idle budget. Nearby/deferred models intentionally keep the old policy.
+    function getGalleryCriticalModelFastLanePauseReason() {
+        if (!galleryExhibitionRuntime.foregroundReady || !galleryFastStartRuntime.interactionReady) return "foreground-not-ready";
+        if (typeof document !== "undefined" && document.hidden) return "document-hidden";
+        if (galleryExhibitionRuntime.switching || galleryExhibitionRuntime.hydrationActive) return "exhibition-transition";
+        return "";
+    }
+
+    function tryStartGalleryCriticalModelFastLane(reason) {
+        if (!galleryZoneStreamingRuntime.started || galleryZoneStreamingRuntime.streamPumpActive) return false;
+        if (galleryFastStartRuntime.modelLoadActiveCount > 0) return false;
+        if (getGalleryCriticalModelFastLanePauseReason()) return false;
+
+        refreshGalleryCurrentStreamingZone(reason || "critical-model-fast-lane", true);
+        var modelEntry = takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredModelLoads, "slot", ["critical"]);
+        if (!modelEntry || !modelEntry.slot || !modelEntry.modelState) return false;
+
+        galleryZoneStreamingRuntime.streamPumpActive = true;
+        galleryFastStartRuntime.backgroundDrainActive = true;
+        galleryFastStartRuntime.modelLoadActiveCount += 1;
+
+        var budgetRuntime = galleryExhibitionRuntime.backgroundHydration;
+        budgetRuntime.slices += 1;
+        budgetRuntime.modelStarts += 1;
+        budgetRuntime.lastStartedAt = Date.now();
+        budgetRuntime.lastReason = reason || "critical-model-fast-lane";
+
+        galleryZoneStreamingRuntime.criticalModelStarted += 1;
+        galleryZoneStreamingRuntime.criticalModelFastLaneStarted += 1;
+        galleryZoneStreamingRuntime.lastCriticalModelFastLaneAt = Date.now();
+        galleryZoneStreamingRuntime.lastCriticalModelFastLaneSlot = modelEntry.slotId || modelEntry.key || (modelEntry.slot && modelEntry.slot.name) || null;
+
+        var immediateState = cloneGalleryFastStartState(modelEntry.modelState);
+        immediateState._galleryFastStartForceImmediate = true;
+        immediateState._galleryStreamingTier = "critical";
+        modelEntry.slot.metadata = modelEntry.slot.metadata || {};
+        modelEntry.slot.metadata.galleryStreaming = modelEntry.slot.metadata.galleryStreaming || {};
+        modelEntry.slot.metadata.galleryStreaming.loading = true;
+        modelEntry.slot.metadata.galleryStreaming.queued = false;
+        modelEntry.slot.metadata.galleryStreaming.fastLane = "current-zone";
+
+        var sliceStartedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        Promise.resolve(applyModel3dStateToSlot(modelEntry.slot, immediateState))
+            .catch(function (error) { console.warn("C6C8C20 critical model fast-lane warning:", error); })
+            .finally(function () {
+                galleryFastStartRuntime.modelLoadActiveCount = Math.max(0, galleryFastStartRuntime.modelLoadActiveCount - 1);
+                if (modelEntry.slot && modelEntry.slot.metadata && modelEntry.slot.metadata.galleryStreaming) {
+                    modelEntry.slot.metadata.galleryStreaming.loading = false;
+                }
+                galleryZoneStreamingRuntime.criticalModelFinished += 1;
+                galleryZoneStreamingRuntime.criticalModelFastLaneFinished += 1;
+                galleryZoneStreamingRuntime.streamPumpActive = false;
+                galleryFastStartRuntime.backgroundDrainActive = false;
+                var finishedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+                budgetRuntime.lastSliceMs = Math.round(Math.max(0, finishedAt - sliceStartedAt) * 10) / 10;
+                budgetRuntime.lastFinishedAt = Date.now();
+                maintainGalleryStreamingMemoryBudget("critical-model-fast-lane-finished");
+                yieldGalleryForegroundFrame(0).then(function () {
+                    scheduleGalleryZoneStreamingPump("critical-model-fast-lane-next", 90);
+                    scheduleGalleryFastStartFullArtworkDrainWhenIdle("critical-model-fast-lane-full-artwork", 220);
+                });
+            });
+        return true;
+    }
+
     function scheduleGalleryZoneStreamingPump(reason, delayMs) {
         if (!galleryZoneStreamingRuntime.started || galleryZoneStreamingRuntime.streamPumpScheduled) return;
         galleryZoneStreamingRuntime.streamPumpScheduled = true;
@@ -16653,6 +16726,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function pumpGalleryZoneStreamingQueues(reason) {
         if (!galleryZoneStreamingRuntime.started || galleryZoneStreamingRuntime.streamPumpActive) return;
+
+        // C6C8C20: current-zone sculpture/model is visible scene content, not an idle-only task.
+        // Give it one fast-lane start before the generic motion-aware background budget.
+        if (tryStartGalleryCriticalModelFastLane(reason || "zone-pump")) return;
 
         var foregroundPause = getGalleryBackgroundHydrationPauseReason("artwork");
         if (foregroundPause) {

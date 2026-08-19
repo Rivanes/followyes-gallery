@@ -14,6 +14,8 @@ const source = fs.readFileSync(path.join(root, 'src', 'Gallery_V0_11.js'), 'utf8
 const bootstrap = fs.readFileSync(path.join(root, 'src', 'bootstrap', 'gallery-viewer-bootstrap.js'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'src', 'config', 'gallery-space-config.js'), 'utf8');
 const sql = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql'), 'utf8');
+const storagePolicyFix = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '05_STORAGE_POLICY_ISOLATION_FIX.sql'), 'utf8');
+const storageDependencyFix = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '06_STORAGE_RLS_DEPENDENCY_FINAL_FIX.sql'), 'utf8');
 
 function expect(label, condition) {
   if (!condition) throw new Error(`Multi-exhibition invariant failed: ${label}`);
@@ -78,6 +80,18 @@ expect('SQL scopes public state/media to published exhibitions while admin can e
   sql.includes('Public can read published gallery state') &&
   sql.includes('gallery_artworks_public_select_scoped') &&
   sql.includes("auth.jwt() ->> 'email' = 'admin@followyes.pl'"));
+
+expect('C6C8C18 isolates platform-media RLS helpers from gallery-artworks uploads',
+  storagePolicyFix.includes("when bucket_id = 'platform-media'") &&
+  storagePolicyFix.includes("policyname = 'd2_platform_media_insert'") &&
+  storagePolicyFix.includes('storage.foldername(objects.name)') &&
+  !storagePolicyFix.includes('storage.foldername(ge.name)'));
+
+expect('C6C8C19 finalizes shared Storage RLS dependencies',
+  storageDependencyFix.includes('grant select on public.exhibitions to authenticated') &&
+  storageDependencyFix.includes('can_edit_venue_runtime_path') &&
+  storageDependencyFix.includes('security definer') &&
+  storageDependencyFix.includes('public.can_edit_venue_runtime_path(name)'));
 
 console.log('Stage 12C66C6C7C8 multi-exhibition invariants passed.');
 

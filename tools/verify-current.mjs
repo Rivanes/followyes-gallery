@@ -13,6 +13,8 @@ const adapter=fs.readFileSync(new URL('../src/vendor/gallery-avif-encoder.mjs',i
 const spaceConfig=fs.readFileSync(new URL('../src/config/gallery-space-config.js',import.meta.url),'utf8');
 const migration=fs.readFileSync(new URL('../SUPABASE_SQL/01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql',import.meta.url),'utf8');
 const currentMigration=fs.readFileSync(new URL('../SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql',import.meta.url),'utf8');
+const storagePolicyFix=fs.readFileSync(new URL('../SUPABASE_SQL/05_STORAGE_POLICY_ISOLATION_FIX.sql',import.meta.url),'utf8');
+const storageDependencyFix=fs.readFileSync(new URL('../SUPABASE_SQL/06_STORAGE_RLS_DEPENDENCY_FINAL_FIX.sql',import.meta.url),'utf8');
 const txt=fs.readFileSync(new URL('../ENGINE_LOGIN_DISABLED.txt',import.meta.url),'utf8');
 const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-bootstrap.js',import.meta.url),'utf8');
 const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
@@ -51,6 +53,11 @@ assert(spaceConfig.includes('Floor_segment.glb')&&spaceConfig.includes('Wall_seg
 assert(spaceConfig.includes('version: 1'),'Space asset versioning missing');
 assert(migration.includes('create table if not exists public.gallery_exhibitions'),'Exhibition migration missing');
 assert(currentMigration.includes('(storage.foldername(name))[2] = \'frames\''),'Shared frame public exception missing');
+assert(storagePolicyFix.includes("policyname = 'd2_platform_media_insert'")&&storagePolicyFix.includes("when bucket_id = 'platform-media'"),'C6C8C18 platform-media policy isolation missing');
+assert(storagePolicyFix.includes('storage.foldername(objects.name)')&&!storagePolicyFix.includes('storage.foldername(ge.name)'),'C6C8C18 outer storage path qualification missing');
+assert(storageDependencyFix.includes('grant select on public.exhibitions to authenticated'),'C6C8C19 exhibitions SELECT grant missing');
+assert(storageDependencyFix.includes('security definer')&&storageDependencyFix.includes('can_edit_venue_runtime_path'),'C6C8C19 Venue Runtime helper missing');
+assert(storageDependencyFix.includes("policyname = 'd2_venue_runtime_insert'")&&storageDependencyFix.includes('public.can_edit_venue_runtime_path(name)'),'C6C8C19 Venue Runtime policy finalization missing');
 assert(admin.includes('id="adminViewportStage"')&&admin.includes('id="exhibitionList"'),'Direct Admin page missing');
 assert(source.includes('enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode')&&source.includes('exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode'),'Same-runtime engine mode API missing');
 assert(source.includes('discardUnsavedChanges: discardGalleryUnsavedChanges'),'Scene discard API missing');

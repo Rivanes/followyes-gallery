@@ -231,6 +231,8 @@ const pump = extract('pumpGalleryZoneStreamingQueues');
 expect('background active-zone only', pump.includes('["critical", "nearby"]') && !pump.includes('["critical", "nearby", "deferred"]'));
 expect('background one-slice budget', pump.includes('budgetRuntime.artworkStarts += 1') && pump.includes('budgetRuntime.modelStarts += 1') && pump.includes('getGalleryBackgroundHydrationPauseReason("model")'));
 expect('motion-aware pause', source.includes('function isGalleryBackgroundHydrationMotionActive(') && source.includes('model-idle-budget') && source.includes('artwork-idle-budget'));
+expect('C6C8C20 current-zone model fast lane', source.includes('function tryStartGalleryCriticalModelFastLane(') && source.includes('takeGalleryStreamingQueueEntry(galleryFastStartRuntime.deferredModelLoads, "slot", ["critical"])') && source.includes('if (tryStartGalleryCriticalModelFastLane(reason || "zone-pump")) return;'));
+expect('C6C8C20 keeps nearby/deferred idle policy', source.includes('getGalleryBackgroundHydrationPauseReason("model")') && source.includes('["critical", "nearby"]'));
 expect('cached batched Space warmup', source.includes('gallerySpaceGpuWarmMeshCache') && source.includes('batchSize = galleryDeviceProfile.mobile ? 2 : 5') && source.includes('Promise.all(list.slice(i, i + batchSize)'));
 expect('admin background diagnostics', admin.includes('BG slices') && admin.includes('Preview presence'));
 console.log('C6C8C10 Startup Critical Path / Background Hydration Budget regression passed.');
