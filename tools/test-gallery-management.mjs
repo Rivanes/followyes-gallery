@@ -49,11 +49,11 @@ const entryReader = extractFunction(admin, 'readRequiredFiniteGalleryNumber');
 const mutationWrapper = extractFunction(admin, 'withGalleryMutation');
 const detailRenderer = extractFunction(admin, 'renderGalleryDetail');
 
-expect('release package is C6C8C22.1 smoke hotfix', pkg.version.includes('c6c8c22-1-gallery-smoke-hotfix'));
-expect('Admin release identity is C6C8C22.1', admin.includes('const STAGE = "C6C8C22.1"'));
+expect('release package is C6C8C23 Space Model Validation', pkg.version.includes('c6c8c23-space-model-validation'));
+expect('Admin release identity is C6C8C23', admin.includes('const STAGE = "C6C8C23"'));
 expect('Gallery data adapter uses canonical Venue RPCs', api.includes('admin_create_gallery_with_initial_draft') && api.includes('admin_begin_venue_draft') && api.includes('admin_set_venue_asset_slot'));
 expect('new asset paths are stable UUID owner paths, not Gallery names', api.includes('venues/${venue}/versions/${version}/assets/${normalizedRole}/') && !api.includes('venue.slug'));
-expect('only controlled C22 building roles are exposed', api.includes('["floor", "walls", "ceiling", "props"]'));
+expect('the controlled Gallery role contract remains exposed for C23', api.includes('["floor", "walls", "ceiling", "props"]'));
 expect('replace uses immutable upload object before binding', api.includes('upsert: false') && api.includes('cleanupCandidates'));
 expect('Admin imports the controlled role binding it executes', /import\s*\{[^}]*\bCONTROLLED_GALLERY_ASSET_ROLES\b[^}]*\}\s*from\s*["']\.\.\/data\/gallery-management-api\.js/.test(admin));
 expect('Admin has Exhibition and Gallery section switch', admin.includes('EXHIBITIONS') && admin.includes('GALLERIES') && admin.includes('galleryManagementSection'));
@@ -74,4 +74,4 @@ expect('Test Gallery resolves Gallery Version only', testBootstrap.includes('gal
 expect('Test Gallery uses a local read-only Exhibition adapter', testBootstrap.includes('Test Gallery is read-only') && testBootstrap.includes('loadState()'));
 expect('Engine CRUD remains outside GalleryApp while camera bridge exists', source.includes('getCameraPose: function ()') && !source.includes('admin_create_gallery_with_initial_draft'));
 
-console.log('C6C8C22.1 Gallery Management browser-smoke invariants passed.');
+console.log('C6C8C23 Gallery Management integration invariants passed.');

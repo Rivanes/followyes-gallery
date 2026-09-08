@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — C6C8C22.1 — Gallery Management smoke hotfix
+  Exhibition Platform — C6C8C23 — Space Model Validation
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -8,10 +8,10 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
-import { createExhibitionDataAdapter, resolveInitialPublicRuntime } from "../data/exhibition-api.js?v=c6c8c22_gallery_management";
+import { createExhibitionDataAdapter, resolveInitialPublicRuntime } from "../data/exhibition-api.js?v=c6c8c23_space_model_validation";
 
-const STAGE = "C6C8C22.1";
-const ENGINE_CACHE_KEY = "c6c8c22_1_gallery_smoke_hotfix_20260908";
+const STAGE = "C6C8C23";
+const ENGINE_CACHE_KEY = "c6c8c23_space_model_validation_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 

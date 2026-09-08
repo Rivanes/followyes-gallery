@@ -6,7 +6,9 @@
 
 export const VENUE_MANIFEST_SCHEMA = "exhibition-platform-venue-manifest.v1";
 export const LEGACY_VENUE_MANIFEST_SCHEMA = "berryboy-venue-manifest.v1";
-export const REQUIRED_SPACE_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling", "props"]);
+export const REQUIRED_SPACE_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling"]);
+export const OPTIONAL_SPACE_ASSET_ROLES = Object.freeze(["props"]);
+export const SPACE_ASSET_ROLES = Object.freeze([...REQUIRED_SPACE_ASSET_ROLES, ...OPTIONAL_SPACE_ASSET_ROLES]);
 
 function text(value) {
   return String(value == null ? "" : value).trim();
@@ -100,6 +102,14 @@ export function validateVenueManifest(manifest, options = {}) {
       problems.push(`${role} asset needs publicUrl or storageBucket + storagePath.`);
     }
   });
+  OPTIONAL_SPACE_ASSET_ROLES.forEach((role) => {
+    const matches = assets.filter((item) => item.role === role);
+    if (matches.length > 1) problems.push(`Venue manifest allows at most one ${role} asset.`);
+    const asset = matches[0];
+    if (asset && !asset.publicUrl && !(asset.storageBucket && asset.storagePath)) {
+      problems.push(`${role} asset needs publicUrl or storageBucket + storagePath when assigned.`);
+    }
+  });
 
   if (!chooseEntry(manifest)) problems.push("Venue manifest needs a safe visitor spawn point with position and target.");
 
@@ -129,8 +139,10 @@ export function buildSpaceDefinition({ supabase, venue, venueVersion, manifest, 
   const byRole = {};
   validation.assets.forEach((asset) => { if (asset.role && !byRole[asset.role]) byRole[asset.role] = asset; });
   const assets = {};
-  REQUIRED_SPACE_ASSET_ROLES.forEach((role) => {
+  SPACE_ASSET_ROLES.forEach((role) => {
     const source = byRole[role];
+    if (!source && OPTIONAL_SPACE_ASSET_ROLES.includes(role)) return;
+    if (!source) throw new Error(`Missing required Venue ${venueSlug} asset ${role}.`);
     const publicUrl = source.publicUrl || getPublicUrl(supabase, source.storageBucket, source.storagePath);
     const parts = splitPublicUrl(publicUrl);
     if (!parts || !parts.rootUrl || !parts.fileName) {
@@ -142,7 +154,7 @@ export function buildSpaceDefinition({ supabase, venue, venueVersion, manifest, 
       rootUrl: parts.rootUrl,
       fileName: parts.fileName,
       version: source.version || "1",
-      required: source.required !== false,
+      required: REQUIRED_SPACE_ASSET_ROLES.includes(role),
       storageBucket: source.storageBucket || null,
       storagePath: source.storagePath || null
     });

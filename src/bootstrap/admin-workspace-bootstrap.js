@@ -1,15 +1,22 @@
 /*
-  Exhibition Platform — C6C8C22 Admin Workspace / Gallery Management
+  Exhibition Platform — C6C8C23 Admin Workspace / Space Model Validation
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
-import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c22_gallery_management";
-import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c22_gallery_management";
+import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c23_space_model_validation";
+import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c23_space_model_validation";
+import {
+  REQUIRED_GALLERY_MODEL_ROLES,
+  validateGalleryModelFile,
+  validateGalleryModelUrl,
+  isCurrentGalleryModelValidation,
+  summarizeGalleryModelValidation
+} from "../validation/gallery-model-validation.js?v=c6c8c23_space_model_validation";
 
-const STAGE = "C6C8C22.1";
-const ENGINE_CACHE_KEY = "c6c8c22_1_gallery_smoke_hotfix_20260908";
+const STAGE = "C6C8C23";
+const ENGINE_CACHE_KEY = "c6c8c23_space_model_validation_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -1235,7 +1242,7 @@ function renderGalleryDetail(detail) {
           <button id="discardGalleryDraftButton" class="adminButton danger" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>DISCARD DRAFT</button>
         </div>
       </div>
-      <div class="gallerySubsection"><h3>Building assets</h3><div class="galleryMuted">Four controlled Space roles. Replacing a file creates a new immutable Storage object.</div><div id="galleryAssetGrid" class="galleryAssetGrid"></div></div>
+      <div class="gallerySubsection"><h3>Building assets</h3><div class="galleryMuted">Floor, Walls and Ceiling are required. Props are optional. Every assigned GLB must pass C23 deep validation before Publish.</div><div id="galleryAssetGrid" class="galleryAssetGrid"></div></div>
       <div class="gallerySubsection"><h3>Entry point</h3>
         <div class="galleryMuted">Fine-adjust values here or capture the current camera from TEST GALLERY.</div>
         <div class="galleryMuted">Position</div><div class="galleryEntryGrid">${["x","y","z"].map((axis)=>`<label class="galleryEntryLabel">${axis}<input id="galleryEntryPos${axis.toUpperCase()}" class="adminInput" type="number" step="0.01" required ${entryEditable ? "" : "readonly"}></label>`).join("")}</div>
@@ -1294,17 +1301,43 @@ function renderGalleryDetail(detail) {
   }
 }
 
+function galleryValidationIssueText(report) {
+  const errors = report && Array.isArray(report.errors) ? report.errors : [];
+  return errors.slice(0, 3).map((item) => item && typeof item === "object" ? (item.message || item.code || "Validation error") : String(item)).join(" · ");
+}
+
+async function validateExistingGalleryAsset(draft, role, asset, onProgress) {
+  if (!draft || !asset) throw new Error(`${role.toUpperCase()} is not assigned.`);
+  if (isCurrentGalleryModelValidation(asset, role)) return { reused: true, report: asset.metadata.c23ModelValidation };
+  const url = galleryManagement.getAssetDeliveryUrl(asset);
+  if (!url) throw new Error(`${role.toUpperCase()} delivery URL could not be resolved.`);
+  const report = await validateGalleryModelUrl(url, {
+    role,
+    expectedSize: asset.file_size == null ? null : Number(asset.file_size),
+    sourceStoragePath: asset.storage_path || null,
+    sourceName: asset.metadata && asset.metadata.originalName ? asset.metadata.originalName : (asset.storage_path || `${role}.glb`),
+    onProgress
+  });
+  if (!report.valid) throw new Error(`${role.toUpperCase()} failed deep validation: ${galleryValidationIssueText(report) || "unknown GLB error"}`);
+  await galleryManagement.recordAssetValidation({ venueVersionId: draft.id, role, validation: report });
+  return { reused: false, report };
+}
+
 function renderGalleryAssetSlots(detail, working, assets, editable) {
   const grid = galleryEl("galleryAssetGrid");
   if (!grid) return;
   grid.replaceChildren();
   CONTROLLED_GALLERY_ASSET_ROLES.forEach((role) => {
     const asset = assets.find((item) => item.role === role || item.asset_id === role) || null;
+    const status = summarizeGalleryModelValidation(asset, role);
     const row = document.createElement("div");
     row.className = "galleryAssetRow";
-    const label = document.createElement("div"); label.className = "galleryAssetRole"; label.textContent = role;
+    const label = document.createElement("div"); label.className = "galleryAssetRole"; label.textContent = role === "props" ? "props · optional" : role;
     const meta = document.createElement("div"); meta.className = "galleryAssetMeta";
-    meta.textContent = asset ? `${asset.storage_path || asset.public_url || "assigned"}${asset.file_size ? ` · ${Math.round(Number(asset.file_size)/1024)} KB` : ""}` : "Not assigned";
+    const pathText = asset ? `${asset.storage_path || asset.public_url || "assigned"}${asset.file_size ? ` · ${Math.round(Number(asset.file_size)/1024)} KB` : ""}` : (role === "props" ? "Not assigned · optional" : "Not assigned · required");
+    meta.textContent = `${pathText} · ${status.label}`;
+    if (status.report && status.state === "invalid") meta.title = galleryValidationIssueText(status.report);
+    const actions = document.createElement("div"); actions.className = "galleryActions";
     const button = document.createElement("button"); button.type="button"; button.className="adminButton"; button.textContent = asset ? "REPLACE" : "UPLOAD"; button.disabled = !editable;
     const input = document.createElement("input"); input.type="file"; input.accept=".glb,model/gltf-binary"; input.className="galleryAssetInput";
     button.addEventListener("click", () => {
@@ -1313,20 +1346,45 @@ function renderGalleryAssetSlots(detail, working, assets, editable) {
     });
     input.addEventListener("change", async () => {
       const file = input.files && input.files[0]; input.value=""; if (!file) return;
-      await withGalleryMutation(button, "UPLOADING…", async () => {
+      await withGalleryMutation(button, "VALIDATING…", async () => {
         try {
           const draft = galleryDraftVersion(selectedGalleryDetail);
           if (!draft || !selectedGalleryDetail || !selectedGalleryDetail.venue) throw new Error("An active Gallery Draft is required before uploading a building asset.");
-          const result = await galleryManagement.uploadAssetSlot({ venueId: selectedGalleryDetail.venue.id, venueVersionId: draft.id, role, file });
+          let lastPercent = -1;
+          const validation = await validateGalleryModelFile(file, { role, onProgress: ({ loaded, total }) => {
+            if (!total) return;
+            const percent = Math.min(100, Math.floor(loaded / total * 100));
+            if (percent !== lastPercent) { lastPercent = percent; button.textContent = `VALIDATING ${percent}%`; }
+          }});
+          if (!validation.valid) throw new Error(`${role.toUpperCase()} failed deep validation: ${galleryValidationIssueText(validation) || "unknown GLB error"}`);
+          button.textContent = "UPLOADING…";
+          const result = await galleryManagement.uploadAssetSlot({ venueId: selectedGalleryDetail.venue.id, venueVersionId: draft.id, role, file, validation });
           const warning = result.cleanup && result.cleanup.warnings && result.cleanup.warnings[0];
-          showToast(warning ? `Asset updated. ${warning}` : `${role.toUpperCase()} updated.`);
+          showToast(warning ? `Asset validated and updated. ${warning}` : `${role.toUpperCase()} validated and updated.`);
           await refreshSelectedGallery();
         } catch (error) {
           showToast(error.message || String(error));
         }
       });
     });
-    row.append(label,meta,button,input); grid.appendChild(row);
+    actions.append(button);
+    if (role === "props" && asset) {
+      const clearButton = document.createElement("button"); clearButton.type="button"; clearButton.className="adminButton"; clearButton.textContent="CLEAR"; clearButton.disabled=!editable;
+      clearButton.addEventListener("click", async () => {
+        if (!window.confirm("Remove optional Props from this Draft Version?")) return;
+        await withGalleryMutation(clearButton, "CLEARING…", async () => {
+          try {
+            const draft = galleryDraftVersion(selectedGalleryDetail); if (!draft) throw new Error("An active Gallery Draft is required.");
+            const result = await galleryManagement.clearOptionalAssetSlot(draft.id, role);
+            const warning = result.cleanup && result.cleanup.warnings && result.cleanup.warnings[0];
+            showToast(warning ? `Optional Props removed. ${warning}` : "Optional Props removed.");
+            await refreshSelectedGallery();
+          } catch (error) { showToast(error.message || String(error)); }
+        });
+      });
+      actions.append(clearButton);
+    }
+    row.append(label, meta, actions, input); grid.appendChild(row);
   });
 }
 
@@ -1502,9 +1560,28 @@ async function handleValidateGallery() {
   const button = galleryEl("validateGalleryButton");
   await withGalleryMutation(button, "VALIDATING…", async () => {
     try {
+      const working = galleryWorkingVersion(selectedGalleryDetail);
+      const assets = working && Array.isArray(working.assets) ? working.assets : [];
+      for (const role of REQUIRED_GALLERY_MODEL_ROLES) {
+        if (!assets.some((item) => item.role === role || item.asset_id === role)) throw new Error(`${role.toUpperCase()} is required before Gallery validation.`);
+      }
+      const assigned = CONTROLLED_GALLERY_ASSET_ROLES
+        .map((role) => [role, assets.find((item) => item.role === role || item.asset_id === role) || null])
+        .filter(([, asset]) => !!asset);
+      for (let index=0; index<assigned.length; index++) {
+        const [role, asset] = assigned[index];
+        let lastPercent = -1;
+        button.textContent = `CHECKING ${role.toUpperCase()}…`;
+        await validateExistingGalleryAsset(draft, role, asset, ({ loaded, total }) => {
+          if (!total) return;
+          const percent = Math.min(100, Math.floor(loaded / total * 100));
+          if (percent !== lastPercent) { lastPercent = percent; button.textContent = `${role.toUpperCase()} ${percent}%`; }
+        });
+      }
+      button.textContent = "CHECKING SPACE…";
       const report = await galleryManagement.validate(draft.id);
       await refreshSelectedGallery();
-      showToast(report.valid ? "Gallery Draft is READY." : "Gallery validation found blockers.");
+      showToast(report.valid ? "Gallery Draft is READY — deep model validation passed." : "Gallery validation found blockers.");
     } catch(error) { showToast(error.message || String(error)); }
   });
 }

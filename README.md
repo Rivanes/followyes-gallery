@@ -1,6 +1,6 @@
 # Exhibition Platform
 
-Current repository release: **C6C8C22.1 — Gallery Management Browser-Smoke Hotfix**.
+Current repository release: **C6C8C23 — Space Model Validation**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
@@ -12,7 +12,7 @@ This repository contains the deployable Babylon.js 3D Exhibition Platform plus r
 - **Exhibition** is the content/publication layer shown inside a Gallery.
 - Multiple Exhibitions can belong to one Gallery.
 - Existing Exhibitions remain pinned to exact Venue Version IDs; publishing a new Gallery Version does not migrate them.
-- A future cross-Gallery transition is a Babylon Scene lifecycle boundary; same-Gallery Exhibition switching retains the existing fast/resident path.
+- A future cross-Gallery transition is a Babylon Scene lifecycle boundary; same-Gallery Exhibition switching retains the accepted fast/resident path.
 
 Specific gallery names are data. They are not platform/runtime branding.
 
@@ -26,11 +26,12 @@ Specific gallery names are data. They are not platform/runtime branding.
 - `src/data/exhibition-api.js` — canonical Venue/Exhibition data adapter.
 - `src/data/gallery-management-api.js` — controlled Gallery lifecycle/Storage adapter used by Admin.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
+- `src/validation/gallery-model-validation.js` — browser coordinator for C23 model validation.
+- `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
 - `src/config/space-fixture.js` — local/login-disabled test fixture only; it is not the production Space source.
 - `src/bootstrap/gallery-test-bootstrap.js` — Test Gallery resolver/startup and Entry Point capture.
 - `src/bootstrap/` — Viewer/Admin/editor/cache/transition bootstraps.
 - `asset-cache-sw.js` — persistent asset cache / delivery layer.
-- `src/workers/` + `src/vendor/gallery-avif-encoder.mjs` — artwork/media AVIF processing.
 - `tools/` — repository build, verifier and consolidated regression suites.
 
 ## Canonical runtime path
@@ -46,9 +47,9 @@ Exhibition
   -> Gallery_V0_11 createScene()
 ```
 
-The engine receives `runtimeOptions.spaceDefinition`; it does not need to know Supabase table names or fixed production GLB URLs.
+The engine receives `runtimeOptions.spaceDefinition`; it does not need to know Supabase table names, model-validation SQL or fixed production GLB URLs.
 
-The active canonical database model is:
+Canonical database model:
 
 ```text
 venues
@@ -60,22 +61,24 @@ exhibitions
   -> exhibition_cards
 ```
 
-Legacy `gallery_exhibitions` / `gallery_state` are not normal runtime dependencies. They remain only as controlled transition/rollback evidence until a later cleanup stage.
+Legacy `gallery_exhibitions` / `gallery_state` are not normal runtime dependencies.
 
-## C6C8C22 Gallery Management
+## Gallery Management baseline
 
-Admin Workspace now separates:
+C6C8C22 / C6C8C22.1 Gallery Management is the accepted PASS/CLOSED baseline.
+
+Admin Workspace separates:
 
 ```text
 EXHIBITIONS | GALLERIES
 ```
 
-The normal Gallery workflow is controlled rather than raw-Manifest editing:
+Gallery lifecycle remains:
 
 ```text
 Create Gallery
 -> initial Draft Version
--> Floor / Walls / Ceiling / Props
+-> building assets
 -> Entry Point
 -> Validate
 -> Test Gallery
@@ -84,69 +87,101 @@ Create Gallery
 -> safe Rollback / Archive / Restore
 ```
 
-A Gallery may have at most one active Draft Version. Creating the next Draft is copy-on-write from the current Published Version: unchanged asset references and manifest state are inherited, while replacing one slot uploads a new immutable Storage object only for that role.
+A Gallery may have at most one active Draft Version. Creating the next Draft is copy-on-write from the current Published Version: unchanged immutable asset references and manifest state are inherited, while replacing one slot uploads a new immutable Storage object only for that role.
 
-New Gallery uploads use UUID-owned paths rather than display names or slugs:
+New Gallery uploads use UUID-owned paths:
 
 ```text
 venue-runtime/venues/{venueUuid}/versions/{versionUuid}/assets/{role}/...
 ```
 
-The controlled building roles in C22 are exactly:
+Published/frozen Venue Versions are not edited in place.
+
+## C6C8C23 Space Model Validation
+
+### Required / optional roles
+
+Required:
 
 - `floor`
 - `walls`
 - `ceiling`
+
+Optional:
+
 - `props`
 
-Published/frozen Venue Versions are not edited in place.
+The optional Props contract is true end-to-end: SQL, Space resolver, Test Gallery and Babylon startup/readiness. A Gallery can be valid and published without Props. If Props is assigned, it must pass the same technical validation as the required models.
 
+### Validation flow
 
-## C6C8C22.1 browser-smoke hardening
+New/replaced model:
 
-C22.1 is a frontend/QA maintenance patch after the first production C22 smoke exposed a missing imported binding in the Building Assets renderer. It does not change the database contract.
+```text
+select GLB
+-> C23 Worker streams + validates + computes SHA-256
+-> reject locally on technical ERROR
+-> immutable Storage upload
+-> controlled RPC binds exact path/hash/report
+```
 
-The maintenance patch:
+Inherited pre-C23 model on an active Draft:
 
-- restores the four controlled Building Asset rows through the shared `CONTROLLED_GALLERY_ASSET_ROLES` import;
-- adds Entry Point dirty-state and strict numeric validation;
-- adds browser-side Gallery mutation/reentrancy locking;
-- renders Gallery list/history dynamic text without interpolated row HTML;
-- adds Gallery-detail render failure handling and caught selection failures;
-- keeps Published/no-Draft Entry controls and Archived metadata read-only;
-- clears Gallery-specific URL state when returning to Exhibitions;
-- bumps Viewer/Admin cache keys so the corrected module is requested after deploy.
+```text
+VALIDATE DRAFT
+-> stream existing Storage delivery URL
+-> C23 Worker validates + hashes
+-> controlled RPC records the validation report
+-> aggregate Gallery deep validation
+```
 
-C22.1 has **no SQL delta**. The full C22 Gallery lifecycle must still pass production smoke before C22 is marked CLOSED.
+Validation metadata is stored with the immutable `venue_assets` row as `metadata.c23ModelValidation`, alongside `file_hash`. No second validation table is introduced.
 
-## Structural validation boundary
+A report is current only when its schema/version, role, SHA-256, exact file size and Storage path still match the asset.
 
-C22 validates lifecycle readiness, including:
+### Technical checks
 
-- neutral Venue manifest schema;
-- Y-up / meter units;
-- exact Gallery/Version binding;
-- exactly one Floor/Walls/Ceiling/Props asset;
-- required Storage object existence;
-- a safe visitor Entry Point.
+The worker validates, among other things:
 
-Deep GLB geometry, mesh semantics, hashes, zones, navigation, anchors and related model validation remain **C6C8C23**.
+- GLB v2 header, declared length and chunk layout;
+- parseable glTF JSON;
+- self-contained delivery (no external file dependencies);
+- buffers, bufferViews, accessors, sparse/accessor byte ranges;
+- node/scene/mesh/material/attribute/morph references;
+- renderable POSITION geometry reachable from the active scene;
+- finite transforms;
+- world bounds derived from POSITION min/max + node transforms;
+- extreme or effectively zero-size bounds;
+- runtime mesh-name collisions inside a model;
+- streaming SHA-256.
+
+The aggregate deep report also blocks duplicate runtime mesh names across assigned Gallery model roles. This protects accepted state flows that target meshes by name.
+
+Cross-model distance and Entry Point plausibility use conservative warning diagnostics. C23 deliberately does **not** impose polygon, LOD, material-aesthetic or art-quality budgets.
+
+### Publish Gate and history
+
+A new C23 Draft can Publish only when every required assigned model has a current passing report and every optional assigned model also passes. Missing Props is not an error.
+
+Existing C22 Published/Previous Gallery Versions are grandfathered and remain runtime/rollback-compatible. C23 invalidates only active Draft aggregate reports so they explicitly pass the new gate before publication.
+
+Gallery Publish/Rollback still does not migrate Exhibition bindings.
 
 ## Test Gallery
 
 `gallery-test.html?version=<venueVersionUuid>` loads one explicit Gallery Version through the authenticated test resolver. It does not resolve or load a real Exhibition state.
 
-The Babylon engine exposes only the small read-only bridge needed by C22:
+The Babylon engine exposes the small read-only bridge:
 
 ```text
 GalleryApp.getCameraPose()
 ```
 
-This powers **SET CURRENT VIEW AS ENTRY**. Gallery CRUD/versioning remains outside `Gallery_V0_11.js`.
+This powers **SET CURRENT VIEW AS ENTRY**. Gallery CRUD/versioning/model validation remain outside `Gallery_V0_11.js`.
 
 ## Runtime behavior retained
 
-C22 is a Gallery management stage, not a rendering rewrite. It retains accepted behavior from C21/C20, including:
+C23 is a technical validation stage, not a rendering rewrite. Accepted behavior from previous stages remains, including:
 
 - same-runtime Public/Admin transitions;
 - persistent draft preview;
@@ -163,7 +198,7 @@ Cross-Gallery public Scene disposal/recreate remains **C6C8C25**.
 
 ## Backend dependency
 
-The application currently uses **Supabase** for Auth, Postgres/RLS/RPC data access and Storage. C22 does not migrate the project to Cloudflare infrastructure.
+The application currently uses **Supabase** for Auth, Postgres/RLS/RPC data access and Storage.
 
 Release SQL, migrations, prechecks/postchecks, rollback synchronizer and operator queries are not repository runtime files. In the release package they live under:
 
@@ -171,9 +206,7 @@ Release SQL, migrations, prechecks/postchecks, rollback synchronizer and operato
 
 ## Compatibility identifiers
 
-Some old internal/debug aliases, localStorage keys, CSS/DOM identifiers and historical physical Storage names still contain `Berryboy`. They are retained only where changing them would risk breaking accepted browser state, diagnostics or historical asset locations. They are **not** the current platform identity and must not be used for new technical contracts.
-
-Primary new globals/contracts use neutral `ExhibitionPlatform...` naming. Compatibility aliases may remain until a dedicated low-risk retirement stage.
+Some old internal/debug aliases, localStorage keys, CSS/DOM identifiers and historical physical Storage names still contain `Berryboy`. They are retained only where changing them would risk breaking accepted browser state, diagnostics or historical asset locations. They are not the current platform identity and must not be used for new technical contracts.
 
 ## Validation
 
@@ -183,17 +216,7 @@ Run from the repository root:
 npm run check
 ```
 
-This performs:
-
-- production build;
-- syntax checks;
-- repository verifier;
-- core runtime regressions;
-- media regressions;
-- platform regressions including the canonical Multi-Space contract;
-- performance regressions;
-- workspace regressions;
-- C6C8C22.1 Gallery Management browser-smoke/Test Gallery regressions.
+This performs production build, syntax checks, repository verification and the consolidated regression suites, including executable C23 GLB worker fixtures.
 
 SQL package validation is intentionally separate and is run from the release-package root with:
 
@@ -201,6 +224,8 @@ SQL package validation is intentionally separate and is run from the release-pac
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
+The SQL package verifier is static; production still requires the documented Supabase PRECHECK/migration/POSTCHECK.
+
 ## Documentation
 
-`README.md` describes the current repository architecture/capabilities. It is not the changelog. Release status, production deployment procedure, QA evidence and continuation state live under `OUTSIDE_REPO/`.
+`README.md` describes current repository architecture/capabilities. It is not the changelog. Release status, production deployment procedure, QA evidence and continuation state live under `OUTSIDE_REPO/`.

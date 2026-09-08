@@ -1,11 +1,13 @@
 /*
-  Exhibition Platform — C6C8C22 Gallery Management data adapter.
-  This is the only C22 Admin layer that knows concrete Venue/Gallery RPC and Storage names.
+  Exhibition Platform — C6C8C23 Gallery Management data adapter.
+  This is the only C23 Admin layer that knows concrete Venue/Gallery RPC and Storage names.
 */
 
-export const GALLERY_MANAGEMENT_STAGE = "C6C8C22";
+export const GALLERY_MANAGEMENT_STAGE = "C6C8C23";
 export const GALLERY_RUNTIME_BUCKET = "venue-runtime";
 export const CONTROLLED_GALLERY_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling", "props"]);
+export const REQUIRED_GALLERY_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling"]);
+export const OPTIONAL_GALLERY_ASSET_ROLES = Object.freeze(["props"]);
 
 function text(value) {
   return String(value == null ? "" : value).trim();
@@ -121,13 +123,18 @@ export function createGalleryManagementApi({ supabase }) {
       return buildAssetUploadPathValue(options || {});
     },
 
-    async uploadAssetSlot({ venueId, venueVersionId, role, file }) {
+    async uploadAssetSlot({ venueId, venueVersionId, role, file, validation }) {
       if (!file) throw new Error("Choose a GLB file.");
       const normalizedRole = roleName(role);
       const extension = text(file.name).toLowerCase();
       if (!extension.endsWith(".glb")) throw new Error("Gallery building asset must be a self-contained .glb file.");
+      if (!validation || validation.valid !== true || validation.role !== normalizedRole || !/^sha256:[0-9a-f]{64}$/.test(text(validation.fileHash))) {
+        throw new Error("C23 deep validation must pass before a Gallery model can be uploaded.");
+      }
+      if (Number(validation.fileSize) !== Number(file.size)) throw new Error("Validated file size does not match the selected upload.");
       const path = buildAssetUploadPathValue({ venueId, venueVersionId, role: normalizedRole, fileName: file.name });
       const contentType = file.type || "model/gltf-binary";
+      const validationForStorage = { ...validation, sourceStoragePath: path };
       const upload = await supabase.storage.from(GALLERY_RUNTIME_BUCKET).upload(path, file, {
         cacheControl: "31536000",
         upsert: false,
@@ -144,8 +151,8 @@ export function createGalleryManagementApi({ supabase }) {
           p_public_url: null,
           p_mime_type: contentType,
           p_file_size: Number(file.size) || 0,
-          p_file_hash: null,
-          p_metadata: { originalName: file.name || "", uploadedAt: new Date().toISOString(), c22ControlledSlot: true }
+          p_file_hash: validationForStorage.fileHash,
+          p_metadata: { originalName: file.name || "", uploadedAt: new Date().toISOString(), c22ControlledSlot: true, c23ModelValidation: validationForStorage }
         }));
         if (!response || !response.asset) throw new Error("Gallery asset slot update returned an incomplete result.");
         const cleanup = await removeStoragePathsBestEffort(supabase, response.cleanupCandidates || []);
@@ -154,6 +161,38 @@ export function createGalleryManagementApi({ supabase }) {
         await supabase.storage.from(GALLERY_RUNTIME_BUCKET).remove([path]).catch(() => null);
         throw error;
       }
+    },
+
+    async recordAssetValidation({ venueVersionId, role, validation }) {
+      const normalizedRole = roleName(role);
+      if (!validation || validation.valid !== true || validation.role !== normalizedRole) throw new Error("Only a passing C23 model validation can be recorded.");
+      const result = one(await supabase.rpc("admin_record_venue_asset_validation", {
+        p_venue_version_id: venueVersionId,
+        p_role: normalizedRole,
+        p_file_hash: validation.fileHash,
+        p_validation: validation
+      }));
+      if (!result || !result.asset) throw new Error("Gallery model validation could not be recorded.");
+      return result;
+    },
+
+    async clearOptionalAssetSlot(venueVersionId, role) {
+      const normalizedRole = roleName(role);
+      if (!OPTIONAL_GALLERY_ASSET_ROLES.includes(normalizedRole)) throw new Error(`${normalizedRole} is required and cannot be cleared.`);
+      const result = one(await supabase.rpc("admin_clear_venue_asset_slot", { p_venue_version_id: venueVersionId, p_role: normalizedRole }));
+      if (!result) throw new Error("Optional Gallery asset could not be cleared.");
+      const cleanup = await removeStoragePathsBestEffort(supabase, result.cleanupCandidates || []);
+      return { ...result, cleanup };
+    },
+
+    getAssetDeliveryUrl(asset) {
+      asset = asset && typeof asset === "object" ? asset : {};
+      if (text(asset.public_url)) return text(asset.public_url);
+      const bucket = text(asset.storage_bucket);
+      const path = text(asset.storage_path);
+      if (!bucket || !path) return "";
+      const result = supabase.storage.from(bucket).getPublicUrl(path);
+      return result && result.data && result.data.publicUrl ? String(result.data.publicUrl) : "";
     },
 
     async setEntryPoint(versionId, position, target) {

@@ -1761,7 +1761,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "C6C8C22.1",
+              stage: "C6C8C23",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1820,7 +1820,7 @@
       });
 
       window.ExhibitionPlatformBootGuard = {
-        stage: "C6C8C22.1",
+        stage: "C6C8C23",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1835,6 +1835,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c22_1_gallery_smoke_hotfix_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c23_space_model_validation_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

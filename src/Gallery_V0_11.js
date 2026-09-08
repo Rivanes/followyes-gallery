@@ -122,6 +122,7 @@
   - Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh — mobile intro keeps Start exploring pinned outside the scrollable instructions, Inspect navigation floats on the popup edge without stealing metadata width, and the desktop floor cursor uses a smaller/thinner low-glow SDF ring and lighter click ripple.
   - C6C8C21: Multi-Space Foundation — production Viewer/Admin resolve canonical Exhibition → Venue Version → Venue assets before scene creation; the engine receives a neutral Space definition while legacy single-space table/config paths remain rollback-only compatibility.
   - C6C8C22: Gallery Management — adds only a read-only camera-pose bridge for isolated Test Gallery Entry capture; Gallery CRUD/versioning remains outside the Babylon engine.
+  - C6C8C23: Space Model Validation — technical GLB/hash validation remains outside the engine; Floor/Walls/Ceiling stay the critical Space shell while Props becomes an optional resident Space asset that cannot block interaction readiness.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -172,6 +173,13 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
             cacheVersion: cacheVersion,
             deliveryFileName: appendGalleryAssetVersion(asset.fileName, cacheVersion)
         });
+    }
+
+    function optionalGallerySpaceAsset(assetKey) {
+        var assets = gallerySpaceDefinition && gallerySpaceDefinition.assets;
+        var asset = assets && assets[assetKey];
+        if (!asset) return null;
+        return requireGallerySpaceAsset(assetKey);
     }
 
     if (!gallerySpaceDefinition || !gallerySpaceDefinition.id || !gallerySpaceDefinition.assets) {
@@ -844,7 +852,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
 
     installGalleryMobileRenderResolutionViewportOwner();
 
-    // Optional startup deferral remains generic for future Space assets. C6C8C12 has no deferred Space asset: Props are critical.
+    // C6C8C23: Props are optional. If assigned they may load in parallel, but they never block viewer entry.
     var galleryStartupDeferredOptionalAssetImports = [];
     var galleryStartupDeferredOptionalAssetsReleased = false;
 
@@ -15824,11 +15832,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerIntroInteractionState();
     }
 
-    // STAGE 12C65A - SINGLE STARTUP GATE / BATCHED FINALIZATION
-    // Critical shell and saved state open the intro; one gate then drains previews/models/Props and finalizes global systems once.
-    var galleryAssetNames = ["floor", "wall", "props", "ceiling"];
-    var galleryCriticalAssetNames = ["floor", "wall", "props", "ceiling"];
-    var galleryOptionalAssetNames = [];
+    // C6C8C23 - Space asset contract: Floor / Walls / Ceiling are critical; Props are optional.
+    var galleryHasOptionalProps = !!(gallerySpaceDefinition && gallerySpaceDefinition.assets && gallerySpaceDefinition.assets.props);
+    var galleryCriticalAssetNames = ["floor", "wall", "ceiling"];
+    var galleryOptionalAssetNames = galleryHasOptionalProps ? ["props"] : [];
+    var galleryAssetNames = galleryCriticalAssetNames.concat(galleryOptionalAssetNames);
     var assetsToLoad = galleryCriticalAssetNames.length;
     var assetsLoaded = 0;
     var galleryWebStateLoadedOnce = false;
@@ -18197,7 +18205,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             pendingTextures: pendingCriticalTextures,
             pendingTexturesTotal: pendingTextures,
             pendingVisibleTextures: pendingVisibleTextures,
-            propsSettled: !!galleryAssetLoadDebug.loaded.props && !galleryAssetLoadDebug.failed.props && getGalleryAssetMeshCount("props") > 0,
+            propsAssigned: galleryHasOptionalProps,
+            propsSettled: !galleryHasOptionalProps || !!galleryAssetLoadDebug.loaded.props || !!galleryAssetLoadDebug.failed.props,
             propsLoaded: !!galleryAssetLoadDebug.loaded.props,
             propsFailed: !!galleryAssetLoadDebug.failed.props,
             criticalZoneId: galleryZoneStreamingRuntime.currentZoneId,
@@ -18218,7 +18227,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             snapshot.requiredPreviews === snapshot.readyPreviews &&
             snapshot.loadingPreviews === 0 &&
             snapshot.missingPreviews === 0 &&
-            snapshot.propsSettled &&
             snapshot.criticalDrainComplete
         );
         snapshot.ready = !!(snapshot.heavyReady && snapshot.finalizationComplete && snapshot.warmupComplete);
@@ -18292,7 +18300,6 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (snapshot.readyPreviews < snapshot.requiredPreviews) blockers.push("requiredPreviews:" + snapshot.readyPreviews + "/" + snapshot.requiredPreviews);
         if (snapshot.loadingPreviews > 0) blockers.push("loadingPreviews:" + snapshot.loadingPreviews);
         if (snapshot.missingPreviews > 0) blockers.push("missingPreviews:" + snapshot.missingPreviews);
-        if (!snapshot.propsSettled) blockers.push("props");
         if (!snapshot.criticalDrainComplete) blockers.push("criticalZoneDrain");
         return blockers;
     }
@@ -18308,7 +18315,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.interactionWarmupComplete = false;
         setGalleryInteractionReady(false, reason || "C6C8C12-hard-space-visual-ready-gate");
 
-        // C6C8C12: the complete static Space shell (including Props) and assigned artwork Preview are foreground-critical. Models remain background work.
+        // C6C8C23: the required static Space shell (Floor/Walls/Ceiling) and assigned artwork Preview are foreground-critical. Optional Props may finish after Ready; models remain background work.
         drainGalleryFastStartBackgroundQueue("C6C8C12-hard-space-visual-ready-gate");
 
         if (galleryFastStartRuntime.interactionGateWatchdogTimer) {
@@ -18619,7 +18626,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, status) {
         updateGalleryLoaderStatus(
             "Loading " + (assetName || "asset") + " " + attempt + " / " + maxAttempts + "...",
-            status || "Retry-safe startup import. Critical Space assets are walls, floor, ceiling and props."
+            status || "Retry-safe startup import. Critical Space assets are walls, floor and ceiling; Props are optional."
         );
     }
 
@@ -37570,7 +37577,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // The engine no longer knows concrete GLB file names. They come from the resolved canonical Venue Space definition.
     var galleryFloorSpaceAsset = requireGallerySpaceAsset("floor");
     var galleryWallSpaceAsset = requireGallerySpaceAsset("walls");
-    var galleryPropsSpaceAsset = requireGallerySpaceAsset("props");
+    var galleryPropsSpaceAsset = optionalGallerySpaceAsset("props");
     var galleryCeilingSpaceAsset = requireGallerySpaceAsset("ceiling");
 
     loadGalleryStartupAssetWithRetry("", galleryFloorSpaceAsset.rootUrl, galleryFloorSpaceAsset.deliveryFileName, scene,
@@ -37600,21 +37607,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         ".glb"
     );
 
-    loadGalleryStartupAssetWithRetry("", galleryPropsSpaceAsset.rootUrl, galleryPropsSpaceAsset.deliveryFileName, scene,
-        function (meshes) {
-            meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); tagGallerySpaceNode(mesh, "prop"); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
-            registerGallerySpaceIntegrityBaseline("prop", propMeshes);
-            markGalleryObjectsDirty("propsImported");
-            freezeStaticGalleryMeshes(propMeshes, "prop");
-            propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); if (mesh && mesh.setEnabled) mesh.setEnabled(true); });
-            rebuildGalleryStreamingZones("props-imported");
-            updateGalleryPropZoneActivation();
-            if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true; else { refreshViewerCollisionMeshes(); hydrateSavedLocalLightTargetsForAll("props-imported"); }
-            assetLoaded("props");
-        }, null,
-        function (scene, message, exception) { console.error("Props Space asset load failed:", { spaceId: galleryActiveSpaceId, file: galleryPropsSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("props", true); },
-        ".glb"
-    );
+    if (galleryPropsSpaceAsset) {
+        loadGalleryStartupAssetWithRetry("", galleryPropsSpaceAsset.rootUrl, galleryPropsSpaceAsset.deliveryFileName, scene,
+            function (meshes) {
+                meshes.forEach(mesh => { mesh.isPickable = true; if (mesh.name !== "__root__" && propMeshes.indexOf(mesh) === -1) { propMeshes.push(mesh); tagGallerySpaceNode(mesh, "prop"); registerViewerCollisionMesh(mesh, "prop"); } registerCommonShadowMesh(mesh, { global: true, local: true, receive: true, cast: true }); });
+                registerGallerySpaceIntegrityBaseline("prop", propMeshes);
+                markGalleryObjectsDirty("propsImported");
+                freezeStaticGalleryMeshes(propMeshes, "prop");
+                propMeshes.forEach(function (mesh) { configureGalleryPropStreamingLod(mesh); if (mesh && mesh.setEnabled) mesh.setEnabled(true); });
+                rebuildGalleryStreamingZones("props-imported");
+                updateGalleryPropZoneActivation();
+                if (galleryFastStartRuntime && !galleryFastStartRuntime.interactionFinalizationComplete) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true; else { refreshViewerCollisionMeshes(); hydrateSavedLocalLightTargetsForAll("props-imported"); }
+                assetLoaded("props");
+            }, null,
+            function (scene, message, exception) { console.warn("Optional Props Space asset load failed; Viewer will continue:", { spaceId: galleryActiveSpaceId, file: galleryPropsSpaceAsset.fileName, message: message, exception: exception }); assetLoaded("props", true); },
+            ".glb"
+        );
+    }
 
     loadGalleryStartupAssetWithRetry("", galleryCeilingSpaceAsset.rootUrl, galleryCeilingSpaceAsset.deliveryFileName, scene,
         function (meshes) {

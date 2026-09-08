@@ -32,7 +32,7 @@ export const developmentSpaceFixture = Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
       fileName: "Props.glb",
       version: 1,
-      required: true
+      required: false
     }),
     ceiling: Object.freeze({
       rootUrl: "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",

@@ -4,7 +4,7 @@
   reading/writing legacy gallery_exhibitions / gallery_state directly.
 */
 
-import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js";
+import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c23_space_model_validation";
 
 export const EXHIBITION_STATE_SCHEMA = "exhibition-platform-exhibition-state.v1";
 
