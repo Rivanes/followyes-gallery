@@ -10,11 +10,12 @@ const admin=fs.readFileSync(new URL('../admin.html',import.meta.url),'utf8');
 const adminBootstrap=fs.readFileSync(new URL('../src/bootstrap/admin-workspace-bootstrap.js',import.meta.url),'utf8');
 const worker=fs.readFileSync(new URL('../src/workers/gallery-avif-encoder-worker.js',import.meta.url),'utf8');
 const adapter=fs.readFileSync(new URL('../src/vendor/gallery-avif-encoder.mjs',import.meta.url),'utf8');
-const spaceConfig=fs.readFileSync(new URL('../src/config/gallery-space-config.js',import.meta.url),'utf8');
-const migration=fs.readFileSync(new URL('../SUPABASE_SQL/01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql',import.meta.url),'utf8');
-const currentMigration=fs.readFileSync(new URL('../SUPABASE_SQL/04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql',import.meta.url),'utf8');
-const storagePolicyFix=fs.readFileSync(new URL('../SUPABASE_SQL/05_STORAGE_POLICY_ISOLATION_FIX.sql',import.meta.url),'utf8');
-const storageDependencyFix=fs.readFileSync(new URL('../SUPABASE_SQL/06_STORAGE_RLS_DEPENDENCY_FINAL_FIX.sql',import.meta.url),'utf8');
+const spaceFixture=fs.readFileSync(new URL('../src/config/space-fixture.js',import.meta.url),'utf8');
+const spaceResolver=fs.readFileSync(new URL('../src/runtime/space-definition-resolver.js',import.meta.url),'utf8');
+const exhibitionApi=fs.readFileSync(new URL('../src/data/exhibition-api.js',import.meta.url),'utf8');
+const galleryManagementApi=fs.readFileSync(new URL('../src/data/gallery-management-api.js',import.meta.url),'utf8');
+const galleryTestBootstrap=fs.readFileSync(new URL('../src/bootstrap/gallery-test-bootstrap.js',import.meta.url),'utf8');
+const galleryTestHtml=fs.readFileSync(new URL('../gallery-test.html',import.meta.url),'utf8');
 const txt=fs.readFileSync(new URL('../ENGINE_LOGIN_DISABLED.txt',import.meta.url),'utf8');
 const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-bootstrap.js',import.meta.url),'utf8');
 const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
@@ -25,15 +26,17 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "12C66C6C8C16"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "12C66C6C8C16"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "12C66C6C8C16"'),'Admin stage identity missing');
-assert(bootstrap.includes('stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813'),'Index cache key missing');
+assert(index.includes('stage: "C6C8C22"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "C6C8C22"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "C6C8C22"'),'Admin stage identity missing');
+assert(bootstrap.includes('c6c8c22_gallery_management_20260908'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=c6c8c22_gallery_management_20260908'),'Index cache key missing');
 assert(source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'),'C6C8C13 source history missing');
 assert(source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'),'C6C8C14 source history missing');
 assert(source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'),'C6C8C15 source history missing');
-assert(source.includes('Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh'),'Current C6C8C16 source history missing');
+assert(source.includes('Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / Cursor Refresh'),'C6C8C16 source history missing');
+assert(source.includes('C6C8C21: Multi-Space Foundation'),'C6C8C21 source history missing');
+assert(source.includes('C6C8C22: Gallery Management'),'C6C8C22 source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='01c01b3e1a1e12f44802a2f375e78fe59acadd0f478d666871ba179098cf3d5f','Accepted C6C8C16 intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='3e555d80b26ee44188f21107cd265cb603ff601cbf51cdebf8bce95d4d00d09e','Accepted C6C8C16 intro behavior changed');
@@ -49,15 +52,16 @@ assert(source.includes('var galleryAvifEncoderModuleUrl = "src/vendor/gallery-av
 assert(worker.includes('import(moduleUrl)')&&adapter.includes('ImageEncoder'),'AVIF worker/adapter missing');
 assert(source.includes('function switchGalleryExhibition(')&&source.includes('function createGalleryExhibition('),'Multi-exhibition runtime missing');
 assert(!source.includes('.eq("id", "main")'),'Hard-coded gallery_state main query remains');
-assert(spaceConfig.includes('Floor_segment.glb')&&spaceConfig.includes('Wall_segments.glb')&&spaceConfig.includes('Ceiling.glb')&&spaceConfig.includes('Props.glb'),'Space assets missing');
-assert(spaceConfig.includes('version: 1'),'Space asset versioning missing');
-assert(migration.includes('create table if not exists public.gallery_exhibitions'),'Exhibition migration missing');
-assert(currentMigration.includes('(storage.foldername(name))[2] = \'frames\''),'Shared frame public exception missing');
-assert(storagePolicyFix.includes("policyname = 'd2_platform_media_insert'")&&storagePolicyFix.includes("when bucket_id = 'platform-media'"),'C6C8C18 platform-media policy isolation missing');
-assert(storagePolicyFix.includes('storage.foldername(objects.name)')&&!storagePolicyFix.includes('storage.foldername(ge.name)'),'C6C8C18 outer storage path qualification missing');
-assert(storageDependencyFix.includes('grant select on public.exhibitions to authenticated'),'C6C8C19 exhibitions SELECT grant missing');
-assert(storageDependencyFix.includes('security definer')&&storageDependencyFix.includes('can_edit_venue_runtime_path'),'C6C8C19 Venue Runtime helper missing');
-assert(storageDependencyFix.includes("policyname = 'd2_venue_runtime_insert'")&&storageDependencyFix.includes('public.can_edit_venue_runtime_path(name)'),'C6C8C19 Venue Runtime policy finalization missing');
+assert(spaceFixture.includes('Floor_segment.glb')&&spaceFixture.includes('Wall_segments.glb')&&spaceFixture.includes('Ceiling.glb')&&spaceFixture.includes('Props.glb'),'Development Space fixture missing current geometry');
+assert(spaceResolver.includes('exhibition-platform-venue-manifest.v1')&&spaceResolver.includes('REQUIRED_SPACE_ASSET_ROLES'),'Canonical Space resolver missing');
+assert(exhibitionApi.includes('resolve_published_exhibition')&&exhibitionApi.includes('save_exhibition_runtime_state'),'Canonical Exhibition adapter missing');
+assert(galleryManagementApi.includes('admin_create_gallery_with_initial_draft')&&galleryManagementApi.includes('admin_set_venue_asset_slot'),'C22 Gallery Management adapter missing');
+assert(galleryManagementApi.includes('venues/${venue}/versions/${version}/assets/${normalizedRole}/'),'C22 UUID Gallery asset path missing');
+assert(adminBootstrap.includes('EXHIBITIONS')&&adminBootstrap.includes('GALLERIES')&&adminBootstrap.includes('createGalleryManagementApi'),'C22 Gallery Management workspace missing');
+assert(galleryTestHtml.includes('data-gallery-test="true"')&&galleryTestBootstrap.includes('admin_resolve_venue_version_for_test')===false&&galleryTestBootstrap.includes('resolveTest('),'C22 Test Gallery shell missing');
+assert(galleryTestBootstrap.includes('getCameraPose')&&source.includes('getCameraPose: function ()'),'C22 Entry capture bridge missing');
+assert(!bootstrap.includes('gallery-space-config.js')&&!adminBootstrap.includes('gallery-space-config.js'),'Production bootstrap still imports static Space config');
+assert(!bootstrap.includes('from("gallery_exhibitions")')&&!adminBootstrap.includes('from("gallery_exhibitions")'),'Production bootstrap still reads legacy catalog directly');
 assert(admin.includes('id="adminViewportStage"')&&admin.includes('id="exhibitionList"'),'Direct Admin page missing');
 assert(source.includes('enterAdminWorkspaceMode: enterGalleryAdminWorkspaceMode')&&source.includes('exitAdminWorkspaceMode: exitGalleryAdminWorkspaceMode'),'Same-runtime engine mode API missing');
 assert(source.includes('discardUnsavedChanges: discardGalleryUnsavedChanges'),'Scene discard API missing');
@@ -70,7 +74,7 @@ assert(adminBootstrap.includes('export async function suspendAdminWorkspace(opti
 assert(admin.includes('.adminButton:visited')&&admin.includes('text-decoration:none'),'Public Page button style fix missing');
 assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes('exhibition-platform-assets-v1'),'Persistent asset cache missing');
 assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v3'),'Production runtime missing current hygiene changes');
-assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.BerryboyGallerySpaceDefinition ='),'Login-disabled test build missing');
+assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.ExhibitionPlatformSpaceDefinition ='),'Login-disabled test build missing');
 assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.includes('function restoreGalleryExhibitionLayer('),'Exhibition layer residency missing');
 assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('instant-workspace-ui-only'),'Instant zero-reload mode transition missing');
 assert(source.includes('function scheduleGalleryWorkspaceModeBackgroundAudit(')&&source.includes('requestIdleCallback(runAudit'),'Deferred workspace integrity audit missing');
@@ -126,6 +130,7 @@ assert(bootstrap.includes('exitAdminWorkspaceMode({ discardUnsaved, preserveDraf
 const packageJson=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
 const expectedRegressionSuites=[
   'test-core-runtime.mjs',
+  'test-gallery-management.mjs',
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
   'test-platform-runtime.mjs',

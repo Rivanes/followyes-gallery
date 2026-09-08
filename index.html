@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Berryboy Art Gallery V0_11</title>
+  <title>Exhibition Platform</title>
 
   <link rel="preconnect" href="https://bazbszvhoxmuekxahokc.supabase.co" crossorigin>
   <link rel="preconnect" href="https://cdn.babylonjs.com" crossorigin>
@@ -1147,9 +1147,9 @@
 
   <div id="appShell">
     <header id="siteHeader">
-      <a id="brand" href="#top" aria-label="Berryboy Art Gallery, back to top">
+      <a id="brand" href="#top" aria-label="Exhibition Platform, back to top">
         <span id="brandMark"></span>
-        <span id="brandLabel"><span>Berryboy</span><span id="brandLongLabel"> Art Gallery</span></span>
+        <span id="brandLabel"><span>Exhibition</span><span id="brandLongLabel"> Platform</span></span>
       </a>
 
       <button id="mobileHeaderMenuButton" type="button" aria-expanded="false" aria-controls="headerRight" aria-label="Open gallery menu">
@@ -1193,9 +1193,9 @@
         <div id="galleryMobileSystemLayer" class="galleryMobileHudLayer">
           <div id="galleryBootGuard" data-state="prestart" role="status" aria-live="polite">
             <div class="galleryBootCard">
-              <div class="galleryBootBrand">Berryboy Art Gallery</div>
+              <div class="galleryBootBrand">Exhibition Platform</div>
               <div class="galleryBootSpinner" aria-hidden="true"></div>
-              <h2 id="galleryBootTitle">Berryboy Art Gallery</h2>
+              <h2 id="galleryBootTitle">Exhibition Platform</h2>
               <p id="galleryBootMessage">The 3D exhibition starts only after you choose to enter.</p>
               <p id="galleryBootTimefiller"></p>
               <div id="galleryBootActions">
@@ -1398,7 +1398,7 @@
     </main>
 
     <footer id="siteFooter">
-      <span>Berryboy Art Gallery</span>
+      <span>Exhibition Platform</span>
     </footer>
   </div>
 
@@ -1626,10 +1626,11 @@
         new ResizeObserver(scheduleViewportUpdate).observe(header);
       }
 
-      window.BerryboyMobileViewport = {
+      window.ExhibitionPlatformMobileViewport = {
         refresh: scheduleViewportUpdate,
         read: readViewport
       };
+      window.BerryboyMobileViewport = window.ExhibitionPlatformMobileViewport; // legacy compatibility alias
 
       applyViewport();
     })();
@@ -1658,7 +1659,7 @@
 
       var copy = {
         pl: {
-          preTitle: "Berryboy Art Gallery",
+          preTitle: "Exhibition Platform",
           preMessage: "Interaktywna wystawa 3D uruchomi się dopiero po wybraniu wejścia.",
           start: "Uruchom galerię",
           about: "O projekcie",
@@ -1676,7 +1677,7 @@
           ]
         },
         en: {
-          preTitle: "Berryboy Art Gallery",
+          preTitle: "Exhibition Platform",
           preMessage: "The interactive 3D exhibition starts only after you choose to enter.",
           start: "Enter gallery",
           about: "About project",
@@ -1760,7 +1761,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "12C66C6C8C16",
+              stage: "C6C8C22",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1818,8 +1819,8 @@
         if (state === "loading") fail("unhandled-rejection", null, event.reason);
       });
 
-      window.BerryboyBootGuard = {
-        stage: "12C66C6C8C16",
+      window.ExhibitionPlatformBootGuard = {
+        stage: "C6C8C22",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1828,11 +1829,12 @@
         fail: fail,
         getState: function () { return state; }
       };
+      window.BerryboyBootGuard = window.ExhibitionPlatformBootGuard; // legacy compatibility alias
 
       render();
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813" onerror="window.BerryboyBootGuard && window.BerryboyBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c22_gallery_management_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

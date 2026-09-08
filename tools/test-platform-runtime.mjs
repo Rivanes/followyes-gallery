@@ -4,6 +4,18 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
+import {
+  VENUE_MANIFEST_SCHEMA,
+  REQUIRED_SPACE_ASSET_ROLES,
+  validateVenueManifest,
+  buildSpaceDefinition
+} from '../src/runtime/space-definition-resolver.js';
+import {
+  EXHIBITION_STATE_SCHEMA,
+  createExhibitionDataAdapter,
+  resolveInitialPublicRuntime,
+  resolveInitialAdminRuntime
+} from '../src/data/exhibition-api.js';
 
 // Consolidated regression suite. Each block is isolated so legacy variable names cannot collide.
 
@@ -12,10 +24,9 @@ await (async () => {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(root, 'src', 'Gallery_V0_11.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(root, 'src', 'bootstrap', 'gallery-viewer-bootstrap.js'), 'utf8');
-const config = fs.readFileSync(path.join(root, 'src', 'config', 'gallery-space-config.js'), 'utf8');
-const sql = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '01_MULTI_EXHIBITION_CORE_STORAGE_POLICIES.sql'), 'utf8');
-const storagePolicyFix = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '05_STORAGE_POLICY_ISOLATION_FIX.sql'), 'utf8');
-const storageDependencyFix = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '06_STORAGE_RLS_DEPENDENCY_FINAL_FIX.sql'), 'utf8');
+const fixture = fs.readFileSync(path.join(root, 'src', 'config', 'space-fixture.js'), 'utf8');
+const spaceResolver = fs.readFileSync(path.join(root, 'src', 'runtime', 'space-definition-resolver.js'), 'utf8');
+const exhibitionApi = fs.readFileSync(path.join(root, 'src', 'data', 'exhibition-api.js'), 'utf8');
 
 function expect(label, condition) {
   if (!condition) throw new Error(`Multi-exhibition invariant failed: ${label}`);
@@ -28,24 +39,28 @@ expect('Combined C6C7/C6C8 stage identity exists',
 expect('Scene factory accepts external runtime options',
   source.includes('export const createScene = function (engineArg, canvasArg, runtimeOptionsArg)') &&
   source.includes('runtimeOptions.spaceDefinition') &&
-  bootstrap.includes('spaceDefinition: gallerySpaceDefinition') &&
+  bootstrap.includes('spaceDefinition: publicRuntime.spaceDefinition') &&
+  bootstrap.includes('createExhibitionDataAdapter({ supabase, mode: "public", initialRuntime: publicRuntime })') &&
   bootstrap.includes('const requestedExhibitionId = getRequestedExhibitionId()') &&
   bootstrap.includes('exhibitionId: publicExhibitionId'));
 
-expect('Current building GLBs live in external Space config',
-  config.includes('Floor_segment.glb') && config.includes('Wall_segments.glb') &&
-  config.includes('Ceiling.glb') && config.includes('Props.glb') &&
+expect('Current building GLBs live only in the development Space fixture while production resolves canonical Venue assets',
+  fixture.includes('Floor_segment.glb') && fixture.includes('Wall_segments.glb') &&
+  fixture.includes('Ceiling.glb') && fixture.includes('Props.glb') &&
+  spaceResolver.includes('buildSpaceDefinition') && exhibitionApi.includes('resolve_published_exhibition') &&
+  !bootstrap.includes('gallery-space-config.js') &&
   source.includes('requireGallerySpaceAsset("floor")') &&
   source.includes('requireGallerySpaceAsset("walls")') &&
   source.includes('requireGallerySpaceAsset("ceiling")') &&
   source.includes('requireGallerySpaceAsset("props")'));
 
-expect('gallery_state reads and saves by active exhibition instead of hard-coded main',
+expect('Canonical Exhibition adapter owns active Exhibition state reads and saves',
   source.includes('fetchGalleryStateRowForExhibition') &&
-  source.includes('.eq("id", exhibitionId)') &&
-  source.includes('var activeExhibitionId = typeof getActiveGalleryExhibitionId === "function"') &&
-  source.includes('.eq("id", activeExhibitionId)') &&
-  !source.includes('.eq("id", "main")'));
+  source.includes('galleryExhibitionDataAdapter.loadState(exhibitionId)') &&
+  source.includes('galleryExhibitionDataAdapter.saveState(activeExhibitionId, state)') &&
+  source.includes('Canonical Exhibition data adapter is required when Supabase is configured.') &&
+  !source.includes('.from("gallery_state")') &&
+  !source.includes('.from("gallery_exhibitions")'));
 
 expect('Storage and save-integrity keys are scoped per exhibition',
   source.includes('getGalleryExhibitionStoragePrefix') &&
@@ -70,29 +85,6 @@ expect('Serialized state carries Space/Exhibition context',
   source.includes('exhibitionId: getActiveGalleryExhibitionId()') &&
   source.includes('spaceId: galleryActiveSpaceId'));
 
-expect('SQL creates exhibition catalog and keeps existing main in place',
-  sql.includes('create table if not exists public.gallery_exhibitions') &&
-  sql.includes("'main', 'Main Exhibition', 'main'") &&
-  sql.includes("on conflict (id) do nothing") &&
-  sql.includes("gallery-artworks/exhibitions/<exhibitionId>"));
-
-expect('SQL scopes public state/media to published exhibitions while admin can edit drafts',
-  sql.includes('Public can read published gallery state') &&
-  sql.includes('gallery_artworks_public_select_scoped') &&
-  sql.includes("auth.jwt() ->> 'email' = 'admin@followyes.pl'"));
-
-expect('C6C8C18 isolates platform-media RLS helpers from gallery-artworks uploads',
-  storagePolicyFix.includes("when bucket_id = 'platform-media'") &&
-  storagePolicyFix.includes("policyname = 'd2_platform_media_insert'") &&
-  storagePolicyFix.includes('storage.foldername(objects.name)') &&
-  !storagePolicyFix.includes('storage.foldername(ge.name)'));
-
-expect('C6C8C19 finalizes shared Storage RLS dependencies',
-  storageDependencyFix.includes('grant select on public.exhibitions to authenticated') &&
-  storageDependencyFix.includes('can_edit_venue_runtime_path') &&
-  storageDependencyFix.includes('security definer') &&
-  storageDependencyFix.includes('public.can_edit_venue_runtime_path(name)'));
-
 console.log('Stage 12C66C6C7C8 multi-exhibition invariants passed.');
 
 })();
@@ -113,7 +105,7 @@ function expect(label, condition) {
 
 expect('Admin Workspace stage identity exists',
   source.includes('Stage 12C66C6C7C8B: Admin Workspace') &&
-  adminBootstrap.includes('const STAGE = "12C66C6C8C16"'));
+  adminBootstrap.includes('const STAGE = "C6C8C22"'));
 
 expect('Exhibition manager was removed from the in-scene editor',
   !source.includes('createEditorSection("EXHIBITIONS")') &&
@@ -132,14 +124,14 @@ expect('Admin page contains constrained viewport and exhibition metadata control
   admin.includes('id="posterFileInput"') &&
   admin.includes('id="exhibitionPublished"'));
 
-expect('Admin bootstrap manages catalog, metadata and poster Storage',
-  adminBootstrap.includes('from("gallery_exhibitions")') &&
+expect('Admin bootstrap manages canonical catalog, metadata and poster Storage',
+  adminBootstrap.includes('createExhibitionDataAdapter') &&
   adminBootstrap.includes('updateExhibitionMetadata') &&
   adminBootstrap.includes('/branding/posters/') &&
   adminBootstrap.includes('storage.from(STORAGE_BUCKET).upload'));
 
 expect('Admin engine starts in the selected exhibition and enters Edit Mode',
-  adminBootstrap.includes('exhibitionId: initialId') &&
+  adminBootstrap.includes('exhibitionId: initialRuntime.exhibition.id') &&
   adminBootstrap.includes('window.GalleryApp.setEditMode(true)'));
 
 expect('Public login redirects into Admin Workspace',
@@ -303,9 +295,9 @@ expect('Public baseline does not start editor draft watcher',
 expect('Navigation handoff prefers published state and both Viewer/Admin can consume it',
   source.includes('var cachedPublished = getCachedGalleryExhibitionState(exhibitionId);') &&
   source.includes('publishedSnapshot || serializeGalleryState()') &&
-  viewer.includes('function readNavigationHandoff(id)') &&
+  viewer.includes('function readNavigationHandoff(id, spaceId)') &&
   viewer.includes('initialExhibitionSnapshot: navigationHandoff || null') &&
-  admin.includes('function readNavigationHandoff(id)'));
+  admin.includes('function readNavigationHandoff(id, spaceId)'));
 
 expect('Invalid/missing handoff state falls through to remote state load',
   source.includes('var handoffHasState = !!(handoff.state && typeof handoff.state === "object");') &&
@@ -367,9 +359,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(root, 'src', 'Gallery_V0_11.js'), 'utf8');
 const viewer = fs.readFileSync(path.join(root, 'src', 'bootstrap', 'gallery-viewer-bootstrap.js'), 'utf8');
 const admin = fs.readFileSync(path.join(root, 'src', 'bootstrap', 'admin-workspace-bootstrap.js'), 'utf8');
-const space = fs.readFileSync(path.join(root, 'src', 'config', 'gallery-space-config.js'), 'utf8');
-const sql = fs.readFileSync(path.join(root, 'SUPABASE_SQL', '04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql'), 'utf8');
-const sqlReadme = fs.readFileSync(path.join(root, 'SUPABASE_SQL', 'README_FIRST.md'), 'utf8');
+const space = fs.readFileSync(path.join(root, 'src', 'config', 'space-fixture.js'), 'utf8');
 
 function expect(label, condition) {
   if (!condition) throw new Error(`Runtime hygiene invariant failed: ${label}`);
@@ -415,24 +405,14 @@ expect('Frame catalog derives a cache version from Storage metadata',
   source.includes('cacheVersion: cacheVersion') &&
   source.includes('return appendGalleryAssetVersion(baseUrl, frameState.cacheVersion);'));
 
-expect('Main publication is no longer an unconditional public exception',
-  !sql.includes("id = 'main'\n  or exists") &&
-  sql.includes("where ge.id = gallery_state.id") &&
-  sql.includes("(storage.foldername(name))[2] = 'frames'") &&
-  sql.includes("ge.id = 'main'") &&
-  sql.includes('ge.is_published = true'));
-
-expect('Public viewer resolves only published exhibitions and can fall back to another published exhibition',
-  viewer.includes('async function resolvePublishedExhibitionId(') &&
-  viewer.includes('.eq("is_published", true)') &&
-  viewer.includes('const publicExhibitionId = await resolvePublishedExhibitionId(requestedExhibitionId);') &&
-  source.includes('if (galleryPublicViewerOnly && exhibition.is_published === false)'));
-
-expect('SQL package is cleaned of no-op Stage marker files',
-  sqlReadme.includes('04_RUNTIME_HYGIENE_PUBLICATION_POLICIES.sql') &&
-  !fs.existsSync(path.join(root, 'SUPABASE_SQL', '04_STAGE_C6C8C_NO_SQL_REQUIRED.sql')) &&
-  !fs.existsSync(path.join(root, 'SUPABASE_SQL', '05_STAGE_C6C8C1_NO_SQL_REQUIRED.sql')) &&
-  !fs.existsSync(path.join(root, 'SUPABASE_SQL', '06_STAGE_C6C8C2_NO_SQL_REQUIRED.sql')));
+const dataAdapter = fs.readFileSync(path.join(root, 'src', 'data', 'exhibition-api.js'), 'utf8');
+expect('Public viewer resolves only canonical published Exhibitions and can fall back to another published Exhibition',
+  viewer.includes('resolveInitialPublicRuntime') &&
+  viewer.includes('const publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);') &&
+  dataAdapter.includes('supabase.rpc("resolve_published_exhibition"') &&
+  dataAdapter.includes('supabase.rpc("list_published_exhibitions")') &&
+  dataAdapter.includes('if (!fallback) throw new Error("No published Exhibition is available.")') &&
+  source.includes('if (galleryPublicViewerOnly && canonicalExhibition.is_published === false)'));
 
 console.log('Runtime Hygiene / Cache Versioning invariants passed.');
 
@@ -483,7 +463,7 @@ const finalizeFn = extractFunction('finalizeGallerySameSpaceExhibitionDelta');
 const objectDirtyFn = extractFunction('markGalleryObjectsDirty');
 const editTourHelper = source.includes('function ensureGalleryExhibitTourCurrent(') ? extractFunction('ensureGalleryExhibitTourCurrent') : '';
 
-expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "12C66C6C8C16"') && pkg.version.includes('c6c8c16'));
+expect('Runtime identity includes C6C8C4 residency in current C6C8C5 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('stage: "C6C8C21"') && pkg.version.includes('c6c8c22'));
 expect('Switch explicitly compares source and target space_id', switchFn.includes('areGalleryExhibitionsInSameSpace(previousExhibition, exhibition)'));
 expect('Same-space cold switch uses delta state and resident return has a dedicated resume path', switchFn.includes('applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch")') && switchFn.includes('lastSwitchMode = "same-space-delta-load"') && switchFn.includes('lastSwitchMode = "resident-layer-resume"'));
 expect('Full reset remains only as fallback for a real Space change', switchFn.includes('else {\n                resetGalleryRuntimeToBlankExhibition();'));
@@ -541,7 +521,7 @@ const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 
-expect('Current runtime/package identity is C6C8C5', source.includes('stage: "12C66C6C8C16"') && pkg.version.includes('c6c8c16'));
+expect('Current runtime/package identity is C6C8C5', source.includes('stage: "C6C8C21"') && pkg.version.includes('c6c8c22'));
 expect('Recently visited Exhibition layers have a residency registry', source.includes('layerResidency: Object.create(null)') && source.includes('residentLayerHits'));
 expect('Switch parks a clean same-Space layer instead of disposing it', switchFn.includes('parkActiveGalleryExhibitionLayer(previousExhibition, previousRuntimeState)') && parkFn.includes('setGalleryArtworkResidentEnabled(artwork, false'));
 expect('Resident target is restored from RAM/GPU', switchFn.includes('restoreGalleryExhibitionLayer(exhibition.id)') && switchFn.includes('lastSwitchMode = "resident-layer-resume"') && restoreFn.includes('artworks = layer.artworks'));
@@ -557,4 +537,136 @@ expect('Admin → Public transition captures a same-runtime Storage delta', view
 
 console.log('C6C8C5 Exhibition Residency / Zero-Reload / Network Diagnostics invariants passed.');
 
+})();
+
+
+// --- C6C8C21 Multi-Space Foundation canonical Venue / Exhibition contract ---
+await (async () => {
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const viewer = fs.readFileSync(path.join(root, 'src/bootstrap/gallery-viewer-bootstrap.js'), 'utf8');
+const admin = fs.readFileSync(path.join(root, 'src/bootstrap/admin-workspace-bootstrap.js'), 'utf8');
+const engine = fs.readFileSync(path.join(root, 'src/Gallery_V0_11.js'), 'utf8');
+const resolverSource = fs.readFileSync(path.join(root, 'src/runtime/space-definition-resolver.js'), 'utf8');
+const apiSource = fs.readFileSync(path.join(root, 'src/data/exhibition-api.js'), 'utf8');
+
+function venueManifest(overrides = {}) {
+  return {
+    schema: VENUE_MANIFEST_SCHEMA,
+    venueId: 'main-gallery',
+    versionId: 'v2',
+    coordinateSystem: { upAxis: 'Y', units: 'meters' },
+    assets: REQUIRED_SPACE_ASSET_ROLES.map((role) => ({
+      id: `${role}-asset`, role, storageBucket: 'legacy-building-assets',
+      storagePath: `Models/${role}.glb`, version: '1', required: true
+    })),
+    spawnPoints: [{ id: 'visitor-entry', safe: true, visitor: true,
+      position: { x: -1, y: -2.2, z: -32 }, target: { x: 0, y: 1, z: 0 } }],
+    ...overrides
+  };
+}
+function storageMock() {
+  return { from(bucket) { return { getPublicUrl(storagePath) {
+    return { data: { publicUrl: `https://example.invalid/storage/${bucket}/${storagePath}` } };
+  } }; } };
+}
+
+let validation = validateVenueManifest(venueManifest());
+assert.equal(validation.valid, true);
+assert.deepEqual([...new Set(validation.assetRoles)].sort(), [...REQUIRED_SPACE_ASSET_ROLES].sort());
+assert.equal(validateVenueManifest(venueManifest({ coordinateSystem: { upAxis: 'Z', units: 'meters' } })).valid, false);
+assert.equal(validateVenueManifest(venueManifest({ coordinateSystem: { upAxis: 'Y', units: 'centimeters' } })).valid, false);
+assert.equal(validateVenueManifest(venueManifest({ spawnPoints: [] })).valid, false);
+assert.equal(validateVenueManifest(venueManifest({ assets: venueManifest().assets.filter((item) => item.role !== 'walls') })).valid, false);
+
+const def = buildSpaceDefinition({
+  supabase: { storage: storageMock() },
+  venue: { id: 'venue-1', slug: 'main-gallery', name: 'Main Gallery' },
+  venueVersion: { id: 'version-2', version_number: 'v2' },
+  manifest: venueManifest()
+});
+assert.equal(def.schema, 'exhibition-platform-space-definition.v1');
+assert.equal(def.id, 'main-gallery');
+assert.equal(def.version, 'v2');
+assert.equal(def.entry.position.z, -32);
+assert.match(def.assets.floor.rootUrl, /legacy-building-assets\/Models\/$/);
+assert.equal(def.assets.floor.fileName, 'floor.glb');
+
+const publishedRow = {
+  id: '11111111-1111-4111-8111-111111111111', slug: 'main', title: 'Main Exhibition', status: 'published', display_order: 0,
+  database_venue_id: 'venue-1', venue_slug: 'main-gallery', venue_name: 'Main Gallery',
+  database_venue_version_id: 'version-2', venue_version_number: 'v2', manifest: venueManifest(),
+  published_state: { schema: EXHIBITION_STATE_SCHEMA, content: { editor: { artworks: [] }, version: 1 } },
+  published_revision: 21, lock_version: 3, published_at: '2026-09-07T00:00:00Z'
+};
+const publicCalls = [];
+const publicSupabase = {
+  storage: storageMock(),
+  async rpc(name, args) {
+    publicCalls.push([name,args]);
+    if (name === 'resolve_published_exhibition') {
+      if (args.p_exhibition_slug === 'missing') return { data: null, error: null };
+      return { data: publishedRow, error: null };
+    }
+    if (name === 'list_published_exhibitions') return { data: [publishedRow], error: null };
+    throw new Error(`Unexpected RPC ${name}`);
+  }
+};
+const resolvedPublic = await resolveInitialPublicRuntime(publicSupabase, 'main');
+assert.equal(resolvedPublic.exhibition.space_id, 'main-gallery');
+assert.deepEqual(resolvedPublic.state, { editor: { artworks: [] }, version: 1 });
+assert.equal(resolvedPublic.spaceDefinition.id, 'main-gallery');
+const fallbackPublic = await resolveInitialPublicRuntime(publicSupabase, 'missing');
+assert.equal(fallbackPublic.exhibition.slug, 'main');
+assert.ok(publicCalls.some(([name]) => name === 'list_published_exhibitions'));
+const publicAdapter = createExhibitionDataAdapter({ supabase: publicSupabase, mode: 'public', initialRuntime: resolvedPublic });
+await assert.rejects(() => publicAdapter.saveState('main', {}), /Public Viewer cannot save/);
+
+const exhibitionId = '22222222-2222-4222-8222-222222222222';
+const venueId = 'venue-1';
+const versionId = 'version-2';
+const adminDetail = {
+  exhibition: { id: exhibitionId, slug: 'main', title: 'Main Exhibition', status: 'published', venue_id: venueId, display_order: 0 },
+  state: { draft_venue_version_id: versionId,
+    draft_state: { schema: EXHIBITION_STATE_SCHEMA, content: { editor: { artworks: [1] } } },
+    published_state: null, draft_revision: 21, lock_version: 2, draft_updated_at: '2026-09-07T01:00:00Z' }
+};
+const venueDetail = {
+  venue: { id: venueId, slug: 'main-gallery', name: 'Main Gallery', published_version_id: versionId, draft_version_id: null },
+  versions: [{ id: versionId, version_number: 'v2', status: 'published', manifest: venueManifest() }]
+};
+const adminCalls = [];
+const adminSupabase = {
+  storage: storageMock(),
+  async rpc(name, args) {
+    adminCalls.push([name,args]);
+    if (name === 'admin_list_exhibitions') return { data: [{ id: exhibitionId, slug: 'main', title: 'Main Exhibition', status: 'published', venue_id: venueId }], error: null };
+    if (name === 'admin_get_exhibition') return { data: adminDetail, error: null };
+    if (name === 'admin_get_venue') return { data: venueDetail, error: null };
+    if (name === 'save_exhibition_runtime_state') return { data: { draft_revision: 22, lock_version: 3, updated_at: '2026-09-07T02:00:00Z', published: false }, error: null };
+    throw new Error(`Unexpected RPC ${name}`);
+  }
+};
+const resolvedAdmin = await resolveInitialAdminRuntime(adminSupabase, 'main');
+assert.equal(resolvedAdmin.exhibition.space_id, 'main-gallery');
+assert.equal(resolvedAdmin.venueVersion.id, versionId);
+assert.deepEqual(resolvedAdmin.state, { editor: { artworks: [1] } });
+const adminAdapter = createExhibitionDataAdapter({ supabase: adminSupabase, mode: 'admin', initialRuntime: resolvedAdmin });
+const save = await adminAdapter.saveState(exhibitionId, { editor: { artworks: [2] } });
+assert.equal(save.revision, 22);
+assert.equal(save.lockVersion, 3);
+assert.ok(adminCalls.some(([name]) => name === 'save_exhibition_runtime_state'));
+
+assert.equal(fs.existsSync(path.join(root, 'src/config/gallery-space-config.js')), false);
+assert.equal(viewer.includes('space-fixture.js'), false);
+assert.equal(admin.includes('space-fixture.js'), false);
+assert.ok(viewer.includes('resolveInitialPublicRuntime'));
+assert.ok(admin.includes('resolveInitialAdminRuntime'));
+assert.ok(viewer.includes('createExhibitionDataAdapter'));
+assert.ok(admin.includes('createExhibitionDataAdapter'));
+assert.equal(engine.includes('.from("gallery_state")'), false);
+assert.equal(engine.includes('.from("gallery_exhibitions")'), false);
+assert.ok(engine.includes('runtimeOptions.spaceDefinition'));
+assert.ok(apiSource.includes('exhibition-platform-canonical-data-adapter.v1'));
+assert.ok(resolverSource.includes('exhibition-platform-venue-manifest.v1'));
+console.log('C6C8C21 Multi-Space Foundation canonical runtime invariants passed.');
 })();

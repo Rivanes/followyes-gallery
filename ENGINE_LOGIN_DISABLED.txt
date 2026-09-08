@@ -1,3 +1,49 @@
+globalThis.ExhibitionPlatformSpaceDefinition = {
+  "schema": "exhibition-platform-space-definition.v1",
+  "id": "main-gallery",
+  "name": "Main Gallery",
+  "version": "v2",
+  "entry": {
+    "id": "visitor-entry",
+    "position": {
+      "x": -1,
+      "y": -2.2,
+      "z": -32
+    },
+    "target": {
+      "x": 0,
+      "y": 1,
+      "z": 0
+    }
+  },
+  "assets": {
+    "floor": {
+      "rootUrl": "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
+      "fileName": "Floor_segment.glb",
+      "version": 1,
+      "required": true
+    },
+    "walls": {
+      "rootUrl": "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
+      "fileName": "Wall_segments.glb",
+      "version": 1,
+      "required": true
+    },
+    "props": {
+      "rootUrl": "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
+      "fileName": "Props.glb",
+      "version": 1,
+      "required": true
+    },
+    "ceiling": {
+      "rootUrl": "https://bazbszvhoxmuekxahokc.supabase.co/storage/v1/object/public/berryboy-art-gallery-assets/Models/",
+      "fileName": "Ceiling.glb",
+      "version": 1,
+      "required": true
+    }
+  }
+};
+
 /*
   Exhibition Platform
   Plik: Gallery_V0_11.js
@@ -18749,7 +18795,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     // false = logowanie edytora jest wylaczone, panel edytora dziala bez strony WEB/loginu.
     // true  = wraca normalna blokada logowania przez globalThis.galleryEditorAuthenticated.
     // Nie usuwamy systemu logowania, tylko omijamy go podczas pracy w samym silniku Babylon.
-    var galleryEditorLoginEnabled = true;
+    var galleryEditorLoginEnabled = false;
     var editorAuthenticated = !galleryEditorLoginEnabled || !!globalThis.galleryEditorAuthenticated;
 
     // ARTWORK UPLOAD / SUPABASE STORAGE

@@ -45,6 +45,7 @@ function extractFunction(text, name) {
 }
 
 const functionNames = [
+  'cloneGalleryJson',
   'cloneGalleryStateForIntegrity',
   'createGalleryComparableState',
   'createGalleryCanonicalFingerprintValue',
@@ -68,18 +69,16 @@ const functionNames = [
   'checkGalleryDraftStateNow',
   'persistGalleryPreviousStateBackup',
   'writeGalleryRemotePreviousStateBackup',
+  'saveGalleryStateWithCanonicalAdapter',
   'saveGalleryStateToSupabase'
 ];
 
 function createHarness({
   serverState = null,
-  backupExists = false,
-  selectMainError = null,
-  backupReadError = null,
-  backupWriteError = null,
-  mainWriteError = null,
-  cleanupError = null,
-  mainCommitEmpty = false
+  canonicalSaveError = null,
+  canonicalRevision = null,
+  canonicalLockVersion = 2,
+  cleanupError = null
 } = {}) {
   const calls = [];
   const messages = [];
@@ -92,71 +91,9 @@ function createHarness({
     localLights: { lights: [] }
   };
 
-  function tableApi() {
-    return {
-      select(fields) {
-        const query = {
-          id: null,
-          eq(_column, value) { query.id = value; return query; },
-          order() { return query; },
-          async limit() {
-            if (query.id === 'main_previous') {
-              calls.push('select-backup');
-              if (backupReadError) return { data: null, error: backupReadError };
-              return backupExists
-                ? { data: [{ id: 'main_previous', updated_at: '2026-07-22T10:00:00Z' }], error: null }
-                : { data: [], error: null };
-            }
-            calls.push('select-main');
-            if (selectMainError) return { data: null, error: selectMainError };
-            return serverState
-              ? { data: [{ state: serverState, updated_at: '2026-07-23T10:00:00Z' }], error: null }
-              : { data: [], error: null };
-          }
-        };
-        return query;
-      },
-      update(_payload) {
-        const query = {
-          id: null,
-          eq(_column, value) { query.id = value; return query; },
-          is() { return query; },
-          async select() {
-            if (query.id === 'main_previous') {
-              calls.push('update-backup');
-              return backupWriteError
-                ? { data: null, error: backupWriteError }
-                : { data: [{ id: 'main_previous' }], error: null };
-            }
-            calls.push('update-main');
-            if (mainWriteError) return { data: null, error: mainWriteError };
-            return { data: mainCommitEmpty ? [] : [{ id: 'main' }], error: null };
-          }
-        };
-        return query;
-      },
-      insert(payload) {
-        return {
-          async select() {
-            if (payload.id === 'main_previous') {
-              calls.push('insert-backup');
-              return backupWriteError
-                ? { data: null, error: backupWriteError }
-                : { data: [{ id: 'main_previous' }], error: null };
-            }
-            calls.push('insert-main');
-            if (mainWriteError) return { data: null, error: mainWriteError };
-            return { data: mainCommitEmpty ? [] : [{ id: 'main' }], error: null };
-          }
-        };
-      }
-    };
-  }
-
   const client = {
     from(table) {
-      assert.equal(table, 'gallery_state');
-      return tableApi();
+      throw new Error(`Legacy table access is forbidden in C6C8C21: ${table}`);
     },
     storage: {
       from(bucket) {
@@ -171,7 +108,7 @@ function createHarness({
   };
 
   const runtime = {
-    stage: '12C66C6A1', schema: 'gallery-save-integrity.v3', sessionId: 'test-session',
+    stage: 'C6C8C21', schema: 'gallery-save-integrity.v3', sessionId: 'test-session',
     tabId: 'tab-current', activeTabsStorageKey: 'active-tabs', heartbeatStaleMs: 120000,
     backgroundTabGraceMs: 86400000, foreignDraftGraceMs: 86400000,
     resolvedCleanupKeys: {}, resolvedDraftUploadKeys: {},
@@ -186,6 +123,29 @@ function createHarness({
     remoteBackupId: 'main_previous', localBackupStorageKey: 'backup',
     pendingCleanupStorageKey: 'cleanup', pendingDraftUploadStorageKey: 'draft-uploads',
     latestSaveResult: null
+  };
+
+  const galleryExhibitionRuntime = {
+    activeId: 'main',
+    active: { id: 'main', name: 'Main Exhibition', slug: 'main', storage_prefix: 'main', space_id: 'main-gallery', is_published: true },
+    stateCache: {
+      main: { state: serverState ? JSON.parse(JSON.stringify(serverState)) : null, revision: serverState?.saveIntegrity?.revision || 0, lockVersion: 1, rowExists: !!serverState }
+    }
+  };
+
+  const galleryExhibitionDataAdapter = {
+    async saveState(_id, state) {
+      calls.push('canonical-save');
+      if (canonicalSaveError) throw canonicalSaveError;
+      return {
+        state,
+        revision: canonicalRevision ?? ((serverState?.saveIntegrity?.revision || 0) + 1),
+        lockVersion: canonicalLockVersion,
+        updatedAt: '2026-09-07T18:00:00Z',
+        rowExists: true,
+        published: true
+      };
+    }
   };
 
   const context = {
@@ -207,7 +167,15 @@ function createHarness({
     editorAuthenticated: true,
     editMode: true,
     galleryFastStartRuntime: { stateApplyActive: false },
+    galleryExhibitionDataAdapter,
+    galleryExhibitionRuntime,
     gallerySaveIntegrityRuntime: runtime,
+    getActiveGalleryExhibitionId() { return 'main'; },
+    getGalleryFallbackMainExhibition() { return galleryExhibitionRuntime.active; },
+    cacheGalleryExhibitionState(exhibition, state, options = {}) {
+      galleryExhibitionRuntime.stateCache[exhibition.id] = { state, revision: options.revision || 0, lockVersion: options.lockVersion || 0, rowExists: options.rowExists !== false };
+      return galleryExhibitionRuntime.stateCache[exhibition.id];
+    },
     serializeGalleryState() { return JSON.parse(JSON.stringify(draftState)); },
     notifyGalleryStatus(message) { messages.push(message); },
     clearModel3dClipboardIfStoragePathMatches() {},
@@ -245,7 +213,7 @@ function createHarness({
   syncQueues();
   const ok = await context.saveGalleryStateToSupabase();
   assert.equal(ok, true);
-  assert.deepEqual(calls, ['select-main', 'select-backup', 'insert-backup', 'update-main']);
+  assert.deepEqual(calls, ['canonical-save']);
   assert.equal(runtime.publishedRevision, 5);
   assert.equal(runtime.pendingStorageDeletes.length, 1);
   assert.equal(runtime.latestSaveResult.cleanup.protectedByPreviousBackup, 1);
@@ -296,43 +264,45 @@ function createHarness({
   assert.equal(runtime.pendingStorageDeletes[0].path, 'main/orphan.jpg');
 }
 
-// Existing remote backup is updated; no upsert or delete fallback exists.
+// Canonical state history replaces legacy remote gallery_state backup rows.
 {
   const state = { editor: {}, localLights: { lights: [] } };
-  const { context, calls } = createHarness({ backupExists: true });
+  const { context, calls } = createHarness();
   const result = await context.writeGalleryRemotePreviousStateBackup(context.window.gallerySupabase, state);
   assert.equal(result.ok, true);
-  assert.equal(result.mode, 'update');
-  assert.deepEqual(calls, ['select-backup', 'update-backup']);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'canonical-history-managed-by-exhibition-state');
+  assert.deepEqual(calls, []);
 }
 
-// Failed main save never starts Storage cleanup.
+// Failed canonical save never starts Storage cleanup.
 {
   const serverState = {
     version: 'test', editor: {}, localLights: { lights: [] }, saveIntegrity: { revision: 2 }
   };
-  const { context, calls, runtime, syncQueues } = createHarness({ serverState, mainWriteError: { message: 'network' } });
+  const { context, calls, runtime, syncQueues } = createHarness({ serverState, canonicalSaveError: { message: 'network' } });
   runtime.pendingStorageDeletes = [
     { bucket: 'gallery-artworks', path: 'main/old.jpg', kind: 'artwork-image' }
   ];
   syncQueues();
   const ok = await context.saveGalleryStateToSupabase();
   assert.equal(ok, false);
+  assert.deepEqual(calls, ['canonical-save']);
   assert.equal(calls.some((call) => call.startsWith('remove-')), false);
   assert.equal(runtime.pendingStorageDeletes.length, 1);
+  assert.equal(runtime.latestSaveResult.reason, 'canonical-save-error');
 }
 
-// Failure to read current main state stops before backup, commit and cleanup.
+// Missing canonical adapter fails closed instead of touching rollback-only legacy tables.
 {
-  const baseline = { version: 'test', editor: {}, localLights: { lights: [] }, saveIntegrity: { revision: 3 } };
-  const { context, calls, runtime } = createHarness({ serverState: baseline, selectMainError: { message: 'offline' } });
+  const { context, calls } = createHarness();
+  context.galleryExhibitionDataAdapter = null;
   const ok = await context.saveGalleryStateToSupabase();
   assert.equal(ok, false);
-  assert.deepEqual(calls, ['select-main']);
-  assert.equal(runtime.latestSaveResult.reason, 'pre-save-read-error');
+  assert.deepEqual(calls, []);
 }
 
-// First publication uses insert and cleanup only after the row exists.
+// First canonical publication commits before deferred Storage cleanup.
 {
   const { context, calls, runtime, syncQueues } = createHarness();
   runtime.pendingStorageDeletes = [
@@ -341,7 +311,7 @@ function createHarness({
   syncQueues();
   const ok = await context.saveGalleryStateToSupabase();
   assert.equal(ok, true);
-  assert.deepEqual(calls, ['select-main', 'insert-main', 'remove-gallery-artworks:main/unused.jpg']);
+  assert.deepEqual(calls, ['canonical-save', 'remove-gallery-artworks:main/unused.jpg']);
   assert.equal(runtime.publishedRevision, 1);
 }
 

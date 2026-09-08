@@ -1,5 +1,5 @@
 /*
-  Berryboy Art Gallery — Stage 12C66C6C
+  Exhibition Platform — Stage 12C66C6C
   Lazy AVIF encoder worker. The codec is imported only after the editor starts
   an explicit optimization operation; viewer startup never downloads it.
 */

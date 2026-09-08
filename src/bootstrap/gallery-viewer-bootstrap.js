@@ -1,47 +1,22 @@
 /*
-  Exhibition Platform — Stage 12C66C6C8C16 — Persistent Draft / Instant Public Preview
+  Exhibition Platform — C6C8C22 — Gallery Management release baseline
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
 */
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { gallerySpaceDefinition } from "../config/gallery-space-config.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
-import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
+import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
+import { createExhibitionDataAdapter, resolveInitialPublicRuntime } from "../data/exhibition-api.js?v=c6c8c22_gallery_management";
 
-const STAGE = "12C66C6C8C16";
-const ENGINE_CACHE_KEY = "stage12c66c6c8c16_mobile_ui_polish_inspect_cursor_20260813";
+const STAGE = "C6C8C22";
+const ENGINE_CACHE_KEY = "c6c8c22_gallery_management_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 window.gallerySupabase = supabase;
-
-async function resolvePublishedExhibitionId(requestedId) {
-  const requested = String(requestedId || "main").trim() || "main";
-  try {
-    const exact = await supabase.from("gallery_exhibitions")
-      .select("id")
-      .eq("id", requested)
-      .eq("is_published", true)
-      .limit(1);
-    if (!exact.error && Array.isArray(exact.data) && exact.data[0] && exact.data[0].id) {
-      return String(exact.data[0].id);
-    }
-
-    const fallback = await supabase.from("gallery_exhibitions")
-      .select("id")
-      .eq("is_published", true)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true })
-      .limit(1);
-    if (!fallback.error && Array.isArray(fallback.data) && fallback.data[0] && fallback.data[0].id) {
-      return String(fallback.data[0].id);
-    }
-  } catch (_error) {}
-  return requested;
-}
 
 const assetCacheReadyPromise = registerExhibitionAssetCache();
 
@@ -126,7 +101,7 @@ function getRequestedExhibitionId() {
   try { const params = new URLSearchParams(window.location.search); return (params.get("exhibition") || "main").trim() || "main"; } catch (error) { return "main"; }
 }
 
-function readNavigationHandoff(id) {
+function readNavigationHandoff(id, spaceId) {
   const key = `exhibition_platform_handoff_${id}`;
   try {
     const raw = sessionStorage.getItem(key);
@@ -137,7 +112,7 @@ function readNavigationHandoff(id) {
     if (!parsed.exhibition || String(parsed.exhibition.id) !== String(id)) return null;
     if (!parsed.state || typeof parsed.state !== "object") return null;
     if (Date.now() - Number(parsed.createdAt || 0) > 120000) return null;
-    if (String(parsed.spaceId || gallerySpaceDefinition.id) !== String(gallerySpaceDefinition.id)) return null;
+    if (spaceId && String(parsed.spaceId || spaceId) !== String(spaceId)) return null;
     return parsed;
   } catch (_error) {
     try { sessionStorage.removeItem(key); } catch (_ignore) {}
@@ -264,7 +239,7 @@ function ensureInlineAdminWorkspaceDom() {
     <div id="inlineAdminBody">
       <aside id="inlineAdminSidebar">
         <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibitions</h2><p>Switch the active exhibition or create a new one in the current 3D Space.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div><div class="sectionBody"><form id="createExhibitionForm"><input id="newExhibitionName" class="adminInput" maxlength="120" placeholder="New exhibition name" autocomplete="off"/><button id="createExhibitionButton" class="adminButton primary" type="submit">CREATE</button></form><div style="height:10px"></div><div id="exhibitionList"><div class="fieldMeta">Loading exhibition catalog…</div></div></div></section>
-        <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata used by the admin workspace and the future public carousel.</p></div></div><div class="sectionBody"><form id="detailsForm"><label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required/></label><label class="fieldLabel">Description<textarea id="exhibitionDescription" class="adminTextarea" maxlength="4000" placeholder="Short exhibition description"></textarea></label><div class="inlineFields"><label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly/></label><label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1"/></label></div><div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox"/></div><div class="fieldLabel">Poster / cover</div><div class="posterCard"><img id="posterPreview" alt="Exhibition poster preview"/><div class="posterActions"><button id="choosePosterButton" class="adminButton" type="button">UPLOAD / REPLACE</button><button id="removePosterButton" class="adminButton danger" type="button">REMOVE</button><div id="posterStatus" class="fieldMeta">No poster assigned.</div><input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif"/></div></div><div class="fieldMeta">Space: <strong id="exhibitionSpaceId">main-space</strong></div><button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button></form></div></section>
+        <section class="workspaceSection"><div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata used by the admin workspace and the future public carousel.</p></div></div><div class="sectionBody"><form id="detailsForm"><label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required/></label><label class="fieldLabel">Description<textarea id="exhibitionDescription" class="adminTextarea" maxlength="4000" placeholder="Short exhibition description"></textarea></label><div class="inlineFields"><label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly/></label><label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1"/></label></div><div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox"/></div><div class="fieldLabel">Poster / cover</div><div class="posterCard"><img id="posterPreview" alt="Exhibition poster preview"/><div class="posterActions"><button id="choosePosterButton" class="adminButton" type="button">UPLOAD / REPLACE</button><button id="removePosterButton" class="adminButton danger" type="button">REMOVE</button><div id="posterStatus" class="fieldMeta">No poster assigned.</div><input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif"/></div></div><div class="fieldMeta">Gallery: <strong id="exhibitionSpaceId">—</strong></div><button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button></form></div></section>
       </aside>
       <main id="inlineAdminMain"><section id="inlineAdminViewportCard"><div id="inlineAdminViewportToolbar"><div><div id="viewportStatus">3D preview: <strong>ready</strong></div><div id="assetDeliveryStatus" class="fieldMeta">Asset delivery: same runtime</div><div id="networkDiagnostics" class="fieldMeta">Network: measuring Storage delivery…</div></div><div class="fieldMeta">Same live 3D runtime — no scene reload.</div></div><div id="adminViewportStage"><div id="workspaceLoading" class="workspaceLoading hidden"><div class="loadingCard">Preparing Admin Workspace…</div></div></div></section></main>
     </div>`;
@@ -328,6 +303,8 @@ async function closeInlineAdminWorkspace(options = {}) {
       adminModule.discardAdminMetadataChanges();
     }
 
+    if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("public");
+    if (window.ExhibitionPlatformDataAdapter && typeof window.ExhibitionPlatformDataAdapter.setMode === "function") window.ExhibitionPlatformDataAdapter.setMode("public");
     if (window.GalleryApp && typeof window.GalleryApp.exitAdminWorkspaceMode === "function") {
       const exited = window.GalleryApp.exitAdminWorkspaceMode({ discardUnsaved, preserveDraft });
       if (!exited) return false;
@@ -426,6 +403,8 @@ async function openInlineAdminWorkspace(exhibitionId) {
       onSessionLost: () => closeInlineAdminWorkspace({ discardUnsaved: true, force: true })
     });
     window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ = inlineContext;
+    if (window.ExhibitionPlatformDataAdapter && typeof window.ExhibitionPlatformDataAdapter.setMode === "function") window.ExhibitionPlatformDataAdapter.setMode("admin");
+    if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");
     if (window.GalleryApp.enterAdminWorkspaceMode) window.GalleryApp.enterAdminWorkspaceMode();
     if (!inlineAdminModulePromise) inlineAdminModulePromise = import(`./admin-workspace-bootstrap.js?v=${ENGINE_CACHE_KEY}`);
     const adminModule = await inlineAdminModulePromise;
@@ -572,8 +551,8 @@ function applyLanguage(lang) {
   if (mobileQualityOptionBalanced) mobileQualityOptionBalanced.textContent = t("qualityBalanced");
   if (mobileQualityOptionSafe) mobileQualityOptionSafe.textContent = t("qualitySafe");
 
-  if (window.BerryboyBootGuard && typeof window.BerryboyBootGuard.setLanguage === "function") {
-    window.BerryboyBootGuard.setLanguage(currentLang);
+  if (window.ExhibitionPlatformBootGuard && typeof window.ExhibitionPlatformBootGuard.setLanguage === "function") {
+    window.ExhibitionPlatformBootGuard.setLanguage(currentLang);
   }
   updateAuthUi();
 }
@@ -687,7 +666,7 @@ window.addEventListener("gallery-mobile-quality-change", function (event) {
 
 applyLanguage(currentLang);
 
-const bootGuard = window.BerryboyBootGuard || {
+const bootGuard = window.ExhibitionPlatformBootGuard || window.BerryboyBootGuard || {
   setLanguage: function () {},
   setPhase: function () {},
   waitForStart: function () { return Promise.resolve(); },
@@ -800,8 +779,8 @@ function installResizeRuntime(engine) {
   // normalized gallery-mobile-viewport-change event. Bootstrap owns desktop resize only.
   let mobileOwner = false;
   try {
-    const viewportState = window.BerryboyMobileViewport && window.BerryboyMobileViewport.read
-      ? window.BerryboyMobileViewport.read()
+    const viewportState = window.ExhibitionPlatformMobileViewport && window.ExhibitionPlatformMobileViewport.read
+      ? window.ExhibitionPlatformMobileViewport.read()
       : null;
     mobileOwner = !!(viewportState && viewportState.mobile);
   } catch (error) {}
@@ -852,17 +831,25 @@ async function startGalleryRuntime() {
 
     bootGuard.setPhase("scene", "Gallery scene");
     const requestedExhibitionId = getRequestedExhibitionId();
-    const publicExhibitionId = await resolvePublishedExhibitionId(requestedExhibitionId);
-    if (publicExhibitionId !== requestedExhibitionId) {
+    const publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);
+    const exhibitionData = createExhibitionDataAdapter({ supabase, mode: "public", initialRuntime: publicRuntime });
+    window.ExhibitionPlatformDataAdapter = exhibitionData;
+    const publicExhibitionId = publicRuntime.exhibition.id;
+    const publicExhibitionSlug = publicRuntime.exhibition.slug || publicExhibitionId;
+    if (publicExhibitionSlug !== requestedExhibitionId) {
       try {
         const nextUrl = new URL(location.href);
-        nextUrl.searchParams.set("exhibition", publicExhibitionId);
+        nextUrl.searchParams.set("exhibition", publicExhibitionSlug);
         history.replaceState(null, "", nextUrl);
       } catch (_error) {}
     }
-    const navigationHandoff = readNavigationHandoff(publicExhibitionId);
+    try {
+      document.title = `${publicRuntime.exhibition.name} — Exhibition Platform`;
+    } catch (_error) {}
+    const navigationHandoff = readNavigationHandoff(publicExhibitionId, publicRuntime.spaceDefinition.id);
     const scene = engineModule.createScene(engine, canvas, {
-      spaceDefinition: gallerySpaceDefinition,
+      spaceDefinition: publicRuntime.spaceDefinition,
+      exhibitionData,
       exhibitionId: publicExhibitionId,
       initialExhibitionSnapshot: navigationHandoff || null
     });
@@ -883,18 +870,19 @@ async function startGalleryRuntime() {
     }
     syncMobileQualityControl();
 
-    window.BerryboyViewerRuntime = {
+    window.ExhibitionPlatformViewerRuntime = {
       stage: STAGE,
       schema: "click-start-original-intro-stage3.v1",
       engine,
       scene,
       supabase,
-      deviceProfile: window.BerryboyArtGalleryDeviceProfile || null,
+      deviceProfile: window.ExhibitionPlatformDeviceProfile || window.BerryboyArtGalleryDeviceProfile || null,
       getSession: function () { return currentSession; },
       loadEditorModule,
       startedAfterExplicitClick: true,
       originalInstructionalPopupRestored: true
     };
+    window.BerryboyViewerRuntime = window.ExhibitionPlatformViewerRuntime; // legacy debug alias
 
     // Hide the page loader first, then show and verify the exact engine-owned popup from Stage 12C66A1.
     bootGuard.ready();
@@ -928,7 +916,7 @@ async function startGalleryRuntime() {
       });
     });
 
-    return window.BerryboyViewerRuntime;
+    return window.ExhibitionPlatformViewerRuntime;
   })().catch(function (error) {
     failGalleryBoot("bootstrap-exception", t("startupError"), error);
     throw error;

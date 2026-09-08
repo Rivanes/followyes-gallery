@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tokenizer } from './vendor/acorn.mjs';
-import { gallerySpaceDefinition } from '../src/config/gallery-space-config.js';
+import { developmentSpaceFixture } from '../src/config/space-fixture.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourcePath = path.join(root, 'src', 'Gallery_V0_11.js');
@@ -31,7 +31,7 @@ function conservativeMinifyJavaScript(code) {
 const production = conservativeMinifyJavaScript(source);
 fs.writeFileSync(productionPath, production, 'utf8');
 const loginDisabled =
-  'globalThis.BerryboyGallerySpaceDefinition = ' + JSON.stringify(gallerySpaceDefinition, null, 2) + ';\n\n' +
+  'globalThis.ExhibitionPlatformSpaceDefinition = ' + JSON.stringify(developmentSpaceFixture, null, 2) + ';\n\n' +
   source.replace(loginEnabledMarker, 'var galleryEditorLoginEnabled = false;');
 fs.writeFileSync(loginDisabledPath, loginDisabled, 'utf8');
 console.log(`Current production build generated (${(production.length / source.length * 100).toFixed(1)}% of source size).`);
