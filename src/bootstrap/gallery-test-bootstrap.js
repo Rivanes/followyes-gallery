@@ -1,10 +1,10 @@
-/* Exhibition Platform — C6C8C23 isolated Test Gallery bootstrap. */
+/* Exhibition Platform — C6C8C24 isolated Test Gallery bootstrap. */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c23_space_model_validation";
-import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c23_space_model_validation";
+import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c24_exhibition_gallery_assignment";
+import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c24_exhibition_gallery_assignment";
 
-const STAGE = "C6C8C23";
-const ENGINE_CACHE_KEY = "c6c8c23_space_model_validation_20260908";
+const STAGE = "C6C8C24";
+const ENGINE_CACHE_KEY = "c6c8c24_exhibition_gallery_assignment_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
@@ -102,7 +102,7 @@ function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
 }
 
 function showError(error) {
-  console.error("C6C8C23 Test Gallery:", error);
+  console.error("C6C8C24 Test Gallery:", error);
   loading.style.display = "none";
   errorMessage.textContent = error && error.message ? error.message : String(error);
   errorPanel.style.display = "grid";

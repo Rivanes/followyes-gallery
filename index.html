@@ -1158,6 +1158,7 @@
       </button>
 
       <div id="headerRight">
+        <a id="exhibitionsButton" class="headerButton" href="./index.html">EXHIBITIONS</a>
         <a id="exploreBelowButton" class="headerButton" href="#project-info">About project</a>
 
         <div id="languageSwitch" aria-label="Language switch">
@@ -1761,7 +1762,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "C6C8C23",
+              stage: "C6C8C24",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1820,7 +1821,7 @@
       });
 
       window.ExhibitionPlatformBootGuard = {
-        stage: "C6C8C23",
+        stage: "C6C8C24",
         schema: "click-start-timefillers.v1",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1835,6 +1836,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c23_space_model_validation_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c24_exhibition_gallery_assignment_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — C6C8C23 — Space Model Validation
+  Exhibition Platform — C6C8C24 — Exhibition ↔ Gallery Assignment + Public Discovery
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -8,10 +8,10 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
-import { createExhibitionDataAdapter, resolveInitialPublicRuntime } from "../data/exhibition-api.js?v=c6c8c23_space_model_validation";
+import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=c6c8c24_exhibition_gallery_assignment";
 
-const STAGE = "C6C8C23";
-const ENGINE_CACHE_KEY = "c6c8c23_space_model_validation_20260908";
+const STAGE = "C6C8C24";
+const ENGINE_CACHE_KEY = "c6c8c24_exhibition_gallery_assignment_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -101,6 +101,94 @@ function getRequestedExhibitionId() {
   try { const params = new URLSearchParams(window.location.search); return (params.get("exhibition") || "main").trim() || "main"; } catch (error) { return "main"; }
 }
 
+function hasExplicitExhibitionSelection() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("exhibition") && !!String(params.get("exhibition") || "").trim();
+  } catch (_error) { return false; }
+}
+
+function publicDiscoveryAssetUrl(value) {
+  const path = String(value || "").trim();
+  if (!path) return "";
+  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("/storage/")) return `${SUPABASE_URL}${path}`;
+  return path;
+}
+
+function ensurePublicDiscoveryStyles() {
+  if (document.getElementById("c24PublicDiscoveryStyles")) return;
+  const style = document.createElement("style");
+  style.id = "c24PublicDiscoveryStyles";
+  style.textContent = `
+    #c24PublicDiscovery{position:fixed;inset:0;z-index:24000;display:grid;grid-template-rows:auto minmax(0,1fr);background:#0d0f0e;color:#f0eade;font-family:Inter,system-ui,sans-serif;overflow:auto}
+    #c24PublicDiscovery[hidden]{display:none}
+    #c24PublicDiscoveryHeader{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:30px clamp(20px,5vw,70px) 20px;border-bottom:1px solid rgba(255,255,255,.12)}
+    #c24PublicDiscoveryHeader h1{margin:0;font-size:clamp(32px,5vw,70px);line-height:.92;letter-spacing:-.055em}
+    #c24PublicDiscoveryHeader p{max-width:560px;margin:8px 0 0;color:rgba(240,234,222,.62);font-size:13px;line-height:1.55}
+    #c24PublicDiscoveryGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));align-content:start;gap:18px;padding:24px clamp(20px,5vw,70px) 60px}
+    .c24ExhibitionCard{position:relative;min-height:390px;display:flex;align-items:flex-end;border:1px solid rgba(255,255,255,.14);border-radius:16px;overflow:hidden;background:linear-gradient(145deg,#1b211d,#0f1110);color:inherit;text-align:left;cursor:pointer;padding:0;font:inherit}
+    .c24ExhibitionCard:hover{border-color:rgba(240,234,222,.44)}
+    .c24ExhibitionCover{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+    .c24ExhibitionFallback{position:absolute;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 30% 20%,rgba(240,234,222,.12),transparent 42%),linear-gradient(145deg,#222823,#111311);font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:rgba(240,234,222,.38)}
+    .c24ExhibitionCardBody{position:relative;z-index:2;width:100%;padding:22px;background:linear-gradient(180deg,transparent,rgba(5,6,5,.94) 34%)}
+    .c24ExhibitionVenue{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:rgba(240,234,222,.58)}
+    .c24ExhibitionCard h2{margin:7px 0 8px;font-size:clamp(24px,3vw,40px);letter-spacing:-.045em;line-height:.98}
+    .c24ExhibitionCard p{margin:0 0 16px;color:rgba(240,234,222,.7);font-size:12px;line-height:1.5}
+    .c24ExhibitionEnter{display:inline-flex;min-height:36px;align-items:center;padding:0 12px;border:1px solid rgba(240,234,222,.45);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    @media(max-width:700px){#c24PublicDiscoveryHeader{align-items:flex-start;flex-direction:column;padding-top:22px}.c24ExhibitionCard{min-height:330px}}
+  `;
+  document.head.appendChild(style);
+}
+
+async function ensurePublicExhibitionSelection() {
+  if (hasExplicitExhibitionSelection()) return getRequestedExhibitionId();
+  let cards = [];
+  try { cards = await listPublicExhibitionCards(supabase); }
+  catch (error) { console.warn("Public Exhibition discovery unavailable; using canonical fallback.", error); return getRequestedExhibitionId(); }
+  if (!cards.length) return getRequestedExhibitionId();
+  ensurePublicDiscoveryStyles();
+  let overlay = document.getElementById("c24PublicDiscovery");
+  if (!overlay) {
+    overlay = document.createElement("section");
+    overlay.id = "c24PublicDiscovery";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    document.body.appendChild(overlay);
+  }
+  const pl = currentLang === "pl";
+  overlay.innerHTML = "";
+  const header = document.createElement("div"); header.id = "c24PublicDiscoveryHeader";
+  const intro = document.createElement("div");
+  const title = document.createElement("h1"); title.textContent = pl ? "Wybierz wystawę" : "Choose an exhibition";
+  const copy = document.createElement("p"); copy.textContent = pl ? "Każda wystawa otwiera swoją opublikowaną przestrzeń Gallery. Wybór następuje przed uruchomieniem sceny 3D." : "Each exhibition opens its own Published Gallery space. Selection happens before the 3D scene starts.";
+  intro.append(title, copy); header.append(intro); overlay.append(header);
+  const grid = document.createElement("div"); grid.id = "c24PublicDiscoveryGrid"; overlay.append(grid);
+
+  return new Promise((resolve) => {
+    for (const card of cards) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "c24ExhibitionCard";
+      const cover = publicDiscoveryAssetUrl(card.mobileCoverUrl || card.coverUrl);
+      if (cover) { const img = document.createElement("img"); img.className = "c24ExhibitionCover"; img.alt = ""; img.src = cover; button.appendChild(img); }
+      else { const fallback = document.createElement("div"); fallback.className = "c24ExhibitionFallback"; fallback.textContent = pl ? "Wystawa" : "Exhibition"; button.appendChild(fallback); }
+      const body = document.createElement("div"); body.className = "c24ExhibitionCardBody";
+      const venue = document.createElement("div"); venue.className = "c24ExhibitionVenue"; venue.textContent = card.venueName || (pl ? "Galeria" : "Gallery");
+      const heading = document.createElement("h2"); heading.textContent = card.title;
+      const desc = document.createElement("p"); desc.textContent = card.description || card.subtitle || "";
+      const enter = document.createElement("span"); enter.className = "c24ExhibitionEnter"; enter.textContent = card.buttonLabel || (pl ? "Wejdź" : "Enter gallery");
+      body.append(venue, heading); if (desc.textContent) body.append(desc); body.append(enter); button.appendChild(body);
+      button.addEventListener("click", () => {
+        const url = new URL(location.href); url.searchParams.set("exhibition", card.slug || card.id); history.replaceState(null, "", url);
+        overlay.hidden = true;
+        document.body.style.removeProperty("overflow");
+        resolve(card.slug || card.id);
+      }, { once: true });
+      grid.appendChild(button);
+    }
+    document.body.style.overflow = "hidden";
+  });
+}
+
 function readNavigationHandoff(id, spaceId) {
   const key = `exhibition_platform_handoff_${id}`;
   try {
@@ -128,6 +216,7 @@ const logoutButton = document.getElementById("logoutButton");
 const adminWorkspaceButton = document.getElementById("adminWorkspaceButton");
 const saveStateButton = document.getElementById("saveStateButton");
 const exploreBelowButton = document.getElementById("exploreBelowButton");
+const exhibitionsButton = document.getElementById("exhibitionsButton");
 const authStatus = document.getElementById("authStatus");
 const submitLoginButton = document.getElementById("submitLoginButton");
 const cancelLoginButton = document.getElementById("cancelLoginButton");
@@ -666,6 +755,12 @@ window.addEventListener("gallery-mobile-quality-change", function (event) {
 
 applyLanguage(currentLang);
 
+if (exhibitionsButton) exhibitionsButton.addEventListener("click", function (event) {
+  event.preventDefault();
+  const url = new URL("./index.html", location.href);
+  location.href = url.href;
+});
+
 const bootGuard = window.ExhibitionPlatformBootGuard || window.BerryboyBootGuard || {
   setLanguage: function () {},
   setPhase: function () {},
@@ -953,6 +1048,7 @@ initializeAuthRuntime().catch(function (error) {
 });
 
 try {
+  await ensurePublicExhibitionSelection();
   await bootGuard.waitForStart();
   await startGalleryRuntime();
 } catch (error) {

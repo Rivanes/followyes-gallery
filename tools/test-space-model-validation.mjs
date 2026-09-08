@@ -194,7 +194,7 @@ assert.ok(apiSource.includes('admin_record_venue_asset_validation'));
 assert.ok(apiSource.includes('admin_clear_venue_asset_slot'));
 assert.ok(apiSource.includes('C23 deep validation must pass before a Gallery model can be uploaded'));
 assert.ok(adminSource.includes('validateGalleryModelFile') && adminSource.includes('validateExistingGalleryAsset'));
-assert.ok(adminSource.includes('../data/exhibition-api.js?v=c6c8c23_space_model_validation'));
+assert.ok(adminSource.includes('../data/exhibition-api.js?v=c6c8c24_exhibition_gallery_assignment'));
 assert.ok(adminSource.includes('props · optional') && adminSource.includes('CHECKING SPACE'));
 assert.ok(engineSource.includes('var galleryCriticalAssetNames = ["floor", "wall", "ceiling"]'));
 assert.ok(engineSource.includes('var galleryOptionalAssetNames = galleryHasOptionalProps ? ["props"] : []'));

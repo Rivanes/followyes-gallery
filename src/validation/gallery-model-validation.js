@@ -7,7 +7,7 @@ export const ALL_GALLERY_MODEL_ROLES = Object.freeze([...REQUIRED_GALLERY_MODEL_
 
 let sequence = 0;
 function nextId() { sequence += 1; return `gallery-model-${Date.now().toString(36)}-${sequence}`; }
-function workerUrl() { return new URL("../workers/gallery-glb-validator-worker.js?v=c6c8c23_space_model_validation", import.meta.url); }
+function workerUrl() { return new URL("../workers/gallery-glb-validator-worker.js?v=c6c8c24_exhibition_gallery_assignment", import.meta.url); }
 
 function validateWithWorker(payload, onProgress) {
   return new Promise((resolve, reject) => {

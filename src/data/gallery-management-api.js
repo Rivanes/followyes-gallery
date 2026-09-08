@@ -1,9 +1,9 @@
 /*
-  Exhibition Platform — C6C8C23 Gallery Management data adapter.
+  Exhibition Platform — C6C8C24 Gallery Management data adapter.
   This is the only C23 Admin layer that knows concrete Venue/Gallery RPC and Storage names.
 */
 
-export const GALLERY_MANAGEMENT_STAGE = "C6C8C23";
+export const GALLERY_MANAGEMENT_STAGE = "C6C8C24";
 export const GALLERY_RUNTIME_BUCKET = "venue-runtime";
 export const CONTROLLED_GALLERY_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling", "props"]);
 export const REQUIRED_GALLERY_ASSET_ROLES = Object.freeze(["floor", "walls", "ceiling"]);

@@ -50,7 +50,7 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('c6c8c23'));
+expect('current package stage', pkg.version.includes('c6c8c24'));
 expect('current runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
@@ -109,7 +109,7 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('c6c8c23'));
+expect('package stage', pkg.version.includes('c6c8c24'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
@@ -185,7 +185,7 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('c6c8c23'));
+expect('package identity', pkg.version.includes('c6c8c24'));
 expect('runtime identity', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 
