@@ -26,11 +26,11 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "C6C8C22"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "C6C8C22"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "C6C8C22"'),'Admin stage identity missing');
-assert(bootstrap.includes('c6c8c22_gallery_management_20260908'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=c6c8c22_gallery_management_20260908'),'Index cache key missing');
+assert(index.includes('stage: "C6C8C22.1"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "C6C8C22.1"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "C6C8C22.1"'),'Admin stage identity missing');
+assert(bootstrap.includes('c6c8c22_1_gallery_smoke_hotfix_20260908'),'Current cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=c6c8c22_1_gallery_smoke_hotfix_20260908'),'Index cache key missing');
 assert(source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'),'C6C8C13 source history missing');
 assert(source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'),'C6C8C14 source history missing');
 assert(source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'),'C6C8C15 source history missing');

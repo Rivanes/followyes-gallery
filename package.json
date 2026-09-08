@@ -1,6 +1,6 @@
 {
   "name": "exhibition-platform",
-  "version": "0.11.69-c6c8c22-gallery-management",
+  "version": "0.11.70-c6c8c22-1-gallery-smoke-hotfix",
   "private": true,
   "description": "Exhibition Platform — consolidated production runtime",
   "type": "module",

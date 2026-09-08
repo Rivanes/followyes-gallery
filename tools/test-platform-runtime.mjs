@@ -105,7 +105,7 @@ function expect(label, condition) {
 
 expect('Admin Workspace stage identity exists',
   source.includes('Stage 12C66C6C7C8B: Admin Workspace') &&
-  adminBootstrap.includes('const STAGE = "C6C8C22"'));
+  adminBootstrap.includes('const STAGE = "C6C8C22.1"'));
 
 expect('Exhibition manager was removed from the in-scene editor',
   !source.includes('createEditorSection("EXHIBITIONS")') &&

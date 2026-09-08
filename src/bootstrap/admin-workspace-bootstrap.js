@@ -6,10 +6,10 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
 import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c22_gallery_management";
-import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c22_gallery_management";
+import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c22_gallery_management";
 
-const STAGE = "C6C8C22";
-const ENGINE_CACHE_KEY = "c6c8c22_gallery_management_20260908";
+const STAGE = "C6C8C22.1";
+const ENGINE_CACHE_KEY = "c6c8c22_1_gallery_smoke_hotfix_20260908";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -83,6 +83,9 @@ let galleryCatalog = [];
 let selectedGalleryDetail = null;
 let galleryMetadataBaseline = "";
 let galleryMetadataDirty = false;
+let galleryEntryBaseline = "";
+let galleryEntryDirty = false;
+let galleryMutationInFlight = false;
 let adminWorkspaceSection = "exhibitions";
 
 function formatDeliveryBytes(bytes) {
@@ -246,12 +249,13 @@ function hasSceneUnsavedChanges() {
 
 function hasAnyAdminUnsavedChanges() {
   syncGalleryMetadataDirty();
-  return !!(metadataDirty || galleryMetadataDirty || hasSceneUnsavedChanges());
+  syncGalleryEntryDirty();
+  return !!(metadataDirty || galleryMetadataDirty || galleryEntryDirty || hasSceneUnsavedChanges());
 }
 
 function discardAdminUnsavedChanges() {
   if (metadataDirty) discardMetadataDraft();
-  if (galleryMetadataDirty) discardGalleryMetadataDraft();
+  if (galleryMetadataDirty || galleryEntryDirty) discardGalleryFormDraft();
   if (hasSceneUnsavedChanges() && window.GalleryApp && typeof window.GalleryApp.discardUnsavedChanges === "function") {
     return window.GalleryApp.discardUnsavedChanges("admin-workspace-discard");
   }
@@ -268,7 +272,8 @@ function confirmAndDiscardAdminChanges(message) {
 function onMetadataBeforeUnload(event) {
   syncMetadataDirtyState();
   syncGalleryMetadataDirty();
-  if ((!workspaceActive && !metadataDraftPreviewActive) || (!metadataDirty && !galleryMetadataDirty)) return;
+  syncGalleryEntryDirty();
+  if ((!workspaceActive && !metadataDraftPreviewActive) || (!metadataDirty && !galleryMetadataDirty && !galleryEntryDirty)) return;
   event.preventDefault();
   event.returnValue = "";
   return "";
@@ -859,7 +864,7 @@ removePosterButton.addEventListener("click", async () => {
 });
 
 // -----------------------------------------------------------------------------
-// C6C8C22 — Gallery Management UI
+// C6C8C22.1 — Gallery Management browser-smoke hardening
 // Injected into both standalone admin.html and the same-runtime inline Admin shell.
 // -----------------------------------------------------------------------------
 function galleryEl(id) { return document.getElementById(id); }
@@ -886,6 +891,7 @@ function ensureGalleryManagementStyles() {
     .galleryValidation{padding:9px 10px;border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;font-size:10px;line-height:1.5;color:var(--muted,rgba(255,255,255,.57))}.galleryValidation.valid{border-color:rgba(127,169,130,.45);background:rgba(127,169,130,.08)}.galleryValidation.invalid{border-color:rgba(209,139,139,.45);background:rgba(209,139,139,.06)}
     .galleryHistory{display:grid;gap:6px}.galleryHistoryItem{display:flex;justify-content:space-between;gap:10px;font-size:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .galleryMuted{color:var(--muted,rgba(255,255,255,.57));font-size:10px;line-height:1.45}.galleryDangerNote{color:#d7a0a0;font-size:10px;line-height:1.45}
+    .galleryRenderError{display:grid;gap:9px;padding:12px;border:1px solid rgba(209,139,139,.45);border-radius:10px;background:rgba(209,139,139,.06);font-size:10px;line-height:1.5}
     @media(max-width:520px){.galleryAssetRow{grid-template-columns:54px minmax(0,1fr)}.galleryAssetRow .adminButton{grid-column:1/-1}.galleryEntryGrid{grid-template-columns:1fr}}
   `;
   document.head.appendChild(style);
@@ -908,12 +914,13 @@ function updateGalleryUrl(venueId) {
   } catch (_error) {}
 }
 
-function galleryWorkingVersion(detail) {
-  if (!detail || !detail.venue) return null;
-  const versions = Array.isArray(detail.versions) ? detail.versions : [];
-  return versions.find((item) => item.id === detail.venue.draft_version_id)
-    || versions.find((item) => item.id === detail.venue.published_version_id)
-    || versions[0] || null;
+function clearGalleryUrl() {
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete("section");
+    url.searchParams.delete("gallery");
+    history.replaceState(null, "", url);
+  } catch (_error) {}
 }
 
 function galleryPublishedVersion(detail) {
@@ -924,6 +931,14 @@ function galleryPublishedVersion(detail) {
 function galleryDraftVersion(detail) {
   if (!detail || !detail.venue) return null;
   return (detail.versions || []).find((item) => item.id === detail.venue.draft_version_id) || null;
+}
+
+function galleryWorkingVersion(detail) {
+  if (!detail || !detail.venue) return null;
+  const published = galleryPublishedVersion(detail);
+  const draft = galleryDraftVersion(detail);
+  if (detail.canManage === true) return draft || published || null;
+  return published || null;
 }
 
 function galleryEntryFromManifest(manifest) {
@@ -939,6 +954,15 @@ function galleryMetadataSnapshot() {
   return JSON.stringify({ name: name ? name.value : "", description: description ? description.value : "" });
 }
 
+function galleryEntrySnapshot() {
+  const read = (prefix) => ({
+    x: galleryEl(`${prefix}X`) ? galleryEl(`${prefix}X`).value : "",
+    y: galleryEl(`${prefix}Y`) ? galleryEl(`${prefix}Y`).value : "",
+    z: galleryEl(`${prefix}Z`) ? galleryEl(`${prefix}Z`).value : ""
+  });
+  return JSON.stringify({ position: read("galleryEntryPos"), target: read("galleryEntryTarget") });
+}
+
 function syncGalleryMetadataDirty() {
   galleryMetadataDirty = !!(selectedGalleryDetail && galleryMetadataBaseline && galleryMetadataSnapshot() !== galleryMetadataBaseline);
   const button = galleryEl("saveGalleryDetailsButton");
@@ -946,10 +970,84 @@ function syncGalleryMetadataDirty() {
   return galleryMetadataDirty;
 }
 
-function discardGalleryMetadataDraft() {
-  if (selectedGalleryDetail) renderGalleryDetail(selectedGalleryDetail);
+function syncGalleryEntryDirty() {
+  galleryEntryDirty = !!(selectedGalleryDetail && galleryEntryBaseline && galleryEntrySnapshot() !== galleryEntryBaseline);
+  const button = galleryEl("saveGalleryEntryButton");
+  if (button) button.dataset.dirty = galleryEntryDirty ? "true" : "false";
+  return galleryEntryDirty;
+}
+
+function restoreGalleryMetadataBaseline() {
+  if (!galleryMetadataBaseline) return;
+  try {
+    const baseline = JSON.parse(galleryMetadataBaseline);
+    const name = galleryEl("galleryName");
+    const description = galleryEl("galleryDescription");
+    if (name) name.value = baseline.name || "";
+    if (description) description.value = baseline.description || "";
+  } catch (_error) {}
   galleryMetadataDirty = false;
+  syncGalleryMetadataDirty();
+}
+
+function restoreGalleryEntryBaseline() {
+  if (!galleryEntryBaseline) return;
+  try {
+    const baseline = JSON.parse(galleryEntryBaseline);
+    ["X","Y","Z"].forEach((axis) => {
+      const key = axis.toLowerCase();
+      const pos = galleryEl(`galleryEntryPos${axis}`);
+      const target = galleryEl(`galleryEntryTarget${axis}`);
+      if (pos) pos.value = baseline.position && baseline.position[key] !== undefined ? baseline.position[key] : "";
+      if (target) target.value = baseline.target && baseline.target[key] !== undefined ? baseline.target[key] : "";
+    });
+  } catch (_error) {}
+  galleryEntryDirty = false;
+  syncGalleryEntryDirty();
+}
+
+function discardGalleryFormDraft() {
+  restoreGalleryMetadataBaseline();
+  restoreGalleryEntryBaseline();
+  galleryMetadataDirty = false;
+  galleryEntryDirty = false;
   return true;
+}
+
+function confirmAndDiscardGalleryFormChanges(message) {
+  syncGalleryMetadataDirty();
+  syncGalleryEntryDirty();
+  if (!galleryMetadataDirty && !galleryEntryDirty) return true;
+  if (!window.confirm(message || "Gallery has unsaved changes. Discard them?")) return false;
+  return discardGalleryFormDraft();
+}
+
+function setGalleryMutationBusy(busy) {
+  galleryMutationInFlight = !!busy;
+  document.querySelectorAll(".galleryManagementSection button").forEach((button) => {
+    if (busy) {
+      if (!Object.prototype.hasOwnProperty.call(button.dataset, "galleryBusyWasDisabled")) {
+        button.dataset.galleryBusyWasDisabled = button.disabled ? "1" : "0";
+      }
+      button.disabled = true;
+    } else if (Object.prototype.hasOwnProperty.call(button.dataset, "galleryBusyWasDisabled")) {
+      button.disabled = button.dataset.galleryBusyWasDisabled === "1";
+      delete button.dataset.galleryBusyWasDisabled;
+    }
+  });
+}
+
+async function withGalleryMutation(button, busyLabel, operation) {
+  if (galleryMutationInFlight) return null;
+  const originalText = button ? button.textContent : "";
+  setGalleryMutationBusy(true);
+  if (button && busyLabel) button.textContent = busyLabel;
+  try {
+    return await operation();
+  } finally {
+    setGalleryMutationBusy(false);
+    if (button && button.isConnected && originalText) button.textContent = originalText;
+  }
 }
 
 async function ensureGalleryManagementApi() {
@@ -963,6 +1061,7 @@ function setAdminWorkspaceSection(section, { skipConfirm = false } = {}) {
   if (adminWorkspaceSection === next) return true;
   syncMetadataDirtyState();
   syncGalleryMetadataDirty();
+  syncGalleryEntryDirty();
   if (!skipConfirm && hasAnyAdminUnsavedChanges()) {
     if (!window.confirm("You have unsaved Admin changes. Discard them and switch section?")) return false;
     discardAdminUnsavedChanges();
@@ -975,6 +1074,8 @@ function setAdminWorkspaceSection(section, { skipConfirm = false } = {}) {
   if (next === "galleries") {
     updateGalleryUrl(selectedGalleryDetail && selectedGalleryDetail.venue ? selectedGalleryDetail.venue.id : getGalleryRequestedId());
     if (session) void loadGalleryCatalog().catch((error) => showToast(error.message || String(error)));
+  } else {
+    clearGalleryUrl();
   }
   return true;
 }
@@ -1014,7 +1115,7 @@ function ensureGalleryManagementUi() {
     <div class="sectionBody" id="galleryDetailBody"><div class="fieldMeta">Select a Gallery.</div></div>`;
   sidebar.appendChild(detailSection);
 
-  galleryEl("refreshGalleriesButton").addEventListener("click", () => loadGalleryCatalog(true).catch((error) => showToast(error.message || String(error))));
+  galleryEl("refreshGalleriesButton").addEventListener("click", handleRefreshGalleries);
   galleryEl("galleryCreateForm").addEventListener("submit", handleCreateGallery);
 
   let initialSection = "exhibitions";
@@ -1040,11 +1141,17 @@ async function loadGalleryCatalog(force = false) {
 function renderGalleryCatalog() {
   const list = galleryEl("galleryList");
   if (!list) return;
-  list.innerHTML = "";
+  list.replaceChildren();
   const canCreate = !!(galleryAdminContext && Array.isArray(galleryAdminContext.capabilities) && galleryAdminContext.capabilities.includes("venue.create"));
   const createForm = galleryEl("galleryCreateForm");
   if (createForm) createForm.style.display = canCreate ? "grid" : "none";
-  if (!galleryCatalog.length) { list.innerHTML = '<div class="fieldMeta">No Galleries found.</div>'; return; }
+  if (!galleryCatalog.length) {
+    const empty = document.createElement("div");
+    empty.className = "fieldMeta";
+    empty.textContent = "No Galleries found.";
+    list.appendChild(empty);
+    return;
+  }
   galleryCatalog.forEach((item) => {
     const versions = Array.isArray(item.versions) ? item.versions : [];
     const published = versions.find((v) => v.id === item.published_version_id);
@@ -1052,15 +1159,21 @@ function renderGalleryCatalog() {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "galleryRow" + (selectedGalleryDetail && selectedGalleryDetail.venue.id === item.id ? " active" : "");
-    row.innerHTML = `<strong>${item.name || item.slug}</strong><span>${item.status === "archived" ? "Archived" : published ? `Published ${published.version_number}` : "Not published"}${draft ? ` · Draft ${draft.version_number}` : ""} · Exhibitions ${Number(item.exhibition_count) || 0}</span>`;
-    row.addEventListener("click", () => selectGallery(item.id));
+    const title = document.createElement("strong");
+    title.textContent = item.name || item.slug || "Untitled Gallery";
+    const meta = document.createElement("span");
+    meta.textContent = `${item.status === "archived" ? "Archived" : published ? `Published ${published.version_number}` : "Not published"}${draft ? ` · Draft ${draft.version_number}` : ""} · Exhibitions ${Number(item.exhibition_count) || 0}`;
+    row.append(title, meta);
+    row.addEventListener("click", () => { void selectGallery(item.id).catch((error) => showToast(error.message || String(error))); });
     list.appendChild(row);
   });
 }
 
 async function selectGallery(venueId, { skipConfirm = false } = {}) {
   syncGalleryMetadataDirty();
-  if (!skipConfirm && galleryMetadataDirty && !window.confirm("Gallery details have unsaved changes. Discard them and open another Gallery?")) return;
+  syncGalleryEntryDirty();
+  if (!skipConfirm && (galleryMetadataDirty || galleryEntryDirty) && !window.confirm("Gallery has unsaved changes. Discard them and open another Gallery?")) return;
+  if (!skipConfirm && (galleryMetadataDirty || galleryEntryDirty)) discardGalleryFormDraft();
   await ensureGalleryManagementApi();
   selectedGalleryDetail = await galleryManagement.get(venueId);
   renderGalleryDetail(selectedGalleryDetail);
@@ -1068,92 +1181,123 @@ async function selectGallery(venueId, { skipConfirm = false } = {}) {
   updateGalleryUrl(venueId);
 }
 
+function renderGalleryDetailError(body, error) {
+  body.replaceChildren();
+  const box = document.createElement("div");
+  box.className = "galleryRenderError";
+  const title = document.createElement("strong");
+  title.textContent = "Gallery details could not be rendered.";
+  const message = document.createElement("div");
+  message.textContent = "The Gallery panel stopped before it was fully initialized. Retry after the current deployment has finished, and inspect the browser console if the problem repeats.";
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "adminButton";
+  retry.textContent = "RETRY GALLERY";
+  retry.addEventListener("click", () => { void refreshSelectedGallery().catch((retryError) => showToast(retryError.message || String(retryError))); });
+  box.append(title, message, retry);
+  body.appendChild(box);
+  console.error("[C6C8C22.1] Gallery Management render failed", error);
+  showToast("Gallery details failed to render.");
+}
+
 function renderGalleryDetail(detail) {
   const body = galleryEl("galleryDetailBody");
   if (!body || !detail || !detail.venue) return;
-  const venue = detail.venue;
-  const canManage = detail.canManage === true;
-  const draft = galleryDraftVersion(detail);
-  const published = galleryPublishedVersion(detail);
-  const working = draft || published;
-  const assets = working && Array.isArray(working.assets) ? working.assets : [];
-  const entry = galleryEntryFromManifest(working && working.manifest);
-  const validation = working && working.validation_report && typeof working.validation_report === "object" ? working.validation_report : {};
-  const validationValid = validation.valid === true;
-  const rollback = detail.rollback || {};
-  const blockers = detail.archiveBlockers || {};
-  const activeExhibitionCount = Number(blockers.activeExhibitions) || 0;
+  try {
+    const venue = detail.venue;
+    const canManage = detail.canManage === true;
+    const metadataEditable = canManage && venue.status !== "archived";
+    const draft = galleryDraftVersion(detail);
+    const published = galleryPublishedVersion(detail);
+    const working = galleryWorkingVersion(detail);
+    const entryEditable = canManage && !!draft && venue.status !== "archived";
+    const assets = working && Array.isArray(working.assets) ? working.assets : [];
+    const entry = galleryEntryFromManifest(working && working.manifest);
+    const validation = working && working.validation_report && typeof working.validation_report === "object" ? working.validation_report : {};
+    const validationValid = validation.valid === true;
+    const rollback = detail.rollback || {};
+    const blockers = detail.archiveBlockers || {};
+    const activeExhibitionCount = Number(blockers.activeExhibitions) || 0;
 
-  body.innerHTML = `
-    <form id="galleryDetailsForm" class="gallerySubsection">
-      <h3>Gallery details</h3>
-      <label class="fieldLabel">Name<input id="galleryName" class="adminInput" maxlength="120" required ${canManage ? "" : "readonly"}></label>
-      <label class="fieldLabel">Description<textarea id="galleryDescription" class="adminTextarea" maxlength="4000" ${canManage ? "" : "readonly"}></textarea></label>
-      <label class="fieldLabel">Technical slug<input id="gallerySlug" class="adminInput" readonly></label>
-      <button id="saveGalleryDetailsButton" class="adminButton primary" type="submit" ${canManage ? "" : "disabled"}>SAVE GALLERY DETAILS</button>
-    </form>
-    <div class="gallerySubsection"><h3>Version</h3>
-      <div class="galleryVersionLine"><span>Published</span><strong>${published ? published.version_number : "—"}</strong></div>
-      <div class="galleryVersionLine"><span>Active Draft</span><strong>${draft ? draft.version_number : "none"}</strong></div>
-      <div class="galleryActions">
-        <button id="beginGalleryDraftButton" class="adminButton" type="button" ${canManage && venue.status !== "archived" ? "" : "disabled"}>${draft ? "EDIT DRAFT" : "CREATE NEXT VERSION"}</button>
-        <button id="discardGalleryDraftButton" class="adminButton danger" type="button" ${canManage && draft ? "" : "disabled"}>DISCARD DRAFT</button>
+    body.innerHTML = `
+      <form id="galleryDetailsForm" class="gallerySubsection">
+        <h3>Gallery details</h3>
+        <label class="fieldLabel">Name<input id="galleryName" class="adminInput" maxlength="120" required ${metadataEditable ? "" : "readonly"}></label>
+        <label class="fieldLabel">Description<textarea id="galleryDescription" class="adminTextarea" maxlength="4000" ${metadataEditable ? "" : "readonly"}></textarea></label>
+        <label class="fieldLabel">Technical slug<input id="gallerySlug" class="adminInput" readonly></label>
+        <button id="saveGalleryDetailsButton" class="adminButton primary" type="submit" ${metadataEditable ? "" : "disabled"}>SAVE GALLERY DETAILS</button>
+      </form>
+      <div class="gallerySubsection"><h3>Version</h3>
+        <div class="galleryVersionLine"><span>Published</span><strong>${published ? published.version_number : "—"}</strong></div>
+        <div class="galleryVersionLine"><span>Active Draft</span><strong>${draft ? draft.version_number : "none"}</strong></div>
+        <div class="galleryActions">
+          <button id="beginGalleryDraftButton" class="adminButton" type="button" ${canManage && venue.status !== "archived" ? "" : "disabled"}>${draft ? "EDIT DRAFT" : "CREATE NEXT VERSION"}</button>
+          <button id="discardGalleryDraftButton" class="adminButton danger" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>DISCARD DRAFT</button>
+        </div>
       </div>
-    </div>
-    <div class="gallerySubsection"><h3>Building assets</h3><div class="galleryMuted">Four controlled Space roles. Replacing a file creates a new immutable Storage object.</div><div id="galleryAssetGrid" class="galleryAssetGrid"></div></div>
-    <div class="gallerySubsection"><h3>Entry point</h3>
-      <div class="galleryMuted">Fine-adjust values here or capture the current camera from TEST GALLERY.</div>
-      <div class="galleryMuted">Position</div><div class="galleryEntryGrid">${["x","y","z"].map((axis)=>`<label class="galleryEntryLabel">${axis}<input id="galleryEntryPos${axis.toUpperCase()}" class="adminInput" type="number" step="0.01"></label>`).join("")}</div>
-      <div class="galleryMuted">Look target</div><div class="galleryEntryGrid">${["x","y","z"].map((axis)=>`<label class="galleryEntryLabel">${axis}<input id="galleryEntryTarget${axis.toUpperCase()}" class="adminInput" type="number" step="0.01"></label>`).join("")}</div>
-      <div class="galleryActions"><button id="saveGalleryEntryButton" class="adminButton" type="button" ${canManage && draft ? "" : "disabled"}>SAVE ENTRY POINT</button><button id="testGalleryButton" class="adminButton" type="button" ${working ? "" : "disabled"}>TEST GALLERY</button></div>
-    </div>
-    <div class="gallerySubsection"><h3>Validation</h3><div id="galleryValidation" class="galleryValidation ${validationValid ? "valid" : "invalid"}"></div><button id="validateGalleryButton" class="adminButton" type="button" ${canManage && draft ? "" : "disabled"}>VALIDATE DRAFT</button></div>
-    <div class="gallerySubsection"><h3>Actions</h3><div class="galleryActions">
-      <button id="publishGalleryButton" class="adminButton primary" type="button" ${canManage && draft ? "" : "disabled"}>PUBLISH VERSION</button>
-      <button id="rollbackGalleryButton" class="adminButton" type="button" ${canManage && rollback.available ? "" : "disabled"}>ROLLBACK</button>
-      <button id="archiveGalleryButton" class="adminButton danger" type="button" ${canManage && venue.status !== "archived" && !draft && activeExhibitionCount===0 ? "" : "disabled"}>ARCHIVE</button>
-      <button id="restoreGalleryButton" class="adminButton" type="button" ${canManage && venue.status === "archived" ? "" : "disabled"}>RESTORE</button>
-    </div><div id="galleryActionNote" class="galleryDangerNote"></div></div>
-    <div class="gallerySubsection"><h3>Version history</h3><div id="galleryHistory" class="galleryHistory"></div></div>`;
+      <div class="gallerySubsection"><h3>Building assets</h3><div class="galleryMuted">Four controlled Space roles. Replacing a file creates a new immutable Storage object.</div><div id="galleryAssetGrid" class="galleryAssetGrid"></div></div>
+      <div class="gallerySubsection"><h3>Entry point</h3>
+        <div class="galleryMuted">Fine-adjust values here or capture the current camera from TEST GALLERY.</div>
+        <div class="galleryMuted">Position</div><div class="galleryEntryGrid">${["x","y","z"].map((axis)=>`<label class="galleryEntryLabel">${axis}<input id="galleryEntryPos${axis.toUpperCase()}" class="adminInput" type="number" step="0.01" required ${entryEditable ? "" : "readonly"}></label>`).join("")}</div>
+        <div class="galleryMuted">Look target</div><div class="galleryEntryGrid">${["x","y","z"].map((axis)=>`<label class="galleryEntryLabel">${axis}<input id="galleryEntryTarget${axis.toUpperCase()}" class="adminInput" type="number" step="0.01" required ${entryEditable ? "" : "readonly"}></label>`).join("")}</div>
+        <div class="galleryActions"><button id="saveGalleryEntryButton" class="adminButton" type="button" ${entryEditable ? "" : "disabled"}>SAVE ENTRY POINT</button><button id="testGalleryButton" class="adminButton" type="button" ${working ? "" : "disabled"}>TEST GALLERY</button></div>
+      </div>
+      <div class="gallerySubsection"><h3>Validation</h3><div id="galleryValidation" class="galleryValidation ${validationValid ? "valid" : "invalid"}"></div><button id="validateGalleryButton" class="adminButton" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>VALIDATE DRAFT</button></div>
+      <div class="gallerySubsection"><h3>Actions</h3><div class="galleryActions">
+        <button id="publishGalleryButton" class="adminButton primary" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>PUBLISH VERSION</button>
+        <button id="rollbackGalleryButton" class="adminButton" type="button" ${canManage && rollback.available && venue.status !== "archived" ? "" : "disabled"}>ROLLBACK</button>
+        <button id="archiveGalleryButton" class="adminButton danger" type="button" ${canManage && venue.status !== "archived" && !draft && activeExhibitionCount===0 ? "" : "disabled"}>ARCHIVE</button>
+        <button id="restoreGalleryButton" class="adminButton" type="button" ${canManage && venue.status === "archived" ? "" : "disabled"}>RESTORE</button>
+      </div><div id="galleryActionNote" class="galleryDangerNote"></div></div>
+      <div class="gallerySubsection"><h3>Version history</h3><div id="galleryHistory" class="galleryHistory"></div></div>`;
 
-  galleryEl("galleryName").value = venue.name || "";
-  galleryEl("galleryDescription").value = venue.description || "";
-  galleryEl("gallerySlug").value = venue.slug || "";
-  const pos = entry && entry.position ? entry.position : {x:0,y:1.7,z:0};
-  const target = entry && entry.target ? entry.target : {x:0,y:1.7,z:1};
-  ["X","Y","Z"].forEach((axis) => {
-    galleryEl(`galleryEntryPos${axis}`).value = String(pos[axis.toLowerCase()] ?? 0);
-    galleryEl(`galleryEntryTarget${axis}`).value = String(target[axis.toLowerCase()] ?? 0);
-  });
-  renderGalleryAssetSlots(detail, working, assets, canManage && !!draft);
-  renderGalleryValidation(validation, working);
-  renderGalleryHistory(detail);
-  const actionNote = galleryEl("galleryActionNote");
-  if (venue.status === "archived") actionNote.textContent = "Archived Gallery is read-only until restored.";
-  else if (draft) actionNote.textContent = "Rollback and Archive are locked while an active Draft Version exists.";
-  else if (activeExhibitionCount > 0) actionNote.textContent = `Archive blocked: ${activeExhibitionCount} active Exhibition(s) still belong to this Gallery.`;
-  else if (venue.previous_version_id && !rollback.available) actionNote.textContent = "Previous Version is invalid or historical only; rollback is unavailable.";
+    galleryEl("galleryName").value = venue.name || "";
+    galleryEl("galleryDescription").value = venue.description || "";
+    galleryEl("gallerySlug").value = venue.slug || "";
+    const pos = entry && entry.position ? entry.position : {x:0,y:1.7,z:0};
+    const target = entry && entry.target ? entry.target : {x:0,y:1.7,z:1};
+    ["X","Y","Z"].forEach((axis) => {
+      galleryEl(`galleryEntryPos${axis}`).value = String(pos[axis.toLowerCase()] ?? 0);
+      galleryEl(`galleryEntryTarget${axis}`).value = String(target[axis.toLowerCase()] ?? 0);
+    });
+    renderGalleryAssetSlots(detail, working, assets, entryEditable);
+    renderGalleryValidation(validation, working, detail);
+    renderGalleryHistory(detail);
+    const actionNote = galleryEl("galleryActionNote");
+    if (venue.status === "archived") actionNote.textContent = "Archived Gallery is read-only until restored.";
+    else if (draft) actionNote.textContent = "Rollback and Archive are locked while an active Draft Version exists.";
+    else if (activeExhibitionCount > 0) actionNote.textContent = `Archive blocked: ${activeExhibitionCount} active Exhibition(s) still belong to this Gallery.`;
+    else if (venue.previous_version_id && !rollback.available) actionNote.textContent = "Previous Version is invalid or historical only; rollback is unavailable.";
 
-  galleryEl("galleryDetailsForm").addEventListener("submit", handleSaveGalleryDetails);
-  galleryEl("galleryName").addEventListener("input", syncGalleryMetadataDirty);
-  galleryEl("galleryDescription").addEventListener("input", syncGalleryMetadataDirty);
-  galleryEl("beginGalleryDraftButton").addEventListener("click", handleBeginGalleryDraft);
-  galleryEl("discardGalleryDraftButton").addEventListener("click", handleDiscardGalleryDraft);
-  galleryEl("saveGalleryEntryButton").addEventListener("click", handleSaveGalleryEntry);
-  galleryEl("testGalleryButton").addEventListener("click", handleTestGallery);
-  galleryEl("validateGalleryButton").addEventListener("click", handleValidateGallery);
-  galleryEl("publishGalleryButton").addEventListener("click", handlePublishGallery);
-  galleryEl("rollbackGalleryButton").addEventListener("click", handleRollbackGallery);
-  galleryEl("archiveGalleryButton").addEventListener("click", handleArchiveGallery);
-  galleryEl("restoreGalleryButton").addEventListener("click", handleRestoreGallery);
-  galleryMetadataBaseline = galleryMetadataSnapshot();
-  galleryMetadataDirty = false;
+    galleryEl("galleryDetailsForm").addEventListener("submit", handleSaveGalleryDetails);
+    galleryEl("galleryName").addEventListener("input", syncGalleryMetadataDirty);
+    galleryEl("galleryDescription").addEventListener("input", syncGalleryMetadataDirty);
+    ["X","Y","Z"].forEach((axis) => {
+      galleryEl(`galleryEntryPos${axis}`).addEventListener("input", syncGalleryEntryDirty);
+      galleryEl(`galleryEntryTarget${axis}`).addEventListener("input", syncGalleryEntryDirty);
+    });
+    galleryEl("beginGalleryDraftButton").addEventListener("click", handleBeginGalleryDraft);
+    galleryEl("discardGalleryDraftButton").addEventListener("click", handleDiscardGalleryDraft);
+    galleryEl("saveGalleryEntryButton").addEventListener("click", handleSaveGalleryEntry);
+    galleryEl("testGalleryButton").addEventListener("click", handleTestGallery);
+    galleryEl("validateGalleryButton").addEventListener("click", handleValidateGallery);
+    galleryEl("publishGalleryButton").addEventListener("click", handlePublishGallery);
+    galleryEl("rollbackGalleryButton").addEventListener("click", handleRollbackGallery);
+    galleryEl("archiveGalleryButton").addEventListener("click", handleArchiveGallery);
+    galleryEl("restoreGalleryButton").addEventListener("click", handleRestoreGallery);
+    galleryMetadataBaseline = galleryMetadataSnapshot();
+    galleryEntryBaseline = galleryEntrySnapshot();
+    galleryMetadataDirty = false;
+    galleryEntryDirty = false;
+  } catch (error) {
+    renderGalleryDetailError(body, error);
+  }
 }
 
 function renderGalleryAssetSlots(detail, working, assets, editable) {
   const grid = galleryEl("galleryAssetGrid");
   if (!grid) return;
-  grid.innerHTML = "";
+  grid.replaceChildren();
   CONTROLLED_GALLERY_ASSET_ROLES.forEach((role) => {
     const asset = assets.find((item) => item.role === role || item.asset_id === role) || null;
     const row = document.createElement("div");
@@ -1163,132 +1307,261 @@ function renderGalleryAssetSlots(detail, working, assets, editable) {
     meta.textContent = asset ? `${asset.storage_path || asset.public_url || "assigned"}${asset.file_size ? ` · ${Math.round(Number(asset.file_size)/1024)} KB` : ""}` : "Not assigned";
     const button = document.createElement("button"); button.type="button"; button.className="adminButton"; button.textContent = asset ? "REPLACE" : "UPLOAD"; button.disabled = !editable;
     const input = document.createElement("input"); input.type="file"; input.accept=".glb,model/gltf-binary"; input.className="galleryAssetInput";
-    button.addEventListener("click", () => input.click());
+    button.addEventListener("click", () => {
+      if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery fields will be discarded before uploading a building asset. Continue?")) return;
+      input.click();
+    });
     input.addEventListener("change", async () => {
       const file = input.files && input.files[0]; input.value=""; if (!file) return;
-      button.disabled=true; button.textContent="UPLOADING…";
-      try {
-        const draft = galleryDraftVersion(selectedGalleryDetail);
-        const result = await galleryManagement.uploadAssetSlot({ venueId: detail.venue.id, venueVersionId: draft.id, role, file });
-        const warning = result.cleanup && result.cleanup.warnings && result.cleanup.warnings[0];
-        showToast(warning ? `Asset updated. ${warning}` : `${role.toUpperCase()} updated.`);
-        await refreshSelectedGallery();
-      } catch (error) { showToast(error.message || String(error)); }
-      finally { button.disabled=false; button.textContent=asset ? "REPLACE" : "UPLOAD"; }
+      await withGalleryMutation(button, "UPLOADING…", async () => {
+        try {
+          const draft = galleryDraftVersion(selectedGalleryDetail);
+          if (!draft || !selectedGalleryDetail || !selectedGalleryDetail.venue) throw new Error("An active Gallery Draft is required before uploading a building asset.");
+          const result = await galleryManagement.uploadAssetSlot({ venueId: selectedGalleryDetail.venue.id, venueVersionId: draft.id, role, file });
+          const warning = result.cleanup && result.cleanup.warnings && result.cleanup.warnings[0];
+          showToast(warning ? `Asset updated. ${warning}` : `${role.toUpperCase()} updated.`);
+          await refreshSelectedGallery();
+        } catch (error) {
+          showToast(error.message || String(error));
+        }
+      });
     });
     row.append(label,meta,button,input); grid.appendChild(row);
   });
 }
 
-function renderGalleryValidation(report, working) {
+function renderGalleryValidation(report, working, detail) {
   const box = galleryEl("galleryValidation"); if (!box) return;
   const valid = report && report.valid === true;
   const errors = report && Array.isArray(report.errors) ? report.errors : [];
   const warnings = report && Array.isArray(report.warnings) ? report.warnings : [];
+  const isPublished = !!(working && detail && detail.venue && working.id === detail.venue.published_version_id);
+  const state = valid ? (isPublished ? "VALID" : "READY") : (isPublished ? "INVALID" : "NOT READY");
   box.className = `galleryValidation ${valid ? "valid" : "invalid"}`;
-  box.textContent = `${working ? working.version_number : "No version"} · ${valid ? "READY" : "NOT READY"}${errors.length ? ` · ${errors.join(" · ")}` : ""}${warnings.length ? ` · Warnings: ${warnings.join(" · ")}` : ""}`;
+  box.textContent = `${working ? working.version_number : "No version"} · ${state}${errors.length ? ` · ${errors.join(" · ")}` : ""}${warnings.length ? ` · Warnings: ${warnings.join(" · ")}` : ""}`;
 }
 
 function renderGalleryHistory(detail) {
   const target = galleryEl("galleryHistory"); if (!target) return;
-  target.innerHTML="";
+  target.replaceChildren();
   (detail.versions || []).forEach((version) => {
     let label = version.status || "historical";
     if (version.id === detail.venue.published_version_id) label = "Published";
     else if (version.id === detail.venue.draft_version_id) label = "Draft";
     else if (version.id === detail.venue.previous_version_id) label = detail.rollback && detail.rollback.available ? "Previous — rollback available" : "Previous — invalid history";
     else if (version.status === "archived") label = "Archived Draft";
-    const row=document.createElement("div"); row.className="galleryHistoryItem"; row.innerHTML=`<strong>${version.version_number}</strong><span class="galleryMuted">${label}</span>`; target.appendChild(row);
+    const row = document.createElement("div");
+    row.className = "galleryHistoryItem";
+    const versionLabel = document.createElement("strong");
+    versionLabel.textContent = version.version_number || "?";
+    const status = document.createElement("span");
+    status.className = "galleryMuted";
+    status.textContent = label;
+    row.append(versionLabel, status);
+    target.appendChild(row);
   });
 }
 
 async function refreshSelectedGallery() {
   if (!selectedGalleryDetail || !selectedGalleryDetail.venue) return;
-  const id=selectedGalleryDetail.venue.id;
-  selectedGalleryDetail=await galleryManagement.get(id);
-  galleryCatalog=await galleryManagement.list();
-  renderGalleryCatalog(); renderGalleryDetail(selectedGalleryDetail);
+  const id = selectedGalleryDetail.venue.id;
+  selectedGalleryDetail = await galleryManagement.get(id);
+  galleryCatalog = await galleryManagement.list();
+  renderGalleryCatalog();
+  renderGalleryDetail(selectedGalleryDetail);
+}
+
+async function handleRefreshGalleries() {
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before refreshing. Continue?")) return;
+  const button = galleryEl("refreshGalleriesButton");
+  await withGalleryMutation(button, "…", async () => {
+    try { await loadGalleryCatalog(true); }
+    catch (error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleCreateGallery(event) {
   event.preventDefault();
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before creating another Gallery. Continue?")) return;
   await ensureGalleryManagementApi();
-  const name=galleryEl("newGalleryName").value.trim(); const description=galleryEl("newGalleryDescription").value.trim();
+  const name = galleryEl("newGalleryName").value.trim();
+  const description = galleryEl("newGalleryDescription").value.trim();
   if (!name) return;
-  const button=galleryEl("createGalleryButton"); setBusy(button,true);
-  try { const created=await galleryManagement.create({name,description}); galleryEl("newGalleryName").value=""; galleryEl("newGalleryDescription").value=""; galleryCatalog=await galleryManagement.list(); await selectGallery(created.venue.id,{skipConfirm:true}); showToast("Gallery created with v1 Draft."); }
-  catch(error){showToast(error.message||String(error));} finally{setBusy(button,false);}
+  const button = galleryEl("createGalleryButton");
+  await withGalleryMutation(button, "CREATING…", async () => {
+    try {
+      const created = await galleryManagement.create({name,description});
+      galleryEl("newGalleryName").value="";
+      galleryEl("newGalleryDescription").value="";
+      galleryCatalog = await galleryManagement.list();
+      await selectGallery(created.venue.id,{skipConfirm:true});
+      showToast("Gallery created with v1 Draft.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleSaveGalleryDetails(event) {
-  event.preventDefault(); if (!selectedGalleryDetail) return;
-  const button=galleryEl("saveGalleryDetailsButton"); setBusy(button,true);
-  try { await galleryManagement.updateDetails(selectedGalleryDetail.venue.id,{name:galleryEl("galleryName").value,description:galleryEl("galleryDescription").value}); await refreshSelectedGallery(); showToast("Gallery details saved."); }
-  catch(error){showToast(error.message||String(error));} finally{setBusy(button,false);}
+  event.preventDefault();
+  if (!selectedGalleryDetail || galleryMutationInFlight) return;
+  syncGalleryEntryDirty();
+  if (galleryEntryDirty) {
+    if (!window.confirm("Entry Point has unsaved changes. Discard them and save Gallery details?")) return;
+    restoreGalleryEntryBaseline();
+  }
+  const name = galleryEl("galleryName").value.trim();
+  if (!name) { showToast("Gallery name is required."); return; }
+  const button = galleryEl("saveGalleryDetailsButton");
+  await withGalleryMutation(button, "SAVING…", async () => {
+    try {
+      await galleryManagement.updateDetails(selectedGalleryDetail.venue.id,{name,description:galleryEl("galleryDescription").value});
+      await refreshSelectedGallery();
+      showToast("Gallery details saved.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleBeginGalleryDraft() {
-  if (!selectedGalleryDetail) return;
-  const button=galleryEl("beginGalleryDraftButton"); setBusy(button,true);
-  try { const result=await galleryManagement.beginDraft(selectedGalleryDetail.venue.id); await refreshSelectedGallery(); showToast(result.created ? `Created ${result.draftVersion.version_number} Draft.` : `Opened ${result.draftVersion.version_number} Draft.`); }
-  catch(error){showToast(error.message||String(error));} finally{setBusy(button,false);}
+  if (!selectedGalleryDetail || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before opening a Draft Version. Continue?")) return;
+  const button = galleryEl("beginGalleryDraftButton");
+  await withGalleryMutation(button, "OPENING…", async () => {
+    try {
+      const result = await galleryManagement.beginDraft(selectedGalleryDetail.venue.id);
+      await refreshSelectedGallery();
+      showToast(result.created ? `Created ${result.draftVersion.version_number} Draft.` : `Opened ${result.draftVersion.version_number} Draft.`);
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleDiscardGalleryDraft() {
-  const draft=galleryDraftVersion(selectedGalleryDetail); if(!draft) return;
+  const draft = galleryDraftVersion(selectedGalleryDetail); if(!draft || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before discarding the Draft. Continue?")) return;
   if(!window.confirm(`Discard ${draft.version_number} Draft? Uploaded objects owned only by this Draft will be cleanup candidates.`)) return;
-  try { const result=await galleryManagement.discardDraft(draft.id); await refreshSelectedGallery(); const warning=result.cleanup&&result.cleanup.warnings&&result.cleanup.warnings[0]; showToast(warning?`Draft discarded. ${warning}`:"Draft discarded."); }
-  catch(error){showToast(error.message||String(error));}
+  const button = galleryEl("discardGalleryDraftButton");
+  await withGalleryMutation(button, "DISCARDING…", async () => {
+    try {
+      const result = await galleryManagement.discardDraft(draft.id);
+      await refreshSelectedGallery();
+      const warning = result.cleanup && result.cleanup.warnings && result.cleanup.warnings[0];
+      showToast(warning ? `Draft discarded. ${warning}` : "Draft discarded.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
+}
+
+function readRequiredFiniteGalleryNumber(id, label) {
+  const input = galleryEl(id);
+  const raw = input ? String(input.value).trim() : "";
+  if (!raw) throw new Error(`${label} is required.`);
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new Error(`${label} must be a finite number.`);
+  return value;
 }
 
 function readEntryForm() {
-  const read=(prefix)=>({x:Number(galleryEl(`${prefix}X`).value),y:Number(galleryEl(`${prefix}Y`).value),z:Number(galleryEl(`${prefix}Z`).value)});
-  return {position:read("galleryEntryPos"),target:read("galleryEntryTarget")};
+  const read = (prefix, label) => ({
+    x: readRequiredFiniteGalleryNumber(`${prefix}X`, `${label} X`),
+    y: readRequiredFiniteGalleryNumber(`${prefix}Y`, `${label} Y`),
+    z: readRequiredFiniteGalleryNumber(`${prefix}Z`, `${label} Z`)
+  });
+  return { position: read("galleryEntryPos", "Entry position"), target: read("galleryEntryTarget", "Entry target") };
 }
 
 async function handleSaveGalleryEntry() {
-  const draft=galleryDraftVersion(selectedGalleryDetail); if(!draft) return;
-  try { const entry=readEntryForm(); await galleryManagement.setEntryPoint(draft.id,entry.position,entry.target); await refreshSelectedGallery(); showToast("Entry Point saved."); }
-  catch(error){showToast(error.message||String(error));}
+  const draft = galleryDraftVersion(selectedGalleryDetail); if(!draft || galleryMutationInFlight) return;
+  syncGalleryMetadataDirty();
+  if (galleryMetadataDirty) {
+    if (!window.confirm("Gallery details have unsaved changes. Discard them and save the Entry Point?")) return;
+    restoreGalleryMetadataBaseline();
+  }
+  let entry;
+  try { entry = readEntryForm(); }
+  catch (error) { showToast(error.message || String(error)); return; }
+  const button = galleryEl("saveGalleryEntryButton");
+  await withGalleryMutation(button, "SAVING…", async () => {
+    try {
+      await galleryManagement.setEntryPoint(draft.id,entry.position,entry.target);
+      await refreshSelectedGallery();
+      showToast("Entry Point saved.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 function handleTestGallery() {
-  const version=galleryWorkingVersion(selectedGalleryDetail); if(!version) return;
+  const version = galleryWorkingVersion(selectedGalleryDetail); if(!version) return;
   if (hasAnyAdminUnsavedChanges() && !window.confirm("Unsaved Admin changes will be discarded before Test Gallery. Continue?")) return;
   if (hasAnyAdminUnsavedChanges()) discardAdminUnsavedChanges();
-  const url=new URL("./gallery-test.html",location.href); url.searchParams.set("version",version.id); url.searchParams.set("gallery",selectedGalleryDetail.venue.id); location.href=url.href;
+  const url = new URL("./gallery-test.html",location.href);
+  url.searchParams.set("version",version.id);
+  url.searchParams.set("gallery",selectedGalleryDetail.venue.id);
+  location.href = url.href;
 }
 
 async function handleValidateGallery() {
-  const draft=galleryDraftVersion(selectedGalleryDetail); if(!draft) return;
-  try { const report=await galleryManagement.validate(draft.id); await refreshSelectedGallery(); showToast(report.valid?"Gallery Draft is READY.":"Gallery validation found blockers."); }
-  catch(error){showToast(error.message||String(error));}
+  const draft = galleryDraftVersion(selectedGalleryDetail); if(!draft || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before validation. Continue?")) return;
+  const button = galleryEl("validateGalleryButton");
+  await withGalleryMutation(button, "VALIDATING…", async () => {
+    try {
+      const report = await galleryManagement.validate(draft.id);
+      await refreshSelectedGallery();
+      showToast(report.valid ? "Gallery Draft is READY." : "Gallery validation found blockers.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handlePublishGallery() {
-  const draft=galleryDraftVersion(selectedGalleryDetail); if(!draft) return;
+  const draft = galleryDraftVersion(selectedGalleryDetail); if(!draft || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before publishing. Continue?")) return;
   if(!window.confirm("Publish this Gallery Version? Existing Exhibitions stay on their currently assigned Gallery Version until deliberately migrated later.")) return;
-  try { await galleryManagement.publish(draft.id); await refreshSelectedGallery(); showToast(`${draft.version_number} published. Existing Exhibitions were not reassigned.`); }
-  catch(error){showToast(error.message||String(error));}
+  const button = galleryEl("publishGalleryButton");
+  await withGalleryMutation(button, "PUBLISHING…", async () => {
+    try {
+      await galleryManagement.publish(draft.id);
+      await refreshSelectedGallery();
+      showToast(`${draft.version_number} published. Existing Exhibitions were not reassigned.`);
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleRollbackGallery() {
-  if(!selectedGalleryDetail||!(selectedGalleryDetail.rollback&&selectedGalleryDetail.rollback.available)) return;
+  if(!selectedGalleryDetail || !(selectedGalleryDetail.rollback && selectedGalleryDetail.rollback.available) || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before rollback. Continue?")) return;
   if(!window.confirm("Rollback the active Gallery Version to the validated previous Version? Existing Exhibitions remain pinned to their explicit versions.")) return;
-  try { await galleryManagement.rollback(selectedGalleryDetail.venue.id); await refreshSelectedGallery(); showToast("Gallery rollback completed."); }
-  catch(error){showToast(error.message||String(error));}
+  const button = galleryEl("rollbackGalleryButton");
+  await withGalleryMutation(button, "ROLLING BACK…", async () => {
+    try {
+      await galleryManagement.rollback(selectedGalleryDetail.venue.id);
+      await refreshSelectedGallery();
+      showToast("Gallery rollback completed.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleArchiveGallery() {
-  if(!selectedGalleryDetail) return; if(!window.confirm("Archive this Gallery?")) return;
-  try { await galleryManagement.archive(selectedGalleryDetail.venue.id); await refreshSelectedGallery(); showToast("Gallery archived."); }
-  catch(error){showToast(error.message||String(error));}
+  if(!selectedGalleryDetail || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before archiving. Continue?")) return;
+  if(!window.confirm("Archive this Gallery?")) return;
+  const button = galleryEl("archiveGalleryButton");
+  await withGalleryMutation(button, "ARCHIVING…", async () => {
+    try {
+      await galleryManagement.archive(selectedGalleryDetail.venue.id);
+      await refreshSelectedGallery();
+      showToast("Gallery archived.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 async function handleRestoreGallery() {
-  if(!selectedGalleryDetail) return;
-  try { await galleryManagement.restore(selectedGalleryDetail.venue.id); await refreshSelectedGallery(); showToast("Gallery restored."); }
-  catch(error){showToast(error.message||String(error));}
+  if(!selectedGalleryDetail || galleryMutationInFlight) return;
+  if (!confirmAndDiscardGalleryFormChanges("Unsaved Gallery changes will be discarded before restoring. Continue?")) return;
+  const button = galleryEl("restoreGalleryButton");
+  await withGalleryMutation(button, "RESTORING…", async () => {
+    try {
+      await galleryManagement.restore(selectedGalleryDetail.venue.id);
+      await refreshSelectedGallery();
+      showToast("Gallery restored.");
+    } catch(error) { showToast(error.message || String(error)); }
+  });
 }
 
 ensureGalleryManagementUi();

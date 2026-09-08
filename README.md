@@ -1,6 +1,6 @@
 # Exhibition Platform
 
-Current repository release: **C6C8C22 — Gallery Management**.
+Current repository release: **C6C8C22.1 — Gallery Management Browser-Smoke Hotfix**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
@@ -101,6 +101,24 @@ The controlled building roles in C22 are exactly:
 
 Published/frozen Venue Versions are not edited in place.
 
+
+## C6C8C22.1 browser-smoke hardening
+
+C22.1 is a frontend/QA maintenance patch after the first production C22 smoke exposed a missing imported binding in the Building Assets renderer. It does not change the database contract.
+
+The maintenance patch:
+
+- restores the four controlled Building Asset rows through the shared `CONTROLLED_GALLERY_ASSET_ROLES` import;
+- adds Entry Point dirty-state and strict numeric validation;
+- adds browser-side Gallery mutation/reentrancy locking;
+- renders Gallery list/history dynamic text without interpolated row HTML;
+- adds Gallery-detail render failure handling and caught selection failures;
+- keeps Published/no-Draft Entry controls and Archived metadata read-only;
+- clears Gallery-specific URL state when returning to Exhibitions;
+- bumps Viewer/Admin cache keys so the corrected module is requested after deploy.
+
+C22.1 has **no SQL delta**. The full C22 Gallery lifecycle must still pass production smoke before C22 is marked CLOSED.
+
 ## Structural validation boundary
 
 C22 validates lifecycle readiness, including:
@@ -175,7 +193,7 @@ This performs:
 - platform regressions including the canonical Multi-Space contract;
 - performance regressions;
 - workspace regressions;
-- C6C8C22 Gallery Management/Test Gallery regressions.
+- C6C8C22.1 Gallery Management browser-smoke/Test Gallery regressions.
 
 SQL package validation is intentionally separate and is run from the release-package root with:
 
