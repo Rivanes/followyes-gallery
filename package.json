@@ -1,22 +1,24 @@
 {
   "name": "exhibition-platform",
-  "version": "0.11.90-c6c8c24-exhibition-gallery-assignment",
+  "version": "0.13.1-v13-shared-asset-foundation",
   "private": true,
-  "description": "Exhibition Platform — C6C8C24 Exhibition ↔ Gallery Assignment + Public Discovery",
+  "description": "Exhibition Platform — V13.1 Shared Asset Foundation",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
-    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/config/space-fixture.js && node --check src/runtime/space-definition-resolver.js && node --check src/data/exhibition-api.js && node --check src/data/exhibition-gallery-assignment.js && node --check src/data/gallery-management-api.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && node --check src/bootstrap/admin-workspace-bootstrap.js && node --check src/bootstrap/gallery-test-bootstrap.js && node --check src/bootstrap/asset-cache-bootstrap.js && node --check src/bootstrap/transition-guard.js && node --check asset-cache-sw.js && node --check src/workers/gallery-avif-encoder-worker.js && node --check src/workers/gallery-glb-validator-worker.js && node --check src/validation/gallery-model-validation.js && node --check src/vendor/gallery-avif-encoder.mjs",
+    "syntax": "node --check src/Gallery_V0_11.js && node --check src/Gallery_V0_11.min.js && node --check src/config/space-fixture.js && node --check src/runtime/space-definition-resolver.js && node --check src/runtime/scene-lifecycle-controller.js && node --check src/runtime/public-space-entry-policy.js && node --check src/data/exhibition-api.js && node --check src/data/exhibition-gallery-assignment.js && node --check src/data/gallery-management-api.js && node --check src/bootstrap/gallery-viewer-bootstrap.js && node --check src/bootstrap/gallery-editor-bootstrap.js && node --check src/bootstrap/admin-workspace-bootstrap.js && node --check src/bootstrap/gallery-test-bootstrap.js && node --check src/bootstrap/asset-cache-bootstrap.js && node --check src/bootstrap/transition-guard.js && node --check asset-cache-sw.js && node --check src/workers/gallery-avif-encoder-worker.js && node --check src/workers/gallery-glb-validator-worker.js && node --check src/validation/gallery-model-validation.js && node --check src/vendor/gallery-avif-encoder.mjs && node --check src/data/shared-asset-api.js && node --check src/runtime/shared-asset-state.js && node --check src/validation/shared-asset-validation.js && node --check src/workers/shared-asset-glb-validator-worker.js",
     "verify": "node tools/verify-current.mjs",
     "test:core": "node tools/test-core-runtime.mjs",
     "test:media": "node tools/test-media-runtime.mjs",
     "test:platform": "node tools/test-platform-runtime.mjs",
     "test:performance": "node tools/test-performance-runtime.mjs",
     "test:workspace": "node tools/test-workspace-ui.mjs",
-    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:gallery-assignment",
+    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:gallery-assignment && npm run test:cross-space && npm run test:assets",
     "check": "npm run build && npm run syntax && npm run verify && npm test",
     "test:gallery": "node tools/test-gallery-management.mjs",
     "test:space-models": "node tools/test-space-model-validation.mjs",
-    "test:gallery-assignment": "node tools/test-exhibition-gallery-assignment.mjs"
+    "test:gallery-assignment": "node tools/test-exhibition-gallery-assignment.mjs",
+    "test:cross-space": "node tools/test-cross-space-runtime.mjs",
+    "test:assets": "node tools/test-shared-assets.mjs"
   }
 }

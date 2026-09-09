@@ -1,27 +1,29 @@
 /*
-  Exhibition Platform — C6C8C24 Admin Workspace / Exhibition ↔ Gallery Assignment
+  Exhibition Platform — V13.1 Admin Workspace / Shared Asset Foundation
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
-import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c24_exhibition_gallery_assignment";
-import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c24_exhibition_gallery_assignment";
+import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
+import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import {
   REQUIRED_GALLERY_MODEL_ROLES,
   validateGalleryModelFile,
   validateGalleryModelUrl,
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
-} from "../validation/gallery-model-validation.js?v=c6c8c24_exhibition_gallery_assignment";
+} from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
+import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
+import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import {
   galleryBindingLabel,
   isExhibitionGalleryMigrationPending,
   summarizeGalleryMigrationImpact
-} from "../data/exhibition-gallery-assignment.js?v=c6c8c24_exhibition_gallery_assignment";
+} from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "C6C8C24";
-const ENGINE_CACHE_KEY = "c6c8c24_exhibition_gallery_assignment_20260908";
+const STAGE = "V13.1";
+const ENGINE_CACHE_KEY = "v13_1_shared_asset_foundation_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -55,7 +57,7 @@ const exhibitionName = el("exhibitionName");
 const exhibitionDescription = el("exhibitionDescription");
 const exhibitionSlug = el("exhibitionSlug");
 const exhibitionSortOrder = el("exhibitionSortOrder");
-const exhibitionPublished = el("exhibitionPublished");
+const exhibitionPublicationStatus = el("exhibitionPublicationStatus");
 const exhibitionSpaceId = el("exhibitionSpaceId");
 const saveMetadataButton = el("saveMetadataButton");
 const choosePosterButton = el("choosePosterButton");
@@ -76,6 +78,8 @@ let catalog = [];
 let selectedExhibition = null;
 let engine = null;
 let scene = null;
+let sceneLifecycleController = inlineRuntimeContext && inlineRuntimeContext.lifecycle ? inlineRuntimeContext.lifecycle : null;
+let galleryEngineModule = null;
 let engineReady = false;
 let sceneSaveState = { dirty: false, saveInFlight: false };
 let toastTimer = 0;
@@ -102,6 +106,7 @@ let adminWorkspaceSection = "exhibitions";
 let exhibitionGalleryDetail = null;
 let exhibitionGalleryDetailRequest = 0;
 let exhibitionGalleryMutationInFlight = false;
+let galleryAuthoringPreviewActive = false;
 
 function formatDeliveryBytes(bytes) {
   const value = Math.max(0, Number(bytes) || 0);
@@ -190,7 +195,7 @@ async function updateNetworkDiagnosticsStatus() {
       ? `BG slices ${Number(background.slices) || 0} · art ${Number(background.artworkStarts) || 0} · model ${Number(background.modelStarts) || 0} · pauses ${Number(background.motionPauses) || 0}`
       : "BG waiting";
     networkDiagnostics.textContent = `${sessionPart} | ${transitionPart} | ${cpuPart} | ${foregroundPart} | ${backgroundPart} | ${spacePart}`;
-    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C12 requires the full static Space shell (Walls/Floor/Ceiling/Props), per-mesh GPU warmup and Preview presence before interaction. Full textures and sculpture/model hydration remain background-budgeted and motion-aware.";
+    networkDiagnostics.title = "Storage is measured by the local Service Worker. C6C8C23 requires Floor/Walls/Ceiling for Published runtime; Props are optional. Per-mesh GPU warmup and Preview presence remain part of normal Exhibition readiness. Full textures and sculpture/model hydration remain background-budgeted and motion-aware.";
   } catch (_error) {
     networkDiagnostics.textContent = "Network: diagnostics unavailable";
   }
@@ -218,7 +223,6 @@ function getMetadataDraftPayload() {
   return {
     name: exhibitionName ? exhibitionName.value.trim() : "",
     description: exhibitionDescription ? exhibitionDescription.value : "",
-    is_published: !!(exhibitionPublished && exhibitionPublished.checked),
     sort_order: Number(exhibitionSortOrder && exhibitionSortOrder.value) || 0
   };
 }
@@ -338,7 +342,7 @@ function getRequestedExhibitionId() {
   } catch (_error) { return "main"; }
 }
 
-function readNavigationHandoff(id, spaceId) {
+function readNavigationHandoff(id, spaceId, venueVersionId) {
   const key = `exhibition_platform_handoff_${id}`;
   try {
     const raw = sessionStorage.getItem(key);
@@ -349,6 +353,7 @@ function readNavigationHandoff(id, spaceId) {
     if (!parsed.exhibition || String(parsed.exhibition.id) !== String(id)) return null;
     if (Date.now() - Number(parsed.createdAt || 0) > 120000) return null;
     if (spaceId && String(parsed.spaceId || spaceId) !== String(spaceId)) return null;
+    if (venueVersionId && parsed.venueVersionId && String(parsed.venueVersionId) !== String(venueVersionId)) return null;
     return parsed;
   } catch (_error) {
     try { sessionStorage.removeItem(key); } catch (_ignore) {}
@@ -399,6 +404,10 @@ function ensureExhibitionGalleryAssignmentUi() {
       #exhibitionGalleryAssignment .c24Migration{padding:8px;border-radius:8px;background:rgba(255,196,92,.08);color:rgba(255,220,153,.92);font-size:10px;line-height:1.45}
       #exhibitionGalleryAssignment .c24Migration.resolved{background:rgba(125,169,130,.08);color:rgba(180,220,184,.9)}
       #exhibitionGalleryAssignment .c24AssignmentActions{display:flex;flex-wrap:wrap;gap:7px}
+      #exhibitionGalleryAssignment .c25PublishValidation{display:grid;gap:5px;padding:9px;border-radius:8px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);font-size:10px;line-height:1.45}
+      #exhibitionGalleryAssignment .c25PublishValidation.valid{background:rgba(125,169,130,.08);color:rgba(180,220,184,.92)}
+      #exhibitionGalleryAssignment .c25PublishValidation.blocked{background:rgba(214,96,96,.08);color:rgba(255,185,185,.94)}
+      #exhibitionGalleryAssignment .c25PublishValidation .warning{color:rgba(255,220,153,.92)}
       #exhibitionGalleryTarget{width:100%;min-height:38px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:#171a18;color:rgba(255,255,255,.92);padding:0 9px;font:inherit}
     `;
     document.head.appendChild(style);
@@ -413,24 +422,66 @@ function ensureExhibitionGalleryAssignmentUi() {
       <div class="c24BindingRow"><span>Previous</span><strong id="c24PreviousGallery">—</strong></div>
     </div>
     <div id="c24GalleryMigration" class="c24Migration resolved">No pending Gallery migration.</div>
+    <div id="c25PublishValidation" class="c25PublishValidation">Checking publication readiness…</div>
     <label class="fieldLabel">Assign Draft to Gallery<select id="exhibitionGalleryTarget"><option value="">Loading available Galleries…</option></select></label>
     <div class="c24AssignmentActions">
       <button id="assignExhibitionGalleryButton" class="adminButton" type="button">ASSIGN DRAFT</button>
       <button id="confirmExhibitionGalleryLayoutButton" class="adminButton" type="button">CONFIRM LAYOUT</button>
       <button id="publishExhibitionBundleButton" class="adminButton primary" type="button">PUBLISH EXHIBITION</button>
+      <button id="unpublishExhibitionButton" class="adminButton danger" type="button">UNPUBLISH EXHIBITION</button>
       <button id="rollbackExhibitionBundleButton" class="adminButton" type="button">ROLLBACK PUBLICATION</button>
     </div>
-    <div class="fieldMeta">Assignment changes the private Draft only. The current public Exhibition keeps its Published Gallery until you explicitly publish the Exhibition.</div>`;
+    <div class="fieldMeta">Poster / cover is optional. Without one, public discovery uses the Exhibition title. Assignment changes the private Draft only; public cutover happens only through PUBLISH EXHIBITION.</div>`;
   anchor.insertAdjacentElement("afterend", wrap);
   document.getElementById("assignExhibitionGalleryButton")?.addEventListener("click", handleAssignExhibitionGallery);
   document.getElementById("confirmExhibitionGalleryLayoutButton")?.addEventListener("click", handleConfirmExhibitionGalleryLayout);
   document.getElementById("publishExhibitionBundleButton")?.addEventListener("click", handlePublishExhibitionBundle);
+  document.getElementById("unpublishExhibitionButton")?.addEventListener("click", handleUnpublishExhibition);
   document.getElementById("rollbackExhibitionBundleButton")?.addEventListener("click", handleRollbackExhibitionBundle);
   return wrap;
 }
 
 function c24Binding(detail, channel) {
   return detail && detail.galleryBindings ? detail.galleryBindings[channel] || null : null;
+}
+
+function renderExhibitionPublishValidation(detail) {
+  const box = document.getElementById("c25PublishValidation");
+  if (!box) return;
+  const validation = detail && detail.validation ? detail.validation : null;
+  const blockers = validation && Array.isArray(validation.blockers) ? validation.blockers : [];
+  const warnings = validation && Array.isArray(validation.warnings) ? validation.warnings : [];
+  box.replaceChildren();
+  box.classList.toggle("valid", !!(validation && validation.valid));
+  box.classList.toggle("blocked", !!(validation && !validation.valid));
+
+  const headline = document.createElement("strong");
+  headline.textContent = validation && validation.valid ? "READY TO PUBLISH" : "PUBLICATION BLOCKED";
+  box.appendChild(headline);
+
+  if (!validation) {
+    const line = document.createElement("div");
+    line.textContent = "Publication validation is unavailable.";
+    box.appendChild(line);
+    return;
+  }
+
+  for (const blocker of blockers) {
+    const line = document.createElement("div");
+    line.textContent = `• ${String(blocker)}`;
+    box.appendChild(line);
+  }
+  for (const warning of warnings) {
+    const line = document.createElement("div");
+    line.className = "warning";
+    line.textContent = `• ${String(warning)}`;
+    box.appendChild(line);
+  }
+  if (!blockers.length && !warnings.length) {
+    const line = document.createElement("div");
+    line.textContent = "No publication blockers.";
+    box.appendChild(line);
+  }
 }
 
 function renderExhibitionGalleryAssignment(detail) {
@@ -455,6 +506,7 @@ function renderExhibitionGalleryAssignment(detail) {
       ? "Gallery changed: spatial placement was reset. Rebuild/save the layout in this Gallery, then CONFIRM LAYOUT before publishing."
       : (migration && migration.status === "resolved" ? "Gallery migration layout confirmed." : "No pending Gallery migration.");
   }
+  renderExhibitionPublishValidation(detail);
 
   const select = document.getElementById("exhibitionGalleryTarget");
   if (select) {
@@ -481,10 +533,12 @@ function renderExhibitionGalleryAssignment(detail) {
   const assign = document.getElementById("assignExhibitionGalleryButton");
   const confirm = document.getElementById("confirmExhibitionGalleryLayoutButton");
   const publish = document.getElementById("publishExhibitionBundleButton");
+  const unpublish = document.getElementById("unpublishExhibitionButton");
   const rollback = document.getElementById("rollbackExhibitionBundleButton");
   if (assign) assign.disabled = exhibitionGalleryMutationInFlight || !selectedOption || !selectedOption.dataset.venueId || sameTarget;
   if (confirm) confirm.disabled = exhibitionGalleryMutationInFlight || !pending;
   if (publish) publish.disabled = exhibitionGalleryMutationInFlight || pending || !(detail.validation && detail.validation.valid);
+  if (unpublish) unpublish.disabled = exhibitionGalleryMutationInFlight || !selectedExhibition || !selectedExhibition.is_published;
   if (rollback) rollback.disabled = exhibitionGalleryMutationInFlight || !(detail.state && detail.state.previous_state && detail.card && detail.card.previous_value);
 }
 
@@ -567,6 +621,22 @@ async function handlePublishExhibitionBundle() {
   try {
     await exhibitionData.publishBundle(selectedExhibition.id);
     showToast("Exhibition published.");
+    await fetchCatalog();
+    syncSelectedFromCatalog(selectedExhibition.id);
+    await refreshExhibitionGalleryAssignment(selectedExhibition.id);
+  } catch (error) { showToast(error.message || String(error)); }
+  finally { exhibitionGalleryMutationInFlight = false; if (exhibitionGalleryDetail) renderExhibitionGalleryAssignment(exhibitionGalleryDetail); }
+}
+
+async function handleUnpublishExhibition() {
+  if (!selectedExhibition || exhibitionGalleryMutationInFlight || !selectedExhibition.is_published) return;
+  if (!window.confirm("Hide this Exhibition from the public site? Draft, Published and Previous snapshots remain stored; this only changes public visibility/status.")) return;
+  exhibitionGalleryMutationInFlight = true;
+  if (exhibitionGalleryDetail) renderExhibitionGalleryAssignment(exhibitionGalleryDetail);
+  try {
+    if (!exhibitionData || typeof exhibitionData.unpublish !== "function") throw new Error("Explicit unpublish action is unavailable.");
+    await exhibitionData.unpublish(selectedExhibition.id);
+    showToast("Exhibition unpublished.");
     await fetchCatalog();
     syncSelectedFromCatalog(selectedExhibition.id);
     await refreshExhibitionGalleryAssignment(selectedExhibition.id);
@@ -667,7 +737,7 @@ function setSelectedExhibition(record) {
   exhibitionDescription.value = selectedExhibition.description;
   exhibitionSlug.value = selectedExhibition.slug;
   exhibitionSortOrder.value = String(selectedExhibition.sort_order);
-  exhibitionPublished.checked = !!selectedExhibition.is_published;
+  if (exhibitionPublicationStatus) exhibitionPublicationStatus.textContent = selectedExhibition.is_published ? "PUBLISHED / PUBLIC" : "DRAFT / NOT PUBLIC";
   exhibitionSpaceId.textContent = selectedExhibition.space_id;
   const posterUrl = publicUrlFor(selectedExhibition.cover_path);
   posterPreview.src = posterUrl || "";
@@ -689,9 +759,10 @@ function syncSelectedFromCatalog(id) {
 async function selectAndSwitchExhibition(id) {
   const target = catalog.find((item) => item.id === id);
   if (!target || isTransitionGuardActive()) return;
-  if (!engineReady || !window.GalleryApp) {
+  if (!engineReady || !window.GalleryApp || !sceneLifecycleController) {
     setSelectedExhibition(target);
     updateUrlExhibition(id);
+    if (!sceneLifecycleController && !inlineWorkspaceMode) reloadAdminForExhibition(id);
     return;
   }
   const current = window.GalleryApp.getActiveExhibition();
@@ -700,36 +771,57 @@ async function selectAndSwitchExhibition(id) {
     return;
   }
   if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return;
-  const currentSpaceId = String((current && current.space_id) || (selectedExhibition && selectedExhibition.space_id) || "");
-  const targetSpaceId = String(target.space_id || "");
-  if (currentSpaceId && targetSpaceId && currentSpaceId !== targetSpaceId) {
-    setViewportStatus(`opening ${target.name} in ${targetSpaceId}…`);
-    reloadAdminForExhibition(id);
+  if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
+  if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
+
+  let targetRuntime = null;
+  try {
+    targetRuntime = await exhibitionData.resolveRuntime(id, { force: true });
+  } catch (error) {
+    showToast("Could not resolve target Exhibition: " + (error.message || error));
     return;
   }
-  setViewportStatus(`switching to ${target.name}…`);
+  const currentRuntime = sceneLifecycleController.getActiveRuntime();
+  const crossSpace = getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(targetRuntime);
+  setViewportStatus(`${crossSpace ? "opening" : "switching to"} ${target.name}…`);
   const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
   const fromId = current && current.id ? current.id : "?";
   const guardToken = await beginTransitionGuard({
     title: `Switching to ${target.name}…`,
-    detail: "Keeping the current 3D Space resident.",
+    detail: crossSpace ? "Recreating the Gallery Scene on the existing WebGL engine." : "Keeping the current immutable Gallery Version resident.",
     minVisibleMs: 150
   });
   if (!guardToken) return;
   const transitionStartedAt = performance.now();
   try {
-    const ok = await window.GalleryApp.switchExhibition(id, { force: true });
-    if (!ok) return;
-    if (typeof window.GalleryApp.waitForForegroundReady === "function") {
+    const result = await sceneLifecycleController.switchTo(id, {
+      runtime: targetRuntime,
+      forceRemote: true,
+      reason: "admin-exhibition-switch",
+      sceneOptions: { adminWorkspace: true }
+    });
+    if (!result || !result.ok) return;
+    scene = sceneLifecycleController.getActiveScene();
+    if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
+    window.galleryEditorAuthenticated = true;
+    if (window.GalleryApp) {
+      if (typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");
+      if (typeof window.GalleryApp.setEditorAuthenticated === "function") window.GalleryApp.setEditorAuthenticated(true);
+      if (typeof window.GalleryApp.enterAdminWorkspaceMode === "function") window.GalleryApp.enterAdminWorkspaceMode();
+    }
+    if (!crossSpace && typeof window.GalleryApp.waitForForegroundReady === "function") {
       await window.GalleryApp.waitForForegroundReady(`switch:${fromId}->${id}`, { pendingTimeoutMs: 7000, quietTimeoutMs: 3600 });
     }
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
     setViewportStatus(target.name);
+    if (engine && engine.resize) engine.resize();
     void captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id)
       .then(() => updateAssetDeliveryStatus())
       .catch(() => null);
   } catch (error) {
+    scene = sceneLifecycleController.getActiveScene();
+    if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
     showToast("Could not switch exhibition: " + (error.message || error));
   } finally {
     await endTransitionGuard(guardToken);
@@ -849,28 +941,19 @@ async function ensureBabylon() {
   if (!window.BABYLON || !window.BABYLON.Engine) throw new Error("Babylon runtime unavailable.");
 }
 
-function waitForInteractionReady(timeoutMs = 120000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error("3D workspace startup timed out.")); }, timeoutMs);
-    const onReady = (event) => { cleanup(); resolve(event.detail || {}); };
-    const onFailure = (event) => { cleanup(); reject(new Error((event.detail && (event.detail.technicalMessage || event.detail.message)) || "3D workspace failed.")); };
-    function cleanup() {
-      clearTimeout(timer);
-      window.removeEventListener("gallery-interaction-ready", onReady);
-      window.removeEventListener("gallery-startup-failure", onFailure);
-    }
-    window.addEventListener("gallery-interaction-ready", onReady, { once: true });
-    window.addEventListener("gallery-startup-failure", onFailure, { once: true });
-  });
-}
-
 function installResize() {
   if (resizeCleanup) resizeCleanup();
   let raf = 0;
   let observer = null;
   const resize = () => {
     if (!workspaceActive || raf) return;
-    raf = requestAnimationFrame(() => { raf = 0; if (workspaceActive && engine) engine.resize(); });
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (!workspaceActive) return;
+      const stage = el("adminViewportStage");
+      if (stage) document.documentElement.style.setProperty("--gallery-visual-viewport-height", `${Math.max(1, stage.getBoundingClientRect().height)}px`);
+      if (engine) engine.resize();
+    });
   };
   window.addEventListener("resize", resize, { passive: true });
   if (window.ResizeObserver) {
@@ -919,7 +1002,11 @@ async function startEngine(initialId, initialSnapshot) {
 
   if (inlineWorkspaceMode) {
     engine = inlineRuntimeContext.engine;
-    scene = inlineRuntimeContext.scene;
+    sceneLifecycleController = inlineRuntimeContext.lifecycle || window.ExhibitionPlatformSceneLifecycle || sceneLifecycleController;
+    scene = sceneLifecycleController && typeof sceneLifecycleController.getActiveScene === "function"
+      ? sceneLifecycleController.getActiveScene()
+      : inlineRuntimeContext.scene;
+    inlineRuntimeContext.scene = scene;
     installResize();
     window.galleryEditorAuthenticated = true;
     if (window.GalleryApp) {
@@ -951,9 +1038,10 @@ async function startEngine(initialId, initialSnapshot) {
 
   await assetCacheReadyPromise;
   await ensureBabylon();
-  const ready = waitForInteractionReady();
-  const module = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
-  let initialRuntime = exhibitionData && typeof exhibitionData.getRuntime === "function" ? exhibitionData.getRuntime(initialId) : null;
+  galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
+  let initialRuntime = exhibitionData && typeof exhibitionData.getRuntime === "function"
+    ? exhibitionData.getRuntime(initialId, { mode: "admin" })
+    : null;
   if (!initialRuntime) initialRuntime = await resolveInitialAdminRuntime(supabase, initialId);
   if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin", initialRuntime });
   if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
@@ -961,16 +1049,45 @@ async function startEngine(initialId, initialSnapshot) {
   engine = new window.BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: false, stencil: true, antialias: true, powerPreference: "high-performance", adaptToDeviceRatio: false
   });
-  scene = module.createScene(engine, canvas, { spaceDefinition: initialRuntime.spaceDefinition, exhibitionData, exhibitionId: initialRuntime.exhibition.id, adminWorkspace: true, initialExhibitionSnapshot: initialSnapshot || null });
-  engine.runRenderLoop(() => scene.render());
+  sceneLifecycleController = createSceneLifecycleController({
+    engine,
+    canvas,
+    engineModule: galleryEngineModule,
+    exhibitionData,
+    resolveRuntime: (reference, options = {}) => exhibitionData.resolveRuntime(reference, Object.assign({ mode: "admin" }, options)),
+    getApp: () => window.GalleryApp || null,
+    getCreateSceneOptions: () => ({ adminWorkspace: true }),
+    onSceneChanged: (nextScene) => {
+      scene = nextScene;
+      if (inlineRuntimeContext) inlineRuntimeContext.scene = nextScene;
+    }
+  });
+  window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
+  const started = await sceneLifecycleController.start(initialRuntime, {
+    initialSnapshot: initialSnapshot || null,
+    sceneOptions: { adminWorkspace: true }
+  });
+  scene = started.scene;
+  engine.runRenderLoop(() => {
+    const current = sceneLifecycleController && typeof sceneLifecycleController.getActiveScene === "function"
+      ? sceneLifecycleController.getActiveScene()
+      : scene;
+    if (!current) return;
+    try {
+      if (typeof current.isDisposed === "function" && current.isDisposed()) return;
+      current.render();
+    } catch (error) {
+      if (!(typeof current.isDisposed === "function" && current.isDisposed())) console.error("Admin render loop error:", error);
+    }
+  });
   installResize();
-  await ready;
   window.galleryEditorAuthenticated = true;
   if (window.GalleryApp) {
     if (typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");
     window.GalleryApp.setEditorAuthenticated(true);
     window.GalleryApp.hideViewerIntroOverlay();
-    window.GalleryApp.setEditMode(true);
+    if (typeof window.GalleryApp.enterAdminWorkspaceMode === "function") window.GalleryApp.enterAdminWorkspaceMode();
+    else window.GalleryApp.setEditMode(true);
   }
   engineReady = true;
   workspaceLoading.classList.add("hidden");
@@ -983,7 +1100,6 @@ async function startEngine(initialId, initialSnapshot) {
   await updateAssetDeliveryStatus();
   startAssetDeliveryMonitoring();
 }
-
 function updateSceneSaveButton() {
   if (!saveStateButton) return;
   const state = sceneSaveState.saveInFlight ? "saving" : sceneSaveState.dirty ? "dirty" : "clean";
@@ -1114,22 +1230,23 @@ function ensureGalleryManagementStyles() {
   style.id = "c22GalleryManagementStyles";
   style.textContent = `
     .adminSectionTabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:12px 14px 0}
-    .adminSectionTab{height:36px;border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;background:rgba(255,255,255,.035);color:var(--muted,rgba(255,255,255,.57));font-size:10px;font-weight:800;letter-spacing:.08em;cursor:pointer}
-    .adminSectionTab.active{background:var(--accent-bg,rgba(125,160,127,.16));border-color:rgba(154,180,155,.38);color:var(--text,#fff)}
+    .adminSectionTabs,.galleryManagementSection{--gallery-admin-text:rgba(255,255,255,.92);--gallery-admin-muted:rgba(255,255,255,.62);--gallery-admin-line:rgba(255,255,255,.10);color:var(--gallery-admin-text)}
+    .adminSectionTab{height:36px;border:1px solid var(--gallery-admin-line);border-radius:10px;background:rgba(255,255,255,.035);color:var(--gallery-admin-muted);font-size:10px;font-weight:800;letter-spacing:.08em;cursor:pointer}
+    .adminSectionTab.active{background:rgba(125,160,127,.16);border-color:rgba(154,180,155,.38);color:var(--gallery-admin-text)}
     .galleryManagementSection.hidden{display:none!important}.exhibitionManagementSection.hidden{display:none!important}
     #galleryCreateForm{display:grid;gap:8px}.galleryList{display:grid;gap:7px;max-height:300px;overflow:auto;padding-right:2px}
     .galleryRow{width:100%;display:grid;gap:4px;text-align:left;padding:10px;border:1px solid transparent;border-radius:10px;background:transparent;color:inherit;cursor:pointer}
     .galleryRow:hover{background:rgba(255,255,255,.045)}.galleryRow.active{border-color:rgba(154,180,155,.38);background:rgba(125,160,127,.16)}
-    .galleryRow strong{font-size:12px}.galleryRow span{font-size:10px;color:var(--muted,rgba(255,255,255,.57));line-height:1.4}
-    #galleryDetailBody{display:grid;gap:13px}.gallerySubsection{display:grid;gap:9px;padding-top:4px}.gallerySubsection+.gallerySubsection{border-top:1px solid var(--line,rgba(255,255,255,.1));padding-top:13px}
-    .gallerySubsection h3{margin:0;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text,#fff)}
-    .galleryVersionLine{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;background:rgba(255,255,255,.025);font-size:10px}
-    .galleryActions{display:flex;flex-wrap:wrap;gap:7px}.galleryAssetGrid{display:grid;gap:7px}.galleryAssetRow{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px}
-    .galleryAssetRole{font-size:10px;font-weight:800;text-transform:uppercase}.galleryAssetMeta{min-width:0;font-size:10px;color:var(--muted,rgba(255,255,255,.57));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .galleryAssetInput{display:none}.galleryEntryGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.galleryEntryLabel{display:grid;gap:4px;font-size:9px;color:var(--muted,rgba(255,255,255,.57));text-transform:uppercase}
-    .galleryValidation{padding:9px 10px;border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;font-size:10px;line-height:1.5;color:var(--muted,rgba(255,255,255,.57))}.galleryValidation.valid{border-color:rgba(127,169,130,.45);background:rgba(127,169,130,.08)}.galleryValidation.invalid{border-color:rgba(209,139,139,.45);background:rgba(209,139,139,.06)}
+    .galleryRow strong{font-size:12px}.galleryRow span{font-size:10px;color:var(--gallery-admin-muted);line-height:1.4}
+    #galleryDetailBody{display:grid;gap:13px}.gallerySubsection{display:grid;gap:9px;padding-top:4px}.gallerySubsection+.gallerySubsection{border-top:1px solid var(--gallery-admin-line);padding-top:13px}
+    .gallerySubsection h3{margin:0;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--gallery-admin-text)}
+    .galleryVersionLine{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--gallery-admin-line);border-radius:10px;background:rgba(255,255,255,.025);font-size:10px}
+    .galleryActions{display:flex;flex-wrap:wrap;gap:7px}.galleryAssetGrid{display:grid;gap:7px}.galleryAssetRow{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--gallery-admin-line);border-radius:10px}
+    .galleryAssetRole{font-size:10px;font-weight:800;text-transform:uppercase}.galleryAssetMeta{min-width:0;font-size:10px;color:var(--gallery-admin-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .galleryAssetInput{display:none}.galleryEntryGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.galleryEntryLabel{display:grid;gap:4px;font-size:9px;color:var(--gallery-admin-muted);text-transform:uppercase}
+    .galleryValidation{padding:9px 10px;border:1px solid var(--gallery-admin-line);border-radius:10px;font-size:10px;line-height:1.5;color:var(--gallery-admin-muted)}.galleryValidation.valid{border-color:rgba(127,169,130,.45);background:rgba(127,169,130,.08)}.galleryValidation.invalid{border-color:rgba(209,139,139,.45);background:rgba(209,139,139,.06)}
     .galleryHistory{display:grid;gap:6px}.galleryHistoryItem{display:flex;justify-content:space-between;gap:10px;font-size:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)}
-    .galleryMuted{color:var(--muted,rgba(255,255,255,.57));font-size:10px;line-height:1.45}.galleryDangerNote{color:#d7a0a0;font-size:10px;line-height:1.45}
+    .galleryMuted{color:var(--gallery-admin-muted);font-size:10px;line-height:1.45}.galleryDangerNote{color:#d7a0a0;font-size:10px;line-height:1.45}
     .galleryRenderError{display:grid;gap:9px;padding:12px;border:1px solid rgba(209,139,139,.45);border-radius:10px;background:rgba(209,139,139,.06);font-size:10px;line-height:1.5}
     @media(max-width:520px){.galleryAssetRow{grid-template-columns:54px minmax(0,1fr)}.galleryAssetRow .adminButton{grid-column:1/-1}.galleryEntryGrid{grid-template-columns:1fr}}
   `;
@@ -1312,9 +1429,10 @@ function setAdminWorkspaceSection(section, { skipConfirm = false } = {}) {
   if (saveStateButton) saveStateButton.style.display = next === "exhibitions" ? "" : "none";
   if (next === "galleries") {
     updateGalleryUrl(selectedGalleryDetail && selectedGalleryDetail.venue ? selectedGalleryDetail.venue.id : getGalleryRequestedId());
-    if (session) void loadGalleryCatalog().catch((error) => showToast(error.message || String(error)));
+    if (session) void loadGalleryCatalog().then(() => previewSelectedGallery("admin-gallery-section")).catch((error) => showToast(error.message || String(error)));
   } else {
     clearGalleryUrl();
+    void restoreSelectedExhibitionPreview("admin-exhibition-section").catch((error) => showToast(error.message || String(error)));
   }
   return true;
 }
@@ -1408,6 +1526,61 @@ function renderGalleryCatalog() {
   });
 }
 
+function createGalleryAuthoringPreviewAdapter(runtime) {
+  const exhibition = runtime.exhibition;
+  return Object.freeze({
+    setMode() {},
+    async list() { return [exhibition]; },
+    async resolve() { return exhibition; },
+    async loadState() { return null; },
+    async saveState() { throw new Error("Gallery authoring preview is read-only for Exhibition state."); },
+    async updateMetadata() { throw new Error("Gallery authoring preview does not edit Exhibition metadata."); },
+    async create() { throw new Error("Gallery authoring preview cannot create Exhibitions."); }
+  });
+}
+
+function buildGalleryAuthoringPreviewRuntime(detail) {
+  if (!detail || !detail.venue) throw new Error("Gallery preview requires Gallery details.");
+  const version = galleryWorkingVersion(detail);
+  if (!version) throw new Error("Gallery has no Draft or Published Version to preview.");
+  const spaceDefinition = buildAuthoringSpaceDefinition({
+    supabase, venue: detail.venue, venueVersion: version, manifest: version.manifest || {}, assets: Array.isArray(version.assets) ? version.assets : []
+  });
+  const exhibition = {
+    id: `gallery-preview-${detail.venue.id}`, name: `${detail.venue.name || detail.venue.slug || "Gallery"} preview`,
+    slug: `gallery-preview-${detail.venue.slug || detail.venue.id}`, description: "", cover_path: null, is_published: false, sort_order: 0,
+    storage_prefix: `gallery-preview/${detail.venue.id}`, space_id: detail.venue.slug || spaceDefinition.id, venue_id: detail.venue.id,
+    venue_version_id: version.id, venue_version_number: version.version_number || spaceDefinition.version
+  };
+  return { context: "gallery-authoring", mode: "admin", exhibition, venue: detail.venue, venueVersion: version, spaceDefinition };
+}
+
+async function previewSelectedGallery(reason = "admin-gallery-selection") {
+  if (!engineReady || !sceneLifecycleController || !selectedGalleryDetail) return false;
+  const runtime = buildGalleryAuthoringPreviewRuntime(selectedGalleryDetail);
+  const adapter = createGalleryAuthoringPreviewAdapter(runtime);
+  const venue = selectedGalleryDetail.venue;
+  const version = galleryWorkingVersion(selectedGalleryDetail);
+  setViewportStatus(`${venue.name || venue.slug} · ${version ? version.version_number : "preview"} · Gallery Draft preview`);
+  const result = await sceneLifecycleController.switchTo(runtime.exhibition.id, {
+    runtime, forceRemote: false, reason,
+    sceneOptions: { adminWorkspace: false, authoringSpacePreview: true, exhibitionData: adapter }
+  });
+  if (!result || !result.ok) return false;
+  galleryAuthoringPreviewActive = true;
+  scene = sceneLifecycleController.getActiveScene();
+  if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
+  if (engine && engine.resize) engine.resize();
+  return true;
+}
+
+async function restoreSelectedExhibitionPreview(reason = "admin-gallery-exit") {
+  if (!galleryAuthoringPreviewActive || !selectedExhibition || !engineReady || !sceneLifecycleController) return true;
+  galleryAuthoringPreviewActive = false;
+  await selectAndSwitchExhibition(selectedExhibition.id);
+  return true;
+}
+
 async function selectGallery(venueId, { skipConfirm = false } = {}) {
   syncGalleryMetadataDirty();
   syncGalleryEntryDirty();
@@ -1418,6 +1591,9 @@ async function selectGallery(venueId, { skipConfirm = false } = {}) {
   renderGalleryDetail(selectedGalleryDetail);
   renderGalleryCatalog();
   updateGalleryUrl(venueId);
+  if (engineReady && adminWorkspaceSection === "galleries") {
+    try { await previewSelectedGallery("admin-gallery-select"); } catch (error) { showToast(`Gallery preview failed: ${error.message || error}`); }
+  }
 }
 
 function renderGalleryDetailError(body, error) {
@@ -1659,6 +1835,9 @@ async function refreshSelectedGallery() {
   galleryCatalog = await galleryManagement.list();
   renderGalleryCatalog();
   renderGalleryDetail(selectedGalleryDetail);
+  if (engineReady && adminWorkspaceSection === "galleries") {
+    try { await previewSelectedGallery("admin-gallery-refresh"); } catch (error) { showToast(`Gallery preview failed: ${error.message || error}`); }
+  }
 }
 
 async function handleRefreshGalleries() {
@@ -1878,7 +2057,6 @@ ensureGalleryManagementUi();
 [exhibitionName, exhibitionDescription, exhibitionSortOrder].forEach((field) => {
   if (field) field.addEventListener("input", syncMetadataDirtyState);
 });
-if (exhibitionPublished) exhibitionPublished.addEventListener("change", syncMetadataDirtyState);
 
 if (publicPageButton) {
   publicPageButton.addEventListener("click", async (event) => {
@@ -1947,8 +2125,9 @@ async function initializeWorkspace() {
     setSelectedExhibition(initial);
     let initialRuntime = exhibitionData && typeof exhibitionData.getRuntime === "function" ? exhibitionData.getRuntime(initial.id) : null;
     if (!initialRuntime) initialRuntime = await resolveInitialAdminRuntime(supabase, initial.id);
-    const navigationHandoff = readNavigationHandoff(initial.id, initialRuntime.spaceDefinition.id);
+    const navigationHandoff = readNavigationHandoff(initial.id, initialRuntime.spaceDefinition.id, getRuntimeVenueVersionKey(initialRuntime));
     await startEngine(initial.id, navigationHandoff);
+    if (adminWorkspaceSection === "galleries" && selectedGalleryDetail) await previewSelectedGallery("admin-initial-gallery-section");
   } catch (error) {
     startupError.textContent = error.message || String(error);
     startupError.style.display = "grid";
@@ -2008,6 +2187,10 @@ export async function resumeAdminWorkspace() {
   const preserveMetadataDraft = metadataDraftPreviewActive && metadataDirty;
   metadataDraftPreviewActive = false;
   workspaceActive = true;
+  if (sceneLifecycleController && typeof sceneLifecycleController.getActiveScene === "function") {
+    scene = sceneLifecycleController.getActiveScene();
+    if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
+  }
   installMetadataBeforeUnload();
   installResize();
   if (exhibitionData && typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");

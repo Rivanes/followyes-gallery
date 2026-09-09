@@ -97,6 +97,7 @@
     #viewportToolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 12px; border-bottom:1px solid var(--line); background:rgba(20,22,21,.96); }
     #viewportStatus { min-width:0; color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #viewportStatus strong { color:var(--text); }
+    #assetDeliveryStatus, #networkDiagnostics, #viewportToolbar > .fieldMeta { display:none !important; }
     #adminViewportStage { position:relative; min-width:0; min-height:0; overflow:hidden; isolation:isolate; }
     #renderCanvas { display:block; width:100%; height:100%; outline:none; touch-action:none; }
     #adminViewportStage > #saveStateButton { display:none; }
@@ -162,7 +163,7 @@
                 <label class="fieldLabel">Slug<input id="exhibitionSlug" class="adminInput" readonly /></label>
                 <label class="fieldLabel">Order<input id="exhibitionSortOrder" class="adminInput" type="number" step="1" /></label>
               </div>
-              <div class="checkRow"><span>Published / visible publicly</span><input id="exhibitionPublished" type="checkbox" /></div>
+              <div class="fieldMeta">Public status: <strong id="exhibitionPublicationStatus">—</strong></div>
               <div class="fieldLabel">Poster / cover</div>
               <div class="posterCard">
                 <img id="posterPreview" alt="Exhibition poster preview" />
@@ -214,6 +215,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=c6c8c24_exhibition_gallery_assignment_20260908"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v13_1_shared_asset_foundation_20260909"></script>
 </body>
 </html>

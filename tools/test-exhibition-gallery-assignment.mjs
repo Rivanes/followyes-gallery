@@ -113,7 +113,7 @@ assert.ok(api.includes('admin_rollback_exhibition_bundle'));
 assert.ok(api.includes('list_public_exhibition_cards'));
 assert.ok(api.includes('migrationPending: isExhibitionGalleryMigrationPending'));
 
-// Admin contract: reassignment is explicitly Draft-only and cross-Gallery editor switch uses a fresh bootstrap boundary.
+// Admin contract: reassignment is explicitly Draft-only; C25 now performs cross-Gallery Scene lifecycle cutover in-session.
 assert.ok(admin.includes('ASSIGN DRAFT'));
 assert.ok(admin.includes('CONFIRM LAYOUT'));
 assert.ok(admin.includes('PUBLISH EXHIBITION'));
@@ -121,23 +121,34 @@ assert.ok(admin.includes('ROLLBACK PUBLICATION'));
 assert.ok(admin.includes('Assignment changes the private Draft only'));
 assert.ok(admin.includes('summarizeGalleryMigrationImpact'));
 assert.ok(admin.includes('isExhibitionGalleryMigrationPending'));
-assert.ok(admin.includes('const currentSpaceId = String((current && current.space_id)') && admin.includes('if (currentSpaceId && targetSpaceId && currentSpaceId !== targetSpaceId)'));
-assert.ok(admin.includes('reloadAdminForExhibition(id)'));
+assert.ok(admin.includes('getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(targetRuntime)'));
+assert.ok(admin.includes('sceneLifecycleController.switchTo(id'));
 assert.ok(admin.includes('exhibitionGalleryDetail'));
 assert.ok(admin.includes('function setViewportStatus(label)') && admin.includes('strong.textContent = String(label'));
 assert.ok(!admin.includes('viewportStatus.innerHTML = `3D preview: <strong>${target.name}'));
 
-// Public discovery is a pre-runtime selection boundary and explicit deep links bypass it.
+// Public discovery resolves Published Exhibition cards and C25 can reuse it as an in-session switcher; explicit deep links still bypass initial discovery.
 assert.ok(viewer.includes('listPublicExhibitionCards'));
 assert.ok(viewer.includes('ensurePublicExhibitionSelection'));
-assert.ok(viewer.includes('history.replaceState'));
+assert.ok(viewer.includes('history.replaceState') && viewer.includes('switchPublicExhibition'));
 assert.ok(viewer.includes('hasExplicitExhibitionSelection'));
 assert.ok(viewer.includes('exhibitionsButton'));
 assert.ok(index.includes('id="exhibitionsButton"'));
 assert.ok(index.includes('href="./index.html"'));
 
-assert.equal(pkg.version, '0.11.90-c6c8c24-exhibition-gallery-assignment');
-assert.ok(pkg.description.includes('C6C8C24'));
+
+// C25.3 publication UI contract: Poster/Cover optional and publication is explicit.
+assert.ok(!admin.includes('id="exhibitionPublished"'));
+assert.ok(admin.includes('exhibitionPublicationStatus'));
+assert.ok(admin.includes('UNPUBLISH EXHIBITION'));
+assert.ok(admin.includes('Poster / cover is optional'));
+assert.ok(admin.includes('c25PublishValidation'));
+assert.ok(api.includes('async unpublish(reference)'));
+assert.ok(api.includes('p_published: false'));
+assert.ok(!api.includes('patch.is_published'));
+
+assert.equal(pkg.version, '0.13.1-v13-shared-asset-foundation');
+assert.ok(pkg.description.includes('V13.1'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
-console.log('C6C8C24 Exhibition ↔ Gallery Assignment executable regression invariants passed.');
+console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.1.');

@@ -332,6 +332,7 @@ await (async () => {
 const index = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const source = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.meta.url), 'utf8');
 const bootstrap = fs.readFileSync(new URL('../src/bootstrap/gallery-viewer-bootstrap.js', import.meta.url), 'utf8');
+const lifecycle = fs.readFileSync(new URL('../src/runtime/scene-lifecycle-controller.js', import.meta.url), 'utf8');
 
 function extractFunction(text, name) {
   const marker = `function ${name}(`;
@@ -376,30 +377,45 @@ assert.equal(
   '3e555d80b26ee44188f21107cd265cb603ff601cbf51cdebf8bce95d4d00d09e'
 );
 
-// Babylon and the engine are deferred until the explicit click.
+// Babylon and the engine are deferred until the visitor selects an Exhibition (or opens an explicit Exhibition deep link).
 assert.equal(/<script[^>]+src=["']https:\/\/cdn\.babylonjs\.com\/babylon\.js/.test(index), false);
 assert.equal(/<script[^>]+src=["']https:\/\/cdn\.babylonjs\.com\/loaders\//.test(index), false);
 assert.equal(bootstrap.includes('import { createScene }'), false);
 assert.ok(bootstrap.includes('await bootGuard.waitForStart();'));
 assert.ok(bootstrap.includes('await loadClassicScript("https://cdn.babylonjs.com/babylon.js"'));
-assert.ok(bootstrap.includes('const engineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`)'));
+assert.ok(bootstrap.includes('galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`)'));
+assert.ok(bootstrap.includes('createSceneLifecycleController')); 
 assert.ok(bootstrap.indexOf('await bootGuard.waitForStart();') < bootstrap.indexOf('await startGalleryRuntime();'));
 assert.equal(bootstrap.includes('const sessionResult = await supabase.auth.getSession();\n  setSession(sessionResult.data.session || null);\n  if (currentSession) await loadEditorModule();\n\n  supabase.auth.onAuthStateChange'), false);
 assert.ok(bootstrap.includes('initializeAuthRuntime().catch(function (error)'));
-assert.ok(bootstrap.indexOf('initializeAuthRuntime().catch(function (error)') < bootstrap.indexOf('await bootGuard.waitForStart();'));
+assert.ok(bootstrap.indexOf('initializeAuthRuntime().catch(function (error)') < bootstrap.indexOf('await ensurePublicExhibitionSelection({ force: resetToHomepageAfterReload })'));
+assert.ok(bootstrap.includes('if (bootGuard && typeof bootGuard.start === "function"'));
+assert.ok(bootstrap.includes('c26HomepageExhibitionCarousel'));
+assert.equal(bootstrap.includes('c25HomepageExhibitionGrid'), false);
+assert.ok(bootstrap.includes('c26ExhibitionCard--titleOnly'));
+assert.ok(bootstrap.includes('scroll-snap-type:x mandatory'));
+assert.ok(bootstrap.includes('justify-content:center'));
+assert.ok(bootstrap.includes('event.key === "ArrowRight"'));
+assert.equal(bootstrap.includes('#c24PublicDiscovery{position:fixed'), false);
+assert.equal(bootstrap.includes('document.body.style.overflow = "hidden"'), false);
 
 // Readiness is the real interaction gate, not the old synchronous gallery-ready event.
-assert.ok(bootstrap.includes('window.addEventListener("gallery-interaction-ready"'));
+assert.ok(lifecycle.includes('window.addEventListener("gallery-interaction-ready"'));
+assert.ok(lifecycle.includes('window.addEventListener("gallery-startup-failure"'));
+assert.ok(lifecycle.includes('text(detail.lifecycleId) === text(lifecycleId)'));
 assert.equal(bootstrap.includes('window.addEventListener("gallery-ready", onReady'), false);
 assert.ok(source.includes('window.dispatchEvent(new CustomEvent("gallery-interaction-ready"'));
 assert.equal(extractFunction(source, 'finishGalleryStartup').includes('showViewerIntroOverlay'), false);
-assert.ok(bootstrap.includes('window.GalleryApp.showViewerIntroOverlay();'));
+assert.ok(bootstrap.includes('applyPublicSpaceIntroPolicy(null, publicRuntime, { initial: true, reason: "initial-public-entry" })'));
 
 // Visitor loading UI is separate from the original post-load instruction popup.
-assert.ok(index.includes('id="galleryBootStart"'));
+assert.equal(index.includes('id="galleryBootStart"'), false);
 assert.ok(index.includes('id="galleryBootTimefiller"'));
 assert.equal(index.includes('id="galleryBootControls"'), false);
-assert.equal(index.includes('id="galleryBootAbout"'), true);
+assert.equal(index.includes('id="galleryBootAbout"'), false);
+assert.ok(index.includes('class="is-hidden" data-state="prestart"'));
+assert.ok(index.includes('<a id="adminWorkspaceButton" class="headerButton" href="./admin.html">ADMIN</a>'));
+assert.ok(bootstrap.includes('if (!currentSession || !activeEngine || !activeScene || !sceneLifecycleController) return;'));
 assert.ok(index.includes('radial-gradient(circle at 50% 34%, rgba(111, 65, 75, 0.24), transparent 43%)'));
 assert.ok(index.includes('width: min(560px, 100%);'));
 assert.ok(index.includes('.galleryBootBrand::before'));
@@ -414,7 +430,7 @@ assert.ok(bootstrap.includes('window.GalleryApp.isEditModeActive()'));
 assert.equal(index.includes('error.stack'), false);
 assert.equal(bootstrap.includes('error.stack'), false);
 
-// Execute the page-level start gate to confirm it does not resolve before the click.
+// Execute the page-level loading gate. It stays hidden until Exhibition selection starts the runtime.
 const bootScriptMatch = index.match(/<script>\s*\(function \(\) \{\s*var guard = document\.getElementById\("galleryBootGuard"\);[\s\S]*?<\/script>/);
 assert.ok(bootScriptMatch, 'BootGuard inline script missing');
 const bootScript = bootScriptMatch[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
@@ -444,8 +460,6 @@ function createBootHarness() {
     ['galleryBootTitle', createElement()],
     ['galleryBootMessage', createElement()],
     ['galleryBootTimefiller', createElement()],
-    ['galleryBootStart', createElement()],
-    ['galleryBootAbout', createElement()],
     ['galleryBootReload', createElement()],
     ['galleryBootExternal', createElement()]
   ]);
@@ -481,7 +495,7 @@ function createBootHarness() {
   context.window.BerryboyBootGuard.waitForStart().then(() => { resolved = true; });
   await Promise.resolve();
   assert.equal(resolved, false);
-  ids.get('galleryBootStart').click();
+  context.window.BerryboyBootGuard.start();
   await Promise.resolve();
   assert.equal(resolved, true);
   assert.equal(context.window.BerryboyBootGuard.getState(), 'loading');
@@ -490,19 +504,18 @@ function createBootHarness() {
   assert.equal(ids.get('galleryBootMessage').textContent, 'One moment — your visit will begin shortly.');
   context.window.BerryboyBootGuard.ready();
   assert.equal(context.window.BerryboyBootGuard.getState(), 'ready');
-  assert.equal(ids.get('galleryBootGuard').classList.contains('is-hidden'), true);
 }
 
 {
   const { context, ids } = createBootHarness();
-  ids.get('galleryBootStart').click();
+  context.window.BerryboyBootGuard.start();
   context.window.BerryboyBootGuard.fail('test', 'technical detail', new Error('secret stack'));
   assert.equal(context.window.BerryboyBootGuard.getState(), 'error');
   assert.equal(ids.get('galleryBootTitle').textContent, 'The gallery could not start');
   assert.equal(ids.get('galleryBootMessage').textContent, 'Reload the page and try again.');
 }
 
-console.log('Stage 12C66C6A1 startup and current-popup regression tests passed.');
+console.log('C6C8C25.2 Exhibition-selection startup and current-popup regression tests passed.');
 
 })();
 

@@ -50,7 +50,7 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('c6c8c24'));
+expect('current package stage', pkg.version.includes('v13-shared-asset-foundation'));
 expect('current runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
@@ -59,8 +59,8 @@ expect('mode switch avoids synchronous space verification', !modeFn.includes('ve
 expect('mode switch records instant UI-only mode', modeFn.includes('instant-workspace-ui-only') && modeFn.includes('foregroundPreserved: true'));
 expect('integrity audit moved to idle', source.includes('function scheduleGalleryWorkspaceModeBackgroundAudit(') && source.includes('requestIdleCallback(runAudit'));
 expect('fast path safety API exists', source.includes('canUseInstantWorkspaceModeSwitch: function ()'));
-expect('clean Admin to Public skips full-page guard', viewer.includes('const instantFastPath = (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch()') && viewer.includes('if (!instantFastPath)'));
-expect('clean Admin to Public skips foreground wait', viewer.includes('if (!instantFastPath && window.GalleryApp') && !viewer.includes('waitForForegroundReady("admin-to-public"'));
+expect('clean Admin to Public skips full-page guard', viewer.includes('const instantFastPath = !crossSpaceReturn && (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch()') && viewer.includes('if (!instantFastPath)'));
+expect('clean Admin to Public skips foreground wait', viewer.includes('if (!instantFastPath && !crossSpaceReturn && window.GalleryApp') && !viewer.includes('waitForForegroundReady("admin-to-public"'));
 expect('C6C8C14 keeps C6C8C13 diagnostics off the clean click path', viewer.includes('const transitionBeforePromise = instantFastPath') && viewer.includes('? null') && viewer.includes('publishInstantWorkspaceModeDiagnostic'));
 expect('Admin telemetry resume is asynchronous', resumeFn.includes('void updateAssetDeliveryStatus().catch(() => null)'));
 
@@ -109,7 +109,7 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('c6c8c24'));
+expect('package stage', pkg.version.includes('v13-shared-asset-foundation'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
@@ -185,7 +185,7 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('c6c8c24'));
+expect('package identity', pkg.version.includes('v13-shared-asset-foundation'));
 expect('runtime identity', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 

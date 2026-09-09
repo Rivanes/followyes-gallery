@@ -1,10 +1,10 @@
-/* Exhibition Platform — C6C8C24 isolated Test Gallery bootstrap. */
+/* Exhibition Platform — C6C8C25 isolated Test Gallery bootstrap. */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c24_exhibition_gallery_assignment";
-import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c24_exhibition_gallery_assignment";
+import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
+import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "C6C8C24";
-const ENGINE_CACHE_KEY = "c6c8c24_exhibition_gallery_assignment_20260908";
+const STAGE = "C6C8C25";
+const ENGINE_CACHE_KEY = "v13_1_shared_asset_foundation_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
@@ -61,18 +61,18 @@ async function ensureBabylon() {
   if (!window.BABYLON || !window.BABYLON.Engine) throw new Error("Babylon runtime unavailable.");
 }
 
-function waitForInteractionReady(timeoutMs = 120000) {
+function waitForInteractionReady(lifecycleId, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { cleanup(); reject(new Error("Test Gallery startup timed out.")); }, timeoutMs);
-    const onReady = (event) => { cleanup(); resolve(event.detail || {}); };
-    const onFailure = (event) => { cleanup(); reject(new Error((event.detail && (event.detail.technicalMessage || event.detail.message)) || "Test Gallery startup failed.")); };
+    const onReady = (event) => { const detail = event.detail || {}; if (detail.lifecycleId !== lifecycleId) return; cleanup(); resolve(detail); };
+    const onFailure = (event) => { const detail = event.detail || {}; if (detail.lifecycleId !== lifecycleId) return; cleanup(); reject(new Error((detail.technicalMessage || detail.message) || "Test Gallery startup failed.")); };
     function cleanup() {
       clearTimeout(timer);
       window.removeEventListener("gallery-interaction-ready", onReady);
       window.removeEventListener("gallery-startup-failure", onFailure);
     }
-    window.addEventListener("gallery-interaction-ready", onReady, { once: true });
-    window.addEventListener("gallery-startup-failure", onFailure, { once: true });
+    window.addEventListener("gallery-interaction-ready", onReady);
+    window.addEventListener("gallery-startup-failure", onFailure);
   });
 }
 
@@ -87,7 +87,8 @@ function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
     is_published: true,
     sort_order: 0,
     storage_prefix: `gallery-tests/${venueVersionId}`,
-    space_id: spaceDefinition.id
+    space_id: spaceDefinition.id,
+    venue_version_id: venueVersionId
   });
   return Object.freeze({
     mode: "test-gallery",
@@ -102,7 +103,7 @@ function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
 }
 
 function showError(error) {
-  console.error("C6C8C24 Test Gallery:", error);
+  console.error("C6C8C25 Test Gallery:", error);
   loading.style.display = "none";
   errorMessage.textContent = error && error.message ? error.message : String(error);
   errorPanel.style.display = "grid";
@@ -128,7 +129,8 @@ async function startTestGallery() {
   });
   const exhibitionData = buildTestExhibitionAdapter(spaceDefinition, requestedVersionId);
   await ensureBabylon();
-  const ready = waitForInteractionReady();
+  const lifecycleId = `c25-gallery-test-${requestedVersionId}-${Date.now()}`;
+  const ready = waitForInteractionReady(lifecycleId);
   const module = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
   engine = new window.BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: false,
@@ -141,7 +143,8 @@ async function startTestGallery() {
     spaceDefinition,
     exhibitionData,
     exhibitionId: `gallery-test-${requestedVersionId}`,
-    galleryTestMode: true
+    galleryTestMode: true,
+    lifecycleId
   });
   engine.runRenderLoop(() => scene.render());
   window.addEventListener("resize", () => engine && engine.resize());

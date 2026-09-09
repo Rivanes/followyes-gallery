@@ -1,6 +1,6 @@
 # Exhibition Platform
 
-Current repository release: **C6C8C24 — Exhibition ↔ Gallery Assignment + Public Discovery**.
+Current repository release: **V13.1 — Shared Asset Foundation**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
@@ -14,13 +14,13 @@ This repository contains the deployable Babylon.js 3D Exhibition Platform plus r
 - `exhibitions.venue_id` / `exhibition_states.venue_id` describe the current **Draft authoring Gallery**.
 - Public Gallery identity is derived from `published_venue_version_id -> venue_versions.venue_id`, not from the current Draft authoring Gallery.
 - Publishing a new Gallery Version does not automatically migrate Exhibitions.
-- Different Galleries remain a full page/bootstrap boundary in C24; same-session Babylon Scene disposal/recreate is reserved for C25.
+- Different immutable Venue Versions can now switch in one browser session through the C25 Scene lifecycle controller.
 
 Specific Gallery names are data. They are not platform/runtime branding.
 
 ## Main entries
 
-- `index.html` — Public Viewer + C24 pre-runtime Exhibition discovery.
+- `index.html` — project homepage + Exhibition carousel + Public Viewer + same-session cross-space switching.
 - `admin.html` — direct/fallback Admin Workspace.
 - `gallery-test.html` — authenticated isolated preview of one Gallery Version.
 - `src/Gallery_V0_11.js` — main Babylon.js runtime source.
@@ -28,7 +28,13 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/data/exhibition-api.js` — canonical Venue/Exhibition data adapter.
 - `src/data/exhibition-gallery-assignment.js` — pure C24 binding/migration helpers and executable reference rebind for QA.
 - `src/data/gallery-management-api.js` — controlled Gallery lifecycle/Storage adapter.
+- `src/data/shared-asset-api.js` — V13.1 guarded Shared Asset catalog/version/upload/publish adapter.
+- `src/runtime/shared-asset-state.js` — V13.1 immutable Shared Asset reference/state-manifest contract for later Exhibition dressing.
+- `src/validation/shared-asset-validation.js` — V13.1 Prop/Frame GLB validation coordinator.
+- `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
+- `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
+- `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
 - `src/config/space-fixture.js` — local/login-disabled test fixture only.
@@ -92,7 +98,7 @@ A Gallery may have at most one active Draft Version. Next Draft creation is copy
 
 ## C6C8C23 Space Model Validation baseline
 
-C23 is PASS/CLOSED and remains fully active in C24.
+C23 is PASS/CLOSED and remains fully active in C25.
 
 Required Gallery roles:
 
@@ -157,11 +163,80 @@ Historical raw assignment and raw state-only publication functions are not brows
 
 ### Public discovery
 
-With no explicit `?exhibition=` query, the Viewer requests canonical published Exhibition cards **before** starting Babylon and shows a selection surface. Card Gallery name comes from the Published Venue Version. A missing cover uses a neutral fallback.
+With no explicit `?exhibition=` query, the homepage requests canonical Published Exhibition cards **before** starting Babylon and renders the V12 carousel inside the homepage 3D stage. The legacy prestart `Enter gallery / About project` popup is not part of the current flow. Cover cards use their Published card media; a coverless Exhibition renders a genuine title-only card with no fake poster/fallback artwork.
 
-Choosing a card sets `?exhibition=<slug>` and continues the normal startup. Explicit deep links bypass discovery.
+Choosing the whole card is the single visitor action: it starts loading/Babylon and enters that Exhibition immediately. The carousel centers the complete card set when it fits the viewport and naturally becomes horizontally scrollable when it overflows; it supports desktop previous/next controls, native touch horizontal scrolling with scroll snap, and keyboard `ArrowLeft` / `ArrowRight` / `Home` / `End` focus navigation. Explicit deep links on a normal navigation still identify the Exhibition and start directly. A hard browser reload of the Public Viewer intentionally clears the active `?exhibition=` entry and returns to the main Exhibition-selection homepage; same-document card switching and browser Back/Forward remain history-managed. The `ADMIN` link is available before Gallery startup; `admin.html` owns direct authentication, while an authenticated already-live runtime can still use the inline Admin fast path.
 
-Different Galleries use a fresh document/bootstrap boundary in C24. Same-Gallery Exhibition switching keeps the accepted resident/delta path. True in-session cross-Gallery Scene teardown/recreation remains C6C8C25.
+C25 replaces the former fresh-document cross-Gallery boundary with same-session Scene lifecycle switching. Same exact Venue Version keeps the accepted resident/delta Exhibition path; another exact Venue Version recreates the Scene on the same Engine/canvas. V12 inherits that lifecycle and the C26 public Space-entry popup policy below.
+
+## V12 Public Carousel / Space Entry Policy
+
+The accepted engine-owned instruction popup is shown by public orchestration, not by a once-per-session flag. Exact immutable `venue_version_id` is the boundary:
+
+```text
+initial public entry A       -> show
+A -> B                       -> show
+B -> A later                 -> show again
+Gallery A v1 -> Gallery A v2 -> show
+same exact version A -> B    -> do not re-show
+Admin / Gallery authoring    -> do not show
+```
+
+The decision runs only after lifecycle-matched target readiness. `window.ExhibitionPlatformPublicSpaceEntryDebug` exposes non-user-facing counters and the last decision for production smoke diagnostics.
+
+
+## C6C8C25.4 Same-Space Exhibition Media Hydration
+
+Same exact `venue_version_id` Exhibition switches continue to reuse the live Babylon Scene, but transition completion now waits for every assigned artwork Preview/Full texture to be materially present. State application may queue Preview loads; C25.4 explicitly primes/drains that queue and treats missing assigned Previews as a transition failure instead of exposing persistent gray placeholders. The rollback path uses the same readiness rule. Full texture upgrades and sculpture/model hydration remain background work.
+
+## C6C8C25.3 Exhibition Publish / Optional Cover
+
+- Poster/Cover is optional for Exhibition publication.
+- Generic Exhibition Details save does not change public visibility.
+- Publication is explicit through `PUBLISH EXHIBITION`; hiding is explicit through `UNPUBLISH EXHIBITION`.
+- Admin shows canonical publication blockers/warnings from `admin_validate_exhibition()`.
+- Public discovery supports coverless title-only cards.
+
+## C6C8C25.2 Admin Gallery Partial Preview / UI Fixes
+
+C25.2 adds a separate Gallery **authoring preview** policy without weakening normal Published/Public Space validation. Selecting a Gallery in Admin now drives the right-side Babylon viewport. A working Venue Version may be previewed with zero or partial building assets; only assigned assets are loaded.
+
+Gallery authoring preview is deliberately isolated from real Exhibition content through a read-only synthetic Exhibition adapter. It cannot load/save the previously selected Exhibition's artwork, sculpture, lighting or editor state. Crossing between a normal Exhibition runtime and Gallery authoring preview forces a Scene lifecycle boundary even when the exact `venue_version_id` matches.
+
+Returning `GALLERIES -> EXHIBITIONS` restores the selected Exhibition Draft runtime. Closing inline Admin from Gallery preview restores the remembered Published public runtime.
+
+The strict publication contract is unchanged: Floor + Walls + Ceiling remain required and must pass C23 validation; Props remains optional. C25.2 also scopes Gallery Management text tokens to the dark Admin surface, hides normal runtime diagnostics from the standard Admin toolbar and constrains the in-scene editor panel to the actual 3D stage height.
+
+## C6C8C25.1 Main-page Exhibition Entry / Admin Direct Access
+
+C25.1 is a browser-flow correction over the C25 Scene lifecycle. It removes the obsolete double-entry path where visitors first saw `Enter gallery` and only then chose an Exhibition. Exhibition choice is now the entry gesture.
+
+The loading/error BootGuard remains, but it is hidden during homepage prestart and appears only after an Exhibition has been chosen (or an explicit Exhibition deep link begins startup). Public `EXHIBITIONS` reopens the in-page selector without locking the whole document.
+
+Admin access is independent from Babylon startup: the static `ADMIN` link can always open `admin.html`; only authenticated sessions with a live runtime intercept that link for the inline Admin fast path.
+
+## C6C8C25 Cross-Space Runtime
+
+C25 uses the exact immutable `venue_version_id` as the physical Space identity. Two Exhibitions may share one Gallery slug but still require a full Scene lifecycle if they target different Gallery Versions.
+
+```text
+same venue_version_id
+  -> existing same-Scene Exhibition switch / residency
+
+different venue_version_id
+  -> resolve complete target runtime
+  -> dispose old Scene
+  -> create new Scene on the same Babylon Engine + canvas
+  -> wait for lifecycle-matched Interaction Ready
+```
+
+The shared `scene-lifecycle-controller.js` owns the active Scene, lifecycle generation, cross-Version cutover and rollback. The Viewer and standalone Admin render loops read the mutable active Scene instead of closing over the first Scene.
+
+Public/Admin runtime caches are mode-qualified so an Exhibition whose Published channel is Gallery A and Draft channel is Gallery B cannot reuse the wrong runtime. Per-Scene lifecycle IDs prevent stale asynchronous READY/FAIL events from completing a newer Scene.
+
+Target runtime resolution happens before current Scene disposal. If target startup fails after disposal, C25 attempts to recreate the previous canonical runtime.
+
+C25 does not change database schema/RPCs. It uses the deployed C24 assignment/publication contract.
 
 ## Test Gallery
 
@@ -174,6 +249,50 @@ GalleryApp.getCameraPose()
 ```
 
 Gallery CRUD/versioning/model validation/Exhibition assignment remain outside `Gallery_V0_11.js`.
+
+## V13.1 Shared Asset Foundation
+
+V13.1 adds the backend/data/runtime contracts required by the future left-workspace Asset Library. It intentionally does **not** add the `ASSETS` UI, drag-and-drop placement or the Frame browser yet. Those remain later V13 stages.
+
+Canonical reusable asset model:
+
+```text
+shared_assets
+  -> shared_asset_versions (immutable published/history GLB versions)
+  -> shared_asset_usages   (Draft/Published/Previous Exhibition references)
+```
+
+Asset types in V13.1:
+
+- `prop` — reusable Exhibition-owned scene-dressing model; initial placement contract is floor-based;
+- `frame` — reusable artwork-only model; it is never a free-standing scene prop.
+
+New reusable binaries use immutable Storage paths:
+
+```text
+shared-assets/assets/<asset UUID>/versions/<asset-version UUID>/model.glb
+```
+
+Existing Frames under `gallery-artworks/main/frames/*.glb` are **not moved, renamed or deleted**. The V13.1 production migration seeds them into the Shared Asset catalog as grandfathered immutable published Frame versions and makes the legacy `main/frames` write path read-only. Existing path-based artwork Frame state continues to work until the later V13 Frame migration stage deliberately writes ID-based references.
+
+V13.1 also freezes the future Exhibition reference contract without integrating placement into the current runtime yet:
+
+- future Props reference immutable `assetVersionId` from Exhibition `assetInstances`;
+- future artwork Frames may reference immutable `assetVersionId` inside `artworks[].frame`;
+- a database usage synchronizer indexes Draft / Published / Previous references transactionally when `exhibition_states` changes;
+- Gallery-scoped (`venue`) asset references are rejected when the Exhibition belongs to another canonical Gallery/Venue;
+- published/history asset-version payloads cannot be overwritten or physically deleted;
+- new version publication requires current V13.1 streaming GLB validation and SHA-256/file-size identity.
+
+The planned Admin UX remains:
+
+```text
+LEFT WORKSPACE: EXHIBITIONS | GALLERIES | ASSETS   (V13.2+)
+CENTER: active 3D Scene
+RIGHT INSPECTOR: EXHIBITS | SPACE | LIGHTING | SETTINGS
+```
+
+`ASSETS` is a left-workspace tool switch, not a Scene switch. That UI contract is planned but is not implemented in V13.1.
 
 ## Backend dependency
 
@@ -193,7 +312,7 @@ From repository root:
 npm run check
 ```
 
-This performs production build, syntax, repository verification and consolidated regression suites, including C23 executable GLB worker fixtures and C24 executable Exhibition/Gallery assignment state-rebind invariants.
+This performs production build, syntax, repository verification and consolidated regression suites, including C23 executable GLB worker fixtures, C24 Exhibition/Gallery assignment invariants, C25/C25.4 cross-space/media readiness tests and C26 carousel/Space-entry policy invariants.
 
 SQL package verification is separate:
 
@@ -201,7 +320,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL verifier is static. Production still requires the documented Supabase PRECHECK/migration/POSTCHECK and browser smoke.
+The SQL/package verifier is static. **V13.1 adds new production SQL** for the Shared Asset foundation. Existing production must use the packaged `CURRENT_PRECHECK.sql -> V13_1_SHARED_ASSET_FOUNDATION.sql -> CURRENT_POSTCHECK.sql` sequence before the V13.1 repository deploy. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

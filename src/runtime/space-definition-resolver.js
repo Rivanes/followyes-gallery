@@ -47,7 +47,7 @@ function normalizeManifestAsset(raw) {
   raw = raw && typeof raw === "object" ? raw : {};
   return {
     id: text(raw.id || raw.assetId || raw.asset_id),
-    role: normalizeRole(raw.role),
+    role: normalizeRole(raw.role || raw.asset_id || raw.assetId),
     storageBucket: text(raw.storageBucket || raw.storage_bucket || raw.bucket),
     storagePath: text(raw.storagePath || raw.storage_path || raw.path),
     publicUrl: text(raw.publicUrl || raw.public_url || raw.url),
@@ -114,6 +114,41 @@ export function validateVenueManifest(manifest, options = {}) {
   if (!chooseEntry(manifest)) problems.push("Venue manifest needs a safe visitor spawn point with position and target.");
 
   return { valid: problems.length === 0, problems, assetRoles: roles, assets };
+}
+
+export function buildAuthoringSpaceDefinition({ supabase, venue, venueVersion, manifest, assets: assetRows = null }) {
+  venue = venue && typeof venue === "object" ? venue : {};
+  venueVersion = venueVersion && typeof venueVersion === "object" ? venueVersion : {};
+  manifest = manifest && typeof manifest === "object" ? manifest : (venueVersion.manifest || {});
+  const venueSlug = text(venue.slug || manifest.venueId || venue.id || "gallery-preview");
+  const versionNumber = text(venueVersion.version_number || venueVersion.versionNumber || manifest.versionId || "v1") || "v1";
+  const sources = Array.isArray(assetRows) ? assetRows.map(normalizeManifestAsset) : (Array.isArray(manifest.assets) ? manifest.assets.map(normalizeManifestAsset) : []);
+  const byRole = {};
+  sources.forEach((asset) => { if (asset.role && SPACE_ASSET_ROLES.includes(asset.role) && !byRole[asset.role]) byRole[asset.role] = asset; });
+  const resolvedAssets = {};
+  SPACE_ASSET_ROLES.forEach((role) => {
+    const source = byRole[role];
+    if (!source) return;
+    const publicUrl = source.publicUrl || getPublicUrl(supabase, source.storageBucket, source.storagePath);
+    const parts = splitPublicUrl(publicUrl);
+    if (!parts || !parts.rootUrl || !parts.fileName) return;
+    resolvedAssets[role] = Object.freeze({
+      id: source.id || role, role, rootUrl: parts.rootUrl, fileName: parts.fileName,
+      version: source.version || "1", required: false, storageBucket: source.storageBucket || null, storagePath: source.storagePath || null
+    });
+  });
+  return Object.freeze({
+    schema: "exhibition-platform-space-definition.v1",
+    id: venueSlug || "gallery-preview",
+    venueId: text(venue.id),
+    name: text(venue.name || venueSlug || "Gallery preview"),
+    version: versionNumber,
+    venueVersionId: text(venueVersion.id),
+    manifestSchema: text(manifest.schema || VENUE_MANIFEST_SCHEMA),
+    entry: chooseEntry(manifest) || { id: "visitor-entry", position: { x: 0, y: 1.7, z: 0 }, target: { x: 0, y: 1.7, z: 1 } },
+    assets: Object.freeze(resolvedAssets),
+    authoringPartial: true
+  });
 }
 
 export function buildSpaceDefinition({ supabase, venue, venueVersion, manifest, allowLegacySchema = false }) {

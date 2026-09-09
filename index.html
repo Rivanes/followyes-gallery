@@ -415,15 +415,11 @@
       margin-top: 22px;
     }
 
-    #galleryBootStart,
     #galleryBootReload,
-    #galleryBootExternal,
-    #galleryBootAbout {
+    #galleryBootExternal {
       display: none;
     }
 
-    #galleryBootGuard[data-state="prestart"] #galleryBootStart,
-    #galleryBootGuard[data-state="prestart"] #galleryBootAbout,
     #galleryBootGuard[data-state="error"] #galleryBootReload,
     #galleryBootGuard[data-state="error"] #galleryBootExternal {
       display: inline-flex;
@@ -1178,7 +1174,7 @@
 
         <span id="authStatus">Public gallery</span>
         <button id="saveStateButton" class="headerButton primary hidden">Save state</button>
-        <a id="adminWorkspaceButton" class="headerButton hidden" href="./admin.html">ADMIN</a>
+        <a id="adminWorkspaceButton" class="headerButton" href="./admin.html">ADMIN</a>
         <button id="loginButton" class="headerButton">Log in</button>
         <button id="logoutButton" class="headerButton hidden">Log out</button>
       </div>
@@ -1192,16 +1188,14 @@
         <div id="galleryMobileControlsLayer" class="galleryMobileHudLayer"></div>
         <div id="galleryMobileInspectLayer" class="galleryMobileHudLayer"></div>
         <div id="galleryMobileSystemLayer" class="galleryMobileHudLayer">
-          <div id="galleryBootGuard" data-state="prestart" role="status" aria-live="polite">
+          <div id="galleryBootGuard" class="is-hidden" data-state="prestart" role="status" aria-live="polite">
             <div class="galleryBootCard">
               <div class="galleryBootBrand">Exhibition Platform</div>
               <div class="galleryBootSpinner" aria-hidden="true"></div>
-              <h2 id="galleryBootTitle">Exhibition Platform</h2>
-              <p id="galleryBootMessage">The 3D exhibition starts only after you choose to enter.</p>
+              <h2 id="galleryBootTitle">Preparing the gallery</h2>
+              <p id="galleryBootMessage">One moment — your visit will begin shortly.</p>
               <p id="galleryBootTimefiller"></p>
               <div id="galleryBootActions">
-                <button id="galleryBootStart" type="button" class="galleryBootAction is-primary">Enter gallery</button>
-                <a id="galleryBootAbout" class="galleryBootAction" href="#project-info">About project</a>
                 <button id="galleryBootReload" type="button" class="galleryBootAction is-primary">Reload gallery</button>
                 <a id="galleryBootExternal" class="galleryBootAction" href="./" target="_blank" rel="noopener noreferrer">Open in browser</a>
               </div>
@@ -1644,8 +1638,6 @@
       var title = document.getElementById("galleryBootTitle");
       var message = document.getElementById("galleryBootMessage");
       var timefiller = document.getElementById("galleryBootTimefiller");
-      var startButton = document.getElementById("galleryBootStart");
-      var aboutButton = document.getElementById("galleryBootAbout");
       var reload = document.getElementById("galleryBootReload");
       var external = document.getElementById("galleryBootExternal");
       var state = "prestart";
@@ -1660,10 +1652,6 @@
 
       var copy = {
         pl: {
-          preTitle: "Exhibition Platform",
-          preMessage: "Interaktywna wystawa 3D uruchomi się dopiero po wybraniu wejścia.",
-          start: "Uruchom galerię",
-          about: "O projekcie",
           loadingTitle: "Przygotowujemy galerię",
           loadingMessage: "Jeszcze chwila — za moment rozpoczniesz zwiedzanie.",
           errorTitle: "Nie udało się uruchomić galerii",
@@ -1678,10 +1666,6 @@
           ]
         },
         en: {
-          preTitle: "Exhibition Platform",
-          preMessage: "The interactive 3D exhibition starts only after you choose to enter.",
-          start: "Enter gallery",
-          about: "About project",
           loadingTitle: "Preparing the gallery",
           loadingMessage: "One moment — your visit will begin shortly.",
           errorTitle: "The gallery could not start",
@@ -1732,12 +1716,7 @@
         var c = getCopy();
         if (guard) guard.dataset.state = state;
 
-        if (state === "prestart") {
-          setText(title, c.preTitle);
-          setText(message, c.preMessage);
-          setText(startButton, c.start);
-          setText(aboutButton, c.about);
-        } else if (state === "loading") {
+        if (state === "loading") {
           setText(title, c.loadingTitle);
           setText(message, c.loadingMessage);
         } else if (state === "error") {
@@ -1762,7 +1741,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "C6C8C24",
+              stage: "V13.1",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1778,7 +1757,7 @@
         if (state !== "prestart" || startResolved) return;
         startResolved = true;
         state = "loading";
-        if (startButton) startButton.disabled = true;
+        if (guard) guard.classList.remove("is-hidden");
         render();
         startFiller();
         timeoutId = window.setTimeout(function () {
@@ -1808,7 +1787,6 @@
         console.error("Gallery startup diagnostic:", failure, error || "");
       }
 
-      if (startButton) startButton.addEventListener("click", beginStart);
       if (reload) reload.addEventListener("click", function () { window.location.reload(); });
       if (external) external.href = window.location.href;
 
@@ -1821,11 +1799,12 @@
       });
 
       window.ExhibitionPlatformBootGuard = {
-        stage: "C6C8C24",
-        schema: "click-start-timefillers.v1",
+        stage: "V13.1",
+        schema: "exhibition-selection-start.v2",
         setLanguage: setLanguage,
         setPhase: setPhase,
         waitForStart: waitForStart,
+        start: beginStart,
         ready: ready,
         fail: fail,
         getState: function () { return state; }
@@ -1836,6 +1815,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=c6c8c24_exhibition_gallery_assignment_20260908" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=v13_1_shared_asset_foundation_20260909" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

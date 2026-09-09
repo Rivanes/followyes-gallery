@@ -16,21 +16,43 @@ const exhibitionApi=fs.readFileSync(new URL('../src/data/exhibition-api.js',impo
 const galleryManagementApi=fs.readFileSync(new URL('../src/data/gallery-management-api.js',import.meta.url),'utf8');
 const galleryTestBootstrap=fs.readFileSync(new URL('../src/bootstrap/gallery-test-bootstrap.js',import.meta.url),'utf8');
 const galleryTestHtml=fs.readFileSync(new URL('../gallery-test.html',import.meta.url),'utf8');
-const txt=fs.readFileSync(new URL('../ENGINE_LOGIN_DISABLED.txt',import.meta.url),'utf8');
 const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-bootstrap.js',import.meta.url),'utf8');
 const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
 const transitionGuard=fs.readFileSync(new URL('../src/bootstrap/transition-guard.js',import.meta.url),'utf8');
+const sceneLifecycle=fs.readFileSync(new URL('../src/runtime/scene-lifecycle-controller.js',import.meta.url),'utf8');
+const sharedAssetApi=fs.readFileSync(new URL('../src/data/shared-asset-api.js',import.meta.url),'utf8');
+const sharedAssetState=fs.readFileSync(new URL('../src/runtime/shared-asset-state.js',import.meta.url),'utf8');
+const sharedAssetValidation=fs.readFileSync(new URL('../src/validation/shared-asset-validation.js',import.meta.url),'utf8');
+const sharedAssetWorker=fs.readFileSync(new URL('../src/workers/shared-asset-glb-validator-worker.js',import.meta.url),'utf8');
 
 function assert(c,m){if(!c)throw new Error(m)}
 function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "C6C8C24"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "C6C8C24"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "C6C8C24"'),'Admin stage identity missing');
-assert(bootstrap.includes('c6c8c24_exhibition_gallery_assignment_20260908'),'Current cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=c6c8c24_exhibition_gallery_assignment_20260908'),'Index cache key missing');
+assert(index.includes('stage: "V13.1"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V13.1"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V13.1"'),'Admin stage identity missing');
+assert(bootstrap.includes('v13_1_shared_asset_foundation_20260909'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v13_1_shared_asset_foundation_20260909'),'Index viewer cache key missing');
+assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
+assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
+assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame"]'),'V13.1 Shared Asset GLB validation contract missing');
+assert(!index.includes('id="galleryBootStart"')&&!index.includes('id="galleryBootAbout"'),'Legacy prestart Enter Gallery popup remains');
+assert(index.includes('class="is-hidden" data-state="prestart"'),'Boot guard must be hidden before Exhibition selection');
+assert(bootstrap.includes('c26HomepageExhibitionCarousel')&&bootstrap.includes('bootGuard.start();'),'Homepage Exhibition carousel/start bridge missing');
+assert(!bootstrap.includes('c25HomepageExhibitionGrid'),'Temporary C25 discovery grid remains');
+assert(bootstrap.includes('c26ExhibitionCard--titleOnly')&&!bootstrap.includes('c25ExhibitionFallback'),'Coverless Exhibition is not a genuine title-only card');
+assert(bootstrap.includes('scroll-snap-type:x mandatory')&&bootstrap.includes('touch-action:pan-x pan-y'),'Carousel mobile swipe contract missing');
+assert(bootstrap.includes('#c26HomepageExhibitionTrack{display:flex;align-items:stretch;justify-content:center')&&bootstrap.includes('width:max-content;min-width:100%'),'Carousel responsive centering contract missing');
+assert(bootstrap.includes('event.key === "ArrowRight"')&&bootstrap.includes('event.key === "ArrowLeft"'),'Carousel keyboard navigation missing');
+assert(bootstrap.includes('function isHardDocumentReload()')&&bootstrap.includes('entries[0].type === "reload"'),'Hard reload detection missing');
+assert(bootstrap.includes('function resetPublicEntryToHomepageOnReload()')&&bootstrap.includes('url.searchParams.delete("exhibition")'),'Reload does not reset public entry URL to homepage');
+assert(bootstrap.includes('ensurePublicExhibitionSelection({ force: resetToHomepageAfterReload })'),'Reload homepage reset is not wired before public discovery');
+assert(bootstrap.includes('applyPublicSpaceIntroPolicy(currentRuntime')&&bootstrap.includes('initial: true, reason: "initial-public-entry"'),'C26 public Space intro orchestration missing');
+assert(index.includes('<a id="adminWorkspaceButton" class="headerButton" href="./admin.html">ADMIN</a>'),'Static Admin entry is not directly exposed');
+assert(bootstrap.includes('adminWorkspaceButton.classList.remove("hidden")'),'Admin direct access is not kept exposed by auth UI');
+assert(bootstrap.includes('if (!currentSession || !activeEngine || !activeScene || !sceneLifecycleController) return;'),'Admin direct navigation fallback missing');
 assert(source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'),'C6C8C13 source history missing');
 assert(source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'),'C6C8C14 source history missing');
 assert(source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'),'C6C8C15 source history missing');
@@ -38,6 +60,7 @@ assert(source.includes('Stage 12C66C6C8C16: Mobile UI Polish / Inspect Layout / 
 assert(source.includes('C6C8C21: Multi-Space Foundation'),'C6C8C21 source history missing');
 assert(source.includes('C6C8C22: Gallery Management'),'C6C8C22 source history missing');
 assert(source.includes('C6C8C23: Space Model Validation'),'C6C8C23 source history missing');
+assert(source.includes('C6C8C25: Cross-Space Runtime'),'C6C8C25 source history missing');
 assert(bootstrap.includes('adaptToDeviceRatio: false'),'Bootstrap still owns device DPR');
 assert(sha(extractFunction(source,'createViewerIntroOverlayStyles'))==='01c01b3e1a1e12f44802a2f375e78fe59acadd0f478d666871ba179098cf3d5f','Accepted C6C8C16 intro CSS changed');
 assert(sha(extractFunction(source,'showViewerIntroOverlay'))==='3e555d80b26ee44188f21107cd265cb603ff601cbf51cdebf8bce95d4d00d09e','Accepted C6C8C16 intro behavior changed');
@@ -52,6 +75,8 @@ assert(source.includes('REPAIR MEDIA')&&source.includes('AUDIT & CLEAN MEDIA'),'
 assert(source.includes('var galleryAvifEncoderModuleUrl = "src/vendor/gallery-avif-encoder.mjs"'),'AVIF entrypoint missing');
 assert(worker.includes('import(moduleUrl)')&&adapter.includes('ImageEncoder'),'AVIF worker/adapter missing');
 assert(source.includes('function switchGalleryExhibition(')&&source.includes('function createGalleryExhibition('),'Multi-exhibition runtime missing');
+assert(source.includes('function waitForGallerySameSpaceArtworkPreviews('),'C6C8C25.4 same-space Preview hydration gate missing');
+assert(source.includes('same-space-exhibition-preview-ready')&&source.includes('same-space-exhibition-rollback-preview-ready'),'C6C8C25.4 switch/rollback Preview readiness wiring missing');
 assert(!source.includes('.eq("id", "main")'),'Hard-coded gallery_state main query remains');
 assert(spaceFixture.includes('Floor_segment.glb')&&spaceFixture.includes('Wall_segments.glb')&&spaceFixture.includes('Ceiling.glb')&&spaceFixture.includes('Props.glb'),'Development Space fixture missing current geometry');
 assert(spaceResolver.includes('exhibition-platform-venue-manifest.v1')&&spaceResolver.includes('REQUIRED_SPACE_ASSET_ROLES'),'Canonical Space resolver missing');
@@ -75,12 +100,13 @@ assert(adminBootstrap.includes('export async function suspendAdminWorkspace(opti
 assert(admin.includes('.adminButton:visited')&&admin.includes('text-decoration:none'),'Public Page button style fix missing');
 assert(assetCacheBootstrap.includes('SERVICE_WORKER_URL')&&assetCacheSw.includes('exhibition-platform-assets-v1'),'Persistent asset cache missing');
 assert(minified.includes('syncGalleryArtworkEgressPolicyForWorkspaceMode')&&minified.includes('gallery-artwork-residency.v3'),'Production runtime missing current hygiene changes');
-assert(txt.includes('var galleryEditorLoginEnabled = false;')&&txt.includes('globalThis.ExhibitionPlatformSpaceDefinition ='),'Login-disabled test build missing');
+assert(source.includes('var galleryEditorLoginEnabled = true;'),'Production editor-login gate marker missing');
+assert(spaceFixture.includes('export const developmentSpaceFixture'),'Development Space fixture export missing');
 assert(source.includes('function parkActiveGalleryExhibitionLayer(')&&source.includes('function restoreGalleryExhibitionLayer('),'Exhibition layer residency missing');
 assert(source.includes('function setGallerySameRuntimeModeState(')&&source.includes('instant-workspace-ui-only'),'Instant zero-reload mode transition missing');
 assert(source.includes('function scheduleGalleryWorkspaceModeBackgroundAudit(')&&source.includes('requestIdleCallback(runAudit'),'Deferred workspace integrity audit missing');
 assert(source.includes('canUseInstantWorkspaceModeSwitch: function ()')&&source.includes('foregroundPreserved: true'),'Workspace fast-path safety API missing');
-assert(bootstrap.includes('const instantFastPath = (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch()')&&!bootstrap.includes('waitForForegroundReady("admin-to-public"'),'Admin→Public still blocks on foreground readiness');
+assert(bootstrap.includes('const instantFastPath = !crossSpaceReturn && (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch()'),'C6C8C25 same-space Admin→Public fast path missing');
 assert(adminBootstrap.includes('void updateAssetDeliveryStatus().catch(() => null)'),'Admin telemetry still blocks workspace resume');
 assert(admin.includes('id="networkDiagnostics"')&&adminBootstrap.includes('getExhibitionAssetDeliveryStats'),'Admin network diagnostics missing');
 assert(assetCacheSw.includes('EXHIBITION_ASSET_DELIVERY_STATS')&&assetCacheSw.includes('supabaseNetworkFetches'),'Storage delivery instrumentation missing');
@@ -90,7 +116,7 @@ assert(source.includes('galleryExhibitionRuntime.hydrationActive = true')&&sourc
 assert(source.includes('blockedSpaceDisposals')&&source.includes('lastHydrationProfile'),'C6C8C7 diagnostics missing');
 assert(transitionGuard.includes('setTimeout(resolve, 34)'),'C6C8C7 transition paint barrier missing');
 assert(bootstrap.includes('Returning to Public Page…')&&bootstrap.includes('Opening Admin Workspace…'),'Viewer/Admin same-runtime transition feedback missing');
-assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Keeping the current 3D Space resident.'),'Exhibition switch loading feedback missing');
+assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Keeping the current immutable Gallery Version resident.'),'Exhibition switch loading feedback missing');
 assert(adminBootstrap.includes('void captureExhibitionTransitionDiagnostic'),'Diagnostics still block the visible exhibition transition');
 assert(source.includes('schema: "gallery-artwork-residency.v3"'),'C6C8C8 residency schema missing');
 assert(source.includes('function isGalleryViewerTextureStreamingMotionBlocked('),'C6C8C8 movement gate missing');
@@ -110,7 +136,7 @@ assert(adminBootstrap.includes('BG slices')&&adminBootstrap.includes('Preview pr
 assert(source.includes('function getGalleryActiveArtworkPreviewPresenceSnapshot(')&&source.includes('function queueGalleryMissingRequiredPreviews('),'C6C8C11 Preview presence/requeue helpers missing');
 assert(source.includes('snapshot.requiredPreviews === snapshot.readyPreviews')&&source.includes('snapshot.missingPreviews === 0'),'C6C8C11 readiness does not guarantee Preview fill');
 assert(source.includes('Math.min(6, getGalleryFastStartPreviewTextureConcurrency())'),'C6C8C11 Preview concurrency path missing');
-assert(source.includes('var galleryCriticalAssetNames = ["floor", "wall", "ceiling"]')&&source.includes('galleryOptionalAssetNames = galleryHasOptionalProps ? ["props"] : []'),'C6C8C23 optional Props runtime contract missing');
+assert(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]')&&source.includes('galleryAuthoringSpacePreview'),'C6C8C23 optional Props runtime contract missing');
 assert(source.includes('function getGallerySpaceGpuWarmupRevision(')&&source.includes('{ kind: "wall", meshes: wallMeshes }')&&source.includes('{ kind: "prop", meshes: propMeshes }'),'C6C8C12 per-mesh Space warmup missing');
 assert(source.includes('gallerySpaceAlwaysResident = true')&&source.includes('freezeStaticGalleryMeshes(propMeshes, "prop")'),'C6C8C12 resident Props contract missing');
 assert(source.includes('warmup.ok !== true')&&source.includes('Space visual warmup failed for:'),'C6C8C12 hard visual warmup gate missing');
@@ -128,14 +154,23 @@ assert(adminBootstrap.includes('metadataDraftPreviewActive = options.preserveDra
 assert(adminBootstrap.includes('const preserveMetadataDraft = metadataDraftPreviewActive && metadataDirty'),'C6C8C15 Admin resume may overwrite metadata draft');
 assert(bootstrap.includes('exitAdminWorkspaceMode({ discardUnsaved, preserveDraft })'),'C6C8C15 viewer close does not forward preserveDraft');
 
+assert(sceneLifecycle.includes('createSceneLifecycleController')&&sceneLifecycle.includes('getRuntimeVenueVersionKey'),'C6C8C25 Scene lifecycle controller missing');
+assert(bootstrap.includes('const scene = activeScene;')&&bootstrap.includes('switchPublicExhibition(reference'),'C6C8C25 mutable Viewer scene loop/switch missing');
+assert(adminBootstrap.includes('sceneLifecycleController.switchTo'),'C6C8C25 Admin switch does not use lifecycle controller');
+assert(source.includes('Exhibition state belongs to another Gallery Version'),'C6C8C25 exact Venue Version state guard missing');
+assert(source.includes('gallery-scene-disposed')&&source.includes('galleryDisposed = true'),'C6C8C25 disposal contract missing');
+assert(exhibitionApi.includes('const runtimeKey = (modeValue, id) =>'),'C6C8C25 mode-qualified runtime cache missing');
+
 const packageJson=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
 const expectedRegressionSuites=[
   'test-core-runtime.mjs',
+  'test-cross-space-runtime.mjs',
   'test-exhibition-gallery-assignment.mjs',
   'test-gallery-management.mjs',
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
   'test-platform-runtime.mjs',
+  'test-shared-assets.mjs',
   'test-space-model-validation.mjs',
   'test-workspace-ui.mjs'
 ];
