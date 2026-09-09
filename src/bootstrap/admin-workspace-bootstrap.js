@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.3 Admin Workspace / Left Workspace Asset Manager
+  Exhibition Platform — V13.4 Admin Workspace / Frame Browser Migration
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -16,15 +16,15 @@ import {
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
-import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_3_prop_browser_placement";
+import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_4_frame_browser_migration";
 import {
   galleryBindingLabel,
   isExhibitionGalleryMigrationPending,
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V13.3";
-const ENGINE_CACHE_KEY = "v13_3_prop_browser_placement_20260909";
+const STAGE = "V13.4";
+const ENGINE_CACHE_KEY = "v13_4_frame_browser_migration_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -1597,11 +1597,50 @@ function ensureGalleryManagementUi() {
     onCancelPropPlacement: (options = {}) => {
       if (window.GalleryApp && typeof window.GalleryApp.cancelSharedAssetPropPlacement === "function") window.GalleryApp.cancelSharedAssetPropPlacement(options || {});
     },
+    getFrameBindingContext: () => {
+      if (assetWorkspaceHost !== "exhibitions" || !window.GalleryApp || typeof window.GalleryApp.getSelectedArtworkFrameBindingContext !== "function") return null;
+      return window.GalleryApp.getSelectedArtworkFrameBindingContext();
+    },
+    onBeginFrameDrag: async (descriptor, options = {}) => {
+      if (assetWorkspaceHost !== "exhibitions") throw new Error("Frame assignment requires an active Exhibition.");
+      if (!window.GalleryApp || typeof window.GalleryApp.beginSharedAssetFrameDrag !== "function") throw new Error("Live Gallery Frame binding bridge is unavailable.");
+      return window.GalleryApp.beginSharedAssetFrameDrag(descriptor, options || {});
+    },
+    onCancelFrameDrag: () => {
+      if (window.GalleryApp && typeof window.GalleryApp.cancelSharedAssetFrameDrag === "function") window.GalleryApp.cancelSharedAssetFrameDrag();
+    },
+    onBindFrame: async (descriptor, options = {}) => {
+      if (assetWorkspaceHost !== "exhibitions") throw new Error("Frame assignment requires an active Exhibition.");
+      if (!window.GalleryApp || typeof window.GalleryApp.applySharedAssetFrameToSelectedArtwork !== "function") throw new Error("Live Gallery Frame binding bridge is unavailable.");
+      return window.GalleryApp.applySharedAssetFrameToSelectedArtwork(descriptor, options || {});
+    },
+    onFrameBindingComplete: () => {
+      setAdminWorkspaceSection("exhibitions", { skipConfirm: true });
+    },
     onUiStateChange: (uiState) => {
       if (adminWorkspaceSection !== "assets") return;
       updateAssetsUrl({ assetId: uiState && uiState.selectedAssetId, filter: uiState && uiState.filter });
     }
   });
+
+  // V13.4: inline Admin can be mounted again in the same document. Keep exactly
+  // one global Frame-browser bridge so a remount cannot double-apply a Frame.
+  if (window.__exhibitionPlatformOpenFrameBrowserHandler) {
+    window.removeEventListener("exhibition-platform:open-frame-browser", window.__exhibitionPlatformOpenFrameBrowserHandler);
+  }
+  const openFrameBrowserHandler = (event) => {
+    try {
+      const target = event && event.detail && typeof event.detail === "object" ? event.detail : null;
+      if (!target || !target.artworkId || !selectedExhibition) throw new Error("Select an artwork in an active Exhibition first.");
+      assetWorkspaceHost = "exhibitions";
+      assetWorkspaceReturnSection = "exhibitions";
+      assetWorkspace.beginFrameBinding(target);
+      updateAssetsUrl({ filter: "frame" });
+      setAdminWorkspaceSection("assets", { skipConfirm: true, assetHost: "exhibitions" });
+    } catch (error) { showToast(error && error.message ? error.message : String(error)); }
+  };
+  window.__exhibitionPlatformOpenFrameBrowserHandler = openFrameBrowserHandler;
+  window.addEventListener("exhibition-platform:open-frame-browser", openFrameBrowserHandler);
 
   galleryEl("refreshGalleriesButton").addEventListener("click", handleRefreshGalleries);
   galleryEl("galleryCreateForm").addEventListener("submit", handleCreateGallery);

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.3 — Left Workspace Asset Manager
+  Exhibition Platform — V13.4 — Frame Browser Migration
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -12,8 +12,8 @@ import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExh
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v13_2_left_workspace_asset_manager";
 
-const STAGE = "V13.3";
-const ENGINE_CACHE_KEY = "v13_3_prop_browser_placement_20260909";
+const STAGE = "V13.4";
+const ENGINE_CACHE_KEY = "v13_4_frame_browser_migration_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -282,7 +282,7 @@ async function ensurePublicExhibitionSelection(options = {}) {
 }
 
 const publicSpaceEntryDebug = {
-  stage: "V13.3",
+  stage: "V13.4",
   schema: "public-space-entry-policy.v1",
   evaluations: 0,
   shows: 0,

@@ -1,10 +1,10 @@
-/* Exhibition Platform — V13.3 Left Workspace Asset Manager + Prop placement launcher.
-   Asset catalog remains in the left workspace; scene placement is delegated to the live Gallery runtime. */
+/* Exhibition Platform — V13.4 Left Workspace Asset Manager + Prop placement / Frame binding.
+   Asset catalog remains in the left workspace; scene placement/binding is delegated to the live Gallery runtime. */
 
-import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_3_prop_browser_placement";
-import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_3_prop_browser_placement";
+import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_4_frame_browser_migration";
+import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_4_frame_browser_migration";
 
-export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.3";
+export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.4";
 
 const MAX_THUMBNAIL_SOURCE_BYTES = 12 * 1024 * 1024;
 const THUMBNAIL_MAX_SIDE = 640;
@@ -100,8 +100,8 @@ function ensureStyles() {
     .assetTile{min-width:0;display:grid;grid-template-rows:92px auto;gap:7px;padding:7px;border:1px solid transparent;border-radius:12px;background:rgba(255,255,255,.02);color:rgba(255,255,255,.92);text-align:left;cursor:pointer}
     .assetTile:hover{background:rgba(255,255,255,.045)}
     .assetTile.active{border-color:rgba(154,180,155,.42);background:rgba(125,160,127,.13)}
-    .assetTile.is-placeable{cursor:grab}.assetTile.is-placeable:active{cursor:grabbing}.assetTile.is-placeable .assetThumb{box-shadow:inset 0 0 0 1px rgba(154,180,155,.18)}
-    .assetTile.is-placement-active{border-color:rgba(180,205,181,.72);background:rgba(125,160,127,.20)}
+    .assetTile.is-placeable,.assetTile.is-bindable{cursor:grab}.assetTile.is-placeable:active,.assetTile.is-bindable:active{cursor:grabbing}.assetTile.is-placeable .assetThumb,.assetTile.is-bindable .assetThumb{box-shadow:inset 0 0 0 1px rgba(154,180,155,.18)}
+    .assetTile.is-placement-active,.assetTile.is-binding-target{border-color:rgba(180,205,181,.72);background:rgba(125,160,127,.20)}
     .assetPlaceHint{position:absolute;right:6px;top:6px;padding:3px 5px;border-radius:6px;background:rgba(83,111,85,.90);font-size:8px;font-weight:800;letter-spacing:.07em;color:#edf4ee}
     .assetPlacementPanel{display:grid;gap:7px;padding:10px;border:1px solid rgba(154,180,155,.28);border-radius:10px;background:rgba(125,160,127,.075)}
     .assetPlacementPanel strong{font-size:10px}.assetPlacementPanel .assetMuted{margin:0}
@@ -139,7 +139,12 @@ export function createAdminAssetWorkspace({
   onUiStateChange = () => {},
   getPlacementContext = () => null,
   onBeginPropPlacement = async () => false,
-  onCancelPropPlacement = () => {}
+  onCancelPropPlacement = () => {},
+  getFrameBindingContext = () => null,
+  onBeginFrameDrag = async () => false,
+  onCancelFrameDrag = () => {},
+  onBindFrame = async () => false,
+  onFrameBindingComplete = () => {}
 } = {}) {
   if (!supabase) throw new Error("Supabase client is required for the Asset Workspace.");
   if (!sidebar) throw new Error("Canonical Admin sidebar is required for the Asset Workspace.");
@@ -161,7 +166,9 @@ export function createAdminAssetWorkspace({
     includeArchived: false,
     busy: false,
     requestId: 0,
-    placementDescriptor: null
+    placementDescriptor: null,
+    frameDragDescriptor: null,
+    frameBindingTarget: null
   };
 
   const catalogSection = document.createElement("section");
@@ -286,6 +293,64 @@ export function createAdminAssetWorkspace({
     };
   }
 
+  function buildFrameBindingDescriptor(source) {
+    const asset = source && source.asset ? source.asset : source;
+    const version = getPublishedVersion(source);
+    if (!asset || text(asset.asset_type).toLowerCase() !== "frame" || !version || !version.id || !version.storage_path) return null;
+    const runtimeMetadata = version.runtime_metadata && typeof version.runtime_metadata === "object" ? version.runtime_metadata : getDefaultSharedAssetRuntimeMetadata("frame");
+    if (text(runtimeMetadata.placementMode || runtimeMetadata.placement_mode).toLowerCase() !== "artwork-only") return null;
+    return {
+      schema: "exhibition-platform-frame-binding.v1",
+      assetId: asset.id,
+      assetVersionId: version.id,
+      assetVersionNumber: Number(version.version_number) || null,
+      assetType: "frame",
+      assetName: asset.name || asset.slug || "Frame",
+      label: asset.name || asset.slug || "Frame",
+      category: asset.category || "",
+      scopeType: asset.scope_type || "platform",
+      scopeVenueId: asset.scope_venue_id || null,
+      storageBucket: version.storage_bucket || api.bucket || "shared-assets",
+      storagePath: version.storage_path,
+      publicUrl: api.getPublicVersionUrl(version),
+      fileHash: version.file_hash || null,
+      runtimeMetadata
+    };
+  }
+
+  function getFrameDragCapability(source) {
+    const descriptor = buildFrameBindingDescriptor(source);
+    const asset = source && source.asset ? source.asset : source;
+    if (asset && text(asset.status).toLowerCase() === "archived") return { allowed: false, reason: "Restore this Frame before assigning it.", descriptor, context: readPlacementContext() };
+    if (state.hostSection !== "exhibitions") return { allowed: false, reason: "Open Assets from an Exhibition to assign Frames.", descriptor, context: null };
+    const context = readPlacementContext();
+    if (!context || !context.exhibitionId) return { allowed: false, reason: "No active Exhibition Frame context.", descriptor, context };
+    if (!descriptor) return { allowed: false, reason: "Publish a validated Frame version before assignment.", descriptor: null, context };
+    if (descriptor.scopeType === "venue" && (!context.venueId || String(descriptor.scopeVenueId) !== String(context.venueId))) {
+      return { allowed: false, reason: "This Frame is scoped to another Gallery.", descriptor, context };
+    }
+    return { allowed: true, reason: "Drag onto an artwork, or use FRAME → CHANGE and click this Frame.", descriptor, context };
+  }
+
+  async function bindFrameToTarget(source) {
+    const target = state.frameBindingTarget;
+    if (!target) throw new Error("No artwork is waiting for a Frame selection.");
+    const capability = getFrameDragCapability(source);
+    if (!capability.allowed || !capability.descriptor) throw new Error(capability.reason);
+    const liveTarget = getFrameBindingContext ? getFrameBindingContext() : null;
+    if (!liveTarget || String(liveTarget.artworkId || "") !== String(target.artworkId || "")) throw new Error("Artwork selection changed. Use FRAME → CHANGE again.");
+    if (target.exhibitionId && String(liveTarget.exhibitionId || "") !== String(target.exhibitionId)) throw new Error("Exhibition changed. Use FRAME → CHANGE again.");
+    if (target.venueVersionId && String(liveTarget.venueVersionId || "") !== String(target.venueVersionId)) throw new Error("Gallery Version changed. Use FRAME → CHANGE again.");
+    const ok = await onBindFrame(capability.descriptor, { target: liveTarget, context: capability.context || null, source: "browser-click" });
+    if (ok === false) return false;
+    state.frameBindingTarget = null;
+    renderHostNote();
+    renderCatalog();
+    showToast(`Frame assigned: ${capability.descriptor.assetName}.`);
+    onFrameBindingComplete({ target: liveTarget, descriptor: capability.descriptor });
+    return true;
+  }
+
   function getPropPlacementCapability(detail) {
     const descriptor = buildPropPlacementDescriptor(detail);
     const asset = detail && detail.asset ? detail.asset : detail;
@@ -316,8 +381,11 @@ export function createAdminAssetWorkspace({
     if (!note) return;
     if (state.hostSection === "galleries") {
       note.innerHTML = `<strong>Gallery preview preserved.</strong> Library management is available. Exhibition Prop placement and Frame binding stay disabled in Gallery context.`;
+    } else if (state.frameBindingTarget) {
+      const label = escapeHtml(state.frameBindingTarget.artworkLabel || state.frameBindingTarget.artworkId || "selected artwork");
+      note.innerHTML = `<strong>Choose a Frame for ${label}.</strong> Click a Published Frame to bind it. The artwork selection and unsaved Exhibition Draft stay active.`;
     } else {
-      note.innerHTML = `<strong>Exhibition preview preserved.</strong> Props with a Published version can be dragged to the floor or placed with PLACE PROP. Browsing Assets does not reload the Scene or discard Draft changes.`;
+      note.innerHTML = `<strong>Exhibition preview preserved.</strong> Props drag to the floor; Frames drag only onto artworks. FRAME → CHANGE opens this library in Frame binding mode without reloading the Scene.`;
     }
   }
 
@@ -349,9 +417,13 @@ export function createAdminAssetWorkspace({
       tile.type = "button";
       tile.className = "assetTile" + (row.id === state.selectedAssetId ? " active" : "");
       tile.dataset.assetId = row.id;
-      const rowPlacementCandidate = state.hostSection === "exhibitions" && text(row.asset_type).toLowerCase() === "prop" && !!row.published_version_number && row.status !== "archived";
+      const rowType = text(row.asset_type).toLowerCase();
+      const rowPlacementCandidate = state.hostSection === "exhibitions" && rowType === "prop" && !!row.published_version_number && row.status !== "archived";
+      const rowFrameCandidate = state.hostSection === "exhibitions" && rowType === "frame" && !!row.published_version_number && row.status !== "archived";
       if (rowPlacementCandidate) tile.classList.add("is-placeable");
+      if (rowFrameCandidate) tile.classList.add("is-bindable");
       if (state.placementDescriptor && state.placementDescriptor.assetId === row.id) tile.classList.add("is-placement-active");
+      if (state.frameBindingTarget && rowFrameCandidate) tile.classList.add("is-binding-target");
       const thumb = document.createElement("div");
       thumb.className = "assetThumb";
       const url = currentThumbnailUrl(row);
@@ -366,13 +438,16 @@ export function createAdminAssetWorkspace({
         const glyph = document.createElement("div"); glyph.className = "assetThumbGlyph"; glyph.textContent = assetTypeGlyph(row.asset_type); thumb.appendChild(glyph);
       }
       const type = document.createElement("span"); type.className = "assetThumbType"; type.textContent = text(row.asset_type).toUpperCase(); thumb.appendChild(type);
-      if (rowPlacementCandidate) { const hint = document.createElement("span"); hint.className = "assetPlaceHint"; hint.textContent = "DRAG"; thumb.appendChild(hint); }
+      if (rowPlacementCandidate || rowFrameCandidate) { const hint = document.createElement("span"); hint.className = "assetPlaceHint"; hint.textContent = rowFrameCandidate ? "DRAG TO ART" : "DRAG"; thumb.appendChild(hint); }
       const meta = document.createElement("div"); meta.className = "assetTileMeta";
       const name = document.createElement("strong"); name.textContent = row.name || row.slug || "Untitled Asset";
       const line = document.createElement("span");
       line.textContent = `${row.category || "Uncategorized"} · ${row.scope_type === "venue" ? "Gallery" : "Shared"}${row.status === "archived" ? " · Archived" : row.published_version_number ? ` · v${row.published_version_number}` : " · No published version"}`;
       meta.append(name, line); tile.append(thumb, meta);
-      tile.addEventListener("click", () => { void selectAsset(row.id); });
+      tile.addEventListener("click", () => {
+        if (state.frameBindingTarget && rowFrameCandidate) void bindFrameToTarget(row).catch((error) => showToast(error.message || String(error)));
+        else void selectAsset(row.id);
+      });
       if (rowPlacementCandidate) {
         tile.draggable = true;
         tile.addEventListener("dragstart", (event) => {
@@ -404,6 +479,32 @@ export function createAdminAssetWorkspace({
           state.placementDescriptor = null;
           onCancelPropPlacement({ reason: "drag-end" });
           renderCatalog();
+        });
+      }
+      if (rowFrameCandidate) {
+        tile.draggable = true;
+        tile.addEventListener("dragstart", (event) => {
+          try {
+            const capability = getFrameDragCapability(row);
+            if (!capability.allowed || !capability.descriptor) { event.preventDefault(); showToast(capability.reason); return; }
+            state.frameDragDescriptor = capability.descriptor;
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "copy";
+              const payload = JSON.stringify(capability.descriptor);
+              event.dataTransfer.setData("application/x-exhibition-shared-frame", payload);
+              event.dataTransfer.setData("text/plain", payload);
+            }
+            const beginResult = onBeginFrameDrag(capability.descriptor, { context: capability.context || null });
+            if (beginResult && typeof beginResult.catch === "function") beginResult.catch((error) => {
+              state.frameDragDescriptor = null;
+              onCancelFrameDrag({ reason: "drag-begin-failed" });
+              showToast(error && error.message ? error.message : String(error));
+            });
+          } catch (error) { event.preventDefault(); showToast(error.message || String(error)); }
+        });
+        tile.addEventListener("dragend", () => {
+          state.frameDragDescriptor = null;
+          onCancelFrameDrag({ reason: "drag-end" });
         });
       }
       root.appendChild(tile);
@@ -669,7 +770,7 @@ export function createAdminAssetWorkspace({
 
   return Object.freeze({
     stage: ADMIN_ASSET_WORKSPACE_STAGE,
-    getState() { return { ...state, catalog: undefined, selectedDetail: undefined, usages: undefined, venues: undefined, placementDescriptor: state.placementDescriptor ? { ...state.placementDescriptor } : null }; },
+    getState() { return { ...state, catalog: undefined, selectedDetail: undefined, usages: undefined, venues: undefined, placementDescriptor: state.placementDescriptor ? { ...state.placementDescriptor } : null, frameDragDescriptor: state.frameDragDescriptor ? { ...state.frameDragDescriptor } : null, frameBindingTarget: state.frameBindingTarget ? { ...state.frameBindingTarget } : null }; },
     async show({ hostSection = "exhibitions", returnSection = hostSection, selectedAssetId = null, filter = null } = {}) {
       state.visible = true;
       state.hostSection = hostSection === "galleries" ? "galleries" : "exhibitions";
@@ -684,9 +785,19 @@ export function createAdminAssetWorkspace({
       emitUiState();
       return true;
     },
-    hide() { state.visible = false; state.placementDescriptor = null; onCancelPropPlacement({ reason: "workspace-hidden" }); catalogSection.classList.add("hidden"); detailSection.classList.add("hidden"); return true; },
+    hide() { state.visible = false; state.placementDescriptor = null; state.frameDragDescriptor = null; state.frameBindingTarget = null; onCancelPropPlacement({ reason: "workspace-hidden" }); onCancelFrameDrag({ reason: "workspace-hidden" }); catalogSection.classList.add("hidden"); detailSection.classList.add("hidden"); return true; },
     async refresh() { return refreshCatalog({ preserveSelection: true, forceDetail: true }); },
     async select(assetId) { return selectAsset(assetId); },
+    beginFrameBinding(target) {
+      if (!target || !text(target.artworkId)) throw new Error("Frame binding requires a selected artwork.");
+      state.frameBindingTarget = { ...target };
+      state.filter = "frame";
+      state.category = "all";
+      $("sharedAssetFilterRow").querySelectorAll("[data-asset-filter]").forEach((node) => node.classList.toggle("active", node.dataset.assetFilter === "frame"));
+      renderHostNote(); renderCatalog(); emitUiState();
+      return true;
+    },
+    cancelFrameBinding() { state.frameBindingTarget = null; renderHostNote(); renderCatalog(); return true; },
     setFilter(filter) {
       const value = filter === "prop" || filter === "frame" ? filter : "all";
       state.filter = value;

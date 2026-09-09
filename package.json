@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.13.3-v13-prop-browser-placement",
+  "version": "0.13.4-v13-frame-browser-migration",
   "private": true,
-  "description": "Exhibition Platform — V13.3 Prop Browser + Exhibition Placement",
+  "description": "Exhibition Platform — V13.4 Frame Browser Migration",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",

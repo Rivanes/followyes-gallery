@@ -9384,8 +9384,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+    // V13.4 — FRAME BROWSER MIGRATION / legacy runtime compatibility
     // STAGE 12C66C6C5 - ARTWORK FRAME FACING FIX
-    // Frames are shared GLBs stored in gallery-artworks/main/frames.
+    // Frames can resolve from stable Shared Asset version IDs while legacy path-based Published state remains readable.
+    // Legacy frame GLBs are still supported from gallery-artworks/main/frames.
     // One frame runtime belongs to one artwork. The frame follows the artwork's
     // already-authoritative aspect/transform calculation; no second aspect system exists.
     // This stage fixes the first fit/orientation pass: frame GLBs are prefetched,
@@ -9397,7 +9399,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         innerWidthRatio: 0.68,
         innerHeightRatio: 0.68,
         depthOverlapRatio: 0.92,
-        zRotationDegrees: 180
+        zRotationDegrees: 180,
+        yFacingDegrees: 180
     };
     var galleryArtworkFrameCalibrationOverrides = {};
     var galleryArtworkFrameCatalog = [];
@@ -9429,6 +9432,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 .toLowerCase();
         }
 
+        if (frameState && frameState.runtimeMetadata && typeof frameState.runtimeMetadata === "object") {
+            calibration = Object.assign(calibration, frameState.runtimeMetadata);
+        }
         if (overrideKey && galleryArtworkFrameCalibrationOverrides[overrideKey]) {
             calibration = Object.assign(calibration, galleryArtworkFrameCalibrationOverrides[overrideKey]);
         }
@@ -9437,6 +9443,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         calibration.innerHeightRatio = BABYLON.Scalar.Clamp(Number(calibration.innerHeightRatio) || 0.68, 0.05, 0.98);
         calibration.depthOverlapRatio = BABYLON.Scalar.Clamp(Number(calibration.depthOverlapRatio) || 0.92, 0, 1);
         calibration.zRotationRadians = BABYLON.Tools.ToRadians(Number(calibration.zRotationDegrees) || 0);
+        calibration.yFacingRadians = BABYLON.Tools.ToRadians(isFinite(Number(calibration.yFacingDegrees)) ? Number(calibration.yFacingDegrees) : 180);
         return calibration;
     }
 
@@ -9495,16 +9502,29 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
     function normalizeArtworkFrameState(frameState) {
         if (!frameState || typeof frameState !== "object") return null;
-        var storagePath = String(frameState.storagePath || frameState.path || "").replace(/^\/+/, "").trim();
+        var storagePath = String(frameState.storagePath || frameState.storage_path || frameState.path || "").replace(/^\/+/, "").trim();
         if (!storagePath || !/\.glb$/i.test(storagePath)) return null;
-        var fileName = String(frameState.fileName || storagePath.split("/").pop() || "").trim();
+        var fileName = String(frameState.fileName || frameState.file_name || storagePath.split("/").pop() || "").trim();
+        var runtimeMetadata = frameState.runtimeMetadata && typeof frameState.runtimeMetadata === "object"
+            ? cloneGalleryJson(frameState.runtimeMetadata)
+            : (frameState.runtime_metadata && typeof frameState.runtime_metadata === "object" ? cloneGalleryJson(frameState.runtime_metadata) : {});
         return {
-            storageBucket: String(frameState.storageBucket || galleryArtworkStorageBucket || "").trim(),
+            assetId: String(frameState.assetId || frameState.asset_id || "").trim() || null,
+            assetVersionId: String(frameState.assetVersionId || frameState.asset_version_id || "").trim() || null,
+            assetVersionNumber: Number(frameState.assetVersionNumber || frameState.asset_version_number) || null,
+            assetType: "frame",
+            assetName: String(frameState.assetName || frameState.asset_name || frameState.label || getArtworkFrameLabelFromFileName(fileName) || fileName).trim(),
+            category: String(frameState.category || "").trim(),
+            scopeType: String(frameState.scopeType || frameState.scope_type || "platform").trim() || "platform",
+            scopeVenueId: frameState.scopeVenueId || frameState.scope_venue_id || null,
+            storageBucket: String(frameState.storageBucket || frameState.storage_bucket || galleryArtworkStorageBucket || "").trim(),
             storagePath: storagePath,
             fileName: fileName,
-            label: String(frameState.label || getArtworkFrameLabelFromFileName(fileName) || fileName).trim(),
-            publicUrl: String(frameState.publicUrl || "").trim(),
-            cacheVersion: String(frameState.cacheVersion || "").trim()
+            label: String(frameState.label || frameState.assetName || frameState.asset_name || getArtworkFrameLabelFromFileName(fileName) || fileName).trim(),
+            publicUrl: String(frameState.publicUrl || frameState.public_url || "").trim(),
+            cacheVersion: String(frameState.cacheVersion || frameState.cache_version || frameState.fileHash || frameState.file_hash || "").trim(),
+            fileHash: String(frameState.fileHash || frameState.file_hash || "").trim() || null,
+            runtimeMetadata: runtimeMetadata
         };
     }
 
@@ -9517,10 +9537,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var frameState = getArtworkFrameState(artwork);
         if (!frameState) return null;
         return {
+            assetId: frameState.assetId || null,
+            assetVersionId: frameState.assetVersionId || null,
+            assetVersionNumber: frameState.assetVersionNumber || null,
+            assetType: "frame",
+            assetName: frameState.assetName || frameState.label,
+            category: frameState.category || "",
+            scopeType: frameState.scopeType || "platform",
+            scopeVenueId: frameState.scopeVenueId || null,
             storageBucket: frameState.storageBucket || galleryArtworkStorageBucket,
             storagePath: frameState.storagePath,
             fileName: frameState.fileName,
-            label: frameState.label
+            label: frameState.label,
+            fileHash: frameState.fileHash || null,
+            runtimeMetadata: frameState.runtimeMetadata && typeof frameState.runtimeMetadata === "object" ? cloneGalleryJson(frameState.runtimeMetadata) : {}
         };
     }
 
@@ -9828,9 +9858,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         // C6C5: the GLB front was facing the wall. Flip around local Y, not Z:
         // local Z is the frame depth/normal, so Y=180 reverses front/back.
-        facingRoot.rotation.y = Math.PI;
-        facingRoot.computeWorldMatrix(true);
         var calibration = getArtworkFrameCalibration(frameState);
+        facingRoot.rotation.y = calibration.yFacingRadians;
+        facingRoot.computeWorldMatrix(true);
         var referenceWidth = Math.max(0.0001, outerWidth * calibration.innerWidthRatio);
         var referenceHeight = Math.max(0.0001, outerHeight * calibration.innerHeightRatio);
         var referenceDepth = outerDepth;
@@ -22631,49 +22661,63 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     artworkFrameStatus.className = "gallery-artwork-image-status";
     artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
 
-    var artworkFrameGrid = document.createElement("div");
-    artworkFrameGrid.className = "gallery-artwork-frame-grid";
+    var artworkFrameActions = document.createElement("div");
+    artworkFrameActions.className = "gallery-artwork-image-actions";
+
+    var artworkFrameChangeButton = document.createElement("button");
+    artworkFrameChangeButton.type = "button";
+    artworkFrameChangeButton.className = "gallery-editor-action-button is-primary";
+    artworkFrameChangeButton.innerText = "CHANGE";
+
+    var artworkFrameRemoveButton = document.createElement("button");
+    artworkFrameRemoveButton.type = "button";
+    artworkFrameRemoveButton.className = "gallery-editor-action-button is-danger";
+    artworkFrameRemoveButton.innerText = "REMOVE";
 
     var artworkFrameNote = document.createElement("p");
     artworkFrameNote.className = "gallery-artwork-image-note";
-    artworkFrameNote.innerText = "Shared GLB variants are read from gallery-artworks/main/frames. The frame follows the selected artwork size and aspect ratio, using its inner opening as the fit reference.";
+    artworkFrameNote.innerText = "Frames are selected from the left Asset Library. You can also drag a Published Frame directly onto an artwork.";
 
+    artworkFrameActions.appendChild(artworkFrameChangeButton);
+    artworkFrameActions.appendChild(artworkFrameRemoveButton);
     artworkFrameSectionData.section.appendChild(artworkFrameStatus);
-    artworkFrameSectionData.section.appendChild(artworkFrameGrid);
+    artworkFrameSectionData.section.appendChild(artworkFrameActions);
     artworkFrameSectionData.section.appendChild(artworkFrameNote);
     editorScroll.appendChild(artworkFrameSectionData.section);
 
-    function renderArtworkFrameCatalogUi() {
-        if (!artworkFrameGrid) return;
-        artworkFrameGrid.innerHTML = "";
+    function getSelectedArtworkFrameBindingContext() {
         var artwork = getSingleSelectedArtworkForImageUi();
-        var currentState = getArtworkFrameState(artwork);
-
-        function appendFrameButton(label, frameState) {
-            var button = document.createElement("button");
-            button.type = "button";
-            button.className = "gallery-editor-action-button";
-            button.innerText = label;
-            var isSelected = !frameState
-                ? !currentState
-                : !!(currentState && currentState.storagePath === frameState.storagePath);
-            if (isSelected) button.classList.add("is-primary");
-            button.disabled = !artwork || !!(artwork && artwork.metadata && artwork.metadata.artworkFrameLoading);
-            button.onclick = function (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                var selected = getSingleSelectedArtworkForImageUi();
-                if (!selected) return;
-                applyArtworkFrameState(selected, frameState, { silent: false, markDirty: true });
-            };
-            artworkFrameGrid.appendChild(button);
-        }
-
-        appendFrameButton("NONE", null);
-        galleryArtworkFrameCatalog.forEach(function (frameState) {
-            appendFrameButton(frameState.label, frameState);
-        });
+        if (!artwork) return null;
+        return {
+            artworkId: ensureArtworkIdentity(artwork),
+            artworkLabel: String((getArtworkInfo(artwork) && getArtworkInfo(artwork).title) || artwork.name || "Artwork"),
+            exhibitionId: getActiveGalleryExhibitionId(),
+            venueId: String(gallerySpaceDefinition && gallerySpaceDefinition.venueId || "").trim() || null,
+            venueVersionId: galleryActiveVenueVersionId || null,
+            currentFrame: getArtworkFrameStateForSave(artwork)
+        };
     }
+
+    artworkFrameChangeButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var target = getSelectedArtworkFrameBindingContext();
+        if (!target) return;
+        try {
+            globalThis.dispatchEvent(new CustomEvent("exhibition-platform:open-frame-browser", { detail: cloneGalleryJson(target) }));
+        } catch (error) {
+            console.warn("Frame Browser open warning:", error);
+            notifyGalleryStatus("Could not open the Frame Browser.");
+        }
+    };
+
+    artworkFrameRemoveButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var artwork = getSingleSelectedArtworkForImageUi();
+        if (!artwork) return;
+        void Promise.resolve(applyArtworkFrameState(artwork, null, { silent: false, markDirty: true }));
+    };
 
     function updateArtworkFrameUi() {
         if (!artworkFrameSectionData || !artworkFrameSectionData.section) return;
@@ -22681,28 +22725,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var frameState = getArtworkFrameState(artwork);
         var loading = !!(artwork && artwork.metadata && artwork.metadata.artworkFrameLoading);
         artworkFrameSectionData.section.classList.toggle("is-hidden", !editMode || !artwork);
+        artworkFrameChangeButton.disabled = !artwork || loading;
+        artworkFrameRemoveButton.disabled = !artwork || loading || !frameState;
 
-        if (!artwork) {
-            artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
-            renderArtworkFrameCatalogUi();
-            return;
-        }
-
-        if (loading) artworkFrameStatus.innerHTML = "Frame: <strong>Loading...</strong>";
+        if (!artwork) artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
+        else if (loading) artworkFrameStatus.innerHTML = "Frame: <strong>Loading...</strong>";
         else if (frameState) artworkFrameStatus.innerHTML = "Frame: <strong>" + frameState.label + "</strong>";
         else artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
-
-        renderArtworkFrameCatalogUi();
-
-        if (!galleryArtworkFrameCatalogLoaded && !galleryArtworkFrameCatalogLoading) {
-            artworkFrameStatus.innerHTML += " <span style=\"opacity:.7\">(reading Storage)</span>";
-            loadGalleryArtworkFrameCatalog(false)
-                .then(function () { updateArtworkFrameUi(); })
-                .catch(function (error) {
-                    console.warn("Artwork frame catalog load failed:", error);
-                    artworkFrameStatus.innerHTML = "Frame library: <strong>Storage read failed</strong>";
-                });
-        }
     }
 
 
@@ -33828,6 +33857,39 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         void placeActiveSharedAssetPropAtPoint(pick.pickedPoint, { descriptor: descriptor, source: "drag-drop" });
     });
 
+    function pickGalleryArtworkFromPointer(event) {
+        if (!event || !canvas || !canvas.getBoundingClientRect) return null;
+        var rect = canvas.getBoundingClientRect();
+        var x = event.clientX - rect.left;
+        var y = event.clientY - rect.top;
+        var pick = scene.pick(x, y, null, false, camera);
+        if (!pick || !pick.hit || !pick.pickedMesh) return null;
+        var artwork = getArtworkFromPopupPickMesh(pick.pickedMesh);
+        return artwork ? { artwork: artwork, pick: pick } : null;
+    }
+
+    registerGalleryDomEvent("sharedAssetFrameDragOver", canvas, "dragover", function (event) {
+        if (!editMode || !gallerySharedAssetFrameDragRuntime.dragActive || !gallerySharedAssetFrameDragRuntime.activeDescriptor) return;
+        event.preventDefault();
+        var target = pickGalleryArtworkFromPointer(event);
+        if (event.dataTransfer) event.dataTransfer.dropEffect = target ? "copy" : "none";
+    });
+
+    registerGalleryDomEvent("sharedAssetFrameDrop", canvas, "drop", function (event) {
+        if (!editMode || !gallerySharedAssetFrameDragRuntime.dragActive || !gallerySharedAssetFrameDragRuntime.activeDescriptor) return;
+        event.preventDefault();
+        var target = pickGalleryArtworkFromPointer(event);
+        var descriptor = gallerySharedAssetFrameDragRuntime.activeDescriptor;
+        cancelSharedAssetFrameDrag();
+        if (!target || !target.artwork) {
+            gallerySharedAssetFrameDragRuntime.rejectedDrops += 1;
+            notifyGalleryStatus("Drop the Frame directly on an artwork.");
+            return;
+        }
+        selectArtwork(target.artwork);
+        void applySharedAssetFrameToArtwork(target.artwork, descriptor, { markDirty: true, silent: false, source: "drag-drop" });
+    });
+
     function startGalleryFloorCursorClickPulse(event) {
         if (!event || event.button !== 0 || !isGalleryDesktopPointerNavigationAvailable() ||
             (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
@@ -37896,6 +37958,103 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 scaling: modelState.transform && modelState.transform.scaling ? modelState.transform.scaling : { x: 1, y: 1, z: 1 }
             }
         };
+    }
+
+    // V13.4 — ARTWORK-ONLY SHARED FRAME BINDING
+    var gallerySharedAssetFrameDragRuntime = {
+        schema: "exhibition-platform-frame-binding.v1",
+        activeDescriptor: null,
+        dragActive: false,
+        assignedCount: 0,
+        rejectedDrops: 0
+    };
+
+    function normalizeSharedAssetFrameDescriptor(value) {
+        if (!value || typeof value !== "object") return null;
+        var assetId = String(value.assetId || value.asset_id || "").trim();
+        var assetVersionId = String(value.assetVersionId || value.asset_version_id || "").trim();
+        var storageBucket = String(value.storageBucket || value.storage_bucket || "shared-assets").trim() || "shared-assets";
+        var storagePath = String(value.storagePath || value.storage_path || "").replace(/^\/+/, "").trim();
+        if (!assetId || !assetVersionId || !storagePath || !/\.glb$/i.test(storagePath)) return null;
+        var runtimeMetadata = value.runtimeMetadata && typeof value.runtimeMetadata === "object" ? cloneGalleryJson(value.runtimeMetadata) : {};
+        if (String(runtimeMetadata.placementMode || runtimeMetadata.placement_mode || "artwork-only").toLowerCase() !== "artwork-only") return null;
+        runtimeMetadata.placementMode = "artwork-only";
+        return normalizeArtworkFrameState({
+            assetId: assetId,
+            assetVersionId: assetVersionId,
+            assetVersionNumber: Number(value.assetVersionNumber || value.asset_version_number) || null,
+            assetType: "frame",
+            assetName: String(value.assetName || value.name || value.label || "Frame").trim() || "Frame",
+            label: String(value.label || value.assetName || value.name || "Frame").trim() || "Frame",
+            category: String(value.category || "").trim(),
+            scopeType: String(value.scopeType || value.scope_type || "platform").trim() || "platform",
+            scopeVenueId: value.scopeVenueId || value.scope_venue_id || null,
+            storageBucket: storageBucket,
+            storagePath: storagePath,
+            publicUrl: String(value.publicUrl || value.public_url || "").trim() || getPublicArtworkUrlFromPath(storagePath, storageBucket),
+            fileHash: value.fileHash || value.file_hash || null,
+            runtimeMetadata: runtimeMetadata
+        });
+    }
+
+    function validateSharedAssetFrameContext(descriptor, options) {
+        options = options || {};
+        var normalized = normalizeSharedAssetFrameDescriptor(descriptor);
+        if (!normalized || !editMode || galleryAuthoringSpacePreview) return { ok: false, descriptor: normalized };
+        var activeExhibitionId = getActiveGalleryExhibitionId();
+        if (!activeExhibitionId) return { ok: false, descriptor: normalized };
+        var expected = options.context && typeof options.context === "object" ? options.context : null;
+        if (expected && expected.exhibitionId && String(expected.exhibitionId) !== String(activeExhibitionId)) return { ok: false, descriptor: normalized };
+        if (expected && expected.venueVersionId && String(expected.venueVersionId) !== String(galleryActiveVenueVersionId)) return { ok: false, descriptor: normalized };
+        var currentVenueId = String(gallerySpaceDefinition && gallerySpaceDefinition.venueId || "").trim();
+        if (normalized.scopeType === "venue" && normalized.scopeVenueId && currentVenueId && String(normalized.scopeVenueId) !== currentVenueId) return { ok: false, descriptor: normalized };
+        return { ok: true, descriptor: normalized };
+    }
+
+    function applySharedAssetFrameToArtwork(artwork, descriptor, options) {
+        options = options || {};
+        if (!artwork || (artwork.isDisposed && artwork.isDisposed())) return Promise.resolve(false);
+        var checked = validateSharedAssetFrameContext(descriptor, options);
+        if (!checked.ok || !checked.descriptor) {
+            if (!options.silent) notifyGalleryStatus("Frame assignment context is no longer valid.");
+            return Promise.resolve(false);
+        }
+        return Promise.resolve(applyArtworkFrameState(artwork, checked.descriptor, { silent: !!options.silent, markDirty: options.markDirty !== false })).then(function (ok) {
+            if (ok) gallerySharedAssetFrameDragRuntime.assignedCount += 1;
+            return !!ok;
+        });
+    }
+
+    function applySharedAssetFrameToSelectedArtwork(descriptor, options) {
+        options = options || {};
+        var target = options.target && typeof options.target === "object" ? options.target : null;
+        var artwork = target && target.artworkId ? getArtworkById(target.artworkId) : getSingleSelectedArtworkForImageUi();
+        if (!artwork) return Promise.resolve(false);
+        if (target && target.exhibitionId && String(target.exhibitionId) !== String(getActiveGalleryExhibitionId())) return Promise.resolve(false);
+        if (target && target.venueVersionId && String(target.venueVersionId) !== String(galleryActiveVenueVersionId)) return Promise.resolve(false);
+        selectArtwork(artwork);
+        return applySharedAssetFrameToArtwork(artwork, descriptor, { context: options.context || target || null, markDirty: true, silent: false });
+    }
+
+    function beginSharedAssetFrameDrag(descriptor, options) {
+        var checked = validateSharedAssetFrameContext(descriptor, options || {});
+        if (!checked.ok || !checked.descriptor) { notifyGalleryStatus("Frame drag context is invalid."); return false; }
+        cancelSharedAssetPropPlacement({ silent: true });
+        gallerySharedAssetFrameDragRuntime.activeDescriptor = checked.descriptor;
+        gallerySharedAssetFrameDragRuntime.dragActive = true;
+        return true;
+    }
+
+    function cancelSharedAssetFrameDrag() {
+        var active = !!gallerySharedAssetFrameDragRuntime.activeDescriptor;
+        gallerySharedAssetFrameDragRuntime.activeDescriptor = null;
+        gallerySharedAssetFrameDragRuntime.dragActive = false;
+        return active;
+    }
+
+    function getSharedAssetFrameBindingDebug() {
+        var descriptor = gallerySharedAssetFrameDragRuntime.activeDescriptor;
+        return { schema: gallerySharedAssetFrameDragRuntime.schema, dragActive: !!gallerySharedAssetFrameDragRuntime.dragActive, assetId: descriptor ? descriptor.assetId : null, assetVersionId: descriptor ? descriptor.assetVersionId : null, assignedCount: gallerySharedAssetFrameDragRuntime.assignedCount, rejectedDrops: gallerySharedAssetFrameDragRuntime.rejectedDrops };
     }
 
     // V13.3 — EXHIBITION-OWNED SHARED PROP INSTANCES
@@ -45322,6 +45481,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         beginSharedAssetPropPlacement: beginSharedAssetPropPlacement,
         cancelSharedAssetPropPlacement: cancelSharedAssetPropPlacement,
         getSharedAssetPropPlacementDebug: getSharedAssetPropPlacementDebug,
+        // V13.4 — artwork-only Frame Browser / drag binding bridge.
+        getSelectedArtworkFrameBindingContext: getSelectedArtworkFrameBindingContext,
+        applySharedAssetFrameToSelectedArtwork: applySharedAssetFrameToSelectedArtwork,
+        beginSharedAssetFrameDrag: beginSharedAssetFrameDrag,
+        cancelSharedAssetFrameDrag: cancelSharedAssetFrameDrag,
+        getSharedAssetFrameBindingDebug: getSharedAssetFrameBindingDebug,
         duplicateSelectedSharedAssetProp: function () {
             var slot = getActiveModel3dSlot();
             return slot && isSharedAssetPropSlot(slot) ? duplicateSharedAssetPropInstance(slot) : Promise.resolve(null);

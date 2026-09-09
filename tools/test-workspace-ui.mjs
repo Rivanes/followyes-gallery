@@ -50,7 +50,7 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('v13-prop-browser-placement'));
+expect('current package stage', pkg.version.includes('v13-frame-browser-migration'));
 expect('current runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
@@ -109,7 +109,7 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('v13-prop-browser-placement'));
+expect('package stage', pkg.version.includes('v13-frame-browser-migration'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
@@ -185,7 +185,7 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('v13-prop-browser-placement'));
+expect('package identity', pkg.version.includes('v13-frame-browser-migration'));
 expect('runtime identity', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 
@@ -269,7 +269,7 @@ const assetWorkspace = fs.readFileSync(new URL('../src/bootstrap/admin-asset-wor
 const source = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.meta.url), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-assert.equal(pkg.version, '0.13.3-v13-prop-browser-placement');
+assert.equal(pkg.version, '0.13.4-v13-frame-browser-migration');
 assert.ok(admin.includes('data-section="exhibitions"') && admin.includes('data-section="galleries"') && admin.includes('data-section="assets"'), 'V13.2 left tabs are not EXHIBITIONS | GALLERIES | ASSETS');
 assert.ok(admin.includes('grid-template-columns:repeat(3,minmax(0,1fr))'), 'V13.2 left tabs are not responsive three-column tabs');
 assert.ok(assetWorkspace.includes('createAdminAssetWorkspace') && assetWorkspace.includes('Asset Library'), 'Shared Asset Manager is not isolated in its own left-workspace module');
@@ -290,6 +290,10 @@ assert.ok(assetWorkspace.includes('application/x-exhibition-shared-asset') && as
 assert.ok(admin.includes('beginSharedAssetPropPlacement') && admin.includes('getPlacementContext'), 'V13.3 live Scene placement bridge is missing');
 assert.ok(source.includes('createEditorSection("PROP")') && source.includes('PROP TRANSFORM'), 'V13.3 right contextual Prop inspector is missing');
 assert.ok(source.includes('assetInstances: artSpheres.filter(isSharedAssetPropSlot)'), 'V13.3 Prop instances are not serialized as a separate Exhibition state domain');
+assert.ok(assetWorkspace.includes('application/x-exhibition-shared-frame') && assetWorkspace.includes('beginFrameBinding(target)'), 'V13.4 left Frame Browser binding/drag affordances are missing');
+assert.ok(admin.includes('exhibition-platform:open-frame-browser') && admin.includes('applySharedAssetFrameToSelectedArtwork'), 'V13.4 Frame Browser workspace bridge is missing');
+assert.ok(admin.includes('__exhibitionPlatformOpenFrameBrowserHandler') && admin.includes('removeEventListener("exhibition-platform:open-frame-browser"'), 'V13.4 Frame Browser bridge is not remount-safe');
+assert.ok(source.includes('artworkFrameChangeButton.innerText = "CHANGE"') && source.includes('artworkFrameRemoveButton.innerText = "REMOVE"') && !source.includes('var artworkFrameGrid = document.createElement("div")'), 'V13.4 old right Frame grid was not removed');
 
-console.log('V13.2 Asset Manager + V13.3 Prop Browser/Placement regression passed.');
+console.log('V13.2 Asset Manager + V13.3 Prop placement + V13.4 Frame Browser regression passed.');
 })();

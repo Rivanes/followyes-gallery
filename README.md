@@ -1,6 +1,6 @@
 # Exhibition Platform
 
-Current repository release: **V13.3 — Prop Browser + Exhibition Placement**.
+Current repository release: **V13.4 — Frame Browser Migration**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
@@ -29,7 +29,7 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/data/exhibition-gallery-assignment.js` — pure C24 binding/migration helpers and executable reference rebind for QA.
 - `src/data/gallery-management-api.js` — controlled Gallery lifecycle/Storage adapter.
 - `src/data/shared-asset-api.js` — guarded Shared Asset catalog/version adapter, V13.2 thumbnail bridge and V13.3 Published runtime descriptor read.
-- `src/bootstrap/admin-asset-workspace.js` — canonical left Asset Manager plus V13.3 Prop drag/PLACE launcher shared by standalone and inline Admin.
+- `src/bootstrap/admin-asset-workspace.js` — canonical left Asset Manager, V13.3 Prop drag/PLACE launcher and V13.4 artwork-only Frame binding/drag Browser shared by standalone and inline Admin.
 - `src/runtime/shared-asset-state.js` — V13.1 immutable Shared Asset reference/state-manifest contract for later Exhibition dressing.
 - `src/validation/shared-asset-validation.js` — V13.1 Prop/Frame GLB validation coordinator.
 - `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
@@ -75,7 +75,7 @@ No parallel Exhibition/Gallery assignment table is introduced. Legacy `gallery_e
 
 ## Gallery Management baseline
 
-C6C8C22 / C6C8C22.1 Gallery Management is PASS/CLOSED. V13.2/V13.3 extend the canonical left Admin Workspace without changing Gallery lifecycle:
+C6C8C22 / C6C8C22.1 Gallery Management is PASS/CLOSED. V13.2/V13.3/V13.4 extend the canonical left Admin Workspace without changing Gallery lifecycle:
 
 ```text
 EXHIBITIONS | GALLERIES | ASSETS
@@ -253,7 +253,7 @@ Gallery CRUD/versioning/model validation/Exhibition assignment remain outside `G
 
 ## V13 Shared Asset Foundation + Asset Manager + Prop Placement
 
-V13.1 (PASS/CLOSED) added the backend/data/runtime contracts for the Shared Asset Library. V13.2 (PASS/CLOSED) implements the left-workspace Asset Manager. V13.3 adds Exhibition-owned Prop placement while the Frame chooser migration remains V13.4.
+V13.1/V13.2/V13.3 are PASS/CLOSED. V13.4 migrates Frame selection into the left Asset Browser while retaining artwork-only semantics and legacy Published compatibility.
 
 Canonical reusable asset model:
 
@@ -297,6 +297,8 @@ RIGHT INSPECTOR: EXHIBITS | SPACE | LIGHTING | SETTINGS
 
 V13.3 adds `editor.assetInstances[]` for Exhibition-owned Shared Props. Published Prop tiles can be dragged from the left Browser onto the Floor on desktop or placed through `PLACE PROP` on touch/narrow input. Placement is checked against the live active Exhibition + exact Venue Version and Gallery scope. Props reuse the existing model-slot/AssetContainer/cache/collision/residency runtime underneath, but are excluded from Sculpture Tour/Inspect and are never serialized in `spheres[]`. Deleting an instance never deletes the immutable Shared Asset binary. Selected Props use the contextual right `PROP` inspector for transform/duplicate/delete.
 
+V13.4 removes the old full Frame variant grid from the right artwork inspector. The right side keeps only current Frame + `CHANGE` / `REMOVE`; `CHANGE` opens left `ASSETS / FRAMES` without rebuilding the Scene or losing artwork selection. Published Frames can be clicked in binding mode or dragged directly onto an artwork. Frame drops on Floor/Wall/Props are rejected. New bindings persist stable Shared Asset/version IDs with legacy Storage fallback, while existing legacy Published Frames remain readable.
+
 Catalog browsing uses metadata/thumbnails and does not prefetch the full GLB catalog. V13.2 thumbnails use immutable `shared-assets/assets/<asset UUID>/thumbnails/<media UUID>.webp` paths and are registered in `media_library`. V13.3 enriches the existing catalog RPC with Published file hash/runtime metadata so native HTML dragstart can build its payload synchronously; no placement table is introduced.
 
 ## Backend dependency
@@ -325,7 +327,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1 Shared Asset Foundation and V13.2 Asset Manager are already deployed/PASS. **V13.3 adds a narrow production SQL extension** that recreates `admin_list_shared_assets(...)` with Published hash/runtime metadata required for synchronous Prop dragstart. Existing production must use the packaged `CURRENT_PRECHECK.sql -> V13_3_PROP_BROWSER_PLACEMENT.sql -> CURRENT_POSTCHECK.sql` sequence before the V13.3 repository deploy. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3 database contracts are already deployed/PASS. **V13.4 adds no SQL** and requires only the repository deploy plus browser smoke. `CURRENT_PRECHECK.sql` / `CURRENT_POSTCHECK.sql` are optional read-only baseline diagnostics. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

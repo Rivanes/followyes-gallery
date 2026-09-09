@@ -527,7 +527,7 @@ expect('Facing root exists between scale and normalized frame geometry',
   source.includes('var facingRoot = new BABYLON.TransformNode(artwork.name + "_FrameFacing_" + generation, scene);') &&
   source.includes('facingRoot.parent = scaleRoot;') &&
   source.includes('orientationRoot.parent = facingRoot;'));
-expect('Frame front/back is flipped on local Y by 180 degrees', source.includes('facingRoot.rotation.y = Math.PI;'));
+expect('Frame front/back keeps 180-degree default while allowing validated Shared Asset Y-facing metadata', source.includes('yFacingDegrees: 180') && source.includes('facingRoot.rotation.y = calibration.yFacingRadians;')); 
 expect('Existing requested in-plane Z rotation remains', source.includes('runtime.root.rotation.z += runtime.zRotationRadians || 0;'));
 console.log('Artwork frame facing invariants passed.');
 
