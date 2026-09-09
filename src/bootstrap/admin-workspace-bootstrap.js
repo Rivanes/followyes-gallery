@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.2 Admin Workspace / Left Workspace Asset Manager
+  Exhibition Platform — V13.3 Admin Workspace / Left Workspace Asset Manager
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -16,15 +16,15 @@ import {
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
-import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_2_left_workspace_asset_manager";
+import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_3_prop_browser_placement";
 import {
   galleryBindingLabel,
   isExhibitionGalleryMigrationPending,
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V13.2";
-const ENGINE_CACHE_KEY = "v13_2_left_workspace_asset_manager_20260909";
+const STAGE = "V13.3";
+const ENGINE_CACHE_KEY = "v13_3_prop_browser_placement_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -1476,7 +1476,7 @@ function setAdminWorkspaceSection(section, { skipConfirm = false, assetHost = nu
   const next = ["exhibitions", "galleries", "assets"].includes(section) ? section : "exhibitions";
   if (adminWorkspaceSection === next) return true;
 
-  // V13.2: ASSETS is a sidebar tool, not a 3D preview context. Entering it from
+  // V13.3: ASSETS is a sidebar tool, not a 3D preview context. Entering it from
   // Exhibition or Gallery preserves the live Scene, selection and unsaved forms.
   if (next === "assets") {
     const host = assetHost === "galleries" || assetHost === "exhibitions"
@@ -1569,6 +1569,33 @@ function ensureGalleryManagementUi() {
       await ensureGalleryManagementApi();
       if (!galleryCatalog.length) galleryCatalog = await galleryManagement.list();
       return galleryCatalog;
+    },
+    getPlacementContext: () => {
+      if (assetWorkspaceHost !== "exhibitions" || !selectedExhibition) return null;
+      // V13.3 hardening: the live Babylon runtime is authoritative for placement identity.
+      // The assignment detail remains a fallback only while the scene bridge is unavailable.
+      const liveExhibition = window.GalleryApp && typeof window.GalleryApp.getActiveExhibition === "function"
+        ? window.GalleryApp.getActiveExhibition()
+        : null;
+      const liveSpace = window.GalleryApp && typeof window.GalleryApp.getSpaceDefinition === "function"
+        ? window.GalleryApp.getSpaceDefinition()
+        : null;
+      const detail = exhibitionGalleryDetail;
+      const draftBinding = detail ? c24Binding(detail, "draft") : null;
+      return {
+        exhibitionId: liveExhibition && liveExhibition.id ? liveExhibition.id : selectedExhibition.id,
+        venueId: liveSpace && liveSpace.venueId ? liveSpace.venueId : (draftBinding && draftBinding.venueId ? draftBinding.venueId : null),
+        venueVersionId: liveSpace && liveSpace.venueVersionId ? liveSpace.venueVersionId : (draftBinding && draftBinding.versionId ? draftBinding.versionId : null)
+      };
+    },
+    onBeginPropPlacement: async (descriptor, options = {}) => {
+      if (assetWorkspaceHost !== "exhibitions") throw new Error("Prop placement requires an active Exhibition.");
+      if (!window.GalleryApp || typeof window.GalleryApp.beginSharedAssetPropPlacement !== "function") throw new Error("Live Gallery Prop placement bridge is unavailable.");
+      const result = await window.GalleryApp.beginSharedAssetPropPlacement(descriptor, options || {});
+      return result !== false;
+    },
+    onCancelPropPlacement: (options = {}) => {
+      if (window.GalleryApp && typeof window.GalleryApp.cancelSharedAssetPropPlacement === "function") window.GalleryApp.cancelSharedAssetPropPlacement(options || {});
     },
     onUiStateChange: (uiState) => {
       if (adminWorkspaceSection !== "assets") return;

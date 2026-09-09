@@ -12077,6 +12077,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     function refreshSculptureCollisionProxy(slot) {
         if (!slot || !slot.metadata) return null;
         var slotId = ensureModel3dSlotIdentity(slot);
+        if (isSharedAssetPropSlot(slot)) {
+            var propDescriptor = getSharedAssetPropInstanceState(slot);
+            var collisionMode = String(propDescriptor && propDescriptor.runtimeMetadata && propDescriptor.runtimeMetadata.collisionMode || "none").toLowerCase();
+            if (collisionMode === "none") {
+                disableSculptureCollisionProxy(slot);
+                return null;
+            }
+        }
         var hasModelState = !!slot.metadata.model3d;
         if (((!hasModelState && !hasLoadedModel3dRuntime(slot)) && !editMode) || !viewerCollisionTargets.sculptures) {
             disableSculptureCollisionProxy(slot);
@@ -12702,8 +12710,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        var resetScale = 1;
+        if (isSharedAssetPropSlot(selectedSphere)) {
+            var propState = getSharedAssetPropInstanceState(selectedSphere);
+            resetScale = Number(propState && propState.runtimeMetadata && propState.runtimeMetadata.defaultScale) || 1;
+        }
         setModel3dSlotTransformState(selectedSphere, {
-            scale: 1,
+            scale: resetScale,
             rotationDegrees: 0
         }, true);
     }
@@ -14701,6 +14714,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return false;
         }
 
+        // V13.3 Shared Props reference immutable library binaries. Removing an instance
+        // must never enqueue deletion of the underlying Shared Asset GLB.
+        if (isSharedAssetPropSlot(slot)) {
+            return deleteSharedAssetPropInstance(slot, { markDirty: true, reason: "shared-asset-prop-removed" });
+        }
+
         var modelState = getModel3dState(slot);
         queueGalleryModelStateForCleanup(modelState, "remove-model-from-slot");
 
@@ -14717,6 +14736,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     async function deleteModel3dSlotWithStorageCleanup(slot, options) {
         if (!slot) {
             return false;
+        }
+
+        // V13.3 Shared Props are Exhibition instances, not owners of their immutable GLB.
+        if (isSharedAssetPropSlot(slot)) {
+            return deleteSharedAssetPropInstance(slot, { markDirty: true, reason: "shared-asset-prop-deleted" });
         }
 
         var modelState = getModel3dState(slot);
@@ -22923,6 +22947,78 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         editorScroll.insertBefore(model3dSectionData.section, artworkImageSectionData.section);
     }
 
+    // V13.3 — contextual Shared Prop inspector. Asset binaries/versions stay managed
+    // exclusively in the left ASSETS workspace; the right panel edits only this instance.
+    var sharedAssetPropSectionData = createEditorSection("PROP");
+    sharedAssetPropSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
+    var sharedAssetPropStatus = document.createElement("div");
+    sharedAssetPropStatus.className = "gallery-artwork-image-status";
+    sharedAssetPropStatus.innerHTML = "Asset: <strong>None</strong>";
+    var sharedAssetPropMeta = document.createElement("p");
+    sharedAssetPropMeta.className = "gallery-artwork-image-note";
+    sharedAssetPropMeta.innerText = "Reusable Shared Asset. Model binary and versions are managed from the left ASSETS workspace.";
+    var sharedAssetPropActions = document.createElement("div");
+    sharedAssetPropActions.className = "gallery-artwork-image-actions is-two";
+    var sharedAssetPropDuplicateButton = document.createElement("button");
+    sharedAssetPropDuplicateButton.type = "button";
+    sharedAssetPropDuplicateButton.className = "gallery-editor-action-button";
+    sharedAssetPropDuplicateButton.innerText = "DUPLICATE";
+    var sharedAssetPropDeleteButton = document.createElement("button");
+    sharedAssetPropDeleteButton.type = "button";
+    sharedAssetPropDeleteButton.className = "gallery-editor-action-button is-danger";
+    sharedAssetPropDeleteButton.innerText = "DELETE";
+    sharedAssetPropActions.appendChild(sharedAssetPropDuplicateButton);
+    sharedAssetPropActions.appendChild(sharedAssetPropDeleteButton);
+    sharedAssetPropSectionData.section.appendChild(sharedAssetPropStatus);
+    sharedAssetPropSectionData.section.appendChild(sharedAssetPropMeta);
+    sharedAssetPropSectionData.section.appendChild(sharedAssetPropActions);
+    editorScroll.appendChild(sharedAssetPropSectionData.section);
+    if (model3dSectionData && model3dSectionData.section) {
+        editorScroll.insertBefore(sharedAssetPropSectionData.section, model3dSectionData.section);
+    }
+
+    function escapeSharedAssetPropUiText(value) {
+        return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+            return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char];
+        });
+    }
+
+    function updateSharedAssetPropUi() {
+        if (!sharedAssetPropSectionData || !sharedAssetPropSectionData.section) return;
+        var slot = getActiveModel3dSlot();
+        var descriptor = slot && isSharedAssetPropSlot(slot) ? getSharedAssetPropInstanceState(slot) : null;
+        var visible = !!(editMode && slot && descriptor);
+        sharedAssetPropSectionData.section.classList.toggle("is-hidden", !visible);
+        sharedAssetPropDuplicateButton.disabled = !visible;
+        sharedAssetPropDeleteButton.disabled = !visible;
+        if (!visible) {
+            sharedAssetPropStatus.innerHTML = "Asset: <strong>None</strong>";
+            return;
+        }
+        var versionLabel = descriptor.assetVersionNumber ? ("v" + descriptor.assetVersionNumber) : (descriptor.assetVersionId ? String(descriptor.assetVersionId).slice(0, 8) + "…" : "unknown");
+        sharedAssetPropStatus.innerHTML = "Asset: <strong>" + escapeSharedAssetPropUiText(descriptor.assetName || "Prop") + "</strong><br>Category: <strong>" + escapeSharedAssetPropUiText(descriptor.category || "Uncategorized") + "</strong><br>Version: <strong>" + escapeSharedAssetPropUiText(versionLabel) + "</strong>";
+    }
+
+    sharedAssetPropDuplicateButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var slot = getActiveModel3dSlot();
+        if (!slot || !isSharedAssetPropSlot(slot)) return;
+        duplicateSharedAssetPropInstance(slot).catch(function (error) {
+            console.warn("Shared Asset Prop duplicate failed:", error);
+            notifyGalleryStatus("Prop duplicate failed.");
+        });
+    };
+
+    sharedAssetPropDeleteButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var slot = getActiveModel3dSlot();
+        if (!slot || !isSharedAssetPropSlot(slot)) return;
+        deleteSharedAssetPropInstance(slot, { markDirty: true });
+        updateEditHelpStatus();
+    };
+
     // STAGE 12C31 - SCULPTURE INFO USES ARTWORK INFO SYSTEM 1:1
     // This section intentionally mirrors ARTWORK INFO structure/classes instead of inventing
     // sculpture-only UI. Sculpture info uses the same author library, author photo, find author,
@@ -23099,7 +23195,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function getSculptureInfoUiTarget() {
-        return selectedSculptures.length === 1 ? selectedSculptures[0] : null;
+        var slot = selectedSculptures.length === 1 ? selectedSculptures[0] : null;
+        return slot && !isSharedAssetPropSlot(slot) ? slot : null;
     }
 
     function updateSculptureAuthorFoundUi(author) {
@@ -23575,7 +23672,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var slot = getActiveModel3dSlot();
+        var sharedProp = !!(slot && isSharedAssetPropSlot(slot));
 
+        model3dTransformSectionData.heading.innerText = sharedProp ? "PROP TRANSFORM" : "SCULPTURE TRANSFORM";
+        model3dTransformNote.innerText = sharedProp
+            ? "Scale and rotate this Prop instance only. The Shared Asset model/version is not modified."
+            : "Scale changes the whole sculpture/model slot. Rotation is a full 360° spin on the floor.";
         model3dTransformSectionData.section.classList.toggle(
             "is-hidden",
             !editMode || !slot
@@ -24615,7 +24717,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             };
         }
 
-        if (selectedSculptures.length === 1) {
+        if (selectedSculptures.length === 1 && !isSharedAssetPropSlot(selectedSculptures[0])) {
             return {
                 type: "sculpture",
                 object: selectedSculptures[0]
@@ -33696,6 +33798,36 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         return visiblePick;
     }
 
+    // V13.3 — desktop Shared Asset drag/drop. The browser drag payload is only a
+    // transport hint; the live runtime descriptor was validated when placement began.
+    registerGalleryDomEvent("sharedAssetPropDragOver", canvas, "dragover", function (event) {
+        if (!editMode || !gallerySharedAssetPropPlacementRuntime.dragActive || !gallerySharedAssetPropPlacementRuntime.activeDescriptor) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        var pick = pickGalleryFloorFromPointer(event);
+        if (pick && pick.pickedPoint) setSharedAssetPropPlacementGhostPoint(pick.pickedPoint);
+        else hideSharedAssetPropPlacementGhost();
+    });
+
+    registerGalleryDomEvent("sharedAssetPropDragLeave", canvas, "dragleave", function (event) {
+        if (!gallerySharedAssetPropPlacementRuntime.dragActive) return;
+        if (event && event.relatedTarget && canvas.contains && canvas.contains(event.relatedTarget)) return;
+        hideSharedAssetPropPlacementGhost();
+    });
+
+    registerGalleryDomEvent("sharedAssetPropDrop", canvas, "drop", function (event) {
+        if (!editMode || !gallerySharedAssetPropPlacementRuntime.dragActive || !gallerySharedAssetPropPlacementRuntime.activeDescriptor) return;
+        event.preventDefault();
+        var pick = pickGalleryFloorFromPointer(event);
+        if (!pick || !pick.pickedPoint) {
+            hideSharedAssetPropPlacementGhost();
+            notifyGalleryStatus("Drop the Prop on the Gallery floor.");
+            return;
+        }
+        var descriptor = gallerySharedAssetPropPlacementRuntime.activeDescriptor;
+        void placeActiveSharedAssetPropAtPoint(pick.pickedPoint, { descriptor: descriptor, source: "drag-drop" });
+    });
+
     function startGalleryFloorCursorClickPulse(event) {
         if (!event || event.button !== 0 || !isGalleryDesktopPointerNavigationAvailable() ||
             (typeof isViewerIntroOverlayBlockingMovement === "function" && isViewerIntroOverlayBlockingMovement()) ||
@@ -34220,7 +34352,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var slot = getActiveModel3dSlot();
-        var isVisible = !!(editMode && slot);
+        var isVisible = !!(editMode && slot && !isSharedAssetPropSlot(slot));
         var modelState = getModel3dState(slot);
 
         model3dSectionData.section.classList.toggle("is-hidden", !isVisible);
@@ -34412,9 +34544,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var selectedLabel = "None";
 
             if (selectedSculptures.length === 1 && activeModel3dSlot) {
-                selectedLabel = "Sculpture: " + activeModel3dSlot.name;
+                if (isSharedAssetPropSlot(activeModel3dSlot)) {
+                    var propSelection = getSharedAssetPropInstanceState(activeModel3dSlot);
+                    selectedLabel = "Prop: " + (propSelection && propSelection.assetName ? propSelection.assetName : activeModel3dSlot.name);
+                } else {
+                    selectedLabel = "Sculpture: " + activeModel3dSlot.name;
+                }
             } else if (selectedSculptures.length > 1 && primarySculpture) {
-                selectedLabel = "Sculpture: " + primarySculpture.name + " + " + (selectedSculptures.length - 1);
+                selectedLabel = "Objects: " + primarySculpture.name + " + " + (selectedSculptures.length - 1);
             } else if (selectedArtworks.length === 1 && selectedArtworks[0]) {
                 selectedLabel = selectedArtworks[0].name;
             } else if (selectedArtworks.length > 1 && primaryArtwork) {
@@ -34446,6 +34583,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateArtworkInfoUi();
         updateArtworkTransformUi();
         updateModel3dSlotUi();
+        updateSharedAssetPropUi();
         updateSculptureInfoUi();
         updateAlignmentPanel();
     }
@@ -34891,6 +35029,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var key = event.key.toLowerCase();
+        if (key === "escape" && gallerySharedAssetPropPlacementRuntime.activeDescriptor) {
+            event.preventDefault();
+            cancelSharedAssetPropPlacement({ reason: "escape" });
+            return;
+        }
         var isSpaceKey = key === " " || key === "spacebar" || event.code === "Space";
         var isArrowKey = key === "arrowup" || key === "arrowdown" || key === "arrowleft" || key === "arrowright";
 
@@ -37755,6 +37898,324 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    // V13.3 — EXHIBITION-OWNED SHARED PROP INSTANCES
+    // Props reuse the proven model-slot runtime underneath, but remain a separate semantic
+    // state domain. They are never serialized as sculptures and never own/delete the
+    // immutable Shared Asset binary.
+    var gallerySharedAssetPropPlacementRuntime = {
+        schema: "exhibition-platform-prop-placement.v1",
+        activeDescriptor: null,
+        tapActive: false,
+        dragActive: false,
+        ghost: null,
+        ghostMaterial: null,
+        lastPoint: null,
+        placedCount: 0,
+        canceledCount: 0,
+        restoreFailures: 0
+    };
+
+    function isSharedAssetPropSlot(slot) {
+        return !!(slot && slot.metadata && slot.metadata.isSharedAssetProp === true && slot.metadata.sharedAssetInstance);
+    }
+
+    function createSharedAssetInstanceId() {
+        try {
+            if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
+        } catch (error) {}
+        return "prop-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+    }
+
+    function normalizeSharedAssetPropDescriptor(value) {
+        if (!value || typeof value !== "object") return null;
+        var assetId = String(value.assetId || value.asset_id || "").trim();
+        var assetVersionId = String(value.assetVersionId || value.asset_version_id || "").trim();
+        var storageBucket = String(value.storageBucket || value.storage_bucket || "shared-assets").trim() || "shared-assets";
+        var storagePath = String(value.storagePath || value.storage_path || "").replace(/^\/+/, "").trim();
+        var publicUrl = String(value.publicUrl || value.modelUrl || value.model_url || "").trim();
+        if (!assetId || !assetVersionId || !storagePath) return null;
+        var runtimeMetadata = value.runtimeMetadata && typeof value.runtimeMetadata === "object" ? cloneGalleryJson(value.runtimeMetadata) : {};
+        var defaultScale = Number(runtimeMetadata.defaultScale);
+        if (!isFinite(defaultScale) || defaultScale <= 0) defaultScale = 1;
+        runtimeMetadata.placementMode = "floor";
+        runtimeMetadata.defaultScale = defaultScale;
+        return {
+            schema: "exhibition-platform-prop-placement.v1",
+            instanceId: String(value.instanceId || value.id || "").trim() || null,
+            assetId: assetId,
+            assetVersionId: assetVersionId,
+            assetVersionNumber: Number(value.assetVersionNumber || value.asset_version_number) || null,
+            assetType: "prop",
+            assetName: String(value.assetName || value.name || "Prop").trim() || "Prop",
+            category: String(value.category || "").trim(),
+            scopeType: String(value.scopeType || value.scope_type || "platform").trim() || "platform",
+            scopeVenueId: value.scopeVenueId || value.scope_venue_id || null,
+            storageBucket: storageBucket,
+            storagePath: storagePath,
+            publicUrl: publicUrl || getPublicArtworkUrlFromPath(storagePath, storageBucket),
+            fileHash: value.fileHash || value.file_hash || null,
+            runtimeMetadata: runtimeMetadata
+        };
+    }
+
+    function getSharedAssetPropInstanceState(slot) {
+        return isSharedAssetPropSlot(slot) ? slot.metadata.sharedAssetInstance : null;
+    }
+
+    function buildSharedAssetPropModelState(slot, descriptor) {
+        descriptor = normalizeSharedAssetPropDescriptor(descriptor);
+        if (!descriptor) return null;
+        return normalizeModel3dState({
+            modelUrl: descriptor.publicUrl || getPublicArtworkUrlFromPath(descriptor.storagePath, descriptor.storageBucket),
+            modelPath: descriptor.storagePath,
+            storageBucket: descriptor.storageBucket,
+            originalName: descriptor.assetName + ".glb",
+            mimeType: "model/gltf-binary",
+            assignedAt: new Date().toISOString(),
+            sourceSlotName: slot ? slot.name : "",
+            isDuplicate: false,
+            ktx2Ready: true,
+            transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scaling: { x: 1, y: 1, z: 1 } }
+        });
+    }
+
+    function serializeSharedAssetPropInstance(slot) {
+        var descriptor = getSharedAssetPropInstanceState(slot);
+        if (!descriptor) return null;
+        var transform = getModel3dSlotTransformState(slot);
+        return {
+            instanceId: descriptor.instanceId,
+            assetId: descriptor.assetId,
+            assetVersionId: descriptor.assetVersionId,
+            assetVersionNumber: descriptor.assetVersionNumber || null,
+            assetType: "prop",
+            assetName: descriptor.assetName || "Prop",
+            category: descriptor.category || "",
+            scopeType: descriptor.scopeType || "platform",
+            scopeVenueId: descriptor.scopeVenueId || null,
+            storageBucket: descriptor.storageBucket || "shared-assets",
+            storagePath: descriptor.storagePath || "",
+            fileHash: descriptor.fileHash || null,
+            runtimeMetadata: cloneGalleryJson(descriptor.runtimeMetadata || {}),
+            position: vectorToState(slot.position),
+            rotation: vectorToState(slot.rotation),
+            scaling: vectorToState(slot.scaling),
+            scale: transform.scale,
+            rotationDegrees: transform.rotationDegrees
+        };
+    }
+
+    function applySharedAssetPropStateToSlot(slot, instanceState) {
+        var descriptor = normalizeSharedAssetPropDescriptor(instanceState);
+        if (!slot || !descriptor) return Promise.resolve(false);
+        descriptor.instanceId = String(instanceState.instanceId || instanceState.id || descriptor.instanceId || createSharedAssetInstanceId());
+        slot.metadata = slot.metadata || {};
+        slot.metadata.isModel3dSlot = true;
+        slot.metadata.isDynamicModelSlot = true;
+        slot.metadata.isSharedAssetProp = true;
+        slot.metadata.sharedAssetInstance = descriptor;
+        slot.metadata.sculptureInfo = null;
+        slot.metadata.tourOrder = 0;
+        slot.metadata.tourOrderLocked = false;
+        if (instanceState.position) slot.position.copyFrom(vectorFromState(instanceState.position, slot.position));
+        var scale = Number(instanceState.scale);
+        if (!isFinite(scale) || scale <= 0) scale = Number(descriptor.runtimeMetadata.defaultScale) || 1;
+        var rotationDegrees = Number(instanceState.rotationDegrees);
+        if (!isFinite(rotationDegrees) && instanceState.rotation && instanceState.rotation.y !== undefined) rotationDegrees = BABYLON.Tools.ToDegrees(Number(instanceState.rotation.y) || 0);
+        if (!isFinite(rotationDegrees)) rotationDegrees = 0;
+        slot.metadata.sculptureTransform = { scale: clampSculptureTransformScale(scale), rotationDegrees: normalizeSculptureTransformRotationDegrees(rotationDegrees) };
+        applySculptureTransformToSlot(slot);
+        var modelState = buildSharedAssetPropModelState(slot, descriptor);
+        if (!modelState) return Promise.resolve(false);
+        slot.metadata.model3d = modelState;
+        return applyModel3dStateToSlot(slot, modelState);
+    }
+
+    function createSharedAssetPropInstanceFromState(instanceState, options) {
+        options = options || {};
+        var descriptor = normalizeSharedAssetPropDescriptor(instanceState);
+        if (!descriptor) return Promise.resolve(null);
+        descriptor.instanceId = String(instanceState.instanceId || instanceState.id || descriptor.instanceId || createSharedAssetInstanceId());
+        var index = getNextModel3dSlotIndex();
+        var point = instanceState.position ? vectorFromState(instanceState.position, getDefaultModel3dSlotAddPosition()) : getDefaultModel3dSlotAddPosition();
+        var slot = createPedestalDisplay(point, index, { name: "AssetProp_" + descriptor.instanceId.replace(/[^a-z0-9]/gi, "").slice(0, 12), slotId: "asset-prop-" + descriptor.instanceId });
+        if (!slot) return Promise.resolve(null);
+        forgetDeletedModel3dSlotName(slot.name);
+        return Promise.resolve(applySharedAssetPropStateToSlot(slot, Object.assign({}, instanceState, descriptor))).then(function (ok) {
+            if (!ok && options.requireLoad) {
+                deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
+                return null;
+            }
+            if (options.select !== false) selectModel3dSlot(slot);
+            updateViewerModePlaceholderVisibility();
+            updateEditHelpStatus();
+            updateSharedAssetPropUi();
+            if (options.markDirty) markGalleryDraftDirty(options.reason || "shared-asset-prop-added");
+            return slot;
+        });
+    }
+
+    function deleteSharedAssetPropInstance(slot, options) {
+        options = options || {};
+        if (!isSharedAssetPropSlot(slot)) return false;
+        var label = getSharedAssetPropInstanceState(slot).assetName || "Prop";
+        var deleted = deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
+        if (deleted && options.markDirty !== false) markGalleryDraftDirty(options.reason || "shared-asset-prop-deleted");
+        if (deleted && !options.silent) notifyGalleryStatus("Prop removed from this Exhibition: " + label + ". Shared Asset binary remains untouched.");
+        updateSharedAssetPropUi();
+        return deleted;
+    }
+
+    function duplicateSharedAssetPropInstance(slot) {
+        if (!isSharedAssetPropSlot(slot)) return Promise.resolve(null);
+        var source = serializeSharedAssetPropInstance(slot);
+        var footprint = getModel3dSlotFootprint(slot);
+        var target = findModel3dDuplicatePlacement(slot);
+        if (!target) target = new BABYLON.Vector3(slot.position.x + Math.max(1.2, footprint.width + 0.45), slot.position.y, slot.position.z);
+        source.instanceId = createSharedAssetInstanceId();
+        source.position = vectorToState(target);
+        return createSharedAssetPropInstanceFromState(source, { select: true, markDirty: true, requireLoad: true, reason: "shared-asset-prop-duplicated" });
+    }
+
+    function getOrCreateSharedAssetPropPlacementGhost() {
+        var runtime = gallerySharedAssetPropPlacementRuntime;
+        if (runtime.ghost && !(runtime.ghost.isDisposed && runtime.ghost.isDisposed())) return runtime.ghost;
+        var material = new BABYLON.StandardMaterial("SharedAssetPropPlacementGhostMaterial", scene);
+        material.diffuseColor = new BABYLON.Color3(0.42, 0.72, 0.46);
+        material.emissiveColor = new BABYLON.Color3(0.08, 0.16, 0.09);
+        material.specularColor = BABYLON.Color3.Black();
+        material.alpha = 0.34;
+        material.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+        material.disableDepthWrite = true;
+        var ghost = BABYLON.MeshBuilder.CreateCylinder("SharedAssetPropPlacementGhost", { diameter: 0.86, height: 0.035, tessellation: 32 }, scene);
+        ghost.material = material;
+        ghost.isPickable = false;
+        ghost.checkCollisions = false;
+        ghost.renderingGroupId = 3;
+        ghost.metadata = ghost.metadata || {};
+        ghost.metadata.isSharedAssetPropPlacementGhost = true;
+        ghost.setEnabled(false);
+        runtime.ghost = ghost;
+        runtime.ghostMaterial = material;
+        return ghost;
+    }
+
+    function setSharedAssetPropPlacementGhostPoint(point) {
+        if (!point) return false;
+        var ghost = getOrCreateSharedAssetPropPlacementGhost();
+        var descriptor = gallerySharedAssetPropPlacementRuntime.activeDescriptor || {};
+        var defaultScale = Number(descriptor.runtimeMetadata && descriptor.runtimeMetadata.defaultScale) || 1;
+        ghost.position.copyFrom(point);
+        ghost.position.y += 0.025;
+        ghost.scaling.set(Math.max(0.55, Math.min(2.6, defaultScale)), 1, Math.max(0.55, Math.min(2.6, defaultScale)));
+        ghost.setEnabled(true);
+        gallerySharedAssetPropPlacementRuntime.lastPoint = point.clone ? point.clone() : new BABYLON.Vector3(point.x || 0, point.y || 0, point.z || 0);
+        return true;
+    }
+
+    function hideSharedAssetPropPlacementGhost() {
+        var ghost = gallerySharedAssetPropPlacementRuntime.ghost;
+        if (ghost && !(ghost.isDisposed && ghost.isDisposed())) ghost.setEnabled(false);
+        gallerySharedAssetPropPlacementRuntime.lastPoint = null;
+    }
+
+    function cancelSharedAssetPropPlacement(options) {
+        options = options || {};
+        var wasActive = !!gallerySharedAssetPropPlacementRuntime.activeDescriptor;
+        gallerySharedAssetPropPlacementRuntime.activeDescriptor = null;
+        gallerySharedAssetPropPlacementRuntime.tapActive = false;
+        gallerySharedAssetPropPlacementRuntime.dragActive = false;
+        hideSharedAssetPropPlacementGhost();
+        if (wasActive) gallerySharedAssetPropPlacementRuntime.canceledCount += 1;
+        if (wasActive && !options.silent) notifyGalleryStatus("Prop placement canceled.");
+        return wasActive;
+    }
+
+    function beginSharedAssetPropPlacement(descriptor, options) {
+        options = options || {};
+        var normalized = normalizeSharedAssetPropDescriptor(descriptor);
+        if (!normalized) {
+            notifyGalleryStatus("Prop placement descriptor is invalid.");
+            return false;
+        }
+        if (!editMode || galleryAuthoringSpacePreview) {
+            notifyGalleryStatus("Open an Exhibition in Edit Mode to place Props.");
+            return false;
+        }
+        var activeExhibitionId = getActiveGalleryExhibitionId();
+        if (!activeExhibitionId) {
+            notifyGalleryStatus("No active Exhibition for Prop placement.");
+            return false;
+        }
+        var expectedContext = options.context && typeof options.context === "object" ? options.context : null;
+        if (expectedContext && expectedContext.exhibitionId && String(expectedContext.exhibitionId) !== String(activeExhibitionId)) {
+            notifyGalleryStatus("Prop placement context changed. Reopen ASSETS from the active Exhibition.");
+            return false;
+        }
+        if (expectedContext && expectedContext.venueVersionId && String(expectedContext.venueVersionId) !== String(galleryActiveVenueVersionId)) {
+            notifyGalleryStatus("Prop placement belongs to another Gallery Version.");
+            return false;
+        }
+        var currentVenueId = String(gallerySpaceDefinition && gallerySpaceDefinition.venueId || "").trim();
+        if (normalized.scopeType === "venue" && normalized.scopeVenueId && currentVenueId && String(normalized.scopeVenueId) !== currentVenueId) {
+            notifyGalleryStatus("This Prop belongs to another Gallery.");
+            return false;
+        }
+        cancelSharedAssetPropPlacement({ silent: true });
+        gallerySharedAssetPropPlacementRuntime.activeDescriptor = normalized;
+        gallerySharedAssetPropPlacementRuntime.dragActive = options.drag === true;
+        gallerySharedAssetPropPlacementRuntime.tapActive = options.drag !== true;
+        if (!options.drag) notifyGalleryStatus("PLACE PROP: click/tap a point on the Gallery floor. Esc cancels.");
+        return true;
+    }
+
+    function placeActiveSharedAssetPropAtPoint(point, options) {
+        options = options || {};
+        var descriptor = normalizeSharedAssetPropDescriptor(options.descriptor || gallerySharedAssetPropPlacementRuntime.activeDescriptor);
+        if (!descriptor || !point || !editMode) return Promise.resolve(null);
+        var state = Object.assign({}, descriptor, {
+            instanceId: createSharedAssetInstanceId(),
+            position: vectorToState(point),
+            scale: Number(descriptor.runtimeMetadata && descriptor.runtimeMetadata.defaultScale) || 1,
+            rotationDegrees: 0
+        });
+        // Placement is one-shot. Clear the placement tool before async GLB hydration so
+        // a slow network cannot accidentally create multiple instances from one click/drop.
+        gallerySharedAssetPropPlacementRuntime.activeDescriptor = null;
+        gallerySharedAssetPropPlacementRuntime.tapActive = false;
+        gallerySharedAssetPropPlacementRuntime.dragActive = false;
+        hideSharedAssetPropPlacementGhost();
+        return createSharedAssetPropInstanceFromState(state, { select: true, markDirty: true, requireLoad: true, reason: "shared-asset-prop-placed" }).then(function (slot) {
+            if (slot) {
+                gallerySharedAssetPropPlacementRuntime.placedCount += 1;
+                notifyGalleryStatus("Prop placed: " + descriptor.assetName + ".");
+            } else {
+                notifyGalleryStatus("Prop could not be loaded. No instance was saved.");
+            }
+            return slot;
+        }).catch(function (error) {
+            console.warn("Shared Asset Prop placement failed:", error);
+            notifyGalleryStatus("Prop placement failed: " + (error && error.message ? error.message : String(error)));
+            return null;
+        });
+    }
+
+    function getSharedAssetPropPlacementDebug() {
+        var descriptor = gallerySharedAssetPropPlacementRuntime.activeDescriptor;
+        return {
+            schema: gallerySharedAssetPropPlacementRuntime.schema,
+            active: !!descriptor,
+            tapActive: !!gallerySharedAssetPropPlacementRuntime.tapActive,
+            dragActive: !!gallerySharedAssetPropPlacementRuntime.dragActive,
+            assetId: descriptor ? descriptor.assetId : null,
+            assetVersionId: descriptor ? descriptor.assetVersionId : null,
+            placedCount: gallerySharedAssetPropPlacementRuntime.placedCount,
+            canceledCount: gallerySharedAssetPropPlacementRuntime.canceledCount,
+            restoreFailures: gallerySharedAssetPropPlacementRuntime.restoreFailures,
+            instanceCount: artSpheres.filter(isSharedAssetPropSlot).length
+        };
+    }
+
     function getModel3dSlotByName(name) {
         return getSphereByName(name);
     }
@@ -40208,6 +40669,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return !!(allowPlaceholder || artworkHasVisiblePopupDisplay(object));
         }
         if (type === "sculpture") {
+            if (isSharedAssetPropSlot(object)) return false;
             if (deletedModel3dSlotNames && deletedModel3dSlotNames.indexOf(object.name) !== -1) return false;
             return !!(
                 allowPlaceholder ||
@@ -40236,6 +40698,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
 
         artSpheres.forEach(function (slot) {
+            if (isSharedAssetPropSlot(slot)) return;
             if (isGalleryExhibitEligible(slot, "sculpture", allowPlaceholder)) {
                 result.push({
                     type: "sculpture",
@@ -41046,6 +41509,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         var sculptureSlot = getModel3dSlotFromPickedMesh(pickedMesh) || (isSculptureSlotObject(pickedMesh) ? pickedMesh : null);
+
+        if (sculptureSlot && isSharedAssetPropSlot(sculptureSlot)) return null;
 
         if (sculptureSlot && (allowPlaceholder || hasLoadedModel3dRuntime(sculptureSlot))) {
             return {
@@ -42183,6 +42648,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
+        // V13.3 PLACE mode must win before mobile look/navigation. One floor tap creates
+        // exactly one Exhibition-owned Prop instance and exits the placement tool.
+        if (editMode && gallerySharedAssetPropPlacementRuntime.tapActive && gallerySharedAssetPropPlacementRuntime.activeDescriptor) {
+            if (evt && evt.preventDefault) evt.preventDefault();
+            if (pickResult && pickResult.hit && pickResult.pickedPoint && floorMeshes.indexOf(pickResult.pickedMesh) !== -1) {
+                var tapPlacementDescriptor = gallerySharedAssetPropPlacementRuntime.activeDescriptor;
+                void placeActiveSharedAssetPropAtPoint(pickResult.pickedPoint, { descriptor: tapPlacementDescriptor, source: "tap-place" });
+            } else {
+                notifyGalleryStatus("PLACE PROP: choose a point on the Gallery floor. Esc cancels.");
+            }
+            return;
+        }
+
         if (isMobileViewerActive()) {
             evt.preventDefault();
             beginMobileCanvasLook(evt);
@@ -42358,7 +42836,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ) {
                 var clickedModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
                 var currentSculptureClickTime = Date.now();
+                var isSharedPropClick = isSharedAssetPropSlot(clickedModel3dSlot);
                 var isSculptureDoubleClick =
+                    !isSharedPropClick &&
                     lastSculptureClickSlot === clickedModel3dSlot &&
                     currentSculptureClickTime - lastSculptureClickTime <= doubleClickDelay;
 
@@ -42438,8 +42918,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 getModel3dSlotFromPickedMesh(pickResult.pickedMesh)
             ) {
                 var viewerModel3dSlot = getModel3dSlotFromPickedMesh(pickResult.pickedMesh);
-                openGalleryInspectTarget(viewerModel3dSlot, { reason: "desktop-sculpture-click" });
-                return;
+                if (!isSharedAssetPropSlot(viewerModel3dSlot)) {
+                    openGalleryInspectTarget(viewerModel3dSlot, { reason: "desktop-sculpture-click" });
+                    return;
+                }
             }
 
             // TRYB EDYCJI = klik w podloge nie wykonuje akcji, jeśli nie mamy aktywnego slotu/modelu.
@@ -42790,7 +43272,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     info: getArtworkInfoState(artwork)
                 };
             }),
-            spheres: artSpheres.map(function (sphere, index) {
+            spheres: artSpheres.filter(function (sphere) { return !isSharedAssetPropSlot(sphere); }).map(function (sphere, index) {
                 return {
                     slotId: ensureModel3dSlotIdentity(sphere),
                     name: sphere.name,
@@ -42815,7 +43297,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     tourOrderLocked: isGalleryExhibitTourOrderLocked(sphere),
                     model3d: getModel3dState(sphere)
                 };
-            })
+            }),
+            assetInstances: artSpheres.filter(isSharedAssetPropSlot).map(serializeSharedAssetPropInstance).filter(Boolean)
         };
     }
 
@@ -43172,6 +43655,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             });
         }
 
+        if (Array.isArray(editorState.assetInstances)) {
+            editorState.assetInstances.forEach(function (instanceState) {
+                if (!instanceState) return;
+                var existing = artSpheres.find(function (slot) {
+                    var state = getSharedAssetPropInstanceState(slot);
+                    return state && String(state.instanceId) === String(instanceState.instanceId || instanceState.id || "");
+                });
+                if (existing) return;
+                Promise.resolve(createSharedAssetPropInstanceFromState(instanceState, { select: false, markDirty: false, requireLoad: false }))
+                    .then(function (slot) { if (!slot) gallerySharedAssetPropPlacementRuntime.restoreFailures += 1; })
+                    .catch(function (error) { gallerySharedAssetPropPlacementRuntime.restoreFailures += 1; console.warn("Shared Asset Prop restore warning:", error); });
+            });
+        }
+
         if (!options.deferGlobalRefresh) {
             if (galleryFastStartRuntime.stateApplyActive || galleryExhibitionRuntime.hydrationActive) {
                 // C6C8C7 atomic state apply: structure first, one global commit later.
@@ -43215,7 +43712,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         exhibition = normalizeGalleryExhibitionRecord(exhibition) || galleryExhibitionRuntime.active || getGalleryFallbackMainExhibition();
         return {
             version: "Gallery_V0_11_WEB", savedAt: new Date().toISOString(), context: { exhibitionId: exhibition.id, spaceId: galleryActiveSpaceId },
-            editor: { version: "Gallery_V0_11_editor", selectedWallMaterialName: null, walls: cloneGalleryJson(baseline.wallStates || []), deletedArtworkNames: [], deletedModel3dSlotNames: [], authors: [], artworks: [], spheres: [] },
+            editor: { version: "Gallery_V0_11_editor", selectedWallMaterialName: null, walls: cloneGalleryJson(baseline.wallStates || []), deletedArtworkNames: [], deletedModel3dSlotNames: [], authors: [], artworks: [], spheres: [], assetInstances: [] },
             lighting: cloneGalleryJson(baseline.lighting || readLightingSettingsFromScene()), visualSettings: cloneGalleryJson(baseline.visualSettings || visualDefaultSettings), lightingPresets: [],
             localLights: { version: "Gallery_V0_11_local_lights", createCounter: 0, activeGroupIndex: 0, groups: [[], [], [], [], [], [], [], []], lights: [] }
         };
@@ -44246,7 +44743,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             (
                 Array.isArray(editorState.walls) ||
                 Array.isArray(editorState.artworks) ||
-                Array.isArray(editorState.spheres)
+                Array.isArray(editorState.spheres) ||
+                Array.isArray(editorState.assetInstances)
             )
         ) {
             applyEditorState(editorState, options);
@@ -44820,6 +45318,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             };
         },
         getArtworkById: getArtworkById,
+        // V13.3 — Shared Asset Prop placement bridge used by the left ASSETS workspace.
+        beginSharedAssetPropPlacement: beginSharedAssetPropPlacement,
+        cancelSharedAssetPropPlacement: cancelSharedAssetPropPlacement,
+        getSharedAssetPropPlacementDebug: getSharedAssetPropPlacementDebug,
+        duplicateSelectedSharedAssetProp: function () {
+            var slot = getActiveModel3dSlot();
+            return slot && isSharedAssetPropSlot(slot) ? duplicateSharedAssetPropInstance(slot) : Promise.resolve(null);
+        },
+        deleteSelectedSharedAssetProp: function () {
+            var slot = getActiveModel3dSlot();
+            return slot && isSharedAssetPropSlot(slot) ? deleteSharedAssetPropInstance(slot, { markDirty: true }) : false;
+        },
         saveStateToSupabase: saveGalleryStateToSupabase,
         loadStateFromSupabase: loadGalleryStateFromSupabase,
         getActiveExhibition: function () { return galleryExhibitionRuntime.active ? Object.assign({}, galleryExhibitionRuntime.active) : getGalleryFallbackMainExhibition(); },
@@ -44896,6 +45406,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 artworks: state.editor && state.editor.artworks ? state.editor.artworks.length : 0,
                 walls: state.editor && state.editor.walls ? state.editor.walls.length : 0,
                 spheres: state.editor && state.editor.spheres ? state.editor.spheres.length : 0,
+                assetInstances: state.editor && state.editor.assetInstances ? state.editor.assetInstances.length : 0,
                 localLights: state.localLights && state.localLights.lights ? state.localLights.lights.length : 0,
                 localGroups: state.localLights && state.localLights.groups ? state.localLights.groups.length : 0,
                 hasLighting: !!state.lighting,

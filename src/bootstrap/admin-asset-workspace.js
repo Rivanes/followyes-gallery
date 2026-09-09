@@ -1,10 +1,10 @@
-/* Exhibition Platform — V13.2 Left Workspace Asset Manager.
-   Catalog/management UI only. Scene placement begins in V13.3. */
+/* Exhibition Platform — V13.3 Left Workspace Asset Manager + Prop placement launcher.
+   Asset catalog remains in the left workspace; scene placement is delegated to the live Gallery runtime. */
 
-import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_2_left_workspace_asset_manager";
-import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_2_left_workspace_asset_manager";
+import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_3_prop_browser_placement";
+import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_3_prop_browser_placement";
 
-export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.2";
+export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.3";
 
 const MAX_THUMBNAIL_SOURCE_BYTES = 12 * 1024 * 1024;
 const THUMBNAIL_MAX_SIDE = 640;
@@ -100,6 +100,11 @@ function ensureStyles() {
     .assetTile{min-width:0;display:grid;grid-template-rows:92px auto;gap:7px;padding:7px;border:1px solid transparent;border-radius:12px;background:rgba(255,255,255,.02);color:rgba(255,255,255,.92);text-align:left;cursor:pointer}
     .assetTile:hover{background:rgba(255,255,255,.045)}
     .assetTile.active{border-color:rgba(154,180,155,.42);background:rgba(125,160,127,.13)}
+    .assetTile.is-placeable{cursor:grab}.assetTile.is-placeable:active{cursor:grabbing}.assetTile.is-placeable .assetThumb{box-shadow:inset 0 0 0 1px rgba(154,180,155,.18)}
+    .assetTile.is-placement-active{border-color:rgba(180,205,181,.72);background:rgba(125,160,127,.20)}
+    .assetPlaceHint{position:absolute;right:6px;top:6px;padding:3px 5px;border-radius:6px;background:rgba(83,111,85,.90);font-size:8px;font-weight:800;letter-spacing:.07em;color:#edf4ee}
+    .assetPlacementPanel{display:grid;gap:7px;padding:10px;border:1px solid rgba(154,180,155,.28);border-radius:10px;background:rgba(125,160,127,.075)}
+    .assetPlacementPanel strong{font-size:10px}.assetPlacementPanel .assetMuted{margin:0}
     .assetThumb{position:relative;display:grid;place-items:center;width:100%;height:92px;overflow:hidden;border:1px solid rgba(255,255,255,.10);border-radius:9px;background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.015))}
     .assetThumb img{width:100%;height:100%;object-fit:cover;display:block}
     .assetThumbGlyph{font-size:24px;opacity:.72}.assetThumbType{position:absolute;left:6px;bottom:6px;padding:3px 5px;border-radius:6px;background:rgba(5,7,6,.78);font-size:8px;font-weight:800;letter-spacing:.08em}
@@ -131,7 +136,10 @@ export function createAdminAssetWorkspace({
   sidebar,
   showToast = () => {},
   loadVenueOptions = async () => [],
-  onUiStateChange = () => {}
+  onUiStateChange = () => {},
+  getPlacementContext = () => null,
+  onBeginPropPlacement = async () => false,
+  onCancelPropPlacement = () => {}
 } = {}) {
   if (!supabase) throw new Error("Supabase client is required for the Asset Workspace.");
   if (!sidebar) throw new Error("Canonical Admin sidebar is required for the Asset Workspace.");
@@ -152,7 +160,8 @@ export function createAdminAssetWorkspace({
     search: "",
     includeArchived: false,
     busy: false,
-    requestId: 0
+    requestId: 0,
+    placementDescriptor: null
   };
 
   const catalogSection = document.createElement("section");
@@ -229,13 +238,86 @@ export function createAdminAssetWorkspace({
     });
   }
 
+  function readPlacementContext() {
+    const context = getPlacementContext ? getPlacementContext() : null;
+    return context && typeof context === "object" ? context : null;
+  }
+
+  function getPublishedVersion(source) {
+    const asset = source && source.asset ? source.asset : source;
+    const versions = Array.isArray(source && source.versions) ? source.versions : [];
+    if (!asset) return null;
+    const detailed = versions.find((version) => version.id === asset.published_version_id) || versions.find((version) => version.status === "published") || null;
+    if (detailed) return detailed;
+    if (!asset.published_version_id || !asset.published_storage_path) return null;
+    return {
+      id: asset.published_version_id,
+      version_number: asset.published_version_number,
+      status: "published",
+      storage_bucket: asset.published_storage_bucket || api.bucket || "shared-assets",
+      storage_path: asset.published_storage_path,
+      file_hash: asset.published_file_hash || null,
+      runtime_metadata: asset.published_runtime_metadata && typeof asset.published_runtime_metadata === "object"
+        ? asset.published_runtime_metadata
+        : null
+    };
+  }
+
+  function buildPropPlacementDescriptor(source) {
+    const asset = source && source.asset ? source.asset : source;
+    const version = getPublishedVersion(source);
+    if (!asset || text(asset.asset_type).toLowerCase() !== "prop" || !version || !version.id || !version.storage_path) return null;
+    const runtimeMetadata = version.runtime_metadata && typeof version.runtime_metadata === "object" ? version.runtime_metadata : getDefaultSharedAssetRuntimeMetadata("prop");
+    return {
+      schema: "exhibition-platform-prop-placement.v1",
+      assetId: asset.id,
+      assetVersionId: version.id,
+      assetVersionNumber: Number(version.version_number) || null,
+      assetType: "prop",
+      assetName: asset.name || asset.slug || "Prop",
+      category: asset.category || "",
+      scopeType: asset.scope_type || "platform",
+      scopeVenueId: asset.scope_venue_id || null,
+      storageBucket: version.storage_bucket || api.bucket || "shared-assets",
+      storagePath: version.storage_path,
+      publicUrl: api.getPublicVersionUrl(version),
+      fileHash: version.file_hash || null,
+      runtimeMetadata
+    };
+  }
+
+  function getPropPlacementCapability(detail) {
+    const descriptor = buildPropPlacementDescriptor(detail);
+    const asset = detail && detail.asset ? detail.asset : detail;
+    if (asset && text(asset.status).toLowerCase() === "archived") return { allowed: false, reason: "Restore this Asset before placing new instances.", descriptor, context: readPlacementContext() };
+    if (state.hostSection !== "exhibitions") return { allowed: false, reason: "Open Assets from an Exhibition to place Props.", descriptor, context: null };
+    const context = readPlacementContext();
+    if (!context || !context.exhibitionId) return { allowed: false, reason: "No active Exhibition placement context.", descriptor, context };
+    if (!descriptor) return { allowed: false, reason: "Publish a validated Prop version before placement.", descriptor: null, context };
+    if (descriptor.scopeType === "venue" && (!context.venueId || String(descriptor.scopeVenueId) !== String(context.venueId))) {
+      return { allowed: false, reason: "This Prop is scoped to another Gallery.", descriptor, context };
+    }
+    return { allowed: true, reason: "Drag to the floor on desktop, or use PLACE PROP for tap placement.", descriptor, context };
+  }
+
+  async function beginPropPlacement(detail) {
+    const capability = getPropPlacementCapability(detail);
+    if (!capability.allowed || !capability.descriptor) throw new Error(capability.reason);
+    state.placementDescriptor = capability.descriptor;
+    renderCatalog();
+    const ok = await onBeginPropPlacement(capability.descriptor, { context: capability.context || null, drag: false });
+    if (ok === false) { state.placementDescriptor = null; renderCatalog(); return false; }
+    showToast("Prop placement active. Choose a point on the Gallery floor.");
+    return true;
+  }
+
   function renderHostNote() {
     const note = $("assetWorkspaceHostNote");
     if (!note) return;
     if (state.hostSection === "galleries") {
       note.innerHTML = `<strong>Gallery preview preserved.</strong> Library management is available. Exhibition Prop placement and Frame binding stay disabled in Gallery context.`;
     } else {
-      note.innerHTML = `<strong>Exhibition preview preserved.</strong> Browsing Assets does not reload the Scene, discard Draft changes or clear selection. Placement starts in V13.3.`;
+      note.innerHTML = `<strong>Exhibition preview preserved.</strong> Props with a Published version can be dragged to the floor or placed with PLACE PROP. Browsing Assets does not reload the Scene or discard Draft changes.`;
     }
   }
 
@@ -267,6 +349,9 @@ export function createAdminAssetWorkspace({
       tile.type = "button";
       tile.className = "assetTile" + (row.id === state.selectedAssetId ? " active" : "");
       tile.dataset.assetId = row.id;
+      const rowPlacementCandidate = state.hostSection === "exhibitions" && text(row.asset_type).toLowerCase() === "prop" && !!row.published_version_number && row.status !== "archived";
+      if (rowPlacementCandidate) tile.classList.add("is-placeable");
+      if (state.placementDescriptor && state.placementDescriptor.assetId === row.id) tile.classList.add("is-placement-active");
       const thumb = document.createElement("div");
       thumb.className = "assetThumb";
       const url = currentThumbnailUrl(row);
@@ -281,12 +366,46 @@ export function createAdminAssetWorkspace({
         const glyph = document.createElement("div"); glyph.className = "assetThumbGlyph"; glyph.textContent = assetTypeGlyph(row.asset_type); thumb.appendChild(glyph);
       }
       const type = document.createElement("span"); type.className = "assetThumbType"; type.textContent = text(row.asset_type).toUpperCase(); thumb.appendChild(type);
+      if (rowPlacementCandidate) { const hint = document.createElement("span"); hint.className = "assetPlaceHint"; hint.textContent = "DRAG"; thumb.appendChild(hint); }
       const meta = document.createElement("div"); meta.className = "assetTileMeta";
       const name = document.createElement("strong"); name.textContent = row.name || row.slug || "Untitled Asset";
       const line = document.createElement("span");
       line.textContent = `${row.category || "Uncategorized"} · ${row.scope_type === "venue" ? "Gallery" : "Shared"}${row.status === "archived" ? " · Archived" : row.published_version_number ? ` · v${row.published_version_number}` : " · No published version"}`;
       meta.append(name, line); tile.append(thumb, meta);
       tile.addEventListener("click", () => { void selectAsset(row.id); });
+      if (rowPlacementCandidate) {
+        tile.draggable = true;
+        tile.addEventListener("dragstart", (event) => {
+          try {
+            // DataTransfer must be populated synchronously inside dragstart. V13.3 therefore
+            // carries the Published version runtime descriptor directly in the catalog RPC.
+            const capability = getPropPlacementCapability(row);
+            if (!capability.allowed || !capability.descriptor) { event.preventDefault(); showToast(capability.reason); return; }
+            state.placementDescriptor = capability.descriptor;
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "copy";
+              const payload = JSON.stringify(capability.descriptor);
+              event.dataTransfer.setData("application/x-exhibition-shared-asset", payload);
+              event.dataTransfer.setData("text/plain", payload);
+            }
+            const beginResult = onBeginPropPlacement(capability.descriptor, { drag: true, context: capability.context || null });
+            if (beginResult && typeof beginResult.catch === "function") {
+              beginResult.catch((error) => {
+                state.placementDescriptor = null;
+                onCancelPropPlacement({ reason: "drag-begin-failed" });
+                renderCatalog();
+                showToast(error && error.message ? error.message : String(error));
+              });
+            }
+            renderCatalog();
+          } catch (error) { event.preventDefault(); showToast(error.message || String(error)); }
+        });
+        tile.addEventListener("dragend", () => {
+          state.placementDescriptor = null;
+          onCancelPropPlacement({ reason: "drag-end" });
+          renderCatalog();
+        });
+      }
       root.appendChild(tile);
     });
   }
@@ -301,7 +420,7 @@ export function createAdminAssetWorkspace({
         <label class="fieldLabel">Y facing<input id="assetRuntimeYFacing" class="adminInput" type="number" step="1" value="${defaults.yFacingDegrees}"></label>
       </div><div class="assetMuted">Frame remains artwork-only. These values describe the opening/facing contract used later by V13.4.</div></div>`;
     }
-    return `<div class="assetRuntimeFields"><h4>Prop defaults</h4><div class="assetRuntimeGrid"><label class="fieldLabel">Default scale<input id="assetRuntimeDefaultScale" class="adminInput" type="number" min="0.001" step="0.01" value="${defaults.defaultScale}"></label><label class="fieldLabel">Placement<input class="adminInput" value="Floor" readonly></label></div><div class="assetMuted">V13.2 validates the reusable model. Floor placement begins in V13.3.</div></div>`;
+    return `<div class="assetRuntimeFields"><h4>Prop defaults</h4><div class="assetRuntimeGrid"><label class="fieldLabel">Default scale<input id="assetRuntimeDefaultScale" class="adminInput" type="number" min="0.001" step="0.01" value="${defaults.defaultScale}"></label><label class="fieldLabel">Placement<input class="adminInput" value="Floor" readonly></label></div><div class="assetMuted">Published Props are placed per Exhibition. Default scale is applied to every new instance.</div></div>`;
   }
 
   function readRuntimeMetadata(assetType) {
@@ -339,6 +458,10 @@ export function createAdminAssetWorkspace({
 
   function bindDetailActions(detail) {
     const asset = detail.asset;
+    const placeProp = $("sharedAssetPlacePropButton");
+    if (placeProp) placeProp.addEventListener("click", () => { void beginPropPlacement(detail).catch((error) => showToast(error.message || String(error))); });
+    const cancelPlacement = $("sharedAssetCancelPlacementButton");
+    if (cancelPlacement) cancelPlacement.addEventListener("click", () => { state.placementDescriptor = null; onCancelPropPlacement({ reason: "ui-cancel" }); renderCatalog(); renderDetail(); });
     const metadataForm = $("sharedAssetMetadataForm");
     if (metadataForm) metadataForm.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -449,8 +572,11 @@ export function createAdminAssetWorkspace({
     const thumbUrl = currentThumbnailUrl(asset);
     const scope = asset.scope_type === "venue" ? `Gallery scoped · ${state.venues.find((v) => v.id === asset.scope_venue_id)?.name || asset.scope_venue_id || "Gallery"}` : "Shared across Galleries";
     const description = text(assetMetadata(asset).description);
+    const placement = getPropPlacementCapability(detail);
+    const placementMarkup = text(asset.asset_type).toLowerCase() === "prop" ? `<div class="assetPlacementPanel"><strong>Exhibition placement</strong><p class="assetMuted">${escapeHtml(placement.reason)}</p><div class="assetActionRow"><button id="sharedAssetPlacePropButton" class="adminButton primary" type="button" ${placement.allowed ? "" : "disabled"}>PLACE PROP</button>${state.placementDescriptor && state.placementDescriptor.assetId === asset.id ? `<button id="sharedAssetCancelPlacementButton" class="adminButton" type="button">CANCEL PLACE</button>` : ""}</div></div>` : "";
     root.innerHTML = `<div class="assetDetailPanel">
       <div class="assetDetailHead"><div><h3>${escapeHtml(asset.name || asset.slug || "Asset")}</h3><p>${escapeHtml(scope)}</p></div><div class="assetBadgeRow"><span class="assetBadge">${escapeHtml(text(asset.asset_type).toUpperCase())}</span><span class="assetBadge ${asset.status === "archived" ? "archived" : ""}">${escapeHtml(statusLabel(asset.status).toUpperCase())}</span>${published ? `<span class="assetBadge published">PUBLISHED v${published.version_number}</span>` : ""}${draft ? `<span class="assetBadge draft">DRAFT v${draft.version_number}</span>` : ""}</div></div>
+      ${placementMarkup}
       <form id="sharedAssetMetadataForm" class="assetDetailGrid"><label class="fieldLabel">Name<input id="sharedAssetDetailName" class="adminInput" maxlength="120" value="${escapeHtml(asset.name || "")}"></label><div class="assetTwoCols"><label class="fieldLabel">Category<input id="sharedAssetDetailCategory" class="adminInput" maxlength="80" value="${escapeHtml(asset.category || "")}"></label><div class="assetTypeLock">Type / scope<br><strong>${escapeHtml(text(asset.asset_type).toUpperCase())} · ${escapeHtml(asset.scope_type === "venue" ? "GALLERY" : "SHARED")}</strong></div></div><label class="fieldLabel">Description<textarea id="sharedAssetDetailDescription" class="adminTextarea" maxlength="1000" placeholder="Internal catalog note">${escapeHtml(description)}</textarea></label><button class="adminButton" type="submit">SAVE ASSET DETAILS</button></form>
       <div><div class="fieldLabel" style="margin-bottom:7px">Thumbnail</div><div class="assetThumbnailCard"><div class="assetThumbnailPreview">${thumbUrl ? `<img src="${escapeHtml(thumbUrl)}" alt="">` : `<span class="assetThumbGlyph">${assetTypeGlyph(asset.asset_type)}</span>`}</div><div class="assetThumbnailActions"><button id="sharedAssetChooseThumbnail" class="adminButton small" type="button">UPLOAD THUMBNAIL</button><button id="sharedAssetRemoveThumbnail" class="adminButton small danger" type="button" ${thumbUrl ? "" : "disabled"}>REMOVE</button><input id="sharedAssetThumbnailInput" class="assetHiddenInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif"><div class="assetMuted">Images are optimized locally to WebP; the catalog never downloads GLBs just to draw tiles.</div></div></div></div>
       <div><div class="fieldLabel" style="margin-bottom:7px">Model version</div>${runtimeFieldsMarkup(asset.asset_type, defaults)}<div style="height:8px"></div><button id="sharedAssetChooseVersion" class="adminButton primary" type="button" ${draft ? "disabled" : ""}>UPLOAD NEW GLB VERSION</button><input id="sharedAssetVersionInput" class="assetHiddenInput" type="file" accept=".glb,model/gltf-binary"><div id="sharedAssetUploadProgress" class="assetProgress"><span></span></div>${draft ? `<div class="assetMuted">Publish or discard the current Draft version before uploading another one.</div>` : ""}</div>
@@ -543,7 +669,7 @@ export function createAdminAssetWorkspace({
 
   return Object.freeze({
     stage: ADMIN_ASSET_WORKSPACE_STAGE,
-    getState() { return { ...state, catalog: undefined, selectedDetail: undefined, usages: undefined, venues: undefined }; },
+    getState() { return { ...state, catalog: undefined, selectedDetail: undefined, usages: undefined, venues: undefined, placementDescriptor: state.placementDescriptor ? { ...state.placementDescriptor } : null }; },
     async show({ hostSection = "exhibitions", returnSection = hostSection, selectedAssetId = null, filter = null } = {}) {
       state.visible = true;
       state.hostSection = hostSection === "galleries" ? "galleries" : "exhibitions";
@@ -558,7 +684,7 @@ export function createAdminAssetWorkspace({
       emitUiState();
       return true;
     },
-    hide() { state.visible = false; catalogSection.classList.add("hidden"); detailSection.classList.add("hidden"); return true; },
+    hide() { state.visible = false; state.placementDescriptor = null; onCancelPropPlacement({ reason: "workspace-hidden" }); catalogSection.classList.add("hidden"); detailSection.classList.add("hidden"); return true; },
     async refresh() { return refreshCatalog({ preserveSelection: true, forceDetail: true }); },
     async select(assetId) { return selectAsset(assetId); },
     setFilter(filter) {

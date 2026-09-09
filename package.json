@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.13.2-v13-left-workspace-asset-manager",
+  "version": "0.13.3-v13-prop-browser-placement",
   "private": true,
-  "description": "Exhibition Platform — V13.2 Left Workspace Asset Manager",
+  "description": "Exhibition Platform — V13.3 Prop Browser + Exhibition Placement",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
