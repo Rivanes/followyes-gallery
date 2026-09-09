@@ -4,7 +4,7 @@ import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=
 import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_cross_space_runtime";
 
 const STAGE = "C6C8C25";
-const ENGINE_CACHE_KEY = "v13_4_frame_browser_migration_20260909";
+const ENGINE_CACHE_KEY = "v13_5_reference_runtime_hardening_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);

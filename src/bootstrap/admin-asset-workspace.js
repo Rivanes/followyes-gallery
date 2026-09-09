@@ -1,10 +1,10 @@
-/* Exhibition Platform — V13.4 Left Workspace Asset Manager + Prop placement / Frame binding.
+/* Exhibition Platform — V13.5 Left Workspace Asset Manager + reference/lifecycle hardening.
    Asset catalog remains in the left workspace; scene placement/binding is delegated to the live Gallery runtime. */
 
-import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_4_frame_browser_migration";
-import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_4_frame_browser_migration";
+import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_5_reference_runtime_hardening";
+import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_5_reference_runtime_hardening";
 
-export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.4";
+export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.5";
 
 const MAX_THUMBNAIL_SOURCE_BYTES = 12 * 1024 * 1024;
 const THUMBNAIL_MAX_SIDE = 640;
@@ -648,8 +648,12 @@ export function createAdminAssetWorkspace({
 
     const archive = $("sharedAssetArchiveButton");
     if (archive) archive.addEventListener("click", () => {
-      if (!window.confirm("Archive this Shared Asset? Existing references remain readable.")) return;
-      void withBusy(async () => { await api.archive(asset.id); showToast("Asset archived."); await refreshCatalog({ preserveSelection: true, forceDetail: true }); }).catch((error) => showToast(error.message || String(error)));
+      const referenceCount = state.usages.length || Number(detail.usageCount) || 0;
+      const message = referenceCount > 0
+        ? `Archive this Shared Asset? ${referenceCount} indexed Exhibition reference${referenceCount === 1 ? "" : "s"} will remain readable, but new Prop placement / Frame assignment will be blocked until Restore.`
+        : "Archive this Shared Asset? Existing Published versions remain immutable; new placement/assignment will be blocked until Restore.";
+      if (!window.confirm(message)) return;
+      void withBusy(async () => { await api.archive(asset.id); showToast("Asset archived. Existing references were preserved."); await refreshCatalog({ preserveSelection: true, forceDetail: true }); }).catch((error) => showToast(error.message || String(error)));
     });
     const restore = $("sharedAssetRestoreButton");
     if (restore) restore.addEventListener("click", () => {

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.4 Admin Workspace / Frame Browser Migration
+  Exhibition Platform — V13.5 Admin Workspace / Reference Runtime Hardening
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -16,15 +16,15 @@ import {
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
-import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_4_frame_browser_migration";
+import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_5_reference_runtime_hardening";
 import {
   galleryBindingLabel,
   isExhibitionGalleryMigrationPending,
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V13.4";
-const ENGINE_CACHE_KEY = "v13_4_frame_browser_migration_20260909";
+const STAGE = "V13.5";
+const ENGINE_CACHE_KEY = "v13_5_reference_runtime_hardening_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;

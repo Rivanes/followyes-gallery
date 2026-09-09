@@ -30,14 +30,14 @@ function expect(label, ok) {
   console.log(`✓ ${label}`);
 }
 
-expect('package identity is V13.4 Frame Browser Migration', pkg.version === '0.13.4-v13-frame-browser-migration');
+expect('package identity is V13.5 Reference / Runtime Hardening', pkg.version === '0.13.5-v13-reference-runtime-hardening');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
 expect('validator worker accepts prop/frame rather than Gallery Space roles', workerSource.includes('["prop","frame"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));
 expect('Shared Asset API uses guarded canonical RPCs', apiSource.includes('admin_create_shared_asset') && apiSource.includes('admin_create_shared_asset_version') && apiSource.includes('admin_register_shared_asset_version_binary') && apiSource.includes('admin_publish_shared_asset_version'));
 expect('immutable upload uses UUID version path returned by server and no upsert', apiSource.includes('version.storage_path') && apiSource.includes('upsert: false'));
 expect('Shared Asset state contract remains separate from Venue props', stateSource.includes('exhibition-platform-state-assets.v1') && !stateSource.includes('venue_assets'));
-expect('V13.2 Asset Manager is a separate left-workspace module', assetWorkspaceSource.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.4"') && assetWorkspaceSource.includes('Asset Library') && assetWorkspaceSource.includes('UPLOAD NEW GLB VERSION'));
+expect('V13.2 Asset Manager is a separate left-workspace module', assetWorkspaceSource.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.5"') && assetWorkspaceSource.includes('Asset Library') && assetWorkspaceSource.includes('UPLOAD NEW GLB VERSION'));
 expect('V13.2 admin exposes three left top-level sections', adminSource.includes('data-section=\"exhibitions\"') && adminSource.includes('data-section=\"galleries\"') && adminSource.includes('data-section=\"assets\"'));
 expect('V13.2 thumbnail API uses guarded Shared Asset RPCs', apiSource.includes('admin_register_shared_asset_thumbnail') && apiSource.includes('admin_clear_shared_asset_thumbnail') && apiSource.includes('/thumbnails/'));
 expect('V13.3 catalog exposes desktop drag and tap PLACE without async dragstart', assetWorkspaceSource.includes('application/x-exhibition-shared-asset') && assetWorkspaceSource.includes('PLACE PROP') && !assetWorkspaceSource.includes('tile.addEventListener("dragstart", async'));
@@ -57,6 +57,11 @@ assert.equal(getDefaultSharedAssetRuntimeMetadata('frame').placementMode, 'artwo
 assert.equal(normalizeSharedAssetRuntimeMetadata('frame', { innerWidthRatio: 0.75 }).innerWidthRatio, 0.75);
 assert.throws(() => normalizeSharedAssetRuntimeMetadata('frame', { placementMode: 'floor' }), /artwork-only/);
 assert.throws(() => normalizeSharedAssetRuntimeMetadata('prop', { defaultScale: 0 }), /greater than zero/);
+
+expect('V13.5 unavailable Prop runtime preserves references and exposes retry', gallerySource.includes('MODEL UNAVAILABLE — reference preserved') && gallerySource.includes('retrySharedAssetPropRuntime') && gallerySource.includes('sharedAssetUnavailable'));
+expect('V13.5 unavailable Frame binding preserves state and exposes retry', gallerySource.includes('MODEL UNAVAILABLE — binding preserved') && gallerySource.includes('artworkFrameRetryButton') && gallerySource.includes('artworkFrameUnavailable'));
+expect('V13.5 shared asset integrity diagnostics expose unavailable Props and Frames', gallerySource.includes('exhibition-platform-shared-asset-integrity.v1') && gallerySource.includes('getSharedAssetIntegrityDebug'));
+expect('V13.5 archive confirmation is reference-aware', assetWorkspaceSource.includes('indexed Exhibition reference') && assetWorkspaceSource.includes('Existing references were preserved'));
 expect('runtime metadata enforces Frame artwork-only and Prop floor contracts', true);
 
 const assetId = '11111111-1111-4111-8111-111111111111';
@@ -120,4 +125,4 @@ assert.equal(rpcCalls[0][1].p_asset_type, 'prop');
 assert.equal((await api.get(assetId)).asset.id, assetId);
 expect('data adapter maps catalog/get reads to V13.1 RPC surface', true);
 
-console.log('V13.1 foundation + V13.2 Asset Manager + V13.3 Prop placement + V13.4 Frame migration invariants passed.');
+console.log('V13.1 foundation + V13.2 Asset Manager + V13.3 Prop placement + V13.4 Frame migration + V13.5 hardening invariants passed.');

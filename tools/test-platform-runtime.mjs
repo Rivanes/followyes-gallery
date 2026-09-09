@@ -106,7 +106,7 @@ function expect(label, condition) {
 
 expect('Admin Workspace stage identity exists',
   source.includes('Stage 12C66C6C7C8B: Admin Workspace') &&
-  adminBootstrap.includes('const STAGE = "V13.4"'));
+  adminBootstrap.includes('const STAGE = "V13.5"'));
 
 expect('Exhibition manager was removed from the in-scene editor',
   !source.includes('createEditorSection("EXHIBITIONS")') &&
@@ -465,7 +465,7 @@ const finalizeFn = extractFunction('finalizeGallerySameSpaceExhibitionDelta');
 const objectDirtyFn = extractFunction('markGalleryObjectsDirty');
 const editTourHelper = source.includes('function ensureGalleryExhibitTourCurrent(') ? extractFunction('ensureGalleryExhibitTourCurrent') : '';
 
-expect('Runtime identity preserves C6C8C4 residency under current C6C8C25 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('C6C8C25: Cross-Space Runtime') && pkg.version.includes('v13-frame-browser-migration'));
+expect('Runtime identity preserves C6C8C4 residency under current C6C8C25 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('C6C8C25: Cross-Space Runtime') && pkg.version.includes('v13-reference-runtime-hardening'));
 expect('Engine same-space switch compares exact immutable Venue Version identity', switchFn.includes('areGalleryExhibitionsInSameSpace(previousExhibition, exhibition)') && source.includes('getGalleryExhibitionVenueVersionId'));
 expect('Same-space cold switch uses delta state and resident return has a dedicated resume path', switchFn.includes('applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch")') && switchFn.includes('lastSwitchMode = "same-space-delta-load"') && switchFn.includes('lastSwitchMode = "resident-layer-resume"'));
 expect('Cross-Version switch is delegated to the C25 Scene lifecycle boundary', switchFn.includes('Cross-Space Exhibition switch requires C6C8C25 Scene lifecycle recreation'));
@@ -523,7 +523,7 @@ const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 
-expect('Current runtime/package identity preserves C6C8C5 under C6C8C25', source.includes('stage: "C6C8C21"') && pkg.version.includes('v13-frame-browser-migration'));
+expect('Current runtime/package identity preserves C6C8C5 under C6C8C25', source.includes('stage: "C6C8C21"') && pkg.version.includes('v13-reference-runtime-hardening'));
 expect('Recently visited Exhibition layers have a residency registry', source.includes('layerResidency: Object.create(null)') && source.includes('residentLayerHits'));
 expect('Switch parks a clean same-Space layer instead of disposing it', switchFn.includes('parkActiveGalleryExhibitionLayer(previousExhibition, previousRuntimeState)') && parkFn.includes('setGalleryArtworkResidentEnabled(artwork, false'));
 expect('Resident target is restored from RAM/GPU', switchFn.includes('restoreGalleryExhibitionLayer(exhibition.id)') && switchFn.includes('lastSwitchMode = "resident-layer-resume"') && restoreFn.includes('artworks = layer.artworks'));

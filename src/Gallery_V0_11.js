@@ -9942,6 +9942,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         disposeArtworkFrameRuntime(artwork);
         artwork.metadata.artworkFrame = normalizedState;
         artwork.metadata.artworkFrameLoading = false;
+        artwork.metadata.artworkFrameUnavailable = null;
 
         if (!normalizedState) {
             markGalleryObjectBoundsDirty(artwork);
@@ -9965,7 +9966,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         var frameUrl = getArtworkFramePublicUrl(normalizedState);
         if (!frameUrl) {
+            artwork.metadata.artworkFrameUnavailable = { message: "Public Frame URL is unavailable.", at: Date.now() };
             if (!options.silent) notifyGalleryStatus("Nie udalo sie pobrac publicznego URL ramy.");
+            if (typeof updateArtworkFrameUi === "function") updateArtworkFrameUi();
             return false;
         }
 
@@ -9999,6 +10002,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             artwork.metadata.artworkFrameLoading = false;
+            artwork.metadata.artworkFrameUnavailable = null;
             syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, "artworkFrameLoaded");
             markGalleryObjectBoundsDirty(artwork);
             scheduleGalleryInspectRefreshForTarget(artwork, "artwork-frame-loaded");
@@ -10009,6 +10013,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         } catch (error) {
             if (artwork && artwork.metadata && getArtworkFrameLoadGeneration(artwork) === generation) {
                 artwork.metadata.artworkFrameLoading = false;
+                artwork.metadata.artworkFrameUnavailable = { message: error && error.message ? String(error.message) : String(error || "Frame load failed"), at: Date.now() };
                 syncArtworkFrameLocalLightMembership(artwork, previousFrameMeshes, "artworkFrameLoadFailed");
             }
             console.warn("Artwork frame load failed:", normalizedState, error);
@@ -22674,12 +22679,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     artworkFrameRemoveButton.className = "gallery-editor-action-button is-danger";
     artworkFrameRemoveButton.innerText = "REMOVE";
 
+    var artworkFrameRetryButton = document.createElement("button");
+    artworkFrameRetryButton.type = "button";
+    artworkFrameRetryButton.className = "gallery-editor-action-button is-primary";
+    artworkFrameRetryButton.innerText = "RETRY";
+    artworkFrameRetryButton.style.display = "none";
+
     var artworkFrameNote = document.createElement("p");
     artworkFrameNote.className = "gallery-artwork-image-note";
     artworkFrameNote.innerText = "Frames are selected from the left Asset Library. You can also drag a Published Frame directly onto an artwork.";
 
     artworkFrameActions.appendChild(artworkFrameChangeButton);
     artworkFrameActions.appendChild(artworkFrameRemoveButton);
+    artworkFrameActions.appendChild(artworkFrameRetryButton);
     artworkFrameSectionData.section.appendChild(artworkFrameStatus);
     artworkFrameSectionData.section.appendChild(artworkFrameActions);
     artworkFrameSectionData.section.appendChild(artworkFrameNote);
@@ -22719,17 +22731,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         void Promise.resolve(applyArtworkFrameState(artwork, null, { silent: false, markDirty: true }));
     };
 
+    artworkFrameRetryButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var artwork = getSingleSelectedArtworkForImageUi();
+        var frameState = getArtworkFrameState(artwork);
+        if (!artwork || !frameState) return;
+        void Promise.resolve(applyArtworkFrameState(artwork, frameState, { silent: false, markDirty: false }));
+    };
+
     function updateArtworkFrameUi() {
         if (!artworkFrameSectionData || !artworkFrameSectionData.section) return;
         var artwork = getSingleSelectedArtworkForImageUi();
         var frameState = getArtworkFrameState(artwork);
         var loading = !!(artwork && artwork.metadata && artwork.metadata.artworkFrameLoading);
+        var unavailable = !!(artwork && artwork.metadata && artwork.metadata.artworkFrameUnavailable);
         artworkFrameSectionData.section.classList.toggle("is-hidden", !editMode || !artwork);
         artworkFrameChangeButton.disabled = !artwork || loading;
         artworkFrameRemoveButton.disabled = !artwork || loading || !frameState;
+        artworkFrameRetryButton.style.display = unavailable && frameState ? "" : "none";
+        artworkFrameRetryButton.disabled = !unavailable || loading || !frameState;
 
         if (!artwork) artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
         else if (loading) artworkFrameStatus.innerHTML = "Frame: <strong>Loading...</strong>";
+        else if (frameState && unavailable) artworkFrameStatus.innerHTML = "Frame: <strong>" + frameState.label + "</strong><br><strong>MODEL UNAVAILABLE — binding preserved</strong>";
         else if (frameState) artworkFrameStatus.innerHTML = "Frame: <strong>" + frameState.label + "</strong>";
         else artworkFrameStatus.innerHTML = "Frame: <strong>None</strong>";
     }
@@ -22976,7 +23001,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         editorScroll.insertBefore(model3dSectionData.section, artworkImageSectionData.section);
     }
 
-    // V13.3 — contextual Shared Prop inspector. Asset binaries/versions stay managed
+    // V13.5 — hardened contextual Shared Prop inspector. Asset binaries/versions stay managed
     // exclusively in the left ASSETS workspace; the right panel edits only this instance.
     var sharedAssetPropSectionData = createEditorSection("PROP");
     sharedAssetPropSectionData.section.classList.add("gallery-artwork-image-section", "is-hidden");
@@ -22996,8 +23021,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     sharedAssetPropDeleteButton.type = "button";
     sharedAssetPropDeleteButton.className = "gallery-editor-action-button is-danger";
     sharedAssetPropDeleteButton.innerText = "DELETE";
+    var sharedAssetPropRetryButton = document.createElement("button");
+    sharedAssetPropRetryButton.type = "button";
+    sharedAssetPropRetryButton.className = "gallery-editor-action-button is-primary";
+    sharedAssetPropRetryButton.innerText = "RETRY MODEL";
+    sharedAssetPropRetryButton.style.display = "none";
     sharedAssetPropActions.appendChild(sharedAssetPropDuplicateButton);
     sharedAssetPropActions.appendChild(sharedAssetPropDeleteButton);
+    sharedAssetPropActions.appendChild(sharedAssetPropRetryButton);
     sharedAssetPropSectionData.section.appendChild(sharedAssetPropStatus);
     sharedAssetPropSectionData.section.appendChild(sharedAssetPropMeta);
     sharedAssetPropSectionData.section.appendChild(sharedAssetPropActions);
@@ -23020,12 +23051,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         sharedAssetPropSectionData.section.classList.toggle("is-hidden", !visible);
         sharedAssetPropDuplicateButton.disabled = !visible;
         sharedAssetPropDeleteButton.disabled = !visible;
+        var unavailable = !!(visible && slot.metadata && slot.metadata.sharedAssetUnavailable);
+        sharedAssetPropRetryButton.style.display = unavailable ? "" : "none";
+        sharedAssetPropRetryButton.disabled = !unavailable;
         if (!visible) {
             sharedAssetPropStatus.innerHTML = "Asset: <strong>None</strong>";
             return;
         }
         var versionLabel = descriptor.assetVersionNumber ? ("v" + descriptor.assetVersionNumber) : (descriptor.assetVersionId ? String(descriptor.assetVersionId).slice(0, 8) + "…" : "unknown");
-        sharedAssetPropStatus.innerHTML = "Asset: <strong>" + escapeSharedAssetPropUiText(descriptor.assetName || "Prop") + "</strong><br>Category: <strong>" + escapeSharedAssetPropUiText(descriptor.category || "Uncategorized") + "</strong><br>Version: <strong>" + escapeSharedAssetPropUiText(versionLabel) + "</strong>";
+        var unavailableLine = unavailable ? "<br><strong>MODEL UNAVAILABLE — reference preserved</strong>" : "";
+        sharedAssetPropStatus.innerHTML = "Asset: <strong>" + escapeSharedAssetPropUiText(descriptor.assetName || "Prop") + "</strong><br>Category: <strong>" + escapeSharedAssetPropUiText(descriptor.category || "Uncategorized") + "</strong><br>Version: <strong>" + escapeSharedAssetPropUiText(versionLabel) + "</strong>" + unavailableLine;
     }
 
     sharedAssetPropDuplicateButton.onclick = function (event) {
@@ -23046,6 +23081,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!slot || !isSharedAssetPropSlot(slot)) return;
         deleteSharedAssetPropInstance(slot, { markDirty: true });
         updateEditHelpStatus();
+    };
+
+    sharedAssetPropRetryButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var slot = getActiveModel3dSlot();
+        if (!slot || !isSharedAssetPropSlot(slot)) return;
+        retrySharedAssetPropRuntime(slot).catch(function (error) {
+            console.warn("Shared Asset Prop retry failed:", error);
+        });
     };
 
     // STAGE 12C31 - SCULPTURE INFO USES ARTWORK INFO SYSTEM 1:1
@@ -38164,6 +38209,48 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    function markSharedAssetPropUnavailable(slot, error) {
+        if (!slot) return;
+        slot.metadata = slot.metadata || {};
+        var previous = slot.metadata.sharedAssetUnavailable || {};
+        slot.metadata.sharedAssetUnavailable = {
+            message: error && error.message ? String(error.message) : String(error || "Shared Asset model unavailable"),
+            at: Date.now(),
+            attempts: (Number(previous.attempts) || 0) + 1
+        };
+        gallerySharedAssetPropPlacementRuntime.restoreFailures += 1;
+        updateViewerModePlaceholderVisibility();
+        updateSharedAssetPropUi();
+    }
+
+    function clearSharedAssetPropUnavailable(slot) {
+        if (!slot || !slot.metadata) return;
+        slot.metadata.sharedAssetUnavailable = null;
+    }
+
+    function retrySharedAssetPropRuntime(slot) {
+        if (!isSharedAssetPropSlot(slot)) return Promise.resolve(false);
+        var state = serializeSharedAssetPropInstance(slot);
+        if (!state) return Promise.resolve(false);
+        notifyGalleryStatus("Retrying Shared Asset model: " + (state.assetName || "Prop") + "...");
+        return Promise.resolve(applySharedAssetPropStateToSlot(slot, state)).then(function (ok) {
+            if (!ok) {
+                markSharedAssetPropUnavailable(slot, new Error("Shared Asset model could not be restored."));
+                notifyGalleryStatus("Shared Asset model is still unavailable. Reference was preserved.");
+                return false;
+            }
+            clearSharedAssetPropUnavailable(slot);
+            updateViewerModePlaceholderVisibility();
+            updateSharedAssetPropUi();
+            notifyGalleryStatus("Shared Asset model restored.");
+            return true;
+        }).catch(function (error) {
+            markSharedAssetPropUnavailable(slot, error);
+            notifyGalleryStatus("Shared Asset model is still unavailable. Reference was preserved.");
+            return false;
+        });
+    }
+
     function applySharedAssetPropStateToSlot(slot, instanceState) {
         var descriptor = normalizeSharedAssetPropDescriptor(instanceState);
         if (!slot || !descriptor) return Promise.resolve(false);
@@ -38187,7 +38274,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var modelState = buildSharedAssetPropModelState(slot, descriptor);
         if (!modelState) return Promise.resolve(false);
         slot.metadata.model3d = modelState;
-        return applyModel3dStateToSlot(slot, modelState);
+        return Promise.resolve(applyModel3dStateToSlot(slot, modelState)).then(function (ok) {
+            if (ok) clearSharedAssetPropUnavailable(slot);
+            return ok;
+        });
     }
 
     function createSharedAssetPropInstanceFromState(instanceState, options) {
@@ -38205,11 +38295,23 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
                 return null;
             }
+            if (!ok) markSharedAssetPropUnavailable(slot, new Error("Shared Asset model could not be restored."));
             if (options.select !== false) selectModel3dSlot(slot);
             updateViewerModePlaceholderVisibility();
             updateEditHelpStatus();
             updateSharedAssetPropUi();
             if (options.markDirty) markGalleryDraftDirty(options.reason || "shared-asset-prop-added");
+            return slot;
+        }).catch(function (error) {
+            if (options.requireLoad) {
+                deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
+                throw error;
+            }
+            markSharedAssetPropUnavailable(slot, error);
+            if (options.select !== false) selectModel3dSlot(slot);
+            updateViewerModePlaceholderVisibility();
+            updateEditHelpStatus();
+            updateSharedAssetPropUi();
             return slot;
         });
     }
@@ -38371,7 +38473,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             placedCount: gallerySharedAssetPropPlacementRuntime.placedCount,
             canceledCount: gallerySharedAssetPropPlacementRuntime.canceledCount,
             restoreFailures: gallerySharedAssetPropPlacementRuntime.restoreFailures,
-            instanceCount: artSpheres.filter(isSharedAssetPropSlot).length
+            instanceCount: artSpheres.filter(isSharedAssetPropSlot).length,
+            unavailableCount: artSpheres.filter(function (slot) { return isSharedAssetPropSlot(slot) && slot.metadata && slot.metadata.sharedAssetUnavailable; }).length
+        };
+    }
+
+    function getSharedAssetIntegrityDebug() {
+        var unavailableProps = artSpheres.filter(function (slot) { return isSharedAssetPropSlot(slot) && slot.metadata && slot.metadata.sharedAssetUnavailable; }).map(function (slot) {
+            var state = getSharedAssetPropInstanceState(slot) || {};
+            return { instanceId: state.instanceId || null, assetId: state.assetId || null, assetVersionId: state.assetVersionId || null, reason: cloneGalleryJson(slot.metadata.sharedAssetUnavailable) };
+        });
+        var unavailableFrames = getActiveArtworks().filter(function (artwork) { return artwork && artwork.metadata && artwork.metadata.artworkFrame && artwork.metadata.artworkFrameUnavailable; }).map(function (artwork) {
+            var frame = getArtworkFrameState(artwork) || {};
+            return { artworkId: ensureArtworkIdentity(artwork), assetId: frame.assetId || null, assetVersionId: frame.assetVersionId || null, storagePath: frame.storagePath || null, reason: cloneGalleryJson(artwork.metadata.artworkFrameUnavailable) };
+        });
+        return {
+            schema: "exhibition-platform-shared-asset-integrity.v1",
+            exhibitionId: getActiveGalleryExhibitionId() || null,
+            venueVersionId: galleryActiveVenueVersionId || null,
+            unavailableProps: unavailableProps,
+            unavailableFrames: unavailableFrames,
+            unavailableCount: unavailableProps.length + unavailableFrames.length
         };
     }
 
@@ -43823,8 +43945,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 });
                 if (existing) return;
                 Promise.resolve(createSharedAssetPropInstanceFromState(instanceState, { select: false, markDirty: false, requireLoad: false }))
-                    .then(function (slot) { if (!slot) gallerySharedAssetPropPlacementRuntime.restoreFailures += 1; })
-                    .catch(function (error) { gallerySharedAssetPropPlacementRuntime.restoreFailures += 1; console.warn("Shared Asset Prop restore warning:", error); });
+                    .then(function (slot) { if (!slot) console.warn("Shared Asset Prop restore returned no slot."); })
+                    .catch(function (error) { console.warn("Shared Asset Prop restore warning:", error); });
             });
         }
 
@@ -45481,6 +45603,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         beginSharedAssetPropPlacement: beginSharedAssetPropPlacement,
         cancelSharedAssetPropPlacement: cancelSharedAssetPropPlacement,
         getSharedAssetPropPlacementDebug: getSharedAssetPropPlacementDebug,
+        getSharedAssetIntegrityDebug: getSharedAssetIntegrityDebug,
         // V13.4 — artwork-only Frame Browser / drag binding bridge.
         getSelectedArtworkFrameBindingContext: getSelectedArtworkFrameBindingContext,
         applySharedAssetFrameToSelectedArtwork: applySharedAssetFrameToSelectedArtwork,
