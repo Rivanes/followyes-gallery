@@ -1,4 +1,4 @@
-/* Exhibition Platform — V13.1 Shared Asset Foundation data adapter. */
+/* Exhibition Platform — V13.2 Shared Asset data adapter / Asset Manager support. */
 
 import {
   SHARED_ASSET_BUCKET,
@@ -26,6 +26,17 @@ function assertGlb(file) {
   if (!name.endsWith(".glb")) throw new Error("Shared Assets currently accept GLB files only.");
   if (Number(file.size || 0) <= 0) throw new Error("Shared Asset GLB is empty.");
   return file;
+}
+
+function randomUuid() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (!globalThis.crypto || typeof globalThis.crypto.getRandomValues !== "function") throw new Error("Secure UUID generation is unavailable.");
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 
 export function createSharedAssetApi({ supabase }) {
@@ -171,6 +182,44 @@ export function createSharedAssetApi({ supabase }) {
 
     async listUsages(assetId) {
       return rows(await supabase.rpc("admin_list_shared_asset_usages", { p_asset_id: assetId }));
+    },
+
+    async uploadThumbnail(assetId, blob, { mimeType = "image/webp", width = null, height = null } = {}) {
+      if (!assetId || !blob || Number(blob.size || 0) <= 0) throw new Error("Optimized Asset thumbnail is required.");
+      if (mimeType !== "image/webp") throw new Error("Shared Asset thumbnails must be optimized WebP images.");
+      const mediaId = randomUuid();
+      const storagePath = `assets/${assetId}/thumbnails/${mediaId}.webp`;
+      const upload = await supabase.storage.from(SHARED_ASSET_BUCKET).upload(storagePath, blob, {
+        cacheControl: "31536000",
+        upsert: false,
+        contentType: mimeType
+      });
+      if (upload.error) throw upload.error;
+      try {
+        const registered = one(await supabase.rpc("admin_register_shared_asset_thumbnail", {
+          p_asset_id: assetId,
+          p_media_id: mediaId,
+          p_storage_path: storagePath,
+          p_mime_type: mimeType,
+          p_file_size: Number(blob.size) || 0,
+          p_width: width == null ? null : Number(width),
+          p_height: height == null ? null : Number(height)
+        }));
+        if (!registered) throw new Error("Shared Asset thumbnail registration returned no record.");
+        const oldPath = text(registered.oldStoragePath || registered.old_storage_path);
+        if (oldPath && oldPath !== storagePath) await supabase.storage.from(SHARED_ASSET_BUCKET).remove([oldPath]).catch(() => null);
+        return registered;
+      } catch (error) {
+        await supabase.storage.from(SHARED_ASSET_BUCKET).remove([storagePath]).catch(() => null);
+        throw error;
+      }
+    },
+
+    async removeThumbnail(assetId) {
+      const result = one(await supabase.rpc("admin_clear_shared_asset_thumbnail", { p_asset_id: assetId }));
+      const oldPath = text(result && (result.oldStoragePath || result.old_storage_path));
+      if (oldPath) await supabase.storage.from(SHARED_ASSET_BUCKET).remove([oldPath]).catch(() => null);
+      return result;
     },
 
     getPublicVersionUrl(version) {

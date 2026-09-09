@@ -24,20 +24,24 @@ const sharedAssetApi=fs.readFileSync(new URL('../src/data/shared-asset-api.js',i
 const sharedAssetState=fs.readFileSync(new URL('../src/runtime/shared-asset-state.js',import.meta.url),'utf8');
 const sharedAssetValidation=fs.readFileSync(new URL('../src/validation/shared-asset-validation.js',import.meta.url),'utf8');
 const sharedAssetWorker=fs.readFileSync(new URL('../src/workers/shared-asset-glb-validator-worker.js',import.meta.url),'utf8');
+const assetWorkspace=fs.readFileSync(new URL('../src/bootstrap/admin-asset-workspace.js',import.meta.url),'utf8');
 
 function assert(c,m){if(!c)throw new Error(m)}
 function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V13.1"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V13.1"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V13.1"'),'Admin stage identity missing');
-assert(bootstrap.includes('v13_1_shared_asset_foundation_20260909'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v13_1_shared_asset_foundation_20260909'),'Index viewer cache key missing');
+assert(index.includes('stage: "V13.2"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V13.2"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V13.2"'),'Admin stage identity missing');
+assert(bootstrap.includes('v13_2_left_workspace_asset_manager_20260909'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v13_2_left_workspace_asset_manager_20260909'),'Index viewer cache key missing');
 assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
 assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
 assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame"]'),'V13.1 Shared Asset GLB validation contract missing');
+assert(assetWorkspace.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.2"')&&assetWorkspace.includes('Asset Library')&&assetWorkspace.includes('UPLOAD NEW GLB VERSION'),'V13.2 left Asset Workspace module missing');
+assert(adminBootstrap.includes('data-section=\"assets\"')&&adminBootstrap.includes('assetWorkspaceHost')&&adminBootstrap.includes('currentPreviewContextSection'),'V13.2 three-tab/host-context orchestration missing');
+assert(assetWorkspace.includes('api.uploadThumbnail')&&sharedAssetApi.includes('admin_register_shared_asset_thumbnail'),'V13.2 thumbnail management bridge missing');
 assert(!index.includes('id="galleryBootStart"')&&!index.includes('id="galleryBootAbout"'),'Legacy prestart Enter Gallery popup remains');
 assert(index.includes('class="is-hidden" data-state="prestart"'),'Boot guard must be hidden before Exhibition selection');
 assert(bootstrap.includes('c26HomepageExhibitionCarousel')&&bootstrap.includes('bootGuard.start();'),'Homepage Exhibition carousel/start bridge missing');

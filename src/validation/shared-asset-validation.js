@@ -23,7 +23,7 @@ const DEFAULT_FRAME_RUNTIME_METADATA = Object.freeze({
 let sequence = 0;
 function nextId() { sequence += 1; return `shared-asset-${Date.now().toString(36)}-${sequence}`; }
 function text(value) { return String(value == null ? "" : value).trim(); }
-function workerUrl() { return new URL("../workers/shared-asset-glb-validator-worker.js?v=v13_1_shared_asset_foundation", import.meta.url); }
+function workerUrl() { return new URL("../workers/shared-asset-glb-validator-worker.js?v=v13_2_left_workspace_asset_manager", import.meta.url); }
 
 export function normalizeSharedAssetType(assetType) {
   const value = text(assetType).toLowerCase();

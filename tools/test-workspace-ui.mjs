@@ -50,7 +50,7 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('v13-shared-asset-foundation'));
+expect('current package stage', pkg.version.includes('v13-left-workspace-asset-manager'));
 expect('current runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
@@ -109,7 +109,7 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('v13-shared-asset-foundation'));
+expect('package stage', pkg.version.includes('v13-left-workspace-asset-manager'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
@@ -185,7 +185,7 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('v13-shared-asset-foundation'));
+expect('package identity', pkg.version.includes('v13-left-workspace-asset-manager'));
 expect('runtime identity', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 
@@ -260,4 +260,32 @@ assert.ok(!source.includes('softRing(0.275, 0.041, 0.010) * baseAlpha * 0.56'), 
 
 console.log('C6C8C16 mobile UI polish / Inspect layout / cursor refresh tests passed.');
 
+})();
+
+// --- V13.2 Left Workspace Asset Manager ---
+await (async () => {
+const admin = fs.readFileSync(new URL('../src/bootstrap/admin-workspace-bootstrap.js', import.meta.url), 'utf8');
+const assetWorkspace = fs.readFileSync(new URL('../src/bootstrap/admin-asset-workspace.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.meta.url), 'utf8');
+const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+assert.equal(pkg.version, '0.13.2-v13-left-workspace-asset-manager');
+assert.ok(admin.includes('data-section="exhibitions"') && admin.includes('data-section="galleries"') && admin.includes('data-section="assets"'), 'V13.2 left tabs are not EXHIBITIONS | GALLERIES | ASSETS');
+assert.ok(admin.includes('grid-template-columns:repeat(3,minmax(0,1fr))'), 'V13.2 left tabs are not responsive three-column tabs');
+assert.ok(assetWorkspace.includes('createAdminAssetWorkspace') && assetWorkspace.includes('Asset Library'), 'Shared Asset Manager is not isolated in its own left-workspace module');
+assert.ok(assetWorkspace.includes('sidebar.append(catalogSection, detailSection)'), 'Asset Manager does not mount into the canonical left sidebar');
+assert.ok(admin.includes('const host = assetHost === "galleries" || assetHost === "exhibitions"') && admin.includes('assetWorkspaceHost = host'), 'Asset host context is not preserved');
+assert.ok(admin.includes('Returning from Assets to its host is also UI-only') && admin.includes('adminWorkspaceSection === "assets" && next === assetWorkspaceHost'), 'Assets round-trip is not a non-destructive tool switch');
+assert.ok(admin.includes('const sceneEditContext = section === "exhibitions" || (section === "assets" && assetWorkspaceHost === "exhibitions")'), 'Scene Save state is not preserved while Assets overlays an Exhibition');
+assert.ok(assetWorkspace.includes('Gallery preview preserved.') && assetWorkspace.includes('placement and Frame binding stay disabled in Gallery context'), 'Gallery-host Assets capability boundary is missing');
+assert.ok(assetWorkspace.includes('UPLOAD NEW GLB VERSION') && assetWorkspace.includes('api.uploadNewVersion'), 'Asset Manager cannot upload immutable GLB versions');
+assert.ok(assetWorkspace.includes('api.publishVersion') && assetWorkspace.includes('api.archive') && assetWorkspace.includes('api.restore'), 'Asset Manager lifecycle actions are incomplete');
+assert.ok(assetWorkspace.includes('api.listUsages') && assetWorkspace.includes('References'), 'Asset usage/reference visibility is missing');
+assert.ok(assetWorkspace.includes('loading = "lazy"') && !assetWorkspace.includes('getPublicVersionUrl(row)'), 'Catalog tiles should use thumbnails/metadata and must not prefetch GLBs');
+const primaryTabsStart = source.indexOf('{ key: "exhibits", label: "EXHIBITS" }');
+const primaryTabs = source.slice(primaryTabsStart, source.indexOf('].forEach(function (definition)', primaryTabsStart) + 2);
+assert.ok(primaryTabs.includes('EXHIBITS') && primaryTabs.includes('SPACE') && primaryTabs.includes('LIGHTING') && primaryTabs.includes('SETTINGS'), 'Right inspector contextual tabs changed unexpectedly');
+assert.ok(!primaryTabs.includes('ASSETS'), 'ASSETS was incorrectly added to the right inspector');
+
+console.log('V13.2 Left Workspace Asset Manager regression passed.');
 })();

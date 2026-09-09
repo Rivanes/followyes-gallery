@@ -147,8 +147,8 @@ assert.ok(api.includes('async unpublish(reference)'));
 assert.ok(api.includes('p_published: false'));
 assert.ok(!api.includes('patch.is_published'));
 
-assert.equal(pkg.version, '0.13.1-v13-shared-asset-foundation');
-assert.ok(pkg.description.includes('V13.1'));
+assert.equal(pkg.version, '0.13.2-v13-left-workspace-asset-manager');
+assert.ok(pkg.description.includes('V13.2'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
-console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.1.');
+console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.2.');

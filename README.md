@@ -1,6 +1,6 @@
 # Exhibition Platform
 
-Current repository release: **V13.1 — Shared Asset Foundation**.
+Current repository release: **V13.2 — Left Workspace Asset Manager**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
@@ -28,7 +28,8 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/data/exhibition-api.js` — canonical Venue/Exhibition data adapter.
 - `src/data/exhibition-gallery-assignment.js` — pure C24 binding/migration helpers and executable reference rebind for QA.
 - `src/data/gallery-management-api.js` — controlled Gallery lifecycle/Storage adapter.
-- `src/data/shared-asset-api.js` — V13.1 guarded Shared Asset catalog/version/upload/publish adapter.
+- `src/data/shared-asset-api.js` — V13.1 guarded Shared Asset catalog/version adapter plus V13.2 thumbnail bridge.
+- `src/bootstrap/admin-asset-workspace.js` — V13.2 canonical left Asset Manager shared by standalone and inline Admin.
 - `src/runtime/shared-asset-state.js` — V13.1 immutable Shared Asset reference/state-manifest contract for later Exhibition dressing.
 - `src/validation/shared-asset-validation.js` — V13.1 Prop/Frame GLB validation coordinator.
 - `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
@@ -74,10 +75,10 @@ No parallel Exhibition/Gallery assignment table is introduced. Legacy `gallery_e
 
 ## Gallery Management baseline
 
-C6C8C22 / C6C8C22.1 Gallery Management is PASS/CLOSED. Admin Workspace separates:
+C6C8C22 / C6C8C22.1 Gallery Management is PASS/CLOSED. V13.2 extends the canonical left Admin Workspace without changing Gallery lifecycle:
 
 ```text
-EXHIBITIONS | GALLERIES
+EXHIBITIONS | GALLERIES | ASSETS
 ```
 
 Gallery lifecycle remains:
@@ -250,9 +251,9 @@ GalleryApp.getCameraPose()
 
 Gallery CRUD/versioning/model validation/Exhibition assignment remain outside `Gallery_V0_11.js`.
 
-## V13.1 Shared Asset Foundation
+## V13 Shared Asset Foundation + V13.2 Asset Manager
 
-V13.1 adds the backend/data/runtime contracts required by the future left-workspace Asset Library. It intentionally does **not** add the `ASSETS` UI, drag-and-drop placement or the Frame browser yet. Those remain later V13 stages.
+V13.1 (PASS/CLOSED) added the backend/data/runtime contracts for the Shared Asset Library. V13.2 implements the left-workspace Asset Manager while intentionally leaving scene Prop placement to V13.3 and the Frame chooser migration to V13.4.
 
 Canonical reusable asset model:
 
@@ -284,15 +285,17 @@ V13.1 also freezes the future Exhibition reference contract without integrating 
 - published/history asset-version payloads cannot be overwritten or physically deleted;
 - new version publication requires current V13.1 streaming GLB validation and SHA-256/file-size identity.
 
-The planned Admin UX remains:
+The implemented V13.2 Admin ownership is:
 
 ```text
-LEFT WORKSPACE: EXHIBITIONS | GALLERIES | ASSETS   (V13.2+)
+LEFT WORKSPACE: EXHIBITIONS | GALLERIES | ASSETS
 CENTER: active 3D Scene
 RIGHT INSPECTOR: EXHIBITS | SPACE | LIGHTING | SETTINGS
 ```
 
-`ASSETS` is a left-workspace tool switch, not a Scene switch. That UI contract is planned but is not implemented in V13.1.
+`ASSETS` is a left-workspace tool switch, not a Scene switch. The Asset Manager provides search/type/category/archive filters, thumbnails, creation/metadata/scope, immutable GLB version upload/validation/publish, archive/restore and usage visibility. Exhibition-host and Gallery-host round trips preserve the current central preview context; Gallery-host Assets remains management-only.
+
+Catalog browsing uses metadata/thumbnails and does not prefetch the full GLB catalog. V13.2 thumbnails use immutable `shared-assets/assets/<asset UUID>/thumbnails/<media UUID>.webp` paths and are registered in `media_library`.
 
 ## Backend dependency
 
@@ -320,7 +323,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. **V13.1 adds new production SQL** for the Shared Asset foundation. Existing production must use the packaged `CURRENT_PRECHECK.sql -> V13_1_SHARED_ASSET_FOUNDATION.sql -> CURRENT_POSTCHECK.sql` sequence before the V13.1 repository deploy. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1 Shared Asset Foundation is already deployed/PASS. **V13.2 adds a narrow production SQL extension** for secure Asset Manager thumbnail lifecycle. Existing production must use the packaged `CURRENT_PRECHECK.sql -> V13_2_LEFT_WORKSPACE_ASSET_MANAGER.sql -> CURRENT_POSTCHECK.sql` sequence before the V13.2 repository deploy. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

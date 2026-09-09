@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.1 Admin Workspace / Shared Asset Foundation
+  Exhibition Platform — V13.2 Admin Workspace / Left Workspace Asset Manager
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -16,14 +16,15 @@ import {
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
+import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_2_left_workspace_asset_manager";
 import {
   galleryBindingLabel,
   isExhibitionGalleryMigrationPending,
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V13.1";
-const ENGINE_CACHE_KEY = "v13_1_shared_asset_foundation_20260909";
+const STAGE = "V13.2";
+const ENGINE_CACHE_KEY = "v13_2_left_workspace_asset_manager_20260909";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -103,6 +104,9 @@ let galleryEntryBaseline = "";
 let galleryEntryDirty = false;
 let galleryMutationInFlight = false;
 let adminWorkspaceSection = "exhibitions";
+let assetWorkspace = null;
+let assetWorkspaceHost = "exhibitions";
+let assetWorkspaceReturnSection = "exhibitions";
 let exhibitionGalleryDetail = null;
 let exhibitionGalleryDetailRequest = 0;
 let exhibitionGalleryMutationInFlight = false;
@@ -1229,7 +1233,7 @@ function ensureGalleryManagementStyles() {
   const style = document.createElement("style");
   style.id = "c22GalleryManagementStyles";
   style.textContent = `
-    .adminSectionTabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:12px 14px 0}
+    .adminSectionTabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 14px 0}
     .adminSectionTabs,.galleryManagementSection{--gallery-admin-text:rgba(255,255,255,.92);--gallery-admin-muted:rgba(255,255,255,.62);--gallery-admin-line:rgba(255,255,255,.10);color:var(--gallery-admin-text)}
     .adminSectionTab{height:36px;border:1px solid var(--gallery-admin-line);border-radius:10px;background:rgba(255,255,255,.035);color:var(--gallery-admin-muted);font-size:10px;font-weight:800;letter-spacing:.08em;cursor:pointer}
     .adminSectionTab.active{background:rgba(125,160,127,.16);border-color:rgba(154,180,155,.38);color:var(--gallery-admin-text)}
@@ -1275,8 +1279,47 @@ function clearGalleryUrl() {
     const url = new URL(location.href);
     url.searchParams.delete("section");
     url.searchParams.delete("gallery");
+    url.searchParams.delete("assetHost");
+    url.searchParams.delete("asset");
+    url.searchParams.delete("assetType");
     history.replaceState(null, "", url);
   } catch (_error) {}
+}
+
+function getAssetRequestedState() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const host = params.get("assetHost") === "galleries" || (!params.get("assetHost") && !!params.get("gallery")) ? "galleries" : "exhibitions";
+    const filter = ["prop","frame"].includes(params.get("assetType")) ? params.get("assetType") : null;
+    return { host, assetId: params.get("asset") || "", filter };
+  } catch (_error) { return { host: "exhibitions", assetId: "", filter: null }; }
+}
+
+function updateAssetsUrl({ assetId = null, filter = null } = {}) {
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set("section", "assets");
+    url.searchParams.set("assetHost", assetWorkspaceHost);
+    if (assetWorkspaceHost !== "galleries") url.searchParams.delete("gallery");
+    else if (selectedGalleryDetail && selectedGalleryDetail.venue && selectedGalleryDetail.venue.id) url.searchParams.set("gallery", selectedGalleryDetail.venue.id);
+    if (assetId) url.searchParams.set("asset", assetId); else url.searchParams.delete("asset");
+    if (filter === "prop" || filter === "frame") url.searchParams.set("assetType", filter); else url.searchParams.delete("assetType");
+    history.replaceState(null, "", url);
+  } catch (_error) {}
+}
+
+function clearAssetUrlState() {
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete("assetHost");
+    url.searchParams.delete("asset");
+    url.searchParams.delete("assetType");
+    history.replaceState(null, "", url);
+  } catch (_error) {}
+}
+
+function currentPreviewContextSection() {
+  return adminWorkspaceSection === "assets" ? assetWorkspaceHost : adminWorkspaceSection;
 }
 
 function galleryPublishedVersion(detail) {
@@ -1412,21 +1455,67 @@ async function ensureGalleryManagementApi() {
   return galleryManagement;
 }
 
-function setAdminWorkspaceSection(section, { skipConfirm = false } = {}) {
-  const next = section === "galleries" ? "galleries" : "exhibitions";
+function applyAdminWorkspaceVisibility(section) {
+  document.querySelectorAll(".exhibitionManagementSection").forEach((node) => node.classList.toggle("hidden", section !== "exhibitions"));
+  document.querySelectorAll(".galleryManagementSection").forEach((node) => node.classList.toggle("hidden", section !== "galleries"));
+  document.querySelectorAll(".adminSectionTab").forEach((node) => node.classList.toggle("active", node.dataset.section === section));
+  if (assetWorkspace) {
+    if (section === "assets" && session) {
+      const requested = getAssetRequestedState();
+      void assetWorkspace.show({ hostSection: assetWorkspaceHost, returnSection: assetWorkspaceReturnSection, selectedAssetId: requested.assetId || null, filter: requested.filter || null })
+        .catch((error) => showToast(error.message || String(error)));
+    } else assetWorkspace.hide();
+  }
+  if (saveStateButton) {
+    const sceneEditContext = section === "exhibitions" || (section === "assets" && assetWorkspaceHost === "exhibitions");
+    saveStateButton.style.display = sceneEditContext ? "" : "none";
+  }
+}
+
+function setAdminWorkspaceSection(section, { skipConfirm = false, assetHost = null } = {}) {
+  const next = ["exhibitions", "galleries", "assets"].includes(section) ? section : "exhibitions";
   if (adminWorkspaceSection === next) return true;
+
+  // V13.2: ASSETS is a sidebar tool, not a 3D preview context. Entering it from
+  // Exhibition or Gallery preserves the live Scene, selection and unsaved forms.
+  if (next === "assets") {
+    const host = assetHost === "galleries" || assetHost === "exhibitions"
+      ? assetHost
+      : (adminWorkspaceSection === "galleries" ? "galleries" : adminWorkspaceSection === "exhibitions" ? "exhibitions" : assetWorkspaceHost);
+    assetWorkspaceHost = host;
+    assetWorkspaceReturnSection = host;
+    adminWorkspaceSection = "assets";
+    applyAdminWorkspaceVisibility("assets");
+    const requested = getAssetRequestedState();
+    updateAssetsUrl({ assetId: requested.assetId || null, filter: requested.filter || null });
+    return true;
+  }
+
+  // Returning from Assets to its host is also UI-only. Do not invoke discard
+  // prompts or scene lifecycle work for a round-trip that did not change preview.
+  if (adminWorkspaceSection === "assets" && next === assetWorkspaceHost) {
+    adminWorkspaceSection = next;
+    applyAdminWorkspaceVisibility(next);
+    clearAssetUrlState();
+    if (next === "galleries") updateGalleryUrl(selectedGalleryDetail && selectedGalleryDetail.venue ? selectedGalleryDetail.venue.id : getGalleryRequestedId());
+    else clearGalleryUrl();
+    return true;
+  }
+
+  // Every other transition changes the central preview context and retains the
+  // existing destructive unsaved-change guard.
   syncMetadataDirtyState();
   syncGalleryMetadataDirty();
   syncGalleryEntryDirty();
   if (!skipConfirm && hasAnyAdminUnsavedChanges()) {
-    if (!window.confirm("You have unsaved Admin changes. Discard them and switch section?")) return false;
+    if (!window.confirm("You have unsaved Admin changes. Discard them and switch preview context?")) return false;
     discardAdminUnsavedChanges();
   }
+
   adminWorkspaceSection = next;
-  document.querySelectorAll(".exhibitionManagementSection").forEach((node) => node.classList.toggle("hidden", next !== "exhibitions"));
-  document.querySelectorAll(".galleryManagementSection").forEach((node) => node.classList.toggle("hidden", next !== "galleries"));
-  document.querySelectorAll(".adminSectionTab").forEach((node) => node.classList.toggle("active", node.dataset.section === next));
-  if (saveStateButton) saveStateButton.style.display = next === "exhibitions" ? "" : "none";
+  assetWorkspaceReturnSection = next;
+  applyAdminWorkspaceVisibility(next);
+  clearAssetUrlState();
   if (next === "galleries") {
     updateGalleryUrl(selectedGalleryDetail && selectedGalleryDetail.venue ? selectedGalleryDetail.venue.id : getGalleryRequestedId());
     if (session) void loadGalleryCatalog().then(() => previewSelectedGallery("admin-gallery-section")).catch((error) => showToast(error.message || String(error)));
@@ -1447,7 +1536,7 @@ function ensureGalleryManagementUi() {
   const tabs = document.createElement("div");
   tabs.id = "adminSectionTabs";
   tabs.className = "adminSectionTabs";
-  tabs.innerHTML = '<button type="button" class="adminSectionTab active" data-section="exhibitions">EXHIBITIONS</button><button type="button" class="adminSectionTab" data-section="galleries">GALLERIES</button>';
+  tabs.innerHTML = '<button type="button" class="adminSectionTab active" data-section="exhibitions">EXHIBITIONS</button><button type="button" class="adminSectionTab" data-section="galleries">GALLERIES</button><button type="button" class="adminSectionTab" data-section="assets">ASSETS</button>';
   sidebar.insertBefore(tabs, sidebar.firstChild);
   tabs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => setAdminWorkspaceSection(button.dataset.section)));
 
@@ -1472,12 +1561,37 @@ function ensureGalleryManagementUi() {
     <div class="sectionBody" id="galleryDetailBody"><div class="fieldMeta">Select a Gallery.</div></div>`;
   sidebar.appendChild(detailSection);
 
+  assetWorkspace = createAdminAssetWorkspace({
+    supabase,
+    sidebar,
+    showToast,
+    loadVenueOptions: async () => {
+      await ensureGalleryManagementApi();
+      if (!galleryCatalog.length) galleryCatalog = await galleryManagement.list();
+      return galleryCatalog;
+    },
+    onUiStateChange: (uiState) => {
+      if (adminWorkspaceSection !== "assets") return;
+      updateAssetsUrl({ assetId: uiState && uiState.selectedAssetId, filter: uiState && uiState.filter });
+    }
+  });
+
   galleryEl("refreshGalleriesButton").addEventListener("click", handleRefreshGalleries);
   galleryEl("galleryCreateForm").addEventListener("submit", handleCreateGallery);
 
   let initialSection = "exhibitions";
-  try { if (new URLSearchParams(location.search).get("section") === "galleries") initialSection = "galleries"; } catch (_error) {}
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get("section") === "galleries") initialSection = "galleries";
+    else if (params.get("section") === "assets") initialSection = "assets";
+  } catch (_error) {}
   if (initialSection === "galleries") setAdminWorkspaceSection("galleries", { skipConfirm: true });
+  else if (initialSection === "assets") {
+    const requested = getAssetRequestedState();
+    assetWorkspaceHost = requested.host;
+    assetWorkspaceReturnSection = requested.host;
+    setAdminWorkspaceSection("assets", { skipConfirm: true, assetHost: requested.host });
+  }
 }
 
 async function loadGalleryCatalog(force = false) {
@@ -1591,7 +1705,7 @@ async function selectGallery(venueId, { skipConfirm = false } = {}) {
   renderGalleryDetail(selectedGalleryDetail);
   renderGalleryCatalog();
   updateGalleryUrl(venueId);
-  if (engineReady && adminWorkspaceSection === "galleries") {
+  if (engineReady && currentPreviewContextSection() === "galleries") {
     try { await previewSelectedGallery("admin-gallery-select"); } catch (error) { showToast(`Gallery preview failed: ${error.message || error}`); }
   }
 }
@@ -1835,7 +1949,7 @@ async function refreshSelectedGallery() {
   galleryCatalog = await galleryManagement.list();
   renderGalleryCatalog();
   renderGalleryDetail(selectedGalleryDetail);
-  if (engineReady && adminWorkspaceSection === "galleries") {
+  if (engineReady && currentPreviewContextSection() === "galleries") {
     try { await previewSelectedGallery("admin-gallery-refresh"); } catch (error) { showToast(`Gallery preview failed: ${error.message || error}`); }
   }
 }
@@ -2118,7 +2232,7 @@ async function initializeWorkspace() {
     window.ExhibitionPlatformDataAdapter = exhibitionData;
     if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");
     await fetchCatalog();
-    if (adminWorkspaceSection === "galleries") await loadGalleryCatalog(true);
+    if (currentPreviewContextSection() === "galleries") await loadGalleryCatalog(true);
     const requested = getRequestedExhibitionId();
     const initial = catalog.find((item) => item.id === requested || item.slug === requested) || catalog.find((item) => item.slug === "main") || catalog[0];
     if (!initial) throw new Error("No canonical Exhibition exists. Run the current platform migration and postcheck.");
@@ -2127,7 +2241,8 @@ async function initializeWorkspace() {
     if (!initialRuntime) initialRuntime = await resolveInitialAdminRuntime(supabase, initial.id);
     const navigationHandoff = readNavigationHandoff(initial.id, initialRuntime.spaceDefinition.id, getRuntimeVenueVersionKey(initialRuntime));
     await startEngine(initial.id, navigationHandoff);
-    if (adminWorkspaceSection === "galleries" && selectedGalleryDetail) await previewSelectedGallery("admin-initial-gallery-section");
+    if (currentPreviewContextSection() === "galleries" && selectedGalleryDetail) await previewSelectedGallery("admin-initial-gallery-section");
+    applyAdminWorkspaceVisibility(adminWorkspaceSection);
   } catch (error) {
     startupError.textContent = error.message || String(error);
     startupError.style.display = "grid";

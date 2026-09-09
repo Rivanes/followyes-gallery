@@ -21,19 +21,24 @@ const apiSource = fs.readFileSync(new URL('src/data/shared-asset-api.js', root),
 const validationSource = fs.readFileSync(new URL('src/validation/shared-asset-validation.js', root), 'utf8');
 const workerSource = fs.readFileSync(new URL('src/workers/shared-asset-glb-validator-worker.js', root), 'utf8');
 const stateSource = fs.readFileSync(new URL('src/runtime/shared-asset-state.js', root), 'utf8');
+const assetWorkspaceSource = fs.readFileSync(new URL('src/bootstrap/admin-asset-workspace.js', root), 'utf8');
+const adminSource = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.js', root), 'utf8');
 
 function expect(label, ok) {
   if (!ok) throw new Error(`V13.1 Shared Asset invariant failed: ${label}`);
   console.log(`✓ ${label}`);
 }
 
-expect('package identity is V13.1 Shared Asset Foundation', pkg.version === '0.13.1-v13-shared-asset-foundation');
+expect('package identity is V13.2 Left Workspace Asset Manager', pkg.version === '0.13.2-v13-left-workspace-asset-manager');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
 expect('validator worker accepts prop/frame rather than Gallery Space roles', workerSource.includes('["prop","frame"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));
 expect('Shared Asset API uses guarded canonical RPCs', apiSource.includes('admin_create_shared_asset') && apiSource.includes('admin_create_shared_asset_version') && apiSource.includes('admin_register_shared_asset_version_binary') && apiSource.includes('admin_publish_shared_asset_version'));
 expect('immutable upload uses UUID version path returned by server and no upsert', apiSource.includes('version.storage_path') && apiSource.includes('upsert: false'));
 expect('Shared Asset state contract remains separate from Venue props', stateSource.includes('exhibition-platform-state-assets.v1') && !stateSource.includes('venue_assets'));
+expect('V13.2 Asset Manager is a separate left-workspace module', assetWorkspaceSource.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.2"') && assetWorkspaceSource.includes('Asset Library') && assetWorkspaceSource.includes('UPLOAD NEW GLB VERSION'));
+expect('V13.2 admin exposes three left top-level sections', adminSource.includes('data-section=\"exhibitions\"') && adminSource.includes('data-section=\"galleries\"') && adminSource.includes('data-section=\"assets\"'));
+expect('V13.2 thumbnail API uses guarded Shared Asset RPCs', apiSource.includes('admin_register_shared_asset_thumbnail') && apiSource.includes('admin_clear_shared_asset_thumbnail') && apiSource.includes('/thumbnails/'));
 
 assert.deepEqual(getDefaultSharedAssetRuntimeMetadata('prop'), { placementMode: 'floor', collisionMode: 'none', defaultScale: 1 });
 assert.equal(getDefaultSharedAssetRuntimeMetadata('frame').placementMode, 'artwork-only');
@@ -103,4 +108,4 @@ assert.equal(rpcCalls[0][1].p_asset_type, 'prop');
 assert.equal((await api.get(assetId)).asset.id, assetId);
 expect('data adapter maps catalog/get reads to V13.1 RPC surface', true);
 
-console.log('V13.1 Shared Asset Foundation regression invariants passed.');
+console.log('V13.1 foundation + V13.2 Asset Manager regression invariants passed.');
