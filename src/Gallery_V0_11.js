@@ -4,6 +4,10 @@ import {
     getSceneLoadingSpaceRolePolicy,
     getSceneLoadingFamilyPolicy
 } from "./runtime/scene-loading-policies.js";
+import {
+    validateSculptureModelFile,
+    hasRenderableSculptureGeometry
+} from "./validation/sculpture-model-validation.js";
 
 /*
   Exhibition Platform
@@ -136,6 +140,7 @@ import {
   - V14.1.3: Scene Ownership Hardening — cancels Scene-local async work on disposal and blocks stale Space/state/Frame/model callbacks from mutating dead Scenes.
   - V14.1.4: Gallery Authoring Assigned-Space Settle — assigned Floor/Walls/Ceiling/Props start immediately in authoring preview and must reach loaded/failed terminal state before compatibility READY.
   - V14.1.5: Admin Visible Hydration Batch — Admin assigned artwork Previews, Frames, sculpture/models and Shared Props settle as one policy-driven visible batch before Admin preview is considered visually settled.
+  - V14.1.5.1: GLB Runtime Truth — sculpture/model completion requires real renderable meshes, queued is distinct from loaded, direct Sculpture GLB uploads are deep-validated, and Admin exposes explicit unavailable/retry state instead of an ambiguous placeholder.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -19373,6 +19378,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, "Attempt " + attempt + " of " + maxAttempts + " for " + sceneFilename);
 
             function succeedAttempt(meshes) {
+                var renderableMeshes = getGalleryRenderableImportedMeshes(meshes || []);
+                if (renderableMeshes.length < 1) {
+                    disposeStaleImportedMeshes(meshes || []);
+                    failAttempt(
+                        "no-renderable-meshes",
+                        "Imported " + assetName + " GLB contains no renderable mesh geometry.",
+                        new Error("Imported " + assetName + " GLB contains no renderable mesh geometry.")
+                    );
+                    return;
+                }
                 if (galleryAssetLoadDebug.failed[assetName]) {
                     // A watchdog or another terminal path already settled this assigned asset as failed.
                     // Do not let a very late network success mutate a preview after authoring READY.
@@ -23550,6 +23565,14 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     model3dRemoveButton.className = "gallery-editor-action-button is-danger";
     model3dRemoveButton.innerText = "REMOVE MODEL";
 
+    var model3dRetryButton = document.createElement("button");
+    model3dRetryButton.type = "button";
+    model3dRetryButton.className = "gallery-editor-action-button is-primary";
+    model3dRetryButton.innerText = "RETRY MODEL";
+    model3dRetryButton.style.display = "none";
+    model3dRetryButton.style.width = "100%";
+    model3dRetryButton.style.marginTop = "12px";
+
     model3dActionsMain.appendChild(model3dUploadButton);
     model3dActionsMain.appendChild(model3dApplyUrlButton);
     model3dActionsMain.appendChild(model3dRemoveButton);
@@ -23586,6 +23609,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     model3dSectionData.section.appendChild(model3dFileInput);
     model3dSectionData.section.appendChild(model3dActionsMain);
     model3dSectionData.section.appendChild(model3dActionsCopy);
+    model3dSectionData.section.appendChild(model3dRetryButton);
     model3dSectionData.section.appendChild(model3dNote);
     editorScroll.appendChild(model3dSectionData.section);
 
@@ -32061,15 +32085,78 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
 
+    function isGalleryRenderableImportedMeshCandidate(mesh) {
+        if (!mesh || mesh.name === "__root__") return false;
+        if (mesh.isDisposed && mesh.isDisposed()) return false;
+        if (typeof mesh.getTotalVertices === "function") {
+            try { return Number(mesh.getTotalVertices()) > 0; } catch (error) { return false; }
+        }
+        return true;
+    }
+
+    function getGalleryRenderableImportedMeshes(meshes) {
+        return (meshes || []).filter(isGalleryRenderableImportedMeshCandidate);
+    }
+
+    function isGalleryModel3dRuntimeRenderable(runtime) {
+        if (!runtime || !Array.isArray(runtime.meshes)) return false;
+        return getGalleryRenderableImportedMeshes(runtime.meshes).length > 0;
+    }
+
     function hasLoadedModel3dRuntime(slot) {
         return !!(
             slot &&
             slot.metadata &&
             slot.metadata.model3d &&
             slot.metadata.model3dRuntime &&
-            slot.metadata.model3dRuntime.meshes &&
-            slot.metadata.model3dRuntime.meshes.length
+            slot.metadata.model3dRuntime.loadedAt &&
+            isGalleryModel3dRuntimeRenderable(slot.metadata.model3dRuntime)
         );
+    }
+
+    function getGalleryModel3dApplyStatus(result) {
+        return result && typeof result === "object" ? String(result.status || "") : (result === true ? "loaded" : (result === false ? "failed" : ""));
+    }
+
+    function isGalleryModel3dApplyLoaded(result) {
+        return getGalleryModel3dApplyStatus(result) === "loaded";
+    }
+
+    function isGalleryModel3dApplyQueued(result) {
+        return getGalleryModel3dApplyStatus(result) === "queued";
+    }
+
+    function isGalleryModel3dApplyAccepted(result) {
+        return isGalleryModel3dApplyLoaded(result) || isGalleryModel3dApplyQueued(result);
+    }
+
+    function createGalleryModel3dApplyResult(status, details) {
+        return Object.assign({
+            status: status || "failed",
+            loaded: status === "loaded",
+            queued: status === "queued"
+        }, details || {});
+    }
+
+    function markModel3dSlotUnavailable(slot, error, reason) {
+        if (!slot) return;
+        slot.metadata = slot.metadata || {};
+        var previous = slot.metadata.model3dUnavailable || {};
+        slot.metadata.model3dLoading = false;
+        slot.metadata.model3dUnavailable = {
+            message: error && error.message ? String(error.message) : String(error || "Sculpture/model unavailable"),
+            reason: reason || "load-failed",
+            at: Date.now(),
+            attempts: (Number(previous.attempts) || 0) + 1
+        };
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.modelState = "failed";
+        slot.metadata.galleryStreaming.loading = false;
+    }
+
+    function clearModel3dSlotUnavailable(slot) {
+        if (!slot || !slot.metadata) return;
+        slot.metadata.model3dUnavailable = null;
     }
 
     // STAGE 12C29 - REAL SCULPTURE / ARTWORK PARITY FLOW
@@ -32103,6 +32190,46 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         material.alpha = 0.72;
         material.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
         return material;
+    }
+
+    function applyModel3dPlaceholderHydrationVisualState(slot, placeholder) {
+        if (!placeholder || !placeholder.material) return;
+        var material = placeholder.material;
+        var unavailable = !!(slot && slot.metadata && slot.metadata.model3dUnavailable);
+        var loading = !!(slot && slot.metadata && slot.metadata.model3dLoading);
+        var streamingState = slot && slot.metadata && slot.metadata.galleryStreaming
+            ? String(slot.metadata.galleryStreaming.modelState || "")
+            : "";
+        var status = unavailable
+            ? "unavailable"
+            : (loading || streamingState === "loading")
+                ? "loading"
+                : streamingState === "queued"
+                    ? "queued"
+                    : (slot && slot.metadata && slot.metadata.model3d)
+                        ? "assigned"
+                        : "empty";
+
+        placeholder.metadata = placeholder.metadata || {};
+        placeholder.metadata.model3dHydrationStatus = status;
+
+        if (unavailable) {
+            material.diffuseColor = new BABYLON.Color3(0.52, 0.16, 0.14);
+            material.emissiveColor = new BABYLON.Color3(0.15, 0.025, 0.02);
+            material.alpha = 0.82;
+            return;
+        }
+
+        if (status === "loading") {
+            material.diffuseColor = new BABYLON.Color3(0.34, 0.44, 0.56);
+            material.emissiveColor = new BABYLON.Color3(0.04, 0.075, 0.12);
+            material.alpha = 0.78;
+            return;
+        }
+
+        material.diffuseColor = new BABYLON.Color3(0.46, 0.49, 0.52);
+        material.emissiveColor = new BABYLON.Color3(0.045, 0.055, 0.065);
+        material.alpha = 0.72;
     }
 
     function createModel3dSlotPlaceholderMesh(slot, index) {
@@ -32243,6 +32370,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         placeholder.metadata = placeholder.metadata || {};
         tagModel3dOwnerNode(placeholder, slot);
         placeholder.metadata.isModel3dPlaceholderMesh = true;
+        applyModel3dPlaceholderHydrationVisualState(slot, placeholder);
 
         return shouldShow ? 0 : 1;
     }
@@ -35058,7 +35186,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (model3dStatus) {
             if (slot && modelState) {
-                model3dStatus.innerHTML = "Slot: <strong>" + slot.name + "</strong><br>Model: <strong>" + (modelState.originalName || "GLB") + "</strong>";
+                var unavailable = slot.metadata && slot.metadata.model3dUnavailable;
+                var streamingState = slot.metadata && slot.metadata.galleryStreaming ? String(slot.metadata.galleryStreaming.modelState || "") : "";
+                var stateLabel = hasLoadedModel3dRuntime(slot)
+                    ? "LOADED"
+                    : (slot.metadata && slot.metadata.model3dLoading) || streamingState === "loading"
+                        ? "LOADING"
+                        : unavailable
+                            ? "MODEL UNAVAILABLE — reference preserved"
+                            : streamingState === "queued"
+                                ? "QUEUED"
+                                : "ASSIGNED";
+                var errorLine = unavailable && unavailable.message ? "<br>Error: <strong>" + String(unavailable.message) + "</strong>" : "";
+                model3dStatus.innerHTML = "Slot: <strong>" + slot.name + "</strong><br>Model: <strong>" + (modelState.originalName || "GLB") + "</strong><br>Status: <strong>" + stateLabel + "</strong>" + errorLine;
             } else if (slot) {
                 model3dStatus.innerHTML = "Slot: <strong>" + slot.name + "</strong><br>Model: <strong>None</strong>";
             } else {
@@ -35096,8 +35236,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             model3dPasteButton.disabled = !isVisible || !galleryModel3dClipboardState;
         }
 
+        if (model3dRetryButton) {
+            var canRetry = !!(isVisible && modelState && slot && slot.metadata && slot.metadata.model3dUnavailable);
+            model3dRetryButton.style.display = canRetry ? "" : "none";
+            model3dRetryButton.disabled = !canRetry;
+        }
+
         updateModel3dTransformUi();
     }
+
+    model3dRetryButton.onclick = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var slot = getActiveModel3dSlot();
+        if (!slot || !getModel3dState(slot)) return;
+        retryModel3dRuntime(slot).catch(function (error) {
+            console.warn("Sculpture/model retry failed:", error);
+        });
+    };
 
     model3dUploadButton.onclick = function (event) {
         event.preventDefault();
@@ -38825,7 +38981,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var state = serializeSharedAssetPropInstance(slot);
         if (!state) return Promise.resolve(false);
         notifyGalleryStatus("Retrying Shared Asset model: " + (state.assetName || "Prop") + "...");
-        return Promise.resolve(applySharedAssetPropStateToSlot(slot, state)).then(function (ok) {
+        return Promise.resolve(applySharedAssetPropStateToSlot(slot, state, { forceImmediate: true })).then(function (ok) {
             if (!ok) {
                 markSharedAssetPropUnavailable(slot, new Error("Shared Asset model could not be restored."));
                 notifyGalleryStatus("Shared Asset model is still unavailable. Reference was preserved.");
@@ -38868,9 +39024,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (!modelState) return Promise.resolve(false);
         if (options.forceImmediate) modelState._galleryFastStartForceImmediate = true;
         slot.metadata.model3d = modelState;
-        return Promise.resolve(applyModel3dStateToSlot(slot, modelState)).then(function (ok) {
-            if (ok) clearSharedAssetPropUnavailable(slot);
-            return ok;
+        return Promise.resolve(applyModel3dStateToSlot(slot, modelState)).then(function (result) {
+            if (isGalleryModel3dApplyLoaded(result)) clearSharedAssetPropUnavailable(slot);
+            return isGalleryModel3dApplyAccepted(result);
         });
     }
 
@@ -39413,6 +39569,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var assetChoice = getGalleryModelStreamingAssetChoice(modelState, streamingTier || getGalleryStreamingTierForObject(slot));
         if (!assetChoice.url) return false;
         slot.metadata.model3d = modelState;
+        slot.metadata.model3dLoading = true;
+        clearModel3dSlotUnavailable(slot);
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.modelState = "loading";
+        slot.metadata.galleryStreaming.loading = true;
         disposeModel3dSlotRuntime(slot);
 
         var root = new BABYLON.TransformNode(slot.name + "_Model3DRoot_" + generation, scene);
@@ -39492,18 +39653,25 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 node.metadata = node.metadata || {};
                 node.metadata.model3dLoadGeneration = generation;
             });
-            var loadedMeshes = collected.meshes.filter(function (mesh) {
-                return mesh && mesh.name !== "__root__" && (!mesh.getTotalVertices || mesh.getTotalVertices() > 0);
-            });
-            loadedMeshes.forEach(function (mesh) { markModel3dRuntimeMesh(mesh, slot); });
+            var loadedMeshes = getGalleryRenderableImportedMeshes(collected.meshes);
 
             pendingRuntime.rootNodes = collected.rootNodes;
             pendingRuntime.nodes = [root].concat(collected.nodes.filter(function (node) { return node !== root; }));
             pendingRuntime.transformNodes = [root].concat(collected.transformNodes.filter(function (node) { return node !== root; }));
             pendingRuntime.meshes = loadedMeshes;
+
+            if (loadedMeshes.length < 1) {
+                throw new Error("Sculpture/model GLB contains no renderable mesh geometry.");
+            }
+
+            loadedMeshes.forEach(function (mesh) { markModel3dRuntimeMesh(mesh, slot); });
             pendingRuntime.loadedAt = new Date().toISOString();
+            slot.metadata.model3dLoading = false;
+            clearModel3dSlotUnavailable(slot);
             slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
             slot.metadata.galleryStreaming.modelState = "loaded";
+            slot.metadata.galleryStreaming.loading = false;
+            slot.metadata.galleryStreaming.queued = false;
             slot.metadata.galleryStreaming.suspended = false;
             slot.metadata.galleryStreaming.lastActiveAt = Date.now();
             slot.metadata.galleryStreaming.currentLoadTier = modelState._galleryStreamingTier || getGalleryStreamingTierForObject(slot);
@@ -39543,7 +39711,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
             console.warn("3D model load failed:", { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, error: error });
             disposeModel3dSlotRuntime(slot);
+            markModel3dSlotUnavailable(slot, error, "runtime-import-failed");
             galleryModel3dLastDebug = { slot: slot.name, slotId: slotId, generation: generation, modelUrl: modelState.modelUrl, loadedUrl: assetChoice.url, assetVariant: assetChoice.variant, error: error && error.message ? error.message : String(error) };
+            updateViewerModePlaceholderVisibility();
+            updateModel3dSlotUi();
             notifyGalleryStatus("Nie udalo sie wczytac modelu 3D. Sprawdz URL/GLB i konsolę.");
             return false;
         }
@@ -39554,16 +39725,30 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var forceImmediate = !!(modelState && modelState._galleryFastStartForceImmediate);
         var streamingTier = modelState && modelState._galleryStreamingTier ? modelState._galleryStreamingTier : null;
         modelState = normalizeModel3dState(modelState);
-        if (!slot || !modelState) return Promise.resolve(false);
+        if (!slot || !modelState) return Promise.resolve(createGalleryModel3dApplyResult("failed", { reason: "invalid-slot-or-state" }));
         if (streamingTier) modelState._galleryStreamingTier = streamingTier;
         if (galleryFastStartRuntime.stateApplyActive && !forceImmediate) {
             slot.metadata = slot.metadata || {};
             slot.metadata.model3d = modelState;
-            queueGalleryFastStartModelLoad(slot, modelState);
+            slot.metadata.model3dLoading = false;
+            clearModel3dSlotUnavailable(slot);
+            var queued = queueGalleryFastStartModelLoad(slot, modelState);
+            slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+            slot.metadata.galleryStreaming.modelState = queued ? "queued" : "failed";
+            slot.metadata.galleryStreaming.loading = false;
             applySculptureSlotVisualState(slot);
-            return Promise.resolve(true);
+            return Promise.resolve(createGalleryModel3dApplyResult(queued ? "queued" : "failed", {
+                slotId: ensureModel3dSlotIdentity(slot),
+                modelUrl: modelState.modelUrl || null
+            }));
         }
-        return loadModel3dIntoSlot(slot, modelState);
+        return Promise.resolve(loadModel3dIntoSlot(slot, modelState)).then(function (loaded) {
+            return createGalleryModel3dApplyResult(loaded ? "loaded" : "failed", {
+                slotId: ensureModel3dSlotIdentity(slot),
+                modelUrl: modelState.modelUrl || null,
+                renderable: loaded ? hasLoadedModel3dRuntime(slot) : false
+            });
+        });
     }
 
     async function restoreModel3dSlotAfterFailedReplacement(slot, previousState) {
@@ -39574,19 +39759,61 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (previousState) {
             var restoreState = cloneGalleryStateForIntegrity(previousState);
             restoreState._galleryFastStartForceImmediate = true;
-            return applyModel3dStateToSlot(slot, restoreState);
+            return Promise.resolve(applyModel3dStateToSlot(slot, restoreState)).then(isGalleryModel3dApplyLoaded);
         }
 
         slot.metadata = slot.metadata || {};
         nextModel3dSlotLoadGeneration(slot, "model-removed");
         disposeModel3dSlotRuntime(slot);
         slot.metadata.model3d = null;
+        slot.metadata.model3dLoading = false;
+        clearModel3dSlotUnavailable(slot);
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.modelState = "idle";
+        slot.metadata.galleryStreaming.loading = false;
+        slot.metadata.galleryStreaming.queued = false;
         applySculptureSlotVisualState(slot);
         disableSculptureCollisionProxy(slot);
         refreshSculptureOutlines();
         updateViewerModePlaceholderVisibility();
         updateModel3dSlotUi();
         return true;
+    }
+
+    async function retryModel3dRuntime(slot) {
+        if (!slot) return false;
+        var modelState = getModel3dState(slot);
+        if (!modelState || !modelState.modelUrl) return false;
+        var retryState = cloneGalleryStateForIntegrity(modelState);
+        retryState._galleryFastStartForceImmediate = true;
+        clearModel3dSlotUnavailable(slot);
+        slot.metadata = slot.metadata || {};
+        slot.metadata.model3dLoading = true;
+        updateModel3dSlotUi();
+        notifyGalleryStatus("Retrying sculpture/model GLB...");
+        try {
+            var result = await applyModel3dStateToSlot(slot, retryState);
+            var loaded = isGalleryModel3dApplyLoaded(result) && hasLoadedModel3dRuntime(slot);
+            if (!loaded) {
+                markModel3dSlotUnavailable(slot, new Error("Sculpture/model could not be restored."), "manual-retry-failed");
+                notifyGalleryStatus("Sculpture/model is still unavailable. Reference was preserved.");
+                updateViewerModePlaceholderVisibility();
+                updateModel3dSlotUi();
+                return false;
+            }
+            clearModel3dSlotUnavailable(slot);
+            slot.metadata.model3dLoading = false;
+            updateViewerModePlaceholderVisibility();
+            updateModel3dSlotUi();
+            notifyGalleryStatus("Sculpture/model restored.");
+            return true;
+        } catch (error) {
+            markModel3dSlotUnavailable(slot, error, "manual-retry-error");
+            updateViewerModePlaceholderVisibility();
+            updateModel3dSlotUi();
+            notifyGalleryStatus("Sculpture/model is still unavailable. Reference was preserved.");
+            return false;
+        }
     }
 
     async function replaceModel3dStateInSlotSafely(slot, nextState, reason, options) {
@@ -39601,7 +39828,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         try {
             var replacementPromise = applyModel3dStateToSlot(slot, nextState);
             replacementGeneration = Number(slot.metadata.model3dLoadGeneration) || null;
-            loaded = await replacementPromise;
+            var replacementResult = await replacementPromise;
+            loaded = isGalleryModel3dApplyLoaded(replacementResult);
         } catch (replacementError) { console.warn("3D model replacement error:", replacementError); loaded = false; }
 
         // A newer replace/paste/restore/streaming load owns the slot now. Never restore an older state over it.
@@ -39626,6 +39854,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         nextModel3dSlotLoadGeneration(slot, "model-removed");
         disposeModel3dSlotRuntime(slot);
         slot.metadata.model3d = null;
+        slot.metadata.model3dLoading = false;
+        clearModel3dSlotUnavailable(slot);
+        slot.metadata.galleryStreaming = slot.metadata.galleryStreaming || {};
+        slot.metadata.galleryStreaming.modelState = "idle";
+        slot.metadata.galleryStreaming.loading = false;
+        slot.metadata.galleryStreaming.queued = false;
 
         applySculptureSlotVisualState(slot);
         disableSculptureCollisionProxy(slot);
@@ -39673,6 +39907,27 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         if (file.size && file.size > maxBytes) {
             notifyGalleryStatus("Model jest za duzy. Limit: " + galleryModel3dMaxUploadSizeMb + " MB.");
+            return false;
+        }
+
+        notifyGalleryStatus("Validating Sculpture GLB geometry...");
+        var validationReport = null;
+        try {
+            validationReport = await validateSculptureModelFile(file);
+        } catch (validationError) {
+            console.warn("Sculpture GLB validation failed:", validationError);
+            notifyGalleryStatus("Nie udalo sie zweryfikowac modelu GLB. Plik nie zostal wyslany.");
+            return false;
+        }
+        if (!hasRenderableSculptureGeometry(validationReport)) {
+            var firstValidationError = validationReport && Array.isArray(validationReport.errors) && validationReport.errors.length
+                ? validationReport.errors[0]
+                : null;
+            console.warn("Sculpture GLB rejected before upload:", validationReport);
+            notifyGalleryStatus(
+                "Model GLB nie zawiera poprawnej renderowalnej geometrii" +
+                (firstValidationError && firstValidationError.message ? ": " + firstValidationError.message : ".")
+            );
             return false;
         }
 
@@ -39877,7 +40132,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             duplicateState.isDuplicate = true;
             duplicateState.assignedAt = new Date().toISOString();
             newSlot.metadata.model3dLoading = true;
-            var loaded = await applyModel3dStateToSlot(newSlot, duplicateState);
+            var duplicateResult = await applyModel3dStateToSlot(newSlot, duplicateState);
+            var loaded = isGalleryModel3dApplyLoaded(duplicateResult);
             newSlot.metadata.model3dLoading = false;
             if (!loaded) {
                 deleteModel3dSlotRuntime(newSlot, { skipRememberDeleted: true, silent: true });
@@ -40278,6 +40534,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 selected: gallerySculptureCoreRuntime.selection.selectedIds.indexOf(slotId) !== -1,
                 loadGeneration: Number(slot.metadata.model3dLoadGeneration) || 0,
                 loading: !!slot.metadata.model3dLoading,
+                hydrationStatus: slot.metadata && slot.metadata.galleryStreaming ? slot.metadata.galleryStreaming.modelState || null : null,
+                unavailable: slot.metadata && slot.metadata.model3dUnavailable ? cloneGalleryJson(slot.metadata.model3dUnavailable) : null,
+                renderableRuntime: hasLoadedModel3dRuntime(slot),
                 runtimeMeshCount: runtime && runtime.meshes ? runtime.meshes.length : 0,
                 runtimeNodeCount: runtime && runtime.nodes ? runtime.nodes.length : 0,
                 runtimeTransformNodeCount: runtime && runtime.transformNodes ? runtime.transformNodes.length : 0,
@@ -44615,13 +44874,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     var modelRestoreState = modelVisibleBlocking
                         ? Object.assign({}, sphereState.model3d, { _galleryFastStartForceImmediate: true })
                         : sphereState.model3d;
-                    var modelRestorePromise = Promise.resolve(applyModel3dStateToSlot(sphere, modelRestoreState)).then(function (ok) {
+                    var modelRestorePromise = Promise.resolve(applyModel3dStateToSlot(sphere, modelRestoreState)).then(function (result) {
+                        var loaded = isGalleryModel3dApplyLoaded(result);
+                        var queued = isGalleryModel3dApplyQueued(result);
                         if (sphere && sphere.metadata) {
-                            sphere.metadata.model3dUnavailable = ok ? null : { message: "Saved sculpture/model is unavailable; reference preserved.", at: Date.now() };
+                            if (loaded || queued) clearModel3dSlotUnavailable(sphere);
+                            else markModel3dSlotUnavailable(sphere, new Error("Saved sculpture/model is unavailable; reference preserved."), "state-restore-failed");
                         }
-                        return ok;
+                        return loaded;
                     }).catch(function (modelRestoreError) {
-                        if (sphere && sphere.metadata) sphere.metadata.model3dUnavailable = { message: modelRestoreError && modelRestoreError.message ? String(modelRestoreError.message) : "Saved sculpture/model restore failed.", at: Date.now() };
+                        if (sphere && sphere.metadata) markModel3dSlotUnavailable(sphere, modelRestoreError || new Error("Saved sculpture/model restore failed."), "state-restore-error");
                         console.warn("Sculpture/model restore warning:", modelRestoreError);
                         return false;
                     }).finally(function () {
@@ -44638,9 +44900,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                                 if (!sphere || (sphere.isDisposed && sphere.isDisposed())) return;
                                 nextModel3dSlotLoadGeneration(sphere, "admin-visible-timeout");
                                 disposeModel3dSlotRuntime(sphere);
-                                sphere.metadata = sphere.metadata || {};
-                                sphere.metadata.model3dLoading = false;
-                                sphere.metadata.model3dUnavailable = { message: "Admin visible sculpture/model hydration timed out.", at: Date.now() };
+                                markModel3dSlotUnavailable(sphere, new Error("Admin visible sculpture/model hydration timed out."), "admin-visible-timeout");
+                                updateViewerModePlaceholderVisibility();
+                                updateModel3dSlotUi();
                             }
                         }
                     ).catch(function () {});
@@ -44688,7 +44950,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         reason: "apply-editor-state-shared-prop",
                         unavailableMessage: "Saved Shared Prop is unavailable; reference preserved.",
                         isLoaded: function (slot) {
-                            return !!(slot && slot.metadata && !slot.metadata.sharedAssetUnavailable && slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.loadedAt);
+                            return !!(slot && slot.metadata && !slot.metadata.sharedAssetUnavailable && hasLoadedModel3dRuntime(slot));
                         },
                         onTimeout: function () {
                             var slot = artSpheres.find(function (candidate) {
@@ -45488,13 +45750,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         ).catch(function () {});
                     } else {
                         var residentModelState = Object.assign({}, modelState, { _galleryFastStartForceImmediate: true });
-                        var residentModelPromise = Promise.resolve(applyModel3dStateToSlot(slot, residentModelState)).then(function (ok) {
-                            slot.metadata = slot.metadata || {};
-                            slot.metadata.model3dUnavailable = ok ? null : { message: "Saved sculpture/model is unavailable; reference preserved.", at: Date.now() };
-                            return ok;
-                        }).catch(function () {
-                            slot.metadata = slot.metadata || {};
-                            slot.metadata.model3dUnavailable = { message: "Saved sculpture/model restore failed.", at: Date.now() };
+                        var residentModelPromise = Promise.resolve(applyModel3dStateToSlot(slot, residentModelState)).then(function (result) {
+                            var loaded = isGalleryModel3dApplyLoaded(result);
+                            if (loaded) clearModel3dSlotUnavailable(slot);
+                            else markModel3dSlotUnavailable(slot, new Error("Saved sculpture/model is unavailable; reference preserved."), "resident-restore-failed");
+                            return loaded;
+                        }).catch(function (error) {
+                            markModel3dSlotUnavailable(slot, error || new Error("Saved sculpture/model restore failed."), "resident-restore-error");
                             return false;
                         });
                         registerGalleryAdminVisibleHydrationTask(
@@ -45508,9 +45770,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                                     if (!slot || (slot.isDisposed && slot.isDisposed())) return;
                                     nextModel3dSlotLoadGeneration(slot, "admin-resident-model-timeout");
                                     disposeModel3dSlotRuntime(slot);
-                                    slot.metadata = slot.metadata || {};
-                                    slot.metadata.model3dLoading = false;
-                                    slot.metadata.model3dUnavailable = { message: "Admin resident sculpture/model hydration timed out.", at: Date.now() };
+                                    markModel3dSlotUnavailable(slot, new Error("Admin resident sculpture/model hydration timed out."), "admin-resident-timeout");
+                                    updateViewerModePlaceholderVisibility();
+                                    updateModel3dSlotUi();
                                 }
                             }
                         ).catch(function () {});
@@ -46679,7 +46941,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? artSpheres[slotNameOrIndex]
                 : getSphereByName(slotNameOrIndex);
 
-            return applyModel3dStateToSlot(slot, createModel3dStateFromUrl(slot, modelUrl));
+            return Promise.resolve(applyModel3dStateToSlot(slot, createModel3dStateFromUrl(slot, modelUrl))).then(isGalleryModel3dApplyLoaded);
         },
         removeModel3dFromSlot: function (slotNameOrIndex) {
             var slot = typeof slotNameOrIndex === "number"

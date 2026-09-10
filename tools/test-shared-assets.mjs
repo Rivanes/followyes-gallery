@@ -30,10 +30,10 @@ function expect(label, ok) {
   console.log(`✓ ${label}`);
 }
 
-expect('current package identity is V14.1.5', pkg.version === '0.14.1-v14-1-5-admin-visible-hydration-batch');
+expect('current package identity is V14.1.5.1', pkg.version === '0.14.1-v14-1-5-1-glb-runtime-truth');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
-expect('validator worker accepts prop/frame rather than Gallery Space roles', workerSource.includes('["prop","frame"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));
+expect('renderable GLB worker preserves Shared Asset prop/frame and adds Sculpture validation without Gallery Space roles', workerSource.includes('["prop","frame","sculpture"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));
 expect('Shared Asset API uses guarded canonical RPCs', apiSource.includes('admin_create_shared_asset') && apiSource.includes('admin_create_shared_asset_version') && apiSource.includes('admin_register_shared_asset_version_binary') && apiSource.includes('admin_publish_shared_asset_version'));
 expect('immutable upload uses UUID version path returned by server and no upsert', apiSource.includes('version.storage_path') && apiSource.includes('upsert: false'));
 expect('Shared Asset state contract remains separate from Venue props', stateSource.includes('exhibition-platform-state-assets.v1') && !stateSource.includes('venue_assets'));

@@ -1,28 +1,30 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.5 — Admin Visible Hydration Batch**.
+Current repository release: **V14.1.5.1 — GLB Runtime Truth & Immediate Admin Defect Fix**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.5 Admin Visible Hydration Batch
+## V14.1.5.1 GLB Runtime Truth & Immediate Admin Defect Fix
 
-V14.1.5 makes the existing `admin-exhibition` loading policy real at executor level. Assigned artwork Preview, artwork Frames, sculpture/models and Shared Props now participate in one policy-driven Admin visible hydration batch. Admin preview/same-Space Exhibition switching does not report `admin-visible-settled` until every required visible task is terminal: `loaded`, or explicit `unavailable/error` with its immutable reference preserved.
+V14.1.5 production smoke exposed a real contradiction: a standard Sculpture could remain the gray Admin placeholder while model hydration had already been treated as successful. The loading-cycle re-audit proved that the low-level model executor could mark `loaded` after an import that produced zero usable renderable meshes.
 
-Frame/model/Shared Prop restore tasks are registered against the current Scene loading session as lifecycle tasks. Scene cancellation supersedes still-pending tasks, and timeout cleanup invalidates the corresponding async generation/runtime so a late completion cannot silently mutate an already-settled Admin preview. Existing V13.5 unavailable/retry semantics remain authoritative for corrupt or unavailable immutable assets.
+V14.1.5.1 repairs that truth layer. A Sculpture/model runtime is now `loaded` only when the current load generation has a real renderable mesh runtime and `loadedAt`. Model application returns an explicit `queued`, `loaded` or `failed` outcome instead of overloading boolean `true` for both queue admission and real visible completion. Shared Prop callers map those states deliberately.
 
-For Admin only, sculpture/models and Shared Props bypass the state-apply deferred background queue while they belong to the visible batch. Their expensive global refresh work is coalesced until the batch settles. **Public behavior is unchanged:** artwork Preview remains foreground while Frames, sculpture/models and Shared Props may continue streaming in background.
+The direct Sculpture upload path now uses `src/validation/sculpture-model-validation.js`, backed by the hardened off-main-thread GLB validator, before Supabase Storage upload. Missing or unreachable renderable geometry is rejected before Draft replacement. Standard Sculpture Admin UI now distinguishes LOADING/LOADED/QUEUED from `MODEL UNAVAILABLE — reference preserved` and exposes `RETRY MODEL`; terminal unavailable/loading also has a distinct placeholder hydration visual state.
 
-V14.1.4 remains the Gallery-authoring readiness foundation: assigned Floor/Walls/Ceiling/Props settle before authoring preview, while an unassigned role remains legal. V14.1.3 remains the Scene-ownership/cancellation foundation.
+Space startup import callback success now requires positive renderable geometry, so strict Floor/Walls/Ceiling and assigned Gallery-authoring Props cannot settle on an empty GLB callback. V14.1.4 assigned-Space terminal settle and V14.1.5 Admin visible-batch infrastructure remain in place.
 
-The three-file target remains:
+**Public background model timing is intentionally preserved in V14.1.5.1.** The end-to-end V14.1 target has nevertheless changed: final Public interaction must not start while walkthrough-visible Frames/Sculptures/Shared Props/Venue Props are still assembling. That product-level migration is scheduled for V14.1.9 after shared host, transition-session ownership and readiness authority are unified in V14.1.6–V14.1.8. V14.1.10 then closes no-reload residency and frame-time/jank behavior.
+
+The three-file lifecycle/loading authority remains:
 
 ```text
 scene-lifecycle-controller.js
-scene-loading-orchestrator.js   (V14.1.2 shell; V14.1.3 cancellation; V14.1.5 lifecycle task reporting)
-scene-loading-policies.js       (V14.1.1 canonical context/readiness/family policy)
+scene-loading-orchestrator.js
+scene-loading-policies.js
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.5 requires no SQL and does not enable latest-wins navigation.
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.5.1 requires no SQL and does not yet enable latest-wins navigation.
 
 ## Product model
 
@@ -52,11 +54,12 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/bootstrap/admin-asset-workspace.js` — canonical left Asset Manager, V13.3 Prop drag/PLACE launcher and V13.4 artwork-only Frame binding/drag Browser shared by standalone and inline Admin.
 - `src/runtime/shared-asset-state.js` — V13.1 immutable Shared Asset reference/state-manifest contract for later Exhibition dressing.
 - `src/validation/shared-asset-validation.js` — V13.1 Prop/Frame GLB validation coordinator.
-- `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
+- `src/validation/sculpture-model-validation.js` — V14.1.5.1 direct Sculpture deep GLB validation coordinator.
+- `src/workers/shared-asset-glb-validator-worker.js` — hardened streaming renderable-GLB validator used by reusable Props/Frames and V14.1.5.1 Sculpture validation.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
 - `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract.
-- `src/runtime/scene-loading-orchestrator.js` — high-level Scene loading shell; V14.1.5 adds lifecycle task registration/snapshots to the existing cancellable Scene-owned loading sessions.
+- `src/runtime/scene-loading-orchestrator.js` — high-level Scene loading shell; V14.1.5 task reporting remains active and V14.1.5.1 bumps current runtime identity without changing ownership semantics.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
@@ -347,7 +350,7 @@ From repository root:
 npm run check
 ```
 
-This performs production build, syntax, repository verification and consolidated regression suites, including C23 executable GLB worker fixtures, C24 Exhibition/Gallery assignment invariants, C25/C25.4 cross-space/media readiness tests and C26 carousel/Space-entry policy invariants.
+This performs production build, syntax, repository verification and consolidated regression suites, including C23 Space GLB fixtures, V14.1.5.1 Sculpture GLB fixtures, C24 Exhibition/Gallery assignment invariants, C25/C25.4 cross-space/media readiness tests and C26 carousel/Space-entry policy invariants.
 
 SQL package verification is separate:
 
@@ -355,7 +358,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.5 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.5.1 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.5 Scene Loading Orchestrator
+  Exhibition Platform — V14.1.5.1 Scene Loading Orchestrator
   Compatibility shell above SceneLifecycleController. It owns high-level loading request/session
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
@@ -236,7 +236,7 @@ export function createSceneLoadingOrchestrator(options = {}) {
   let disposed = false;
   const recentSessions = [];
   const debug = {
-    stage: "V14.1.5",
+    stage: "V14.1.5.1",
     schema: SCENE_LOADING_ORCHESTRATOR_SCHEMA,
     requests: 0,
     starts: 0,

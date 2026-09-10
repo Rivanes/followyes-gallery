@@ -233,7 +233,7 @@ assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId()
 
 const orchestratorDebug = orchestrator.getDebug();
 assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
-assert.equal(orchestratorDebug.stage, 'V14.1.5');
+assert.equal(orchestratorDebug.stage, 'V14.1.5.1');
 assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.3 must not silently enable latest-wins behavior before V14.1.7');
 assert.ok(orchestratorDebug.requests >= 2);
 assert.ok(orchestratorDebug.recentSessions.length >= 2);

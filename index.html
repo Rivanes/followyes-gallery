@@ -1741,7 +1741,7 @@
         try {
           window.dispatchEvent(new CustomEvent("gallery-debug-status", {
             detail: {
-              stage: "V14.1.5",
+              stage: "V14.1.5.1",
               phase: phase || "startup",
               technicalMessage: technicalMessage || null
             }
@@ -1799,7 +1799,7 @@
       });
 
       window.ExhibitionPlatformBootGuard = {
-        stage: "V14.1.5",
+        stage: "V14.1.5.1",
         schema: "exhibition-selection-start.v2",
         setLanguage: setLanguage,
         setPhase: setPhase,
@@ -1815,6 +1815,6 @@
     })();
   </script>
 
-  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=v14_1_5_admin_visible_hydration_batch_20260910" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
+  <script type="module" src="./src/bootstrap/gallery-viewer-bootstrap.js?v=v14_1_5_1_glb_runtime_truth_20260910" onerror="window.ExhibitionPlatformBootGuard && window.ExhibitionPlatformBootGuard.fail('viewer-bootstrap', null, new Error('Viewer bootstrap could not be loaded.'))"></script>
 </body>
 </html>

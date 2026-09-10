@@ -436,7 +436,7 @@ async function streamSource(source, onProgress) {
 async function validate(message) {
   const assetType=safeText(message.assetType).toLowerCase();
   const errors=[], warnings=[];
-  if(!["prop","frame"].includes(assetType)) errors.push(issue("ASSET_TYPE_INVALID",`Unsupported Shared Asset type: ${assetType||"(missing)"}.`));
+  if(!["prop","frame","sculpture"].includes(assetType)) errors.push(issue("ASSET_TYPE_INVALID",`Unsupported renderable GLB type: ${assetType||"(missing)"}.`));
   const streamed=await streamSource(message.source,(loaded,total)=>postMessage({type:"progress",id:message.id,loaded,total}));
   errors.push(...streamed.parsed.errors);
   let summary={};
