@@ -309,6 +309,11 @@ assert.ok(source.includes('var galleryAuthoringSpacePreview = galleryLegacyScene
 assert.ok(source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)'));
 assert.ok(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]'));
 assert.ok(source.includes('galleryCriticalAssetNames = galleryAuthoringSpacePreview ? [] : galleryStrictCriticalAssetNames.slice()'));
+assert.ok(source.includes('galleryAuthoringPreviewBlockingAssetNames'), 'V14.1.4 must keep authoring validity separate from assigned preview settle');
+assert.ok(source.includes('if (galleryAuthoringSpacePreview && galleryAuthoringPreviewBlockingAssetNames.indexOf(assetName) !== -1)'), 'assigned authoring assets must bypass deferred optional queue');
+assert.ok(source.includes('galleryStartupBlockingAssetNames = galleryAuthoringSpacePreview'), 'authoring preview needs its own startup blocking set');
+assert.ok(source.includes('authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug)'), 'authoring settle debug contract missing');
+assert.ok(admin.includes('Gallery preview is partial. Assigned asset failed to load:'), 'assigned authoring asset failure must be explicit in Admin UI');
 assert.ok(source.includes('galleryAuthoringSpacePreview ? optionalGallerySpaceAsset("floor") : requireGallerySpaceAsset("floor")'));
 assert.ok(viewer.includes('currentRuntime && currentRuntime.context === "gallery-authoring" ? activePublicRuntime : currentRuntime'));
 

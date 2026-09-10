@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.3 Admin Workspace / Scene Loading Orchestrator
+  Exhibition Platform — V14.1.4 Admin Workspace / Scene Loading Orchestrator
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_3_scene_ownership_hardening_20260910";
-import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_3_scene_ownership_hardening_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_4_gallery_authoring_assigned_space_settle_20260910";
+import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_4_gallery_authoring_assigned_space_settle_20260910";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -24,8 +24,8 @@ import {
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V14.1.3";
-const ENGINE_CACHE_KEY = "v14_1_3_scene_ownership_hardening_20260910";
+const STAGE = "V14.1.4";
+const ENGINE_CACHE_KEY = "v14_1_4_gallery_authoring_assigned_space_settle_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -1753,6 +1753,19 @@ async function previewSelectedGallery(reason = "admin-gallery-selection") {
   scene = sceneLifecycleController.getActiveScene();
   if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
   if (engine && engine.resize) engine.resize();
+
+  // V14.1.4 — assigned authoring assets are allowed to fail terminally, but that
+  // failure must be visible instead of being hidden behind generic READY.
+  const policyDebug = window.GalleryApp && typeof window.GalleryApp.getSceneLoadingPolicyDebug === "function"
+    ? window.GalleryApp.getSceneLoadingPolicyDebug()
+    : null;
+  const authoringSettle = policyDebug && policyDebug.authoringPreviewSettle ? policyDebug.authoringPreviewSettle : null;
+  const failedAssigned = authoringSettle && Array.isArray(authoringSettle.failed) ? authoringSettle.failed : [];
+  if (failedAssigned.length) {
+    const failedLabel = failedAssigned.map((role) => role === "wall" ? "Walls" : role.charAt(0).toUpperCase() + role.slice(1)).join(", ");
+    setViewportStatus(`${venue.name || venue.slug} · Gallery Draft preview · unavailable: ${failedLabel}`);
+    showToast(`Gallery preview is partial. Assigned asset failed to load: ${failedLabel}.`);
+  }
   return true;
 }
 

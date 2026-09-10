@@ -1,4 +1,8 @@
-import { resolveSceneLoadingPolicyFromRuntimeOptions, getLegacySceneModeFlags } from "./runtime/scene-loading-policies.js";
+import {
+    resolveSceneLoadingPolicyFromRuntimeOptions,
+    getLegacySceneModeFlags,
+    getSceneLoadingSpaceRolePolicy
+} from "./runtime/scene-loading-policies.js";
 
 /*
   Exhibition Platform
@@ -129,6 +133,7 @@ import { resolveSceneLoadingPolicyFromRuntimeOptions, getLegacySceneModeFlags } 
   - C6C8C25: Cross-Space Runtime — one persistent Babylon Engine/canvas may recreate the active Scene when the immutable Venue Version changes; exact venue_version_id is the Space identity and lifecycle events are generation-scoped.
   - V14.1.2: Scene Loading Orchestrator — adds the compatibility orchestrator shell and per-request/session identity while preserving legacy execution/readiness behavior.
   - V14.1.3: Scene Ownership Hardening — cancels Scene-local async work on disposal and blocks stale Space/state/Frame/model callbacks from mutating dead Scenes.
+  - V14.1.4: Gallery Authoring Assigned-Space Settle — assigned Floor/Walls/Ceiling/Props start immediately in authoring preview and must reach loaded/failed terminal state before compatibility READY.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -904,6 +909,11 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     var galleryStartupDeferredOptionalAssetsReleased = false;
 
     function shouldGalleryDeferOptionalStartupAsset(assetName) {
+        // V14.1.4: an assigned authoring Space role is optional for structural validity, but it is
+        // foreground for preview readiness. It must start now, never in the post-READY optional queue.
+        if (galleryAuthoringSpacePreview && galleryAuthoringPreviewBlockingAssetNames.indexOf(assetName) !== -1) {
+            return false;
+        }
         return galleryOptionalAssetNames.indexOf(assetName) !== -1;
     }
 
@@ -15993,18 +16003,47 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         updateViewerIntroInteractionState();
     }
 
-    // C6C8C23 - Space asset contract: Floor / Walls / Ceiling are critical; Props are optional.
+    // C6C8C23 keeps Public/Admin structural validity strict: Floor / Walls / Ceiling are critical; Props are optional.
+    // V14.1.4 separates that validity rule from Gallery-authoring preview readiness. In authoring, an
+    // unassigned role is legal and creates no task; every assigned Floor/Walls/Ceiling/Props role follows
+    // the canonical loading policy and must reach a terminal loaded/failed state before preview READY.
     var galleryHasFloorAsset = !!(gallerySpaceDefinition && gallerySpaceDefinition.assets && gallerySpaceDefinition.assets.floor);
     var galleryHasWallAsset = !!(gallerySpaceDefinition && gallerySpaceDefinition.assets && gallerySpaceDefinition.assets.walls);
     var galleryHasCeilingAsset = !!(gallerySpaceDefinition && gallerySpaceDefinition.assets && gallerySpaceDefinition.assets.ceiling);
     var galleryHasOptionalProps = !!(gallerySpaceDefinition && gallerySpaceDefinition.assets && gallerySpaceDefinition.assets.props);
+    var galleryAssignedAssetNames = [
+        galleryHasFloorAsset ? "floor" : null,
+        galleryHasWallAsset ? "wall" : null,
+        galleryHasCeilingAsset ? "ceiling" : null,
+        galleryHasOptionalProps ? "props" : null
+    ].filter(Boolean);
     var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"];
     var galleryCriticalAssetNames = galleryAuthoringSpacePreview ? [] : galleryStrictCriticalAssetNames.slice();
     var galleryOptionalAssetNames = galleryAuthoringSpacePreview
-        ? ([galleryHasFloorAsset ? "floor" : null, galleryHasWallAsset ? "wall" : null, galleryHasCeilingAsset ? "ceiling" : null, galleryHasOptionalProps ? "props" : null].filter(Boolean))
+        ? galleryAssignedAssetNames.slice()
         : (galleryHasOptionalProps ? ["props"] : []);
-    var galleryAssetNames = galleryCriticalAssetNames.concat(galleryOptionalAssetNames);
-    var assetsToLoad = galleryCriticalAssetNames.length;
+
+    function getGalleryLoadingPolicyRoleForAssetName(assetName) {
+        return assetName === "wall" ? "walls" : assetName;
+    }
+
+    var galleryAuthoringPreviewBlockingAssetNames = galleryAuthoringSpacePreview
+        ? galleryAssignedAssetNames.filter(function (assetName) {
+            var rolePolicy = getSceneLoadingSpaceRolePolicy(
+                galleryLoadingPolicy,
+                getGalleryLoadingPolicyRoleForAssetName(assetName),
+                { assigned: true }
+            );
+            return rolePolicy.mustSettleBeforePreview === true;
+        })
+        : [];
+    var galleryStartupBlockingAssetNames = galleryAuthoringSpacePreview
+        ? galleryAuthoringPreviewBlockingAssetNames.slice()
+        : galleryCriticalAssetNames.slice();
+    var galleryAssetNames = galleryCriticalAssetNames.concat(galleryOptionalAssetNames).filter(function (assetName, index, list) {
+        return list.indexOf(assetName) === index;
+    });
+    var assetsToLoad = galleryStartupBlockingAssetNames.length;
     var assetsLoaded = 0;
     var galleryWebStateLoadedOnce = false;
     var galleryStartupWatchdogTimer = null;
@@ -17410,6 +17449,20 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, 700);
     }
 
+    var galleryAuthoringPreviewSettleDebug = {
+        stage: "V14.1.4",
+        phase: galleryLoadingPolicy && galleryLoadingPolicy.readiness ? galleryLoadingPolicy.readiness.previewPhase : null,
+        enabled: !!galleryAuthoringSpacePreview,
+        assigned: galleryAssignedAssetNames.slice(),
+        blocking: galleryAuthoringPreviewBlockingAssetNames.slice(),
+        settled: [],
+        failed: [],
+        pending: galleryAuthoringPreviewBlockingAssetNames.slice(),
+        complete: !galleryAuthoringSpacePreview || galleryAuthoringPreviewBlockingAssetNames.length === 0,
+        settledAt: !galleryAuthoringSpacePreview || galleryAuthoringPreviewBlockingAssetNames.length === 0 ? Date.now() : null,
+        lastReason: "initial"
+    };
+
     var galleryAssetLoadDebug = {
         loaded: {},
         failed: {},
@@ -17418,6 +17471,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         missingCritical: [],
         missingPending: [],
         optionalFailed: [],
+        previewBlocking: galleryStartupBlockingAssetNames.slice(),
+        previewPending: galleryStartupBlockingAssetNames.slice(),
         criticalReady: false,
         failureShown: false,
         watchdogFired: false,
@@ -17432,6 +17487,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             mobileAssetsToLoad: assetsToLoad,
             sequentialCriticalAssets: false,
             startupDeferredOptionalAssets: true,
+            authoringAssignedAssetsImmediate: true,
             singleStartupGate: true
         },
         startedAt: Date.now(),
@@ -17887,6 +17943,29 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
+    function getGalleryPendingStartupBlockingAssetNames() {
+        return galleryStartupBlockingAssetNames.filter(function (assetName) {
+            return !galleryAssetLoadDebug.loaded[assetName] && !galleryAssetLoadDebug.failed[assetName];
+        });
+    }
+
+    function refreshGalleryAuthoringPreviewSettleDebug(reason) {
+        galleryAuthoringPreviewSettleDebug.lastReason = reason || galleryAuthoringPreviewSettleDebug.lastReason || "refresh";
+        if (!galleryAuthoringPreviewSettleDebug.enabled) return galleryAuthoringPreviewSettleDebug;
+        galleryAuthoringPreviewSettleDebug.settled = galleryAuthoringPreviewBlockingAssetNames.filter(function (assetName) {
+            return !!galleryAssetLoadDebug.loaded[assetName] || !!galleryAssetLoadDebug.failed[assetName];
+        });
+        galleryAuthoringPreviewSettleDebug.failed = galleryAuthoringPreviewBlockingAssetNames.filter(function (assetName) {
+            return !!galleryAssetLoadDebug.failed[assetName];
+        });
+        galleryAuthoringPreviewSettleDebug.pending = getGalleryPendingStartupBlockingAssetNames();
+        galleryAuthoringPreviewSettleDebug.complete = galleryAuthoringPreviewSettleDebug.pending.length === 0;
+        if (galleryAuthoringPreviewSettleDebug.complete && !galleryAuthoringPreviewSettleDebug.settledAt) {
+            galleryAuthoringPreviewSettleDebug.settledAt = Date.now();
+        }
+        return galleryAuthoringPreviewSettleDebug;
+    }
+
     function refreshGalleryAssetReadinessDebug(reason) {
         galleryAssetLoadDebug.lastReason = reason || galleryAssetLoadDebug.lastReason || "refresh";
         galleryAssetLoadDebug.missingCritical = getGalleryMissingCriticalAssetNames();
@@ -17894,13 +17973,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryAssetLoadDebug.optionalFailed = galleryOptionalAssetNames.filter(function (assetName) {
             return !!galleryAssetLoadDebug.failed[assetName];
         });
+        galleryAssetLoadDebug.previewPending = getGalleryPendingStartupBlockingAssetNames();
         galleryAssetLoadDebug.criticalReady = galleryAssetLoadDebug.missingCritical.length === 0;
+        refreshGalleryAuthoringPreviewSettleDebug(reason || "asset-readiness-refresh");
 
         galleryAssetNames.forEach(function (assetName) {
             var entry = galleryAssetLoadDebug.entries[assetName] || {};
             entry.meshCount = getGalleryAssetMeshCount(assetName);
             entry.critical = galleryCriticalAssetNames.indexOf(assetName) !== -1;
             entry.optional = galleryOptionalAssetNames.indexOf(assetName) !== -1;
+            entry.previewBlocking = galleryStartupBlockingAssetNames.indexOf(assetName) !== -1;
+            entry.authoringAssigned = galleryAuthoringPreviewBlockingAssetNames.indexOf(assetName) !== -1;
             entry.status = galleryAssetLoadDebug.loaded[assetName]
                 ? "loaded"
                 : galleryAssetLoadDebug.failed[assetName]
@@ -18634,10 +18717,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         refreshGalleryAssetReadinessDebug("completeGalleryStartupIfReady");
 
         if (assetsLoaded < assetsToLoad || galleryWebStateLoadedOnce) {
-            updateGalleryLoaderStatus(
-                "Loading gallery assets " + assetsLoaded + " / " + assetsToLoad + "...",
-                "Required shell is loading first. Visible content will be prepared before viewer entry."
-            );
+            if (galleryAuthoringSpacePreview && !galleryWebStateLoadedOnce) {
+                updateGalleryLoaderStatus(
+                    "Settling assigned Gallery assets " + assetsLoaded + " / " + assetsToLoad + "...",
+                    "Assigned Floor, Walls, Ceiling and Props must finish loading or fail explicitly before the Draft preview is ready."
+                );
+            } else {
+                updateGalleryLoaderStatus(
+                    "Loading gallery assets " + assetsLoaded + " / " + assetsToLoad + "...",
+                    "Required shell is loading first. Visible content will be prepared before viewer entry."
+                );
+            }
             return;
         }
 
@@ -18655,7 +18745,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (galleryAssetLoadDebug.optionalFailed.length) {
-            console.warn("Optional gallery assets failed. Viewer can continue.", galleryAssetLoadDebug.optionalFailed, galleryAssetLoadDebug);
+            if (galleryAuthoringSpacePreview) {
+                console.error(
+                    "Assigned Gallery authoring Space assets reached terminal failure. Preview will remain partial and the failure is explicit.",
+                    galleryAuthoringPreviewSettleDebug.failed,
+                    galleryAssetLoadDebug
+                );
+            } else {
+                console.warn("Optional gallery assets failed. Viewer can continue.", galleryAssetLoadDebug.optionalFailed, galleryAssetLoadDebug);
+            }
         }
 
         updateGalleryLoaderStatus(
@@ -18709,7 +18807,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryAssetLoadDebug.entries[assetName] = entry;
 
-        if (galleryCriticalAssetNames.indexOf(assetName) !== -1) {
+        if (galleryStartupBlockingAssetNames.indexOf(assetName) !== -1) {
+            // `assetsLoaded` is the historical startup counter. V14.1.4 counts terminal
+            // preview-blocking outcomes here; failed authoring assets are terminal too.
             assetsLoaded++;
         }
 
@@ -18726,7 +18826,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryAssetLoadDebug.watchdogFired = true;
         console.warn("Gallery startup watchdog fired. Missing asset callbacks will be marked failed.", galleryAssetLoadDebug);
 
-        getGalleryMissingCriticalAssetNames().forEach(function (assetName) {
+        getGalleryPendingStartupBlockingAssetNames().forEach(function (assetName) {
             assetLoaded(assetName, true, { reason: "startup-watchdog-timeout" });
         });
 
@@ -18764,7 +18864,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 retryDelaysMs: galleryAssetRetryDelaysMs.slice(),
                 startupWatchdogMs: galleryStartupWatchdogMs,
                 deviceProfile: cloneGalleryFastStartState(galleryDeviceProfile),
-                assetsToLoad: assetsToLoad
+                assetsToLoad: assetsToLoad,
+                startupBlockingAssets: galleryStartupBlockingAssetNames.slice(),
+                authoringPreviewSettle: JSON.parse(JSON.stringify(galleryAuthoringPreviewSettleDebug))
             };
         }
     };
@@ -18870,6 +18972,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, "retry-queued:" + assetName);
 
         function runAttempt() {
+            if (galleryAssetLoadDebug.loaded[assetName] || galleryAssetLoadDebug.failed[assetName]) {
+                done = true;
+                updateGalleryAssetRetryEntry(assetName, {
+                    status: galleryAssetLoadDebug.failed[assetName] ? "failed" : "loaded",
+                    finishedAt: Date.now(),
+                    finalFailureReason: galleryAssetLoadDebug.failed[assetName] ? "already-terminal" : null
+                }, "retry-terminal-before-attempt:" + assetName);
+                return null;
+            }
             if (done || !isGallerySceneWorkCurrent()) {
                 done = true;
                 updateGalleryAssetRetryEntry(assetName, {
@@ -18893,6 +19004,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, "Attempt " + attempt + " of " + maxAttempts + " for " + sceneFilename);
 
             function succeedAttempt(meshes) {
+                if (galleryAssetLoadDebug.failed[assetName]) {
+                    // A watchdog or another terminal path already settled this assigned asset as failed.
+                    // Do not let a very late network success mutate a preview after authoring READY.
+                    disposeStaleImportedMeshes(meshes || []);
+                    settled = true;
+                    done = true;
+                    updateGalleryAssetRetryEntry(assetName, {
+                        status: "failed",
+                        finishedAt: Date.now(),
+                        finalFailureReason: "late-success-after-terminal-failure"
+                    }, "retry-late-success-discarded:" + assetName);
+                    return;
+                }
                 if (settled || done || token !== activeToken || !isGallerySceneWorkCurrent()) {
                     disposeStaleImportedMeshes(meshes || []);
                     settled = true;
@@ -45719,12 +45843,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? galleryLoadingSession.getSnapshot()
                 : null;
             return {
-                stage: "V14.1.3",
+                stage: "V14.1.4",
                 schema: galleryLoadingPolicy.schema,
                 contextKind: galleryLoadingPolicy.contextKind,
                 readiness: cloneGalleryJson(galleryLoadingPolicy.readiness),
                 sceneReuse: cloneGalleryJson(galleryLoadingPolicy.sceneReuse),
                 compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility),
+                authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug),
                 sceneWorkCurrent: isGallerySceneWorkCurrent(),
                 loadingSession: loadingSessionSnapshot ? cloneGalleryJson(loadingSessionSnapshot) : null
             };

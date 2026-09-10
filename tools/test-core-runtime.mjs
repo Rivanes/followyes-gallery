@@ -1427,6 +1427,13 @@ for (const role of ['floor', 'walls', 'ceiling', 'props']) {
   assert.equal(assigned.mustSettleBeforePreview, true, `authoring/${role} assigned slot must settle before preview`);
 }
 
+const authoringBlockingRoles = (assignedRoles) => ['floor', 'walls', 'ceiling', 'props'].filter((role) =>
+  getSceneLoadingSpaceRolePolicy(authoringPolicy, role, { assigned: assignedRoles.includes(role) }).mustSettleBeforePreview
+);
+assert.deepEqual(authoringBlockingRoles([]), [], 'authoring zero-assignment preview must have zero Space settle tasks');
+assert.deepEqual(authoringBlockingRoles(['floor']), ['floor'], 'authoring partial assignment must wait only for assigned roles');
+assert.deepEqual(authoringBlockingRoles(['floor', 'walls', 'ceiling', 'props']), ['floor', 'walls', 'ceiling', 'props'], 'authoring full assignment must wait for every assigned Space role');
+
 assert.equal(getSceneLoadingReadinessContract(publicPolicy).previewPhase, 'interaction-ready');
 assert.equal(getSceneLoadingReadinessContract(adminPolicy).previewPhase, 'admin-visible-settled');
 assert.equal(getSceneLoadingReadinessContract(authoringPolicy).previewPhase, 'authoring-preview-settled');
@@ -1456,6 +1463,11 @@ const coreSource = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.met
 assert.ok(coreSource.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)'), 'Core compatibility wiring does not resolve the canonical loading policy');
 assert.ok(coreSource.includes('getLegacySceneModeFlags(galleryLoadingPolicy)'), 'Core compatibility wiring does not preserve legacy execution flags through policy');
 assert.ok(coreSource.includes('getSceneLoadingPolicyDebug: function ()'), 'Policy debug surface missing');
+assert.ok(coreSource.includes('galleryAuthoringPreviewBlockingAssetNames'), 'V14.1.4 authoring preview blocking set missing');
+assert.ok(coreSource.includes('getSceneLoadingSpaceRolePolicy(\n                galleryLoadingPolicy'), 'V14.1.4 core must derive assigned authoring settle behavior from canonical policy');
+assert.ok(coreSource.includes('galleryStartupBlockingAssetNames.indexOf(assetName) !== -1'), 'V14.1.4 terminal startup counter must use preview-blocking assets');
+assert.ok(coreSource.includes('getGalleryPendingStartupBlockingAssetNames().forEach'), 'V14.1.4 watchdog must terminate pending authoring assignments');
+assert.ok(coreSource.includes('retry-late-success-discarded:'), 'V14.1.4 late success after terminal failure must be discarded');
 
-console.log('V14.1.1 pure Scene Loading policy matrix and compatibility wiring tests passed.');
+console.log('V14.1.1 + V14.1.4 Scene Loading policy/authoring settle tests passed.');
 })();

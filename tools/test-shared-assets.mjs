@@ -30,7 +30,7 @@ function expect(label, ok) {
   console.log(`✓ ${label}`);
 }
 
-expect('package identity is V13.6 Production Closure', pkg.version === '0.14.1-v14-1-3-scene-ownership-hardening');
+expect('package identity is V13.6 Production Closure', pkg.version === '0.14.1-v14-1-4-gallery-authoring-assigned-space-settle');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
 expect('validator worker accepts prop/frame rather than Gallery Space roles', workerSource.includes('["prop","frame"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));

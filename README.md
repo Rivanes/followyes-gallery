@@ -1,24 +1,26 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.3 — Scene Ownership / Cancellation Hardening**.
+Current repository release: **V14.1.4 — Gallery Authoring Assigned-Space Settle**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.3 Scene Ownership / Cancellation Hardening
+## V14.1.4 Gallery Authoring Assigned-Space Settle
 
-V14.1.3 gives every physical Scene a real loading-session ownership boundary. The session is bound to the exact lifecycle ID, remains valid after initial READY for background work, and is cancelled when that Scene is disposed. Late startup Space retries/deferred imports, startup state preload/apply, Frame GLB and model/Prop GLB callbacks must pass one Scene-current predicate before mutating runtime state.
+V14.1.4 fixes Gallery Draft preview readiness without changing the Public loading policy. In `gallery-authoring`, an unassigned Floor/Walls/Ceiling/Props role remains legal and creates no loading task; an assigned role is derived from the canonical Scene Loading policy, starts immediately and must reach terminal `loaded` or explicit `failed` before the authoring preview proceeds.
 
-The previously confirmed stale-global bug is also fixed: `ExhibitionPlatformWebState` now carries the exact `__lifecycleId`, so disposal clears only the global owned by the outgoing Scene.
+The authoring settle gate is deliberately separate from the Public structural-critical gate. Assigned authoring Space assets no longer wait in the post-interaction deferred optional queue. The startup watchdog explicitly terminalizes a missing assigned callback, Admin surfaces a partial-preview warning for failed assigned assets, and a GLB that succeeds only after terminal failure is discarded instead of appearing after READY.
+
+V14.1.3 remains the underlying Scene-ownership foundation: every physical Scene has a cancellable loading session bound to the exact lifecycle ID, and late Scene-owned work is rejected after disposal/lifecycle mismatch.
 
 The three-file target remains:
 
 ```text
 scene-lifecycle-controller.js
 scene-loading-orchestrator.js   (V14.1.2 shell; V14.1.3 session cancellation)
-scene-loading-policies.js       (implemented V14.1.1)
+scene-loading-policies.js       (V14.1.1 policy; V14.1.4 authoring assigned-settle contract)
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.3 requires no SQL and still does not change authoring readiness or enable latest-wins navigation.
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.4 requires no SQL and does not enable latest-wins navigation.
 
 ## Product model
 
@@ -351,7 +353,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.3 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.4 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

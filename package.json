@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.14.1-v14-1-3-scene-ownership-hardening",
+  "version": "0.14.1-v14-1-4-gallery-authoring-assigned-space-settle",
   "private": true,
-  "description": "Exhibition Platform — V14.1.3 Scene Ownership Hardening",
+  "description": "Exhibition Platform — V14.1.4 Gallery Authoring Assigned-Space Settle",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
