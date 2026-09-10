@@ -49,8 +49,8 @@ const entryReader = extractFunction(admin, 'readRequiredFiniteGalleryNumber');
 const mutationWrapper = extractFunction(admin, 'withGalleryMutation');
 const detailRenderer = extractFunction(admin, 'renderGalleryDetail');
 
-expect('release package is V13.6 Production Closure', pkg.version.includes('v14-1-1-scene-loading-policies'));
-expect('Admin release identity is V13.6', admin.includes('const STAGE = "V14.1.1"'));
+expect('release package is V13.6 Production Closure', pkg.version.includes('v14-1-2-scene-loading-orchestrator'));
+expect('Admin release identity is V13.6', admin.includes('const STAGE = "V14.1.2"'));
 expect('Gallery data adapter uses canonical Venue RPCs', api.includes('admin_create_gallery_with_initial_draft') && api.includes('admin_begin_venue_draft') && api.includes('admin_set_venue_asset_slot'));
 expect('new asset paths are stable UUID owner paths, not Gallery names', api.includes('venues/${venue}/versions/${version}/assets/${normalizedRole}/') && !api.includes('venue.slug'));
 expect('the controlled Gallery role contract remains exposed for C23', api.includes('["floor", "walls", "ceiling", "props"]'));

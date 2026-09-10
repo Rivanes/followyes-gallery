@@ -164,6 +164,10 @@ export function createSceneLifecycleController(options = {}) {
         ? (options.getCreateSceneOptions(runtime, createOptions) || {})
         : {};
       const sceneOptions = createOptions.sceneOptions && typeof createOptions.sceneOptions === "object" ? createOptions.sceneOptions : {};
+      const loadingSession = sceneOptions.loadingSession && typeof sceneOptions.loadingSession === "object" ? sceneOptions.loadingSession : null;
+      if (loadingSession && typeof loadingSession.bindSceneLifecycleId === "function") {
+        loadingSession.bindSceneLifecycleId(lifecycleId);
+      }
       const runtimeExhibitionData = sceneOptions.exhibitionData || exhibitionData;
       scene = engineModule.createScene(engine, canvas, {
         ...extraOptions,

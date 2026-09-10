@@ -1,22 +1,22 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.1 — Scene Loading Policies**.
+Current repository release: **V14.1.2 — Scene Loading Orchestrator Compatibility Shell**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.1 Scene Loading Policies
+## V14.1.2 Scene Loading Orchestrator Compatibility Shell
 
-V14.1.1 is the first deployable slice of the V14 Scene Loading/Lifecycle cleanup. It adds a pure policy module for Public Exhibition, Admin Exhibition, Gallery authoring and Test Gallery, then derives the existing core mode flags from that module. It intentionally does **not** change readiness enforcement or move loading orchestration yet.
+V14.1.2 adds the high-level Scene Loading Orchestrator compatibility shell above the existing C25 SceneLifecycleController. Viewer and standalone Admin now instantiate the orchestrator, which owns request/transition/loading-session identity and injects the V14 policy/session into createScene while delegating the existing physical Scene and readiness behavior unchanged.
 
 The three-file target remains:
 
 ```text
 scene-lifecycle-controller.js
-scene-loading-orchestrator.js   (starts V14.1.2)
+scene-loading-orchestrator.js   (implemented V14.1.2)
 scene-loading-policies.js       (implemented V14.1.1)
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.1 requires no SQL.
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.2 requires no SQL and does not yet fix authoring readiness or enable latest-wins navigation.
 
 ## Product model
 
@@ -49,7 +49,8 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
-- `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract; compatibility-only wiring in this slice.
+- `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract.
+- `src/runtime/scene-loading-orchestrator.js` — V14.1.2 high-level compatibility shell owning request/transition/loading-session identity while delegating physical Scene work to the controller.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
@@ -348,7 +349,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.1 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.2 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

@@ -127,7 +127,7 @@ import { resolveSceneLoadingPolicyFromRuntimeOptions, getLegacySceneModeFlags } 
   - C6C8C22: Gallery Management — adds only a read-only camera-pose bridge for isolated Test Gallery Entry capture; Gallery CRUD/versioning remains outside the Babylon engine.
   - C6C8C23: Space Model Validation — technical GLB/hash validation remains outside the engine; Floor/Walls/Ceiling stay the critical Space shell while Props becomes an optional resident Space asset that cannot block interaction readiness.
   - C6C8C25: Cross-Space Runtime — one persistent Babylon Engine/canvas may recreate the active Scene when the immutable Venue Version changes; exact venue_version_id is the Space identity and lifecycle events are generation-scoped.
-  - V14.1.1: Scene Loading Policies — adds the pure three-context/four-context loading-policy contract and compatibility wiring without changing legacy execution/readiness behavior.
+  - V14.1.2: Scene Loading Orchestrator — adds the compatibility orchestrator shell and per-request/session identity while preserving legacy execution/readiness behavior.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -143,6 +143,7 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     // wiring intentionally preserves the pre-V14 execution paths; later slices move
     // readiness/orchestration authority out of this Babylon executor layer.
     var galleryLoadingPolicy = resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions);
+    var galleryLoadingSession = runtimeOptions.loadingSession && typeof runtimeOptions.loadingSession === "object" ? runtimeOptions.loadingSession : null;
     var galleryLegacySceneModeFlags = getLegacySceneModeFlags(galleryLoadingPolicy);
     var galleryAuthoringSpacePreview = galleryLegacySceneModeFlags.authoringSpacePreview === true;
     var galleryAdminWorkspaceMode = galleryLegacySceneModeFlags.adminWorkspace === true && !galleryAuthoringSpacePreview;
@@ -45613,13 +45614,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             };
         },
         getSceneLoadingPolicyDebug: function () {
+            var loadingSessionSnapshot = galleryLoadingSession && typeof galleryLoadingSession.getSnapshot === "function"
+                ? galleryLoadingSession.getSnapshot()
+                : null;
             return {
-                stage: "V14.1.1",
+                stage: "V14.1.2",
                 schema: galleryLoadingPolicy.schema,
                 contextKind: galleryLoadingPolicy.contextKind,
                 readiness: cloneGalleryJson(galleryLoadingPolicy.readiness),
                 sceneReuse: cloneGalleryJson(galleryLoadingPolicy.sceneReuse),
-                compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility)
+                compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility),
+                loadingSession: loadingSessionSnapshot ? cloneGalleryJson(loadingSessionSnapshot) : null
             };
         },
         isDraftPreviewActive: function () {

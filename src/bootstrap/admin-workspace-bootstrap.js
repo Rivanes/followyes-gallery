@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.1 Admin Workspace / Scene Loading Policies
+  Exhibition Platform — V14.1.2 Admin Workspace / Scene Loading Orchestrator
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -14,7 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_2_scene_loading_orchestrator_20260910";
+import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_2_scene_loading_orchestrator_20260910";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -23,8 +24,8 @@ import {
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V14.1.1";
-const ENGINE_CACHE_KEY = "v14_1_1_scene_loading_policies_20260910";
+const STAGE = "V14.1.2";
+const ENGINE_CACHE_KEY = "v14_1_2_scene_loading_orchestrator_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -1053,7 +1054,7 @@ async function startEngine(initialId, initialSnapshot) {
   engine = new window.BABYLON.Engine(canvas, true, {
     preserveDrawingBuffer: false, stencil: true, antialias: true, powerPreference: "high-performance", adaptToDeviceRatio: false
   });
-  sceneLifecycleController = createSceneLifecycleController({
+  sceneLifecycleController = createSceneLoadingOrchestrator({
     engine,
     canvas,
     engineModule: galleryEngineModule,
@@ -1066,6 +1067,7 @@ async function startEngine(initialId, initialSnapshot) {
       if (inlineRuntimeContext) inlineRuntimeContext.scene = nextScene;
     }
   });
+  window.ExhibitionPlatformSceneLoading = sceneLifecycleController;
   window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
   const started = await sceneLifecycleController.start(initialRuntime, {
     initialSnapshot: initialSnapshot || null,

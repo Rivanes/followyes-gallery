@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createSceneLifecycleController, getRuntimeVenueVersionKey, areRuntimesSameVenueVersion } from '../src/runtime/scene-lifecycle-controller.js';
+import { createSceneLoadingOrchestrator, SCENE_LOADING_ORCHESTRATOR_SCHEMA, SCENE_LOADING_SESSION_SCHEMA } from '../src/runtime/scene-loading-orchestrator.js';
 import { shouldShowPublicSpaceIntro } from '../src/runtime/public-space-entry-policy.js';
 import { buildAuthoringSpaceDefinition, buildSpaceDefinition } from '../src/runtime/space-definition-resolver.js';
 
@@ -191,6 +192,53 @@ controller.dispose();
 assert.equal(engine.scenes.length, 0);
 assert.equal(controller.getActiveScene(), null);
 
+// V14.1.2 — Orchestrator compatibility shell owns the controller and injects
+// immutable policy + request/session identity without changing physical Scene behavior.
+const orchestratorSceneChanges = [];
+const orchestrator = createSceneLoadingOrchestrator({
+  engine,
+  canvas,
+  engineModule,
+  exhibitionData,
+  resolveRuntime: async (reference) => {
+    const resolved = runtimeMap.get(reference);
+    if (!resolved) throw new Error(`unknown orchestrator runtime ${reference}`);
+    return resolved;
+  },
+  getApp: () => window.GalleryApp,
+  onSceneChanged: (scene, rt, lifecycleId, reason) => orchestratorSceneChanges.push({ scene, runtime: rt, lifecycleId, reason }),
+  readinessTimeoutMs: 3000
+});
+const orchestratedStart = await orchestrator.start(runtimeA1, { sceneOptions: { adminWorkspace: false } });
+assert.equal(orchestratedStart.ok, true);
+const orchestratedScene = orchestrator.getActiveScene();
+assert.ok(orchestratedScene.options.loadingPolicy, 'orchestrator must inject loading policy into createScene options');
+assert.equal(orchestratedScene.options.loadingPolicy.contextKind, 'public-exhibition');
+assert.ok(orchestratedScene.options.loadingSession, 'orchestrator must inject loading session into createScene options');
+assert.equal(orchestratedScene.options.loadingSession.schema, SCENE_LOADING_SESSION_SCHEMA);
+assert.equal(orchestratedScene.options.loadingSession.getSceneLifecycleId(), orchestratedScene.options.lifecycleId, 'controller must bind physical lifecycleId before core createScene');
+assert.match(orchestratedScene.options.loadingSession.id, /^v14-loading-/);
+assert.match(orchestratedScene.options.loadingSession.transitionId, /^v14-transition-/);
+
+const orchestratedAdmin = runtime('ex-b', 'venue-version-a2', { spaceId: 'main-gallery', mode: 'admin' });
+const orchestratedSwitch = await orchestrator.switchTo('ex-b', { runtime: orchestratedAdmin, forceRemote: true, sceneOptions: { adminWorkspace: true } });
+assert.equal(orchestratedSwitch.ok, true);
+assert.equal(orchestrator.getActiveRuntime(), orchestratedAdmin);
+const orchestratedAdminScene = orchestrator.getActiveScene();
+assert.equal(orchestratedAdminScene.options.loadingPolicy.contextKind, 'admin-exhibition');
+assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId(), orchestratedAdminScene.options.lifecycleId);
+
+const orchestratorDebug = orchestrator.getDebug();
+assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
+assert.equal(orchestratorDebug.stage, 'V14.1.2');
+assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.2 must not silently enable latest-wins behavior before V14.1.7');
+assert.ok(orchestratorDebug.requests >= 2);
+assert.ok(orchestratorDebug.recentSessions.length >= 2);
+assert.equal(orchestratorDebug.recentSessions.at(-1).contextKind, 'admin-exhibition');
+assert.equal(orchestratorDebug.activeVenueVersionId, 'venue-version-a2');
+orchestrator.dispose();
+assert.equal(engine.scenes.length, 0);
+
 // Source-level contract checks for the integration points that a controller-only fake cannot execute.
 const root = new URL('../', import.meta.url);
 const viewer = fs.readFileSync(new URL('src/bootstrap/gallery-viewer-bootstrap.js', root), 'utf8');
@@ -198,13 +246,17 @@ const admin = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.j
 const source = fs.readFileSync(new URL('src/Gallery_V0_11.js', root), 'utf8');
 const api = fs.readFileSync(new URL('src/data/exhibition-api.js', root), 'utf8');
 
-assert.ok(viewer.includes('createSceneLifecycleController'));
+assert.ok(viewer.includes('createSceneLoadingOrchestrator'));
+assert.ok(viewer.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController'));
+assert.equal(viewer.includes('createSceneLifecycleController'), false, 'Viewer must no longer instantiate the controller outside the orchestrator');
 assert.ok(viewer.includes('const scene = activeScene;'), 'viewer render loop must follow mutable activeScene');
 assert.ok(viewer.includes('switchPublicExhibition(reference'));
 assert.ok(viewer.includes('window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController'));
 assert.ok(viewer.includes('sceneLifecycleController.adoptRuntime(publicRuntime'), 'same-scene Admin→Public must update lifecycle runtime identity');
 assert.ok(viewer.includes('initialPublicExhibitionReference = await ensurePublicExhibitionSelection({ force: resetToHomepageAfterReload })'), 'initial discovery selection must actually drive startup');
-assert.ok(admin.includes('createSceneLifecycleController'));
+assert.ok(admin.includes('createSceneLoadingOrchestrator'));
+assert.ok(admin.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController'));
+assert.equal(admin.includes('createSceneLifecycleController'), false, 'Standalone Admin must no longer instantiate the controller outside the orchestrator');
 assert.ok(admin.includes('sceneLifecycleController.switchTo'), 'Admin Exhibition selection must use lifecycle controller');
 assert.ok(source.includes('venueVersionId: galleryActiveVenueVersionId'), 'serialized/runtime identity must retain exact Venue Version');
 assert.ok(source.includes('Exhibition state belongs to another Gallery Version'), 'state must reject another immutable Gallery Version');

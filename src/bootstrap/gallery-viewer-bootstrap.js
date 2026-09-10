@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.1 — Scene Loading Policies
+  Exhibition Platform — V14.1.2 — Scene Loading Orchestrator
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -9,11 +9,12 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
 import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
-import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_2_scene_loading_orchestrator_20260910";
+import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_2_scene_loading_orchestrator_20260910";
 import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v13_2_left_workspace_asset_manager";
 
-const STAGE = "V14.1.1";
-const ENGINE_CACHE_KEY = "v14_1_1_scene_loading_policies_20260910";
+const STAGE = "V14.1.2";
+const ENGINE_CACHE_KEY = "v14_1_2_scene_loading_orchestrator_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -1194,7 +1195,7 @@ async function startGalleryRuntime() {
     updatePublicRuntimeIdentity(publicRuntime, "replace");
     const navigationHandoff = readNavigationHandoff(publicExhibitionId, publicRuntime.spaceDefinition.id, getRuntimeVenueVersionKey(publicRuntime));
 
-    sceneLifecycleController = createSceneLifecycleController({
+    sceneLifecycleController = createSceneLoadingOrchestrator({
       engine,
       canvas,
       engineModule: galleryEngineModule,
@@ -1209,6 +1210,7 @@ async function startGalleryRuntime() {
         if (window.ExhibitionPlatformViewerRuntime) window.ExhibitionPlatformViewerRuntime.scene = nextScene;
       }
     });
+    window.ExhibitionPlatformSceneLoading = sceneLifecycleController;
     window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
     const started = await sceneLifecycleController.start(publicRuntime, {
       initialSnapshot: navigationHandoff || null,
