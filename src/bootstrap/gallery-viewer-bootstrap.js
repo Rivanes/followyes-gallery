@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.5.1 — GLB Runtime Truth
+  Exhibition Platform — V14.1.6 — Shared Runtime Host
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -9,12 +9,12 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
 import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_5_1_glb_runtime_truth_20260910";
-import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_5_1_glb_runtime_truth_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_6_shared_runtime_host_20260910";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_6_shared_runtime_host_20260910";
 import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v13_2_left_workspace_asset_manager";
 
-const STAGE = "V14.1.5.1";
-const ENGINE_CACHE_KEY = "v14_1_5_1_glb_runtime_truth_20260910";
+const STAGE = "V14.1.6";
+const ENGINE_CACHE_KEY = "v14_1_6_shared_runtime_host_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -417,6 +417,7 @@ let activeEngine = null;
 let activeScene = null;
 let activePublicRuntime = null;
 let sceneLifecycleController = null;
+let sceneRuntimeHost = null;
 let galleryEngineModule = null;
 let publicExhibitionData = null;
 let galleryStartPromise = null;
@@ -760,6 +761,7 @@ async function openInlineAdminWorkspace(exhibitionId) {
     Object.assign(inlineContext, {
       engine: activeEngine,
       scene: activeScene,
+      host: sceneRuntimeHost,
       lifecycle: sceneLifecycleController,
       supabase,
       session: currentSession,
@@ -1135,7 +1137,7 @@ installCanvasContextRecovery(canvas, function () { return activeEngine; });
 
 function installResizeRuntime(engine) {
   // Stage C6C1: mobile DPR and resize are owned by Gallery_V0_11 through the
-  // normalized gallery-mobile-viewport-change event. Bootstrap owns desktop resize only.
+  // normalized gallery-mobile-viewport-change event. V14.1.6 host owns the desktop listener lifetime.
   let mobileOwner = false;
   try {
     const viewportState = window.ExhibitionPlatformMobileViewport && window.ExhibitionPlatformMobileViewport.read
@@ -1144,7 +1146,7 @@ function installResizeRuntime(engine) {
     mobileOwner = !!(viewportState && viewportState.mobile);
   } catch (error) {}
 
-  if (mobileOwner) return;
+  if (mobileOwner) return function () {};
 
   let resizeFrame = 0;
   function scheduleEngineResize() {
@@ -1158,51 +1160,66 @@ function installResizeRuntime(engine) {
   window.addEventListener("resize", scheduleEngineResize, { passive: true });
   window.addEventListener("orientationchange", scheduleEngineResize, { passive: true });
   scheduleEngineResize();
+  return function cleanupViewerResizeOwner() {
+    window.removeEventListener("resize", scheduleEngineResize);
+    window.removeEventListener("orientationchange", scheduleEngineResize);
+    if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+    resizeFrame = 0;
+  };
 }
 
 async function startGalleryRuntime() {
   if (galleryStartPromise) return galleryStartPromise;
 
   galleryStartPromise = (async function () {
-    // Give the persistent asset cache a chance to claim this page before heavy Storage requests begin.
-    await assetCacheReadyPromise;
-    await ensureBabylonDependencies();
-
-    bootGuard.setPhase("engine-module", "Gallery engine module");
-    galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
-    if (!galleryEngineModule || typeof galleryEngineModule.createScene !== "function") {
-      throw new Error("The gallery scene factory is unavailable.");
-    }
-
-    bootGuard.setPhase("engine", "WebGL engine");
-    const engine = new window.BABYLON.Engine(canvas, true, {
-      preserveDrawingBuffer: false,
-      stencil: true,
-      antialias: true,
-      powerPreference: "high-performance",
-      failIfMajorPerformanceCaveat: false,
-      adaptToDeviceRatio: false
-    });
-    activeEngine = engine;
-
-    bootGuard.setPhase("scene", "Gallery scene");
-    const requestedExhibitionId = initialPublicExhibitionReference || getRequestedExhibitionId();
-    const publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);
-    initialPublicExhibitionReference = null;
-    publicExhibitionData = createExhibitionDataAdapter({ supabase, mode: "public", initialRuntime: publicRuntime });
-    window.ExhibitionPlatformDataAdapter = publicExhibitionData;
-    const publicExhibitionId = publicRuntime.exhibition.id;
-    updatePublicRuntimeIdentity(publicRuntime, "replace");
-    const navigationHandoff = readNavigationHandoff(publicExhibitionId, publicRuntime.spaceDefinition.id, getRuntimeVenueVersionKey(publicRuntime));
-
-    sceneLifecycleController = createSceneLoadingOrchestrator({
-      engine,
+    let publicRuntime = null;
+    let navigationHandoff = null;
+    sceneRuntimeHost = await createSceneLoadingRuntimeHost({
       canvas,
-      engineModule: galleryEngineModule,
-      exhibitionData: publicExhibitionData,
-      resolveRuntime: (reference, options = {}) => publicExhibitionData.resolveRuntime(reference, options),
-      getApp: () => window.GalleryApp || null,
-      getCreateSceneOptions: (runtime) => ({ adminWorkspace: runtime && runtime.mode === "admin" }),
+      prepare: async () => {
+        // Give the persistent asset cache a chance to claim this page before heavy Storage requests begin.
+        await assetCacheReadyPromise;
+        await ensureBabylonDependencies();
+      },
+      configure: async () => {
+        bootGuard.setPhase("engine-module", "Gallery engine module");
+        galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
+        if (!galleryEngineModule || typeof galleryEngineModule.createScene !== "function") {
+          throw new Error("The gallery scene factory is unavailable.");
+        }
+        bootGuard.setPhase("scene", "Gallery scene");
+        const requestedExhibitionId = initialPublicExhibitionReference || getRequestedExhibitionId();
+        publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);
+        initialPublicExhibitionReference = null;
+        publicExhibitionData = createExhibitionDataAdapter({ supabase, mode: "public", initialRuntime: publicRuntime });
+        window.ExhibitionPlatformDataAdapter = publicExhibitionData;
+        updatePublicRuntimeIdentity(publicRuntime, "replace");
+        navigationHandoff = readNavigationHandoff(publicRuntime.exhibition.id, publicRuntime.spaceDefinition.id, getRuntimeVenueVersionKey(publicRuntime));
+        return {
+          engineModule: galleryEngineModule,
+          exhibitionData: publicExhibitionData,
+          resolveRuntime: (reference, options = {}) => publicExhibitionData.resolveRuntime(reference, options),
+          initialRuntime: publicRuntime,
+          initialStartOptions: { initialSnapshot: navigationHandoff || null, sceneOptions: { adminWorkspace: false } },
+          getApp: () => window.GalleryApp || null,
+          getCreateSceneOptions: (runtime) => ({ adminWorkspace: runtime && runtime.mode === "admin" })
+        };
+      },
+      createEngine: () => {
+        bootGuard.setPhase("engine", "WebGL engine");
+        return new window.BABYLON.Engine(canvas, true, {
+          preserveDrawingBuffer: false,
+          stencil: true,
+          antialias: true,
+          powerPreference: "high-performance",
+          failIfMajorPerformanceCaveat: false,
+          adaptToDeviceRatio: false
+        });
+      },
+      installResize: (hostEngine) => installResizeRuntime(hostEngine),
+      onRenderError: (error, currentScene) => {
+        if (!(currentScene && typeof currentScene.isDisposed === "function" && currentScene.isDisposed())) console.error("Gallery render loop error:", error);
+      },
       onSceneChanged: (nextScene, nextRuntime) => {
         activeScene = nextScene;
         if (nextRuntime && nextRuntime.mode === "public") activePublicRuntime = nextRuntime;
@@ -1210,27 +1227,15 @@ async function startGalleryRuntime() {
         if (window.ExhibitionPlatformViewerRuntime) window.ExhibitionPlatformViewerRuntime.scene = nextScene;
       }
     });
+    activeEngine = sceneRuntimeHost.engine;
+    sceneLifecycleController = sceneRuntimeHost.orchestrator;
+    window.ExhibitionPlatformSceneRuntimeHost = sceneRuntimeHost;
     window.ExhibitionPlatformSceneLoading = sceneLifecycleController;
     window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
-    const started = await sceneLifecycleController.start(publicRuntime, {
-      initialSnapshot: navigationHandoff || null,
-      sceneOptions: { adminWorkspace: false }
-    });
-    activeScene = started.scene;
+    activeScene = sceneRuntimeHost.started.scene;
     activePublicRuntime = publicRuntime;
     updateAuthUi();
-
-    engine.runRenderLoop(function () {
-      const scene = activeScene;
-      if (!scene) return;
-      try {
-        if (typeof scene.isDisposed === "function" && scene.isDisposed()) return;
-        scene.render();
-      } catch (error) {
-        if (!(typeof scene.isDisposed === "function" && scene.isDisposed())) console.error("Gallery render loop error:", error);
-      }
-    });
-    installResizeRuntime(engine);
+    const engine = activeEngine;
     syncMobileQualityControl();
 
     if (mobileQualitySelect && window.GalleryApp && typeof window.GalleryApp.setMobileQualityMode === "function") {
@@ -1247,6 +1252,7 @@ async function startGalleryRuntime() {
       engine,
       scene: activeScene,
       lifecycle: sceneLifecycleController,
+      host: sceneRuntimeHost,
       supabase,
       deviceProfile: window.ExhibitionPlatformDeviceProfile || window.BerryboyArtGalleryDeviceProfile || null,
       getSession: function () { return currentSession; },

@@ -1,10 +1,11 @@
-/* Exhibition Platform — V14.1.5.1 isolated Test Gallery bootstrap. */
+/* Exhibition Platform — V14.1.6 isolated Test Gallery bootstrap via shared Scene runtime host. */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_cross_space_runtime";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_6_shared_runtime_host_20260910";
 
-const STAGE = "V14.1.5.1";
-const ENGINE_CACHE_KEY = "v14_1_5_1_glb_runtime_truth_20260910";
+const STAGE = "V14.1.6";
+const ENGINE_CACHE_KEY = "v14_1_6_shared_runtime_host_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
@@ -26,6 +27,8 @@ const loginError = el("testLoginError");
 
 let engine = null;
 let scene = null;
+let sceneRuntimeHost = null;
+let sceneLifecycleController = null;
 let testPackage = null;
 let started = false;
 
@@ -61,22 +64,7 @@ async function ensureBabylon() {
   if (!window.BABYLON || !window.BABYLON.Engine) throw new Error("Babylon runtime unavailable.");
 }
 
-function waitForInteractionReady(lifecycleId, timeoutMs = 120000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error("Test Gallery startup timed out.")); }, timeoutMs);
-    const onReady = (event) => { const detail = event.detail || {}; if (detail.lifecycleId !== lifecycleId) return; cleanup(); resolve(detail); };
-    const onFailure = (event) => { const detail = event.detail || {}; if (detail.lifecycleId !== lifecycleId) return; cleanup(); reject(new Error((detail.technicalMessage || detail.message) || "Test Gallery startup failed.")); };
-    function cleanup() {
-      clearTimeout(timer);
-      window.removeEventListener("gallery-interaction-ready", onReady);
-      window.removeEventListener("gallery-startup-failure", onFailure);
-    }
-    window.addEventListener("gallery-interaction-ready", onReady);
-    window.addEventListener("gallery-startup-failure", onFailure);
-  });
-}
-
-function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
+function createTestExhibitionRuntime(spaceDefinition, venueVersionId) {
   const id = `gallery-test-${venueVersionId}`;
   const record = Object.freeze({
     id,
@@ -90,7 +78,7 @@ function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
     space_id: spaceDefinition.id,
     venue_version_id: venueVersionId
   });
-  return Object.freeze({
+  const adapter = Object.freeze({
     mode: "test-gallery",
     setMode() { return "test-gallery"; },
     list() { return Promise.resolve([record]); },
@@ -100,10 +88,19 @@ function buildTestExhibitionAdapter(spaceDefinition, venueVersionId) {
     create() { return Promise.reject(new Error("Test Gallery cannot create Exhibitions.")); },
     updateMetadata() { return Promise.reject(new Error("Test Gallery cannot edit Exhibition metadata.")); }
   });
+  const runtime = Object.freeze({
+    context: "test-gallery",
+    mode: "test-gallery",
+    exhibition: record,
+    venue: testPackage ? testPackage.venue : null,
+    venueVersion: testPackage ? testPackage.version : null,
+    spaceDefinition
+  });
+  return Object.freeze({ record, adapter, runtime });
 }
 
 function showError(error) {
-  console.error("C6C8C25 Test Gallery:", error);
+  console.error("V14.1.6 Test Gallery:", error);
   loading.style.display = "none";
   errorMessage.textContent = error && error.message ? error.message : String(error);
   errorPanel.style.display = "grid";
@@ -127,28 +124,54 @@ async function startTestGallery() {
     venueVersion: testPackage.version,
     manifest: testPackage.manifest
   });
-  const exhibitionData = buildTestExhibitionAdapter(spaceDefinition, requestedVersionId);
-  await ensureBabylon();
-  const lifecycleId = `c25-gallery-test-${requestedVersionId}-${Date.now()}`;
-  const ready = waitForInteractionReady(lifecycleId);
-  const module = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
-  engine = new window.BABYLON.Engine(canvas, true, {
-    preserveDrawingBuffer: false,
-    stencil: true,
-    antialias: true,
-    powerPreference: "high-performance",
-    adaptToDeviceRatio: false
+  const testExhibition = createTestExhibitionRuntime(spaceDefinition, requestedVersionId);
+
+  sceneRuntimeHost = await createSceneLoadingRuntimeHost({
+    canvas,
+    prepare: ensureBabylon,
+    configure: async () => {
+      const module = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
+      if (!module || typeof module.createScene !== "function") throw new Error("The Gallery scene factory is unavailable.");
+      return {
+        engineModule: module,
+        exhibitionData: testExhibition.adapter,
+        resolveRuntime: async () => testExhibition.runtime,
+        initialRuntime: testExhibition.runtime,
+        initialStartOptions: {
+          sceneOptions: {
+            galleryTestMode: true,
+            loadingContext: "test-gallery",
+            exhibitionData: testExhibition.adapter
+          }
+        },
+        getApp: () => window.GalleryApp || null,
+        getCreateSceneOptions: () => ({ galleryTestMode: true, loadingContext: "test-gallery" })
+      };
+    },
+    createEngine: () => new window.BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: true,
+      antialias: true,
+      powerPreference: "high-performance",
+      adaptToDeviceRatio: false
+    }),
+    installResize: (hostEngine) => {
+      const onResize = () => hostEngine && hostEngine.resize && hostEngine.resize();
+      window.addEventListener("resize", onResize, { passive: true });
+      return () => window.removeEventListener("resize", onResize);
+    },
+    onRenderError: (error, currentScene) => {
+      if (!(currentScene && typeof currentScene.isDisposed === "function" && currentScene.isDisposed())) console.error("Test Gallery render loop error:", error);
+    },
+    onSceneChanged: (nextScene) => { scene = nextScene; }
   });
-  scene = module.createScene(engine, canvas, {
-    spaceDefinition,
-    exhibitionData,
-    exhibitionId: `gallery-test-${requestedVersionId}`,
-    galleryTestMode: true,
-    lifecycleId
-  });
-  engine.runRenderLoop(() => scene.render());
-  window.addEventListener("resize", () => engine && engine.resize());
-  await ready;
+
+  engine = sceneRuntimeHost.engine;
+  sceneLifecycleController = sceneRuntimeHost.orchestrator;
+  scene = sceneRuntimeHost.started && sceneRuntimeHost.started.scene ? sceneRuntimeHost.started.scene : sceneRuntimeHost.getActiveScene();
+  window.ExhibitionPlatformSceneRuntimeHost = sceneRuntimeHost;
+  window.ExhibitionPlatformSceneLoading = sceneLifecycleController;
+  window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
 
   if (window.GalleryApp && typeof window.GalleryApp.hideViewerIntroOverlay === "function") window.GalleryApp.hideViewerIntroOverlay();
   title.textContent = `${testPackage.venue.name || "Gallery"} · ${testPackage.version.version_number || "Draft"}`;
@@ -203,4 +226,9 @@ if (!sessionResponse.data.session) {
   startTestGallery().catch(showError);
 }
 
-window.ExhibitionPlatformTestGallery = Object.freeze({ stage: STAGE, getPackage: () => testPackage, backUrl });
+window.ExhibitionPlatformTestGallery = Object.freeze({
+  stage: STAGE,
+  getPackage: () => testPackage,
+  getRuntimeHost: () => sceneRuntimeHost,
+  backUrl
+});

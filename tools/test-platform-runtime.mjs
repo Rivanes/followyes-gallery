@@ -39,10 +39,10 @@ expect('Combined C6C7/C6C8 stage identity exists',
 expect('Scene factory accepts external runtime options',
   source.includes('export const createScene = function (engineArg, canvasArg, runtimeOptionsArg)') &&
   source.includes('runtimeOptions.spaceDefinition') &&
-  bootstrap.includes('createSceneLoadingOrchestrator({') &&
+  bootstrap.includes('createSceneLoadingRuntimeHost({') &&
   bootstrap.includes('createExhibitionDataAdapter({ supabase, mode: "public", initialRuntime: publicRuntime })') &&
   bootstrap.includes('const requestedExhibitionId = initialPublicExhibitionReference || getRequestedExhibitionId()') &&
-  bootstrap.includes('sceneLifecycleController.start(publicRuntime'));
+  bootstrap.includes('initialRuntime: publicRuntime'));
 
 expect('Current building GLBs live only in the development Space fixture while production resolves canonical Venue assets',
   fixture.includes('Floor_segment.glb') && fixture.includes('Wall_segments.glb') &&
@@ -106,7 +106,7 @@ function expect(label, condition) {
 
 expect('Admin Workspace stage identity exists',
   source.includes('Stage 12C66C6C7C8B: Admin Workspace') &&
-  adminBootstrap.includes('const STAGE = "V14.1.5.1"'));
+  adminBootstrap.includes('const STAGE = "V14.1.6"'));
 
 expect('Exhibition manager was removed from the in-scene editor',
   !source.includes('createEditorSection("EXHIBITIONS")') &&
@@ -132,7 +132,7 @@ expect('Admin bootstrap manages canonical catalog, metadata and poster Storage',
   adminBootstrap.includes('storage.from(STORAGE_BUCKET).upload'));
 
 expect('Admin engine starts in the selected exhibition and enters Admin Workspace Mode',
-  adminBootstrap.includes('sceneLifecycleController.start(initialRuntime') &&
+  adminBootstrap.includes('initialRuntime,') && adminBootstrap.includes('createSceneLoadingRuntimeHost({') &&
   adminBootstrap.includes('window.GalleryApp.enterAdminWorkspaceMode()'));
 
 expect('Public login redirects into Admin Workspace',
@@ -159,7 +159,7 @@ expect('Engine has explicit Admin Workspace runtime mode through canonical V14.1
   source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)') &&
   source.includes('getLegacySceneModeFlags(galleryLoadingPolicy)') &&
   source.includes('var galleryAuthoringSpacePreview = galleryLegacySceneModeFlags.authoringSpacePreview === true;') &&
-  source.includes('var galleryAdminWorkspaceMode = galleryLegacySceneModeFlags.adminWorkspace === true && !galleryAuthoringSpacePreview;') &&
+  source.includes('var galleryAdminWorkspaceMode = galleryLegacySceneModeFlags.adminWorkspace === true && !galleryAuthoringSpacePreview && !galleryTestMode;') &&
   source.includes('var galleryPublicViewerOnly = galleryLegacySceneModeFlags.publicViewerOnly === true && !galleryAdminWorkspaceMode && !galleryAuthoringSpacePreview;'));
 
 expect('Public Edit Mode control routes to admin for active exhibition',
@@ -349,7 +349,7 @@ expect('Engine exposes same-runtime Admin enter/exit APIs', source.includes('ent
 expect('Public Edit Mode prefers inline Admin callback before navigation fallback', source.includes('window.ExhibitionPlatformOpenAdminWorkspace') && source.indexOf('window.ExhibitionPlatformOpenAdminWorkspace') < source.indexOf('window.location.href = targetUrl'));
 expect('Viewer mounts Admin Workspace around the existing gallery section', viewer.includes('function openInlineAdminWorkspace(') && viewer.includes('stage.appendChild(gallerySection)'));
 expect('Viewer passes the existing Babylon engine and scene', viewer.includes('engine: activeEngine') && viewer.includes('scene: activeScene'));
-expect('Admin bootstrap reuses existing engine/lifecycle in inline branch', admin.includes('const inlineWorkspaceMode') && admin.includes('engine = inlineRuntimeContext.engine') && admin.includes('inlineRuntimeContext.lifecycle || window.ExhibitionPlatformSceneLifecycle') && admin.includes('getActiveScene()') && admin.includes('enterAdminWorkspaceMode'));
+expect('Admin bootstrap reuses existing engine/lifecycle in inline branch', admin.includes('const inlineWorkspaceMode') && admin.includes('sceneRuntimeHost = inlineRuntimeContext.host || window.ExhibitionPlatformSceneRuntimeHost || sceneRuntimeHost') && admin.includes('inlineRuntimeContext.lifecycle || window.ExhibitionPlatformSceneLifecycle') && admin.includes('getActiveScene()') && admin.includes('enterAdminWorkspaceMode'));
 expect('Returning to Public Viewer uses inline close instead of document navigation', admin.includes('inlineRuntimeContext.close') && viewer.includes('function closeInlineAdminWorkspace('));
 expect('Public Page link is styled like a button including visited state', adminHtml.includes('.adminButton:visited') && adminHtml.includes('text-decoration:none'));
 expect('Inline Public Page control has explicit non-link button styling', viewer.includes('#inlineAdminWorkspace .adminButton:visited') && viewer.includes('text-decoration:none !important'));
@@ -412,7 +412,7 @@ expect('Frame catalog derives a cache version from Storage metadata',
 const dataAdapter = fs.readFileSync(path.join(root, 'src', 'data', 'exhibition-api.js'), 'utf8');
 expect('Public viewer resolves only canonical published Exhibitions and can fall back to another published Exhibition',
   viewer.includes('resolveInitialPublicRuntime') &&
-  viewer.includes('const publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);') &&
+  viewer.includes('publicRuntime = await resolveInitialPublicRuntime(supabase, requestedExhibitionId);') &&
   dataAdapter.includes('supabase.rpc("resolve_published_exhibition"') &&
   dataAdapter.includes('supabase.rpc("list_published_exhibitions")') &&
   dataAdapter.includes('if (!fallback) throw new Error("No published Exhibition is available.")') &&
@@ -467,7 +467,7 @@ const finalizeFn = extractFunction('finalizeGallerySameSpaceExhibitionDelta');
 const objectDirtyFn = extractFunction('markGalleryObjectsDirty');
 const editTourHelper = source.includes('function ensureGalleryExhibitTourCurrent(') ? extractFunction('ensureGalleryExhibitTourCurrent') : '';
 
-expect('Runtime identity preserves C6C8C4 residency under current C6C8C25 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('C6C8C25: Cross-Space Runtime') && pkg.version.includes('v14-1-5-1-glb-runtime-truth'));
+expect('Runtime identity preserves C6C8C4 residency under current C6C8C25 build', source.includes('Stage 12C66C6C8C4: Space Residency / Exhibition Delta Switch') && source.includes('C6C8C25: Cross-Space Runtime') && pkg.version.includes('v14-1-6-shared-runtime-host'));
 expect('Engine same-space switch compares exact immutable Venue Version identity', switchFn.includes('areGalleryExhibitionsInSameSpace(previousExhibition, exhibition)') && source.includes('getGalleryExhibitionVenueVersionId'));
 expect('Same-space cold switch uses delta state and resident return has a dedicated resume path', switchFn.includes('applyGallerySameSpaceExhibitionState(state, "same-space-exhibition-switch")') && switchFn.includes('lastSwitchMode = "same-space-delta-load"') && switchFn.includes('lastSwitchMode = "resident-layer-resume"'));
 expect('Cross-Version switch is delegated to the C25 Scene lifecycle boundary', switchFn.includes('Cross-Space Exhibition switch requires C6C8C25 Scene lifecycle recreation'));
@@ -525,7 +525,7 @@ const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 
-expect('Current runtime/package identity preserves C6C8C5 under C6C8C25', source.includes('stage: "C6C8C21"') && pkg.version.includes('v14-1-5-1-glb-runtime-truth'));
+expect('Current runtime/package identity preserves C6C8C5 under C6C8C25', source.includes('stage: "C6C8C21"') && pkg.version.includes('v14-1-6-shared-runtime-host'));
 expect('Recently visited Exhibition layers have a residency registry', source.includes('layerResidency: Object.create(null)') && source.includes('residentLayerHits'));
 expect('Switch parks a clean same-Space layer instead of disposing it', switchFn.includes('parkActiveGalleryExhibitionLayer(previousExhibition, previousRuntimeState)') && parkFn.includes('setGalleryArtworkResidentEnabled(artwork, false'));
 expect('Resident target is restored from RAM/GPU', switchFn.includes('restoreGalleryExhibitionLayer(exhibition.id)') && switchFn.includes('lastSwitchMode = "resident-layer-resume"') && restoreFn.includes('artworks = layer.artworks'));

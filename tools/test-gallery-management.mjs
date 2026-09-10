@@ -49,8 +49,8 @@ const entryReader = extractFunction(admin, 'readRequiredFiniteGalleryNumber');
 const mutationWrapper = extractFunction(admin, 'withGalleryMutation');
 const detailRenderer = extractFunction(admin, 'renderGalleryDetail');
 
-expect('current release package is V14.1.5.1', pkg.version.includes('v14-1-5-1-glb-runtime-truth'));
-expect('Admin release identity is V14.1.5.1', admin.includes('const STAGE = "V14.1.5.1"'));
+expect('current release package is V14.1.6', pkg.version.includes('v14-1-6-shared-runtime-host'));
+expect('Admin release identity is V14.1.6', admin.includes('const STAGE = "V14.1.6"'));
 expect('Gallery data adapter uses canonical Venue RPCs', api.includes('admin_create_gallery_with_initial_draft') && api.includes('admin_begin_venue_draft') && api.includes('admin_set_venue_asset_slot'));
 expect('new asset paths are stable UUID owner paths, not Gallery names', api.includes('venues/${venue}/versions/${version}/assets/${normalizedRole}/') && !api.includes('venue.slug'));
 expect('the controlled Gallery role contract remains exposed for C23', api.includes('["floor", "walls", "ceiling", "props"]'));
@@ -72,6 +72,7 @@ expect('Archived Gallery metadata is read-only in the normal UI', detailRenderer
 expect('Test Gallery has isolated shell', testHtml.includes('data-gallery-test="true"') && testHtml.includes('SET CURRENT VIEW AS ENTRY'));
 expect('Test Gallery resolves Gallery Version only', testBootstrap.includes('galleryManagement.resolveTest') && !testBootstrap.includes('resolve_published_exhibition') && !testBootstrap.includes('admin_get_exhibition') && !testBootstrap.includes('exhibition_states'));
 expect('Test Gallery uses a local read-only Exhibition adapter', testBootstrap.includes('Test Gallery is read-only') && testBootstrap.includes('loadState()'));
+expect('V14.1.6 Test Gallery uses shared Scene runtime host', testBootstrap.includes('createSceneLoadingRuntimeHost') && testBootstrap.includes('loadingContext: "test-gallery"') && !testBootstrap.includes('waitForInteractionReady') && !testBootstrap.includes('engine.runRenderLoop'));
 expect('Engine CRUD remains outside GalleryApp while camera bridge exists', source.includes('getCameraPose: function ()') && !source.includes('admin_create_gallery_with_initial_draft'));
 
 console.log('C6C8C22 Gallery Management regression invariants passed under V13.6.');

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.5.1 Admin Workspace / GLB Runtime Truth
+  Exhibition Platform — V14.1.6 Admin Workspace / Shared Runtime Host
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_5_1_glb_runtime_truth_20260910";
-import { createSceneLoadingOrchestrator } from "../runtime/scene-loading-orchestrator.js?v=v14_1_5_1_glb_runtime_truth_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_6_shared_runtime_host_20260910";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_6_shared_runtime_host_20260910";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -24,8 +24,8 @@ import {
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V14.1.5.1";
-const ENGINE_CACHE_KEY = "v14_1_5_1_glb_runtime_truth_20260910";
+const STAGE = "V14.1.6";
+const ENGINE_CACHE_KEY = "v14_1_6_shared_runtime_host_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -81,6 +81,7 @@ let selectedExhibition = null;
 let engine = null;
 let scene = null;
 let sceneLifecycleController = inlineRuntimeContext && inlineRuntimeContext.lifecycle ? inlineRuntimeContext.lifecycle : null;
+let sceneRuntimeHost = inlineRuntimeContext && inlineRuntimeContext.host ? inlineRuntimeContext.host : null;
 let galleryEngineModule = null;
 let engineReady = false;
 let sceneSaveState = { dirty: false, saveInFlight: false };
@@ -1006,8 +1007,9 @@ async function startEngine(initialId, initialSnapshot) {
   setViewportStatus("starting…");
 
   if (inlineWorkspaceMode) {
-    engine = inlineRuntimeContext.engine;
-    sceneLifecycleController = inlineRuntimeContext.lifecycle || window.ExhibitionPlatformSceneLifecycle || sceneLifecycleController;
+    sceneRuntimeHost = inlineRuntimeContext.host || window.ExhibitionPlatformSceneRuntimeHost || sceneRuntimeHost;
+    engine = sceneRuntimeHost && sceneRuntimeHost.engine ? sceneRuntimeHost.engine : inlineRuntimeContext.engine;
+    sceneLifecycleController = (sceneRuntimeHost && sceneRuntimeHost.orchestrator) || inlineRuntimeContext.lifecycle || window.ExhibitionPlatformSceneLifecycle || sceneLifecycleController;
     scene = sceneLifecycleController && typeof sceneLifecycleController.getActiveScene === "function"
       ? sceneLifecycleController.getActiveScene()
       : inlineRuntimeContext.scene;
@@ -1041,52 +1043,56 @@ async function startEngine(initialId, initialSnapshot) {
     return;
   }
 
-  await assetCacheReadyPromise;
-  await ensureBabylon();
-  galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
-  let initialRuntime = exhibitionData && typeof exhibitionData.getRuntime === "function"
-    ? exhibitionData.getRuntime(initialId, { mode: "admin" })
-    : null;
-  if (!initialRuntime) initialRuntime = await resolveInitialAdminRuntime(supabase, initialId);
-  if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin", initialRuntime });
-  if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
-  window.ExhibitionPlatformDataAdapter = exhibitionData;
-  engine = new window.BABYLON.Engine(canvas, true, {
-    preserveDrawingBuffer: false, stencil: true, antialias: true, powerPreference: "high-performance", adaptToDeviceRatio: false
-  });
-  sceneLifecycleController = createSceneLoadingOrchestrator({
-    engine,
+  let initialRuntime = null;
+  sceneRuntimeHost = await createSceneLoadingRuntimeHost({
     canvas,
-    engineModule: galleryEngineModule,
-    exhibitionData,
-    resolveRuntime: (reference, options = {}) => exhibitionData.resolveRuntime(reference, Object.assign({ mode: "admin" }, options)),
-    getApp: () => window.GalleryApp || null,
-    getCreateSceneOptions: () => ({ adminWorkspace: true }),
+    prepare: async () => {
+      await assetCacheReadyPromise;
+      await ensureBabylon();
+    },
+    configure: async () => {
+      galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`);
+      initialRuntime = exhibitionData && typeof exhibitionData.getRuntime === "function"
+        ? exhibitionData.getRuntime(initialId, { mode: "admin" })
+        : null;
+      if (!initialRuntime) initialRuntime = await resolveInitialAdminRuntime(supabase, initialId);
+      if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin", initialRuntime });
+      if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
+      window.ExhibitionPlatformDataAdapter = exhibitionData;
+      return {
+        engineModule: galleryEngineModule,
+        exhibitionData,
+        resolveRuntime: (reference, options = {}) => exhibitionData.resolveRuntime(reference, Object.assign({ mode: "admin" }, options)),
+        initialRuntime,
+        initialStartOptions: { initialSnapshot: initialSnapshot || null, sceneOptions: { adminWorkspace: true } },
+        getApp: () => window.GalleryApp || null,
+        getCreateSceneOptions: () => ({ adminWorkspace: true })
+      };
+    },
+    createEngine: () => {
+      engine = new window.BABYLON.Engine(canvas, true, {
+        preserveDrawingBuffer: false, stencil: true, antialias: true, powerPreference: "high-performance", adaptToDeviceRatio: false
+      });
+      return engine;
+    },
+    installResize: () => {
+      installResize();
+      return () => { if (resizeCleanup) resizeCleanup(); };
+    },
+    onRenderError: (error, current) => {
+      if (!(current && typeof current.isDisposed === "function" && current.isDisposed())) console.error("Admin render loop error:", error);
+    },
     onSceneChanged: (nextScene) => {
       scene = nextScene;
       if (inlineRuntimeContext) inlineRuntimeContext.scene = nextScene;
     }
   });
+  engine = sceneRuntimeHost.engine;
+  sceneLifecycleController = sceneRuntimeHost.orchestrator;
+  scene = sceneRuntimeHost.started.scene;
+  window.ExhibitionPlatformSceneRuntimeHost = sceneRuntimeHost;
   window.ExhibitionPlatformSceneLoading = sceneLifecycleController;
   window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController;
-  const started = await sceneLifecycleController.start(initialRuntime, {
-    initialSnapshot: initialSnapshot || null,
-    sceneOptions: { adminWorkspace: true }
-  });
-  scene = started.scene;
-  engine.runRenderLoop(() => {
-    const current = sceneLifecycleController && typeof sceneLifecycleController.getActiveScene === "function"
-      ? sceneLifecycleController.getActiveScene()
-      : scene;
-    if (!current) return;
-    try {
-      if (typeof current.isDisposed === "function" && current.isDisposed()) return;
-      current.render();
-    } catch (error) {
-      if (!(typeof current.isDisposed === "function" && current.isDisposed())) console.error("Admin render loop error:", error);
-    }
-  });
-  installResize();
   window.galleryEditorAuthenticated = true;
   if (window.GalleryApp) {
     if (typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");

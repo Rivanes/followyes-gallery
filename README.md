@@ -1,20 +1,18 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.5.1 — GLB Runtime Truth & Immediate Admin Defect Fix**.
+Current repository release: **V14.1.6 — Shared Viewer/Admin/Test Runtime Host + Dynamic Context Rebinding**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.5.1 GLB Runtime Truth & Immediate Admin Defect Fix
+## V14.1.6 Shared Runtime Host + Dynamic Context Rebinding
 
-V14.1.5 production smoke exposed a real contradiction: a standard Sculpture could remain the gray Admin placeholder while model hydration had already been treated as successful. The loading-cycle re-audit proved that the low-level model executor could mark `loaded` after an import that produced zero usable renderable meshes.
+V14.1.5.1 is production **PASS/CLOSED** and fixed the immediate Sculpture/model runtime-truth defect. V14.1.6 continues the audited Scene Loading/Lifecycle refactor without changing database contracts or yet migrating Public heavy renderables to the final pre-interaction settle.
 
-V14.1.5.1 repairs that truth layer. A Sculpture/model runtime is now `loaded` only when the current load generation has a real renderable mesh runtime and `loadedAt`. Model application returns an explicit `queued`, `loaded` or `failed` outcome instead of overloading boolean `true` for both queue admission and real visible completion. Shared Prop callers map those states deliberately.
+`src/runtime/scene-loading-orchestrator.js` now exports a reusable `createSceneLoadingRuntimeHost()`. The host owns the common startup algorithm: dependency/configuration hooks, Babylon Engine create/reuse, one orchestrator/controller tree, one render loop, resize-owner cleanup and initial Scene start. Public Viewer and standalone Admin use this host, and inline Admin reuses the Viewer host.
 
-The direct Sculpture upload path now uses `src/validation/sculpture-model-validation.js`, backed by the hardened off-main-thread GLB validator, before Supabase Storage upload. Missing or unreachable renderable geometry is rejected before Draft replacement. Standard Sculpture Admin UI now distinguishes LOADING/LOADED/QUEUED from `MODEL UNAVAILABLE — reference preserved` and exposes `RETRY MODEL`; terminal unavailable/loading also has a distinct placeholder hydration visual state.
+Test Gallery no longer bypasses the orchestrator. Its bootstrap now starts through the same shared host with canonical `test-gallery` policy; it no longer owns a direct `Gallery_V0_11.createScene()`, manual READY waiter or private render loop. Assigned Test Space roles use the canonical preview-blocking policy, including assigned Props.
 
-Space startup import callback success now requires positive renderable geometry, so strict Floor/Walls/Ceiling and assigned Gallery-authoring Props cannot settle on an empty GLB callback. V14.1.4 assigned-Space terminal settle and V14.1.5 Admin visible-batch infrastructure remain in place.
-
-**Public background model timing is intentionally preserved in V14.1.5.1.** The end-to-end V14.1 target has nevertheless changed: final Public interaction must not start while walkthrough-visible Frames/Sculptures/Shared Props/Venue Props are still assembling. That product-level migration is scheduled for V14.1.9 after shared host, transition-session ownership and readiness authority are unified in V14.1.6–V14.1.8. V14.1.10 then closes no-reload residency and frame-time/jank behavior.
+V14.1.6 also fixes the audited **birth-context** defect. An exact-Venue-Version Scene created as Public can be reused by inline Admin, but before target Exhibition hydration the orchestrator now rebinds the active Scene to `admin-exhibition`; returning to Public restores `public-exhibition`. This updates effective Admin visible-batch behavior without forcing a Scene rebuild. Isolated Gallery authoring/Test contexts remain Scene-recreation boundaries.
 
 The three-file lifecycle/loading authority remains:
 
@@ -24,7 +22,11 @@ scene-loading-orchestrator.js
 scene-loading-policies.js
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.5.1 requires no SQL and does not yet enable latest-wins navigation.
+`Gallery_V0_11.js` remains the Babylon/editor executor and only exposes an inward context-rebind compatibility bridge; it does not import or construct the orchestrator.
+
+**V14.1.6 intentionally does not yet change Public heavy-renderable timing.** Same-Space current loading-session ownership/latest-wins is V14.1.7, sole readiness authority is V14.1.8, complete Public pre-interaction Frames/Sculptures/Shared/Venue Props settle is V14.1.9, and active-visit no-reload/frame-time closure is V14.1.10.
+
+V14.1.6 requires **no SQL**.
 
 ## Product model
 
@@ -59,12 +61,12 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
 - `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract.
-- `src/runtime/scene-loading-orchestrator.js` — high-level Scene loading shell; V14.1.5 task reporting remains active and V14.1.5.1 bumps current runtime identity without changing ownership semantics.
+- `src/runtime/scene-loading-orchestrator.js` — high-level loading authority plus V14.1.6 shared Viewer/Admin/Test runtime host and dynamic Public/Admin context rebinding.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
 - `src/config/space-fixture.js` — local/login-disabled test fixture only.
-- `src/bootstrap/gallery-test-bootstrap.js` — Test Gallery resolver/startup and Entry Point capture.
+- `src/bootstrap/gallery-test-bootstrap.js` — V14.1.6 Test Gallery resolver/startup through the shared runtime host plus Entry Point capture.
 - `src/bootstrap/` — Viewer/Admin/editor/cache/transition bootstraps.
 - `asset-cache-sw.js` — persistent asset cache / delivery layer.
 - `tools/` — repository build, verifier and consolidated regression suites.
@@ -350,7 +352,7 @@ From repository root:
 npm run check
 ```
 
-This performs production build, syntax, repository verification and consolidated regression suites, including C23 Space GLB fixtures, V14.1.5.1 Sculpture GLB fixtures, C24 Exhibition/Gallery assignment invariants, C25/C25.4 cross-space/media readiness tests and C26 carousel/Space-entry policy invariants.
+This performs production build, syntax, repository verification and consolidated regression suites, including C23 Space GLB fixtures, V14.1.5.1 Sculpture GLB fixtures, V14.1.6 shared-host/context tests, C24 Exhibition/Gallery assignment invariants, C25/C25.4 cross-space/media readiness tests and C26 carousel/Space-entry policy invariants.
 
 SQL package verification is separate:
 
@@ -358,7 +360,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.5.1 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.6 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

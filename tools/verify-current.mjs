@@ -34,11 +34,11 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V14.1.5.1"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V14.1.5.1"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V14.1.5.1"'),'Admin stage identity missing');
-assert(bootstrap.includes('v14_1_5_1_glb_runtime_truth_20260910'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_5_1_glb_runtime_truth_20260910'),'Index viewer cache key missing');
+assert(index.includes('stage: "V14.1.6"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V14.1.6"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V14.1.6"'),'Admin stage identity missing');
+assert(bootstrap.includes('v14_1_6_shared_runtime_host_20260910'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_6_shared_runtime_host_20260910'),'Index viewer cache key missing');
 assert(sceneLoadingPolicies.includes('SCENE_LOADING_POLICY_SCHEMA = "exhibition-platform-scene-loading-policy.v1"'),'V14.1.1 loading policy schema missing');
 assert(sceneLoadingPolicies.includes('PUBLIC_EXHIBITION: "public-exhibition"')&&sceneLoadingPolicies.includes('ADMIN_EXHIBITION: "admin-exhibition"')&&sceneLoadingPolicies.includes('GALLERY_AUTHORING: "gallery-authoring"')&&sceneLoadingPolicies.includes('TEST_GALLERY: "test-gallery"'),'V14.1.1 canonical loading contexts missing');
 assert(sceneLoadingPolicies.includes('function resolveSceneLoadingContextFromRuntimeOptions')&&sceneLoadingPolicies.includes('function createSceneLoadingPolicy')&&sceneLoadingPolicies.includes('function getSceneLoadingSpaceRolePolicy'),'V14.1.1 pure policy API missing');
@@ -48,9 +48,12 @@ assert(source.includes('getSceneLoadingPolicyDebug: function ()'),'V14.1.1 polic
 assert(sceneLoadingOrchestrator.includes('SCENE_LOADING_ORCHESTRATOR_SCHEMA = "exhibition-platform-scene-loading-orchestrator.v1"')&&sceneLoadingOrchestrator.includes('SCENE_LOADING_SESSION_SCHEMA = "exhibition-platform-scene-loading-session.v1"'),'V14.1.3 orchestrator/session schema missing');
 assert(sceneLoadingOrchestrator.includes('createSceneLoadingOrchestrator')&&sceneLoadingOrchestrator.includes('latestWinsEnabled: false')&&sceneLoadingOrchestrator.includes('loadingSession'),'V14.1.3 compatibility orchestrator contract missing');
 assert(sceneLifecycle.includes('loadingSession.bindSceneLifecycleId(lifecycleId)'),'V14.1.3 controller does not bind loading session to physical lifecycle');
-assert(bootstrap.includes('createSceneLoadingOrchestrator')&&!bootstrap.includes('createSceneLifecycleController'),'V14.1.3 Viewer still instantiates lifecycle controller directly');
-assert(adminBootstrap.includes('createSceneLoadingOrchestrator')&&!adminBootstrap.includes('createSceneLifecycleController'),'V14.1.3 Admin still instantiates lifecycle controller directly');
+assert(bootstrap.includes('createSceneLoadingRuntimeHost')&&!bootstrap.includes('createSceneLifecycleController'),'V14.1.6 Viewer shared runtime host missing');
+assert(adminBootstrap.includes('createSceneLoadingRuntimeHost')&&!adminBootstrap.includes('createSceneLifecycleController'),'V14.1.6 Admin shared runtime host missing');
 assert(bootstrap.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController')&&adminBootstrap.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController'),'V14.1.3 orchestrator debug global missing');
+assert(galleryTestBootstrap.includes('createSceneLoadingRuntimeHost')&&!galleryTestBootstrap.includes('waitForInteractionReady')&&!galleryTestBootstrap.includes('engine.runRenderLoop'),'V14.1.6 Test Gallery still bypasses shared runtime host');
+assert(source.includes('rebindSceneLoadingContext: function (options)')&&source.includes('galleryLoadingContextRebindDebug'),'V14.1.6 dynamic Scene loading context rebind bridge missing');
+assert(sceneLoadingOrchestrator.includes('createSceneLoadingRuntimeHost')&&sceneLoadingOrchestrator.includes('SCENE_LOADING_RUNTIME_HOST_SCHEMA'),'V14.1.6 shared runtime host contract missing');
 assert(source.includes('var galleryLoadingSession = runtimeOptions.loadingSession')&&source.includes('loadingSession: loadingSessionSnapshot'),'V14.1.3 core loading-session compatibility bridge missing');
 assert(sceneLoadingOrchestrator.includes('cancel(reason, details)')&&sceneLoadingOrchestrator.includes('canContinue(lifecycleId)')&&sceneLoadingOrchestrator.includes('cancelReason'),'V14.1.3 loading session cancellation contract missing');
 assert(source.includes('function isGallerySceneWorkCurrent()')&&source.includes('cancelGallerySceneLoadingSession("scene-disposed"'),'V14.1.3 Scene-local cancellation bridge missing');
@@ -208,7 +211,7 @@ assert(adminBootstrap.includes('const preserveMetadataDraft = metadataDraftPrevi
 assert(bootstrap.includes('exitAdminWorkspaceMode({ discardUnsaved, preserveDraft })'),'C6C8C15 viewer close does not forward preserveDraft');
 
 assert(sceneLifecycle.includes('createSceneLifecycleController')&&sceneLifecycle.includes('getRuntimeVenueVersionKey'),'C6C8C25 Scene lifecycle controller missing');
-assert(bootstrap.includes('const scene = activeScene;')&&bootstrap.includes('switchPublicExhibition(reference'),'C6C8C25 mutable Viewer scene loop/switch missing');
+assert(bootstrap.includes('sceneRuntimeHost = await createSceneLoadingRuntimeHost')&&bootstrap.includes('switchPublicExhibition(reference'),'C6C8C25/V14.1.6 mutable Viewer host/switch missing');
 assert(adminBootstrap.includes('sceneLifecycleController.switchTo'),'C6C8C25 Admin switch does not use lifecycle controller');
 assert(source.includes('Exhibition state belongs to another Gallery Version'),'C6C8C25 exact Venue Version state guard missing');
 assert(source.includes('gallery-scene-disposed')&&source.includes('galleryDisposed = true'),'C6C8C25 disposal contract missing');
@@ -223,6 +226,7 @@ const expectedRegressionSuites=[
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
   'test-platform-runtime.mjs',
+  'test-scene-runtime-host.mjs',
   'test-sculpture-model-validation.mjs',
   'test-shared-assets.mjs',
   'test-space-model-validation.mjs',

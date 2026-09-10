@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.5.1 Scene Loading Orchestrator
+  Exhibition Platform — V14.1.6 Scene Loading Orchestrator / Shared Runtime Host
   Compatibility shell above SceneLifecycleController. It owns high-level loading request/session
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
@@ -14,6 +14,7 @@ import {
 export const SCENE_LOADING_ORCHESTRATOR_SCHEMA = "exhibition-platform-scene-loading-orchestrator.v1";
 export const SCENE_LOADING_SESSION_SCHEMA = "exhibition-platform-scene-loading-session.v1";
 export const SCENE_LOADING_REQUEST_SCHEMA = "exhibition-platform-scene-loading-request.v1";
+export const SCENE_LOADING_RUNTIME_HOST_SCHEMA = "exhibition-platform-scene-loading-runtime-host.v1";
 
 function text(value) { return String(value == null ? "" : value).trim(); }
 function nowMs() { return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(); }
@@ -223,6 +224,7 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
 
 export function createSceneLoadingOrchestrator(options = {}) {
   const resolveRuntime = typeof options.resolveRuntime === "function" ? options.resolveRuntime : null;
+  const getApp = typeof options.getApp === "function" ? options.getApp : () => (typeof window !== "undefined" ? window.GalleryApp || null : null);
   const lifecycleController = options.lifecycleController || createSceneLifecycleController(options);
   if (!lifecycleController || typeof lifecycleController.start !== "function" || typeof lifecycleController.switchTo !== "function") {
     throw new Error("Scene loading orchestrator requires a SceneLifecycleController-compatible authority.");
@@ -236,7 +238,7 @@ export function createSceneLoadingOrchestrator(options = {}) {
   let disposed = false;
   const recentSessions = [];
   const debug = {
-    stage: "V14.1.5.1",
+    stage: "V14.1.6",
     schema: SCENE_LOADING_ORCHESTRATOR_SCHEMA,
     requests: 0,
     starts: 0,
@@ -363,6 +365,29 @@ export function createSceneLoadingOrchestrator(options = {}) {
     }
   }
 
+  function canReuseActiveSceneForRuntime(runtime, policy) {
+    const activeRuntime = getActiveRuntime();
+    const activeScene = getActiveScene();
+    if (!activeScene || !activeRuntime || !runtime || !policy || !policy.sceneReuse || policy.sceneReuse.allowSameVenueVersionSceneReuse !== true) return false;
+    const activePolicy = resolvePolicy(activeRuntime, { loadingContext: activeRuntime.context || activeRuntime.mode });
+    if (!activePolicy || !activePolicy.sceneReuse || activePolicy.sceneReuse.allowSameVenueVersionSceneReuse !== true) return false;
+    const activeVersionId = getRuntimeVenueVersionKey(activeRuntime);
+    const targetVersionId = getRuntimeVenueVersionKey(runtime);
+    return !!(activeVersionId && targetVersionId && activeVersionId === targetVersionId);
+  }
+
+  function rebindActiveSceneLoadingContext(policy, runtime, reason) {
+    const app = getApp();
+    if (!app || typeof app.rebindSceneLoadingContext !== "function") return { supported: false, changed: false };
+    const result = app.rebindSceneLoadingContext({
+      loadingPolicy: policy,
+      loadingContext: policy && policy.contextKind ? policy.contextKind : null,
+      runtimeMode: runtime && runtime.mode ? runtime.mode : null,
+      reason: reason || "orchestrator-context-rebind"
+    });
+    return result && typeof result === "object" ? result : { supported: true, changed: result !== false };
+  }
+
   async function switchTo(reference, switchOptions = {}) {
     if (disposed) throw new Error("Scene loading orchestrator is disposed.");
     if (activeRequest || resolvingSwitch || (typeof lifecycleController.isSwitching === "function" && lifecycleController.isSwitching())) {
@@ -382,9 +407,16 @@ export function createSceneLoadingOrchestrator(options = {}) {
       resolvingSwitch = false;
     }
     const policyRuntime = targetRuntime || switchOptions.runtime || getActiveRuntime();
+    const previousRuntime = getActiveRuntime();
     const request = beginRequest("switch", policyRuntime, switchOptions);
     debug.switches += 1;
     request.session.markDelegated();
+    const reusedSceneContext = canReuseActiveSceneForRuntime(policyRuntime, request.policy);
+    let contextRebound = false;
+    if (reusedSceneContext) {
+      const rebound = rebindActiveSceneLoadingContext(request.policy, policyRuntime, "orchestrator-switch-preflight");
+      contextRebound = !!(rebound && rebound.changed !== false);
+    }
     try {
       const delegatedOptions = decorateOptions(switchOptions, request);
       if (targetRuntime || switchOptions.runtime) delegatedOptions.runtime = targetRuntime || switchOptions.runtime;
@@ -392,6 +424,11 @@ export function createSceneLoadingOrchestrator(options = {}) {
       const result = await lifecycleController.switchTo(reference, delegatedOptions);
       return finishRequest(request, result, null);
     } catch (error) {
+      if (contextRebound && previousRuntime) {
+        try {
+          rebindActiveSceneLoadingContext(resolvePolicy(previousRuntime, { loadingContext: previousRuntime.context || previousRuntime.mode }), previousRuntime, "orchestrator-switch-rollback");
+        } catch (_rebindRollbackError) {}
+      }
       finishRequest(request, null, error);
       throw error;
     }
@@ -403,13 +440,24 @@ export function createSceneLoadingOrchestrator(options = {}) {
       debug.busyRejects += 1;
       return { ok: false, mode: "busy", scene: getActiveScene(), runtime: getActiveRuntime() };
     }
-    const request = beginRequest("adopt", runtime, { loadingContext: runtime && runtime.context });
+    const previousRuntime = getActiveRuntime();
+    const request = beginRequest("adopt", runtime, { loadingContext: runtime && (runtime.context || runtime.mode) });
     debug.adopts += 1;
     request.session.markDelegated();
+    let contextRebound = false;
+    if (canReuseActiveSceneForRuntime(runtime, request.policy)) {
+      const rebound = rebindActiveSceneLoadingContext(request.policy, runtime, reason || "same-scene-runtime-adopt");
+      contextRebound = !!(rebound && rebound.changed !== false);
+    }
     try {
       const result = lifecycleController.adoptRuntime(runtime, reason);
       return finishRequest(request, result, null);
     } catch (error) {
+      if (contextRebound && previousRuntime) {
+        try {
+          rebindActiveSceneLoadingContext(resolvePolicy(previousRuntime, { loadingContext: previousRuntime.context || previousRuntime.mode }), previousRuntime, "orchestrator-adopt-rollback");
+        } catch (_rebindRollbackError) {}
+      }
       finishRequest(request, null, error);
       throw error;
     }
@@ -462,5 +510,139 @@ export function createSceneLoadingOrchestrator(options = {}) {
     isSwitching,
     getDebug,
     getLifecycleController: () => lifecycleController
+  });
+}
+
+export async function createSceneLoadingRuntimeHost(options = {}) {
+  let hostOptions = { ...(options || {}) };
+  const prepare = typeof hostOptions.prepare === "function" ? hostOptions.prepare : null;
+  const configure = typeof hostOptions.configure === "function" ? hostOptions.configure : null;
+  const debug = {
+    stage: "V14.1.6",
+    schema: SCENE_LOADING_RUNTIME_HOST_SCHEMA,
+    prepared: false,
+    configured: false,
+    engineCreated: false,
+    engineReused: false,
+    moduleLoaded: false,
+    renderLoopInstalled: false,
+    resizeOwnerInstalled: false,
+    starts: 0,
+    disposed: false
+  };
+
+  if (prepare) await prepare();
+  debug.prepared = true;
+  if (configure) {
+    const configured = await configure();
+    if (configured && typeof configured === "object") hostOptions = { ...hostOptions, ...configured };
+    debug.configured = true;
+  }
+
+  const canvas = hostOptions.canvas || null;
+  const createEngine = typeof hostOptions.createEngine === "function" ? hostOptions.createEngine : null;
+  const loadEngineModule = typeof hostOptions.loadEngineModule === "function" ? hostOptions.loadEngineModule : null;
+  const installResize = typeof hostOptions.installResize === "function" ? hostOptions.installResize : null;
+  const onRenderError = typeof hostOptions.onRenderError === "function" ? hostOptions.onRenderError : null;
+  const onSceneChanged = typeof hostOptions.onSceneChanged === "function" ? hostOptions.onSceneChanged : null;
+  let engine = hostOptions.engine || null;
+  let engineModule = hostOptions.engineModule || null;
+  let orchestrator = null;
+  let resizeCleanup = null;
+  let renderLoopInstalled = false;
+  let disposed = false;
+  const ownsEngine = !engine;
+  debug.engineReused = !!engine;
+  debug.moduleLoaded = !!engineModule;
+
+  if (!canvas) throw new Error("Scene loading runtime host requires a canvas.");
+  if (!engineModule && loadEngineModule) {
+    engineModule = await loadEngineModule();
+    debug.moduleLoaded = true;
+  }
+  if (!engineModule || typeof engineModule.createScene !== "function") {
+    throw new Error("Scene loading runtime host requires a Gallery createScene module.");
+  }
+  if (!engine) {
+    if (!createEngine) throw new Error("Scene loading runtime host requires createEngine() when no Engine is supplied.");
+    engine = await createEngine(canvas);
+    debug.engineCreated = true;
+  }
+  if (!engine) throw new Error("Scene loading runtime host could not create or reuse an Engine.");
+
+  orchestrator = createSceneLoadingOrchestrator({
+    ...hostOptions,
+    engine,
+    canvas,
+    engineModule,
+    onSceneChanged(scene, runtime, lifecycleId, reason) {
+      if (onSceneChanged) onSceneChanged(scene, runtime, lifecycleId, reason);
+    }
+  });
+
+  if (typeof engine.runRenderLoop === "function") {
+    engine.runRenderLoop(() => {
+      if (disposed || !orchestrator) return;
+      const scene = orchestrator.getActiveScene();
+      if (!scene) return;
+      try {
+        if (typeof scene.isDisposed === "function" && scene.isDisposed()) return;
+        scene.render();
+      } catch (error) {
+        if (onRenderError) onRenderError(error, scene);
+        else if (!(typeof scene.isDisposed === "function" && scene.isDisposed())) console.error("Scene runtime host render loop error:", error);
+      }
+    });
+    renderLoopInstalled = true;
+    debug.renderLoopInstalled = true;
+  }
+
+  if (installResize) {
+    const cleanup = installResize(engine, () => orchestrator ? orchestrator.getActiveScene() : null);
+    resizeCleanup = typeof cleanup === "function" ? cleanup : null;
+    debug.resizeOwnerInstalled = true;
+  }
+
+  let started = null;
+  if (hostOptions.initialRuntime) {
+    started = await orchestrator.start(hostOptions.initialRuntime, hostOptions.initialStartOptions || {});
+    debug.starts += 1;
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    debug.disposed = true;
+    if (resizeCleanup) {
+      try { resizeCleanup(); } catch (_error) {}
+      resizeCleanup = null;
+    }
+    if (orchestrator && typeof orchestrator.dispose === "function") orchestrator.dispose();
+    if (renderLoopInstalled && engine && typeof engine.stopRenderLoop === "function") {
+      try { engine.stopRenderLoop(); } catch (_error) {}
+    }
+    if (ownsEngine && hostOptions.disposeEngine !== false && engine && typeof engine.dispose === "function") {
+      try { engine.dispose(); } catch (_error) {}
+    }
+  }
+
+  return Object.freeze({
+    schema: SCENE_LOADING_RUNTIME_HOST_SCHEMA,
+    engine,
+    orchestrator,
+    lifecycle: orchestrator,
+    started,
+    start: async (runtime, startOptions = {}) => {
+      const result = await orchestrator.start(runtime, startOptions);
+      debug.starts += 1;
+      return result;
+    },
+    switchTo: (reference, switchOptions = {}) => orchestrator.switchTo(reference, switchOptions),
+    adoptRuntime: (runtime, reason) => orchestrator.adoptRuntime(runtime, reason),
+    getActiveScene: () => orchestrator.getActiveScene(),
+    getActiveRuntime: () => orchestrator.getActiveRuntime(),
+    getActiveLifecycleId: () => orchestrator.getActiveLifecycleId(),
+    getDebug: () => ({ ...debug, orchestrator: orchestrator.getDebug() }),
+    dispose
   });
 }

@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.14.1-v14-1-5-1-glb-runtime-truth",
+  "version": "0.14.1-v14-1-6-shared-runtime-host",
   "private": true,
-  "description": "Exhibition Platform — V14.1.5.1 GLB Runtime Truth & Immediate Admin Defect Fix",
+  "description": "Exhibition Platform — V14.1.6 Shared Viewer/Admin/Test Runtime Host + Dynamic Context Rebinding",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
@@ -13,13 +13,14 @@
     "test:platform": "node tools/test-platform-runtime.mjs",
     "test:performance": "node tools/test-performance-runtime.mjs",
     "test:workspace": "node tools/test-workspace-ui.mjs",
-    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:sculpture-models && npm run test:gallery-assignment && npm run test:cross-space && npm run test:assets",
+    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:sculpture-models && npm run test:gallery-assignment && npm run test:cross-space && npm run test:runtime-host && npm run test:assets",
     "check": "npm run build && npm run syntax && npm run verify && npm test",
     "test:gallery": "node tools/test-gallery-management.mjs",
     "test:space-models": "node tools/test-space-model-validation.mjs",
     "test:gallery-assignment": "node tools/test-exhibition-gallery-assignment.mjs",
     "test:cross-space": "node tools/test-cross-space-runtime.mjs",
     "test:assets": "node tools/test-shared-assets.mjs",
-    "test:sculpture-models": "node tools/test-sculpture-model-validation.mjs"
+    "test:sculpture-models": "node tools/test-sculpture-model-validation.mjs",
+    "test:runtime-host": "node tools/test-scene-runtime-host.mjs"
   }
 }

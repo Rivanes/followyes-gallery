@@ -384,7 +384,7 @@ assert.equal(bootstrap.includes('import { createScene }'), false);
 assert.ok(bootstrap.includes('await bootGuard.waitForStart();'));
 assert.ok(bootstrap.includes('await loadClassicScript("https://cdn.babylonjs.com/babylon.js"'));
 assert.ok(bootstrap.includes('galleryEngineModule = await import(`../Gallery_V0_11.min.js?v=${ENGINE_CACHE_KEY}`)'));
-assert.ok(bootstrap.includes('createSceneLoadingOrchestrator'));
+assert.ok(bootstrap.includes('createSceneLoadingRuntimeHost'));
 assert.equal(bootstrap.includes('createSceneLifecycleController'), false); 
 assert.ok(bootstrap.indexOf('await bootGuard.waitForStart();') < bootstrap.indexOf('await startGalleryRuntime();'));
 assert.equal(bootstrap.includes('const sessionResult = await supabase.auth.getSession();\n  setSession(sessionResult.data.session || null);\n  if (currentSession) await loadEditorModule();\n\n  supabase.auth.onAuthStateChange'), false);

@@ -233,7 +233,7 @@ assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId()
 
 const orchestratorDebug = orchestrator.getDebug();
 assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
-assert.equal(orchestratorDebug.stage, 'V14.1.5.1');
+assert.equal(orchestratorDebug.stage, 'V14.1.6');
 assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.3 must not silently enable latest-wins behavior before V14.1.7');
 assert.ok(orchestratorDebug.requests >= 2);
 assert.ok(orchestratorDebug.recentSessions.length >= 2);
@@ -278,15 +278,15 @@ const admin = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.j
 const source = fs.readFileSync(new URL('src/Gallery_V0_11.js', root), 'utf8');
 const api = fs.readFileSync(new URL('src/data/exhibition-api.js', root), 'utf8');
 
-assert.ok(viewer.includes('createSceneLoadingOrchestrator'));
+assert.ok(viewer.includes('createSceneLoadingRuntimeHost'));
 assert.ok(viewer.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController'));
 assert.equal(viewer.includes('createSceneLifecycleController'), false, 'Viewer must no longer instantiate the controller outside the orchestrator');
-assert.ok(viewer.includes('const scene = activeScene;'), 'viewer render loop must follow mutable activeScene');
+assert.ok(viewer.includes('sceneRuntimeHost = await createSceneLoadingRuntimeHost'), 'viewer must delegate mutable active Scene rendering to shared host');
 assert.ok(viewer.includes('switchPublicExhibition(reference'));
 assert.ok(viewer.includes('window.ExhibitionPlatformSceneLifecycle = sceneLifecycleController'));
 assert.ok(viewer.includes('sceneLifecycleController.adoptRuntime(publicRuntime'), 'same-scene Admin→Public must update lifecycle runtime identity');
 assert.ok(viewer.includes('initialPublicExhibitionReference = await ensurePublicExhibitionSelection({ force: resetToHomepageAfterReload })'), 'initial discovery selection must actually drive startup');
-assert.ok(admin.includes('createSceneLoadingOrchestrator'));
+assert.ok(admin.includes('createSceneLoadingRuntimeHost'));
 assert.ok(admin.includes('window.ExhibitionPlatformSceneLoading = sceneLifecycleController'));
 assert.equal(admin.includes('createSceneLifecycleController'), false, 'Standalone Admin must no longer instantiate the controller outside the orchestrator');
 assert.ok(admin.includes('sceneLifecycleController.switchTo'), 'Admin Exhibition selection must use lifecycle controller');
@@ -335,8 +335,8 @@ assert.ok(source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOp
 assert.ok(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]'));
 assert.ok(source.includes('galleryCriticalAssetNames = galleryAuthoringSpacePreview ? [] : galleryStrictCriticalAssetNames.slice()'));
 assert.ok(source.includes('galleryAuthoringPreviewBlockingAssetNames'), 'V14.1.4 must keep authoring validity separate from assigned preview settle');
-assert.ok(source.includes('if (galleryAuthoringSpacePreview && galleryAuthoringPreviewBlockingAssetNames.indexOf(assetName) !== -1)'), 'assigned authoring assets must bypass deferred optional queue');
-assert.ok(source.includes('galleryStartupBlockingAssetNames = galleryAuthoringSpacePreview'), 'authoring preview needs its own startup blocking set');
+assert.ok(source.includes('if (galleryPolicyPreviewBlockingAssetNames.indexOf(assetName) !== -1)'), 'assigned authoring/Test assets must bypass deferred optional queue');
+assert.ok(source.includes('galleryStartupBlockingAssetNames = (galleryAuthoringSpacePreview || galleryTestMode)'), 'authoring/Test preview needs its own startup blocking set');
 assert.ok(source.includes('authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug)'), 'authoring settle debug contract missing');
 assert.ok(admin.includes('Gallery preview is partial. Assigned asset failed to load:'), 'assigned authoring asset failure must be explicit in Admin UI');
 assert.ok(source.includes('galleryAuthoringSpacePreview ? optionalGallerySpaceAsset("floor") : requireGallerySpaceAsset("floor")'));
