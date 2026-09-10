@@ -192,7 +192,7 @@ controller.dispose();
 assert.equal(engine.scenes.length, 0);
 assert.equal(controller.getActiveScene(), null);
 
-// V14.1.2 — Orchestrator compatibility shell owns the controller and injects
+// V14.1.3 — Orchestrator compatibility shell owns the controller and injects
 // immutable policy + request/session identity without changing physical Scene behavior.
 const orchestratorSceneChanges = [];
 const orchestrator = createSceneLoadingOrchestrator({
@@ -219,6 +219,9 @@ assert.equal(orchestratedScene.options.loadingSession.schema, SCENE_LOADING_SESS
 assert.equal(orchestratedScene.options.loadingSession.getSceneLifecycleId(), orchestratedScene.options.lifecycleId, 'controller must bind physical lifecycleId before core createScene');
 assert.match(orchestratedScene.options.loadingSession.id, /^v14-loading-/);
 assert.match(orchestratedScene.options.loadingSession.transitionId, /^v14-transition-/);
+assert.equal(orchestratedScene.options.loadingSession.isCancelled(), false);
+assert.equal(orchestratedScene.options.loadingSession.canContinue(orchestratedScene.options.lifecycleId), true);
+assert.equal(orchestratedScene.options.loadingSession.canContinue('another-lifecycle'), false, 'bound loading session must reject another physical lifecycle');
 
 const orchestratedAdmin = runtime('ex-b', 'venue-version-a2', { spaceId: 'main-gallery', mode: 'admin' });
 const orchestratedSwitch = await orchestrator.switchTo('ex-b', { runtime: orchestratedAdmin, forceRemote: true, sceneOptions: { adminWorkspace: true } });
@@ -230,12 +233,21 @@ assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId()
 
 const orchestratorDebug = orchestrator.getDebug();
 assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
-assert.equal(orchestratorDebug.stage, 'V14.1.2');
-assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.2 must not silently enable latest-wins behavior before V14.1.7');
+assert.equal(orchestratorDebug.stage, 'V14.1.3');
+assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.3 must not silently enable latest-wins behavior before V14.1.7');
 assert.ok(orchestratorDebug.requests >= 2);
 assert.ok(orchestratorDebug.recentSessions.length >= 2);
 assert.equal(orchestratorDebug.recentSessions.at(-1).contextKind, 'admin-exhibition');
 assert.equal(orchestratorDebug.activeVenueVersionId, 'venue-version-a2');
+// The fake Scene cannot execute Gallery_V0_11.onDisposeObservable, so exercise the
+// session cancellation primitive directly here; source-level checks below prove the
+// real core calls it from physical Scene disposal.
+const activeSession = orchestratedAdminScene.options.loadingSession;
+assert.equal(activeSession.cancel('synthetic-scene-dispose', { lifecycleId: orchestratedAdminScene.options.lifecycleId }), true);
+assert.equal(activeSession.isCancelled(), true);
+assert.equal(activeSession.canContinue(orchestratedAdminScene.options.lifecycleId), false);
+assert.equal(activeSession.getSnapshot().cancelReason, 'synthetic-scene-dispose');
+assert.equal(activeSession.cancel('duplicate-cancel'), false, 'cancellation must be idempotent');
 orchestrator.dispose();
 assert.equal(engine.scenes.length, 0);
 
@@ -261,6 +273,11 @@ assert.ok(admin.includes('sceneLifecycleController.switchTo'), 'Admin Exhibition
 assert.ok(source.includes('venueVersionId: galleryActiveVenueVersionId'), 'serialized/runtime identity must retain exact Venue Version');
 assert.ok(source.includes('Exhibition state belongs to another Gallery Version'), 'state must reject another immutable Gallery Version');
 assert.ok(source.includes('galleryDisposed = true'));
+assert.ok(source.includes('cancelGallerySceneLoadingSession("scene-disposed"'), 'physical Scene disposal must cancel its loading session');
+assert.ok(source.includes('function isGallerySceneWorkCurrent()'), 'core needs one canonical Scene-work ownership predicate');
+assert.ok(source.includes('__lifecycleId: galleryLifecycleId,\n        exportState: serializeGalleryState'), 'WebState must carry lifecycle ownership so dispose can clear the correct global');
+assert.ok(source.includes('retry-success-cancelled:') && source.includes('retry-failure-cancelled:'), 'late startup imports/retries must be blocked after disposal');
+assert.ok(source.includes('deferred-optional-import-cancelled:'), 'deferred optional Space work must not start after Scene disposal');
 assert.ok(source.includes('gallery-scene-disposed'));
 assert.ok(source.includes('galleryLifecycleId'));
 assert.ok(source.includes('Cross-Space Exhibition switch requires C6C8C25 Scene lifecycle recreation'));

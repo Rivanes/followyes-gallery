@@ -128,6 +128,7 @@ import { resolveSceneLoadingPolicyFromRuntimeOptions, getLegacySceneModeFlags } 
   - C6C8C23: Space Model Validation — technical GLB/hash validation remains outside the engine; Floor/Walls/Ceiling stay the critical Space shell while Props becomes an optional resident Space asset that cannot block interaction readiness.
   - C6C8C25: Cross-Space Runtime — one persistent Babylon Engine/canvas may recreate the active Scene when the immutable Venue Version changes; exact venue_version_id is the Space identity and lifecycle events are generation-scoped.
   - V14.1.2: Scene Loading Orchestrator — adds the compatibility orchestrator shell and per-request/session identity while preserving legacy execution/readiness behavior.
+  - V14.1.3: Scene Ownership Hardening — cancels Scene-local async work on disposal and blocks stale Space/state/Frame/model callbacks from mutating dead Scenes.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -144,6 +145,33 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     // readiness/orchestration authority out of this Babylon executor layer.
     var galleryLoadingPolicy = resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions);
     var galleryLoadingSession = runtimeOptions.loadingSession && typeof runtimeOptions.loadingSession === "object" ? runtimeOptions.loadingSession : null;
+
+    // V14.1.3 — one Scene-local ownership predicate for asynchronous work. The loading
+    // session survives past the initial READY request so background imports can be
+    // invalidated immediately when their physical Scene is disposed.
+    function isGallerySceneWorkCurrent() {
+        if (galleryDisposed) return false;
+        if (!galleryLoadingSession) return true;
+        if (typeof galleryLoadingSession.canContinue === "function") {
+            return galleryLoadingSession.canContinue(galleryLifecycleId) !== false;
+        }
+        if (typeof galleryLoadingSession.isCancelled === "function" && galleryLoadingSession.isCancelled()) {
+            return false;
+        }
+        if (typeof galleryLoadingSession.getSceneLifecycleId === "function") {
+            var ownedLifecycleId = String(galleryLoadingSession.getSceneLifecycleId() || "").trim();
+            if (ownedLifecycleId && ownedLifecycleId !== galleryLifecycleId) return false;
+        }
+        return true;
+    }
+
+    function cancelGallerySceneLoadingSession(reason, details) {
+        if (!galleryLoadingSession || typeof galleryLoadingSession.cancel !== "function") return false;
+        return galleryLoadingSession.cancel(reason || "scene-disposed", Object.assign({
+            lifecycleId: galleryLifecycleId
+        }, details || {}));
+    }
+
     var galleryLegacySceneModeFlags = getLegacySceneModeFlags(galleryLoadingPolicy);
     var galleryAuthoringSpacePreview = galleryLegacySceneModeFlags.authoringSpacePreview === true;
     var galleryAdminWorkspaceMode = galleryLegacySceneModeFlags.adminWorkspace === true && !galleryAuthoringSpacePreview;
@@ -900,6 +928,10 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         galleryStartupDeferredOptionalAssetImports.length = 0;
 
         queued.forEach(function (entry) {
+            if (!isGallerySceneWorkCurrent()) {
+                galleryDeviceProfile.notes.push("deferred-optional-import-cancelled: " + (entry && entry.assetName ? entry.assetName : "asset"));
+                return;
+            }
             try {
                 entry.run();
             } catch (error) {
@@ -1451,6 +1483,10 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
 
     scene.onDisposeObservable.add(function () {
         galleryDisposed = true;
+        cancelGallerySceneLoadingSession("scene-disposed", {
+            venueVersionId: galleryActiveVenueVersionId,
+            exhibitionId: getActiveGalleryExhibitionId ? getActiveGalleryExhibitionId() : galleryActiveExhibitionId
+        });
         Object.keys(galleryBeforeRenderObserverRegistry).forEach(unregisterGalleryBeforeRenderObserver);
 
         Object.keys(galleryEngineResizeObserverRegistry).forEach(function (key) {
@@ -9987,10 +10023,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         try {
             var instance = null;
             var container = await getGalleryCachedArtworkFrameContainer(frameUrl);
+            if (!isGallerySceneWorkCurrent()) return false;
             if (container) {
                 instance = instantiateArtworkFrameContainer(container, artwork);
             } else {
                 var imported = await BABYLON.SceneLoader.ImportMeshAsync("", "", frameUrl, scene);
+                if (!isGallerySceneWorkCurrent()) {
+                    disposeStaleImportedMeshes((imported && imported.meshes) || []);
+                    ((imported && imported.transformNodes) || []).forEach(function (node) {
+                        try { if (node && node.dispose && !(node.isDisposed && node.isDisposed())) node.dispose(false, true); } catch (disposeError) {}
+                    });
+                    return false;
+                }
                 var importedNodes = (imported.transformNodes || []).concat(imported.meshes || []);
                 instance = {
                     rootNodes: importedNodes.filter(function (node, index, array) {
@@ -17581,6 +17625,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         if (galleryAuthoringSpacePreview) {
             try {
                 var previewExhibition = await resolveGalleryExhibitionMetadata(null, galleryRequestedExhibitionId);
+                if (!isGallerySceneWorkCurrent()) return { ok: false, status: "cancelled", cancelled: true, exhibition: null, state: null, rowExists: false };
                 setActiveGalleryExhibitionContext(previewExhibition, { persistCurrentQueues: false });
                 return { ok: true, status: "gallery-authoring-preview", exhibition: previewExhibition, state: null, rowExists: false, authoringPreview: true };
             } catch (previewError) {
@@ -17617,8 +17662,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         try {
             var exhibition = await resolveGalleryExhibitionMetadata(client, galleryRequestedExhibitionId);
+            if (!isGallerySceneWorkCurrent()) return { ok: false, status: "cancelled", cancelled: true, exhibition: null, state: null, rowExists: false };
             setActiveGalleryExhibitionContext(exhibition, { persistCurrentQueues: false });
             var row = await fetchGalleryStateRowForExhibition(client, exhibition.id);
+            if (!isGallerySceneWorkCurrent()) return { ok: false, status: "cancelled", cancelled: true, exhibition: exhibition, state: null, rowExists: false };
             var state = row && row.state && typeof row.state === "object" ? row.state : null;
             cacheGalleryExhibitionState(exhibition, state, { updatedAt: row ? row.updated_at || null : null, rowExists: row ? row.rowExists !== false : false, revision: row ? row.revision || 0 : 0, lockVersion: row ? row.lock_version || 0 : 0, source: "startup-canonical" });
             if (state && Object.keys(state).length > 0) {
@@ -17646,6 +17693,9 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
         galleryStartupStatePreloadPromise = fetchGalleryStartupStateSnapshotFromSupabase()
             .then(function (result) {
+                if (!isGallerySceneWorkCurrent()) {
+                    return { ok: false, status: "cancelled", cancelled: true, state: null };
+                }
                 galleryStartupStatePreloadResult = result || {
                     ok: false,
                     status: "unknown",
@@ -17678,6 +17728,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     async function applyGalleryStartupStatePreloadResult(result, reason) {
+        if (!isGallerySceneWorkCurrent()) return false;
         result = result || galleryStartupStatePreloadResult || {
             ok: false,
             status: "missing-result",
@@ -17695,6 +17746,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         galleryFastStartRuntime.stateApplyActive = true;
 
         try {
+            if (!isGallerySceneWorkCurrent() || result.cancelled) {
+                galleryStartupFinalizeDebug.stateApplyStatus = "cancelled";
+                return false;
+            }
             if (galleryAuthoringSpacePreview || result.authoringPreview) {
                 resetGalleryRuntimeToBlankExhibition();
                 galleryStartupFinalizeDebug.stateApplyStatus = "gallery-authoring-preview";
@@ -17715,10 +17770,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             if (result.state) {
                 await yieldGalleryForegroundFrame(0);
+                if (!isGallerySceneWorkCurrent()) return false;
                 resetGalleryRuntimeToBlankExhibition();
                 await yieldGalleryForegroundFrame(0);
+                if (!isGallerySceneWorkCurrent()) return false;
                 var applyResult = tryApplyGalleryStateSafely(result.state);
                 await yieldGalleryForegroundFrame(0);
+                if (!isGallerySceneWorkCurrent()) return false;
 
                 if (!applyResult.ok) {
                     notifyGalleryStatus("Nie udalo sie wczytac zapisanego stanu galerii.");
@@ -17757,6 +17815,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             galleryStartupFinalizeDebug.stateApplyMs = galleryStartupFinalizeDebug.stateApplyFinishedAt - galleryStartupFinalizeDebug.stateApplyStartedAt;
 
             setTimeout(function () {
+                if (!isGallerySceneWorkCurrent()) return;
                 try {
                     setGalleryPublishedStateBaseline(serializeGalleryState(), {
                         serverState: result && result.state ? result.state : null,
@@ -18454,6 +18513,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function beginGalleryInteractionReadinessGate(reason) {
+        if (!isGallerySceneWorkCurrent()) return;
         if (galleryFastStartRuntime.interactionGateActive || galleryFastStartRuntime.interactionReady) return;
 
         galleryFastStartRuntime.interactionGateActive = true;
@@ -18483,6 +18543,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, Math.max(15000, Number(galleryFastStartRuntime.interactionGateTimeoutMs) || 60000));
 
         function poll() {
+            if (!isGallerySceneWorkCurrent()) return;
             if (galleryFastStartRuntime.interactionReady) return;
             var snapshot = getGalleryInteractionReadinessSnapshot();
             galleryFastStartRuntime.interactionGateLastSnapshot = snapshot;
@@ -18533,6 +18594,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function finishGalleryStartup() {
+        if (!isGallerySceneWorkCurrent()) return;
         refreshGalleryAssetReadinessDebug("finishGalleryStartup-preflight");
 
         if (!galleryAssetLoadDebug.criticalReady) {
@@ -18568,6 +18630,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function completeGalleryStartupIfReady() {
+        if (!isGallerySceneWorkCurrent()) return;
         refreshGalleryAssetReadinessDebug("completeGalleryStartupIfReady");
 
         if (assetsLoaded < assetsToLoad || galleryWebStateLoadedOnce) {
@@ -18621,6 +18684,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     function assetLoaded(assetName, failed, details) {
+        if (!isGallerySceneWorkCurrent()) return;
         assetName = assetName || "asset_" + assetsLoaded;
 
         if (galleryAssetLoadDebug.loaded[assetName] || galleryAssetLoadDebug.failed[assetName]) {
@@ -18654,6 +18718,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     galleryStartupWatchdogTimer = setTimeout(function () {
+        if (!isGallerySceneWorkCurrent()) return;
         if (galleryWebStateLoadedOnce || galleryAssetLoadDebug.failureShown) {
             return;
         }
@@ -18805,7 +18870,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }, "retry-queued:" + assetName);
 
         function runAttempt() {
-            if (done) return null;
+            if (done || !isGallerySceneWorkCurrent()) {
+                done = true;
+                updateGalleryAssetRetryEntry(assetName, {
+                    status: "cancelled",
+                    finishedAt: Date.now(),
+                    finalFailureReason: "scene-no-longer-current"
+                }, "retry-cancelled:" + assetName);
+                return null;
+            }
             attempt += 1;
             var token = ++activeToken;
             var settled = false;
@@ -18820,8 +18893,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             updateGalleryRetryLoaderStatus(assetName, attempt, maxAttempts, "Attempt " + attempt + " of " + maxAttempts + " for " + sceneFilename);
 
             function succeedAttempt(meshes) {
-                if (settled || done || token !== activeToken) {
+                if (settled || done || token !== activeToken || !isGallerySceneWorkCurrent()) {
                     disposeStaleImportedMeshes(meshes || []);
+                    settled = true;
+                    done = true;
+                    updateGalleryAssetRetryEntry(assetName, {
+                        status: "cancelled",
+                        finishedAt: Date.now(),
+                        finalFailureReason: "scene-no-longer-current"
+                    }, "retry-success-cancelled:" + assetName);
                     return;
                 }
                 settled = true;
@@ -18844,6 +18924,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
             function failAttempt(reason, message, exception) {
                 if (settled || done || token !== activeToken) return;
+                if (!isGallerySceneWorkCurrent()) {
+                    settled = true;
+                    done = true;
+                    updateGalleryAssetRetryEntry(assetName, {
+                        status: "cancelled",
+                        finishedAt: Date.now(),
+                        finalFailureReason: "scene-no-longer-current"
+                    }, "retry-failure-cancelled:" + assetName);
+                    return;
+                }
                 settled = true;
                 recordGalleryAssetAttemptError(assetName, attempt, reason, message, exception);
                 if (attempt < maxAttempts) {
@@ -38862,7 +38952,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             var result = null;
             var cachedInstance = null;
             if (!galleryDeviceProfile.mobile) {
-                try { cachedInstance = instantiateGalleryCachedModel3d(await getGalleryCachedModel3dContainer(assetChoice.url), slot); }
+                try {
+                    var cachedContainer = await getGalleryCachedModel3dContainer(assetChoice.url);
+                    if (!isGallerySceneWorkCurrent()) return false;
+                    cachedInstance = instantiateGalleryCachedModel3d(cachedContainer, slot);
+                }
                 catch (cacheError) { console.warn("Model 3D cache fallback warning:", cacheError); }
             }
             if (cachedInstance && cachedInstance.meshes.length) {
@@ -38879,6 +38973,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 };
             } else {
                 result = await BABYLON.SceneLoader.ImportMeshAsync("", "", assetChoice.url, scene);
+            }
+
+            if (!isGallerySceneWorkCurrent()) {
+                gallerySculptureCoreRuntime.loadDiscardCount += 1;
+                disposeLateResult(result);
+                return false;
             }
 
             if (!isCurrentModel3dSlotLoad(slot, generation) || slot.metadata.model3dRuntime !== pendingRuntime) {
@@ -45547,6 +45647,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     }
 
     globalThis.ExhibitionPlatformWebState = {
+        __lifecycleId: galleryLifecycleId,
         exportState: serializeGalleryState,
         importState: applyGalleryState,
         save: saveGalleryStateToSupabase,
@@ -45618,12 +45719,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? galleryLoadingSession.getSnapshot()
                 : null;
             return {
-                stage: "V14.1.2",
+                stage: "V14.1.3",
                 schema: galleryLoadingPolicy.schema,
                 contextKind: galleryLoadingPolicy.contextKind,
                 readiness: cloneGalleryJson(galleryLoadingPolicy.readiness),
                 sceneReuse: cloneGalleryJson(galleryLoadingPolicy.sceneReuse),
                 compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility),
+                sceneWorkCurrent: isGallerySceneWorkCurrent(),
                 loadingSession: loadingSessionSnapshot ? cloneGalleryJson(loadingSessionSnapshot) : null
             };
         },

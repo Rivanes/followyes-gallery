@@ -1,22 +1,24 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.2 — Scene Loading Orchestrator Compatibility Shell**.
+Current repository release: **V14.1.3 — Scene Ownership / Cancellation Hardening**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.2 Scene Loading Orchestrator Compatibility Shell
+## V14.1.3 Scene Ownership / Cancellation Hardening
 
-V14.1.2 adds the high-level Scene Loading Orchestrator compatibility shell above the existing C25 SceneLifecycleController. Viewer and standalone Admin now instantiate the orchestrator, which owns request/transition/loading-session identity and injects the V14 policy/session into createScene while delegating the existing physical Scene and readiness behavior unchanged.
+V14.1.3 gives every physical Scene a real loading-session ownership boundary. The session is bound to the exact lifecycle ID, remains valid after initial READY for background work, and is cancelled when that Scene is disposed. Late startup Space retries/deferred imports, startup state preload/apply, Frame GLB and model/Prop GLB callbacks must pass one Scene-current predicate before mutating runtime state.
+
+The previously confirmed stale-global bug is also fixed: `ExhibitionPlatformWebState` now carries the exact `__lifecycleId`, so disposal clears only the global owned by the outgoing Scene.
 
 The three-file target remains:
 
 ```text
 scene-lifecycle-controller.js
-scene-loading-orchestrator.js   (implemented V14.1.2)
+scene-loading-orchestrator.js   (V14.1.2 shell; V14.1.3 session cancellation)
 scene-loading-policies.js       (implemented V14.1.1)
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.2 requires no SQL and does not yet fix authoring readiness or enable latest-wins navigation.
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.3 requires no SQL and still does not change authoring readiness or enable latest-wins navigation.
 
 ## Product model
 
@@ -50,7 +52,7 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
 - `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract.
-- `src/runtime/scene-loading-orchestrator.js` — V14.1.2 high-level compatibility shell owning request/transition/loading-session identity while delegating physical Scene work to the controller.
+- `src/runtime/scene-loading-orchestrator.js` — V14.1.2 high-level shell; V14.1.3 adds cancellable Scene-owned loading sessions and lifecycle-current checks.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
@@ -349,7 +351,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.2 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.3 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.2 Scene Loading Orchestrator
+  Exhibition Platform — V14.1.3 Scene Loading Orchestrator
   Compatibility shell above SceneLifecycleController. It owns high-level loading request/session
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
@@ -52,6 +52,10 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
   let status = "created";
   let settledAt = 0;
   let error = null;
+  let cancelled = false;
+  let cancelledAt = 0;
+  let cancelReason = null;
+  let cancelDetails = null;
   const createdAt = wallNow();
   const startedAt = nowMs();
 
@@ -71,6 +75,11 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       return sceneLifecycleId;
     },
     getSceneLifecycleId() { return sceneLifecycleId || null; },
+    isOwnedByLifecycle(value) {
+      const candidate = text(value);
+      if (!candidate || !sceneLifecycleId) return true;
+      return candidate === sceneLifecycleId;
+    },
     markDelegated() {
       if (status === "created") status = "delegated";
     },
@@ -80,7 +89,18 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       error = ok === false ? text(reason) || "scene-loading-request-failed" : null;
       settledAt = wallNow();
     },
-    isCancelled() { return false; }, // V14.1.3 adds real Scene-local cancellation ownership.
+    cancel(reason, details) {
+      if (cancelled) return false;
+      cancelled = true;
+      cancelledAt = wallNow();
+      cancelReason = text(reason) || "scene-loading-session-cancelled";
+      cancelDetails = details && typeof details === "object" ? { ...details } : null;
+      return true;
+    },
+    isCancelled() { return cancelled; },
+    canContinue(lifecycleId) {
+      return !cancelled && session.isOwnedByLifecycle(lifecycleId);
+    },
     getSnapshot() {
       return {
         schema: SCENE_LOADING_SESSION_SCHEMA,
@@ -93,6 +113,10 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
         sceneLifecycleId: sceneLifecycleId || null,
         status,
         error,
+        cancelled,
+        cancelledAt: cancelledAt || null,
+        cancelReason,
+        cancelDetails,
         createdAt,
         settledAt: settledAt || null,
         durationMs: Math.max(0, nowMs() - startedAt)
@@ -117,7 +141,7 @@ export function createSceneLoadingOrchestrator(options = {}) {
   let disposed = false;
   const recentSessions = [];
   const debug = {
-    stage: "V14.1.2",
+    stage: "V14.1.3",
     schema: SCENE_LOADING_ORCHESTRATOR_SCHEMA,
     requests: 0,
     starts: 0,
@@ -213,6 +237,9 @@ export function createSceneLoadingOrchestrator(options = {}) {
       : (typeof lifecycleController.getActiveLifecycleId === "function" ? lifecycleController.getActiveLifecycleId() : "");
     request.session.bindSceneLifecycleId(lifecycleId);
     request.session.markSettled(!error, error && (error.message || error));
+    if (error && typeof request.session.cancel === "function") {
+      request.session.cancel("request-failed", { error: text(error && (error.message || error)) || null });
+    }
     debug.lastMode = result && result.mode ? result.mode : (error ? "failed" : request.kind);
     debug.lastError = error ? text(error.message || error) : null;
     debug.lastDurationMs = Math.max(0, nowMs() - request.startedAt);
@@ -300,6 +327,9 @@ export function createSceneLoadingOrchestrator(options = {}) {
 
   function dispose() {
     disposed = true;
+    if (activeRequest && activeRequest.session && typeof activeRequest.session.cancel === "function") {
+      activeRequest.session.cancel("orchestrator-dispose", { requestId: activeRequest.requestId });
+    }
     if (typeof lifecycleController.dispose === "function") lifecycleController.dispose();
     activeRequest = null;
     debug.lastMode = "disposed";
