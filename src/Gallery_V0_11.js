@@ -1,7 +1,8 @@
 import {
     resolveSceneLoadingPolicyFromRuntimeOptions,
     getLegacySceneModeFlags,
-    getSceneLoadingSpaceRolePolicy
+    getSceneLoadingSpaceRolePolicy,
+    getSceneLoadingFamilyPolicy
 } from "./runtime/scene-loading-policies.js";
 
 /*
@@ -134,6 +135,7 @@ import {
   - V14.1.2: Scene Loading Orchestrator — adds the compatibility orchestrator shell and per-request/session identity while preserving legacy execution/readiness behavior.
   - V14.1.3: Scene Ownership Hardening — cancels Scene-local async work on disposal and blocks stale Space/state/Frame/model callbacks from mutating dead Scenes.
   - V14.1.4: Gallery Authoring Assigned-Space Settle — assigned Floor/Walls/Ceiling/Props start immediately in authoring preview and must reach loaded/failed terminal state before compatibility READY.
+  - V14.1.5: Admin Visible Hydration Batch — Admin assigned artwork Previews, Frames, sculpture/models and Shared Props settle as one policy-driven visible batch before Admin preview is considered visually settled.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -16124,6 +16126,366 @@ syncControl("bloomEnabled", "visualBloomEnabled");
     };
 
 
+    // V14.1.5 — ADMIN VISIBLE HYDRATION BATCH
+    // The policy already classifies Admin Frames / sculpture-models / Shared Props as
+    // foreground-terminal. This registry gives those executor promises one deterministic
+    // lifecycle boundary instead of letting applyEditorState() fire-and-forget them.
+    var galleryAdminVisibleHydrationRuntime = {
+        stage: "V14.1.5",
+        schema: "gallery-admin-visible-hydration-batch.v1",
+        enabled: galleryLoadingPolicy.contextKind === "admin-exhibition",
+        generation: 0,
+        batchesStarted: 0,
+        tasksRegistered: 0,
+        tasksLoaded: 0,
+        tasksUnavailable: 0,
+        tasksErrored: 0,
+        timeouts: 0,
+        activeBatch: null,
+        lastBatch: null
+    };
+
+    function isGalleryAdminVisibleFamilyBlocking(family) {
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return false;
+        var familyPolicy = getSceneLoadingFamilyPolicy(galleryLoadingPolicy, family);
+        return !!(familyPolicy && familyPolicy.blocksPreviewSettle === true);
+    }
+
+    function getGalleryAdminVisibleHydrationTaskKey(family, key) {
+        return String(family || "visible") + ":" + String(key || "task");
+    }
+
+    function registerGalleryLoadingSessionTask(family, key, details) {
+        if (!galleryLoadingSession || typeof galleryLoadingSession.registerTask !== "function") return null;
+        var familyPolicy = getSceneLoadingFamilyPolicy(galleryLoadingPolicy, family);
+        var blocksSettle = !!(familyPolicy && familyPolicy.blocksPreviewSettle === true);
+        var previewPhase = galleryLoadingPolicy && galleryLoadingPolicy.readiness
+            ? galleryLoadingPolicy.readiness.previewPhase
+            : "runtime-visible-settled";
+        var phase = blocksSettle
+            ? previewPhase
+            : "background-visible-hydration";
+        try {
+            return galleryLoadingSession.registerTask({
+                key: String(key || "task"),
+                phase: phase,
+                family: String(family || "visible"),
+                blocksSettle: blocksSettle,
+                referencePreserved: true,
+                details: Object.assign({
+                    exhibitionId: getActiveGalleryExhibitionId(),
+                    venueVersionId: galleryActiveVenueVersionId,
+                    transitionEpoch: Number(galleryExhibitionRuntime && galleryExhibitionRuntime.transitionEpoch) || 0,
+                    mode: familyPolicy && familyPolicy.mode ? familyPolicy.mode : null
+                }, details || {})
+            });
+        } catch (error) {
+            console.warn("V14.1.5 loading-session task registration warning:", error);
+            return null;
+        }
+    }
+
+    function refreshGalleryAdminVisibleHydrationBatch(batch) {
+        if (!batch) return null;
+        var tasks = Array.isArray(batch.tasks) ? batch.tasks : [];
+        batch.pending = tasks.filter(function (task) { return task && task.status === "pending"; }).length;
+        batch.loaded = tasks.filter(function (task) { return task && task.status === "loaded"; }).length;
+        batch.unavailable = tasks.filter(function (task) { return task && task.status === "unavailable"; }).length;
+        batch.errors = tasks.filter(function (task) { return task && task.status === "error"; }).length;
+        batch.superseded = tasks.filter(function (task) { return task && task.status === "superseded"; }).length;
+        batch.complete = batch.collecting === true ? false : batch.pending === 0;
+        if (batch.complete && !batch.settledAt) {
+            batch.settledAt = Date.now();
+            batch.durationMs = Math.max(0, batch.settledAt - batch.startedAt);
+            batch.status = batch.errors > 0 || batch.unavailable > 0
+                ? "settled-with-unavailable"
+                : "settled";
+        }
+        return batch;
+    }
+
+    function getGalleryAdminVisibleHydrationBatchSnapshot(batch) {
+        batch = batch || galleryAdminVisibleHydrationRuntime.activeBatch || galleryAdminVisibleHydrationRuntime.lastBatch;
+        if (!batch) {
+            return {
+                stage: galleryAdminVisibleHydrationRuntime.stage,
+                schema: galleryAdminVisibleHydrationRuntime.schema,
+                enabled: !!galleryAdminVisibleHydrationRuntime.enabled,
+                active: false,
+                complete: true,
+                tasks: []
+            };
+        }
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        return {
+            stage: galleryAdminVisibleHydrationRuntime.stage,
+            schema: galleryAdminVisibleHydrationRuntime.schema,
+            enabled: !!galleryAdminVisibleHydrationRuntime.enabled,
+            active: galleryAdminVisibleHydrationRuntime.activeBatch === batch && !batch.complete,
+            id: batch.id,
+            generation: batch.generation,
+            reason: batch.reason,
+            exhibitionId: batch.exhibitionId,
+            venueVersionId: batch.venueVersionId,
+            transitionEpoch: batch.transitionEpoch,
+            status: batch.status,
+            complete: !!batch.complete,
+            pending: batch.pending,
+            loaded: batch.loaded,
+            unavailable: batch.unavailable,
+            errors: batch.errors,
+            superseded: batch.superseded,
+            timedOut: !!batch.timedOut,
+            startedAt: batch.startedAt,
+            settledAt: batch.settledAt || null,
+            durationMs: batch.durationMs || 0,
+            tasks: (batch.tasks || []).map(function (task) {
+                return {
+                    family: task.family,
+                    key: task.key,
+                    taskKey: task.taskKey,
+                    status: task.status,
+                    referencePreserved: task.referencePreserved !== false,
+                    details: task.details || null,
+                    error: task.error || null,
+                    startedAt: task.startedAt,
+                    settledAt: task.settledAt || null,
+                    durationMs: task.settledAt ? Math.max(0, task.settledAt - task.startedAt) : Math.max(0, Date.now() - task.startedAt)
+                };
+            })
+        };
+    }
+
+    function supersedeGalleryAdminVisibleHydrationBatch(batch, reason) {
+        if (!batch || batch.complete) return batch;
+        (batch.tasks || []).forEach(function (task) {
+            if (!task || task.status !== "pending") return;
+            task.status = "superseded";
+            task.error = reason || "superseded";
+            task.settledAt = Date.now();
+            if (task.sessionTask && typeof task.sessionTask.settle === "function") {
+                try { task.sessionTask.settle("superseded", task.error, { batchSuperseded: true }); } catch (sessionTaskError) {}
+            }
+        });
+        batch.status = "superseded";
+        batch.collecting = false;
+        batch.supersededAt = Date.now();
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        galleryAdminVisibleHydrationRuntime.lastBatch = batch;
+        return batch;
+    }
+
+    function beginGalleryAdminVisibleHydrationBatch(reason, details) {
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return null;
+        var current = galleryAdminVisibleHydrationRuntime.activeBatch;
+        if (current && !current.complete) supersedeGalleryAdminVisibleHydrationBatch(current, "superseded-by-new-admin-visible-batch");
+        galleryAdminVisibleHydrationRuntime.generation += 1;
+        galleryAdminVisibleHydrationRuntime.batchesStarted += 1;
+        var generation = galleryAdminVisibleHydrationRuntime.generation;
+        var batch = {
+            id: "admin-visible-" + generation + "-" + Date.now().toString(36),
+            generation: generation,
+            reason: reason || "admin-visible-hydration",
+            exhibitionId: getActiveGalleryExhibitionId(),
+            venueVersionId: galleryActiveVenueVersionId,
+            transitionEpoch: Number(galleryExhibitionRuntime && galleryExhibitionRuntime.transitionEpoch) || 0,
+            details: details || null,
+            status: "collecting",
+            collecting: true,
+            startedAt: Date.now(),
+            settledAt: null,
+            durationMs: 0,
+            complete: false,
+            timedOut: false,
+            eventDispatched: false,
+            tasks: []
+        };
+        galleryAdminVisibleHydrationRuntime.activeBatch = batch;
+        return refreshGalleryAdminVisibleHydrationBatch(batch);
+    }
+
+    function ensureGalleryAdminVisibleHydrationBatch(reason) {
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return null;
+        var current = galleryAdminVisibleHydrationRuntime.activeBatch;
+        if (current && !current.complete) return current;
+        return beginGalleryAdminVisibleHydrationBatch(reason || "apply-editor-state");
+    }
+
+    function findGalleryAdminVisibleHydrationTask(batch, family, key) {
+        if (!batch) return null;
+        var taskKey = getGalleryAdminVisibleHydrationTaskKey(family, key);
+        return (batch.tasks || []).find(function (task) { return task && task.taskKey === taskKey; }) || null;
+    }
+
+    function settleGalleryAdminVisibleHydrationTask(batch, task, status, error, details) {
+        if (!batch || !task || task.status !== "pending") return task;
+        task.status = status || "loaded";
+        task.error = error ? String(error && error.message ? error.message : error) : null;
+        if (details) task.details = Object.assign({}, task.details || {}, details);
+        task.settledAt = Date.now();
+        if (task.sessionTask && typeof task.sessionTask.settle === "function") {
+            try { task.sessionTask.settle(task.status, task.error, task.details || null); } catch (sessionTaskError) {
+                console.warn("V14.1.5 loading-session task settle warning:", sessionTaskError);
+            }
+        }
+        if (task.status === "loaded") galleryAdminVisibleHydrationRuntime.tasksLoaded += 1;
+        else if (task.status === "unavailable") galleryAdminVisibleHydrationRuntime.tasksUnavailable += 1;
+        else if (task.status === "error") galleryAdminVisibleHydrationRuntime.tasksErrored += 1;
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        return task;
+    }
+
+    function registerGalleryAdminVisibleHydrationManualTask(family, key, details) {
+        if (!isGalleryAdminVisibleFamilyBlocking(family)) return null;
+        var batch = ensureGalleryAdminVisibleHydrationBatch("apply-editor-state");
+        if (!batch) return null;
+        var existing = findGalleryAdminVisibleHydrationTask(batch, family, key);
+        if (existing) {
+            if (details) existing.details = Object.assign({}, existing.details || {}, details);
+            return existing;
+        }
+        var task = {
+            family: family,
+            key: String(key || "task"),
+            taskKey: getGalleryAdminVisibleHydrationTaskKey(family, key),
+            status: "pending",
+            referencePreserved: true,
+            details: details || null,
+            error: null,
+            startedAt: Date.now(),
+            settledAt: null,
+            promise: null,
+            onTimeout: null,
+            sessionTask: registerGalleryLoadingSessionTask(family, key, details || null)
+        };
+        batch.tasks.push(task);
+        galleryAdminVisibleHydrationRuntime.tasksRegistered += 1;
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        return task;
+    }
+
+    function registerGalleryAdminVisibleHydrationTask(family, key, promise, options) {
+        options = options || {};
+        if (!isGalleryAdminVisibleFamilyBlocking(family)) return Promise.resolve(promise);
+        var batch = ensureGalleryAdminVisibleHydrationBatch(options.reason || "apply-editor-state");
+        if (!batch) return Promise.resolve(promise);
+        var existing = findGalleryAdminVisibleHydrationTask(batch, family, key);
+        if (existing && existing.promise) return existing.promise;
+        var task = existing || registerGalleryAdminVisibleHydrationManualTask(family, key, options.details || null);
+        if (!task) return Promise.resolve(promise);
+        task.onTimeout = typeof options.onTimeout === "function" ? options.onTimeout : null;
+        task.referencePreserved = options.referencePreserved !== false;
+        var observed = Promise.resolve(promise).then(function (result) {
+            var loaded = typeof options.isLoaded === "function" ? options.isLoaded(result) : result !== false && result !== null;
+            settleGalleryAdminVisibleHydrationTask(batch, task, loaded ? "loaded" : "unavailable", loaded ? null : (options.unavailableMessage || "Visible asset is unavailable."));
+            return result;
+        }).catch(function (error) {
+            settleGalleryAdminVisibleHydrationTask(batch, task, "error", error || options.unavailableMessage || "Visible asset restore failed.");
+            throw error;
+        });
+        task.promise = observed;
+        return observed;
+    }
+
+    function registerGalleryAdminArtworkPreviewTaskFromEditorState(editorState) {
+        if (!isGalleryAdminVisibleFamilyBlocking("artwork-preview") || !editorState || !Array.isArray(editorState.artworks)) return null;
+        var assignedCount = editorState.artworks.filter(function (artworkState) {
+            return !!(artworkState && (artworkState.image || artworkState.artworkImage || artworkState.imageUrl || artworkState.imagePath));
+        }).length;
+        if (assignedCount < 1) return null;
+        return registerGalleryAdminVisibleHydrationManualTask("artwork-preview", "assigned-previews", { assignedCount: assignedCount });
+    }
+
+    function settleGalleryAdminArtworkPreviewTask(reason, snapshot) {
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return null;
+        var batch = galleryAdminVisibleHydrationRuntime.activeBatch;
+        var task = findGalleryAdminVisibleHydrationTask(batch, "artwork-preview", "assigned-previews");
+        if (!task) return null;
+        return settleGalleryAdminVisibleHydrationTask(batch, task, "loaded", null, {
+            reason: reason || "artwork-preview-ready",
+            requiredPreviews: snapshot && snapshot.requiredPreviews !== undefined ? snapshot.requiredPreviews : null,
+            readyPreviews: snapshot && snapshot.readyPreviews !== undefined ? snapshot.readyPreviews : null
+        });
+    }
+
+    function flushGalleryAdminVisibleHydrationGlobalRefresh(reason) {
+        if (!galleryFastStartRuntime.startupBatchGlobalRefreshNeeded) return;
+        if (!galleryFastStartRuntime.interactionFinalizationComplete) return;
+        try {
+            refreshViewerExhibitionCollisionMeshes();
+            refreshCommonLightingMaterialSupport();
+            refreshArtworkLightExclusions();
+            refreshPedestalLightIncludedMeshes();
+            hydrateSavedLocalLightTargetsForAll(reason || "V14.1.5-admin-visible-settled");
+            galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = false;
+        } catch (error) {
+            console.warn("V14.1.5 Admin visible hydration final refresh warning:", error);
+        }
+    }
+
+    async function waitForGalleryAdminVisibleHydrationBatch(reason, options) {
+        options = options || {};
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return getGalleryAdminVisibleHydrationBatchSnapshot(null);
+        var batch = galleryAdminVisibleHydrationRuntime.activeBatch;
+        if (!batch) return getGalleryAdminVisibleHydrationBatchSnapshot(null);
+        batch.collecting = false;
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        if (!batch.complete) {
+            batch.status = "waiting";
+            var pendingPromises = (batch.tasks || []).filter(function (task) {
+                return task && task.status === "pending" && task.promise && typeof task.promise.then === "function";
+            }).map(function (task) { return Promise.resolve(task.promise).catch(function () { return null; }); });
+            var timeoutMs = Math.max(5000, Number(options.timeoutMs) || 30000);
+            var waitStartedAt = Date.now();
+            if (pendingPromises.length) {
+                var timeoutHandle = null;
+                await Promise.race([
+                    Promise.allSettled(pendingPromises),
+                    new Promise(function (resolve) {
+                        timeoutHandle = setTimeout(resolve, timeoutMs);
+                    })
+                ]);
+                if (timeoutHandle) clearTimeout(timeoutHandle);
+            }
+            refreshGalleryAdminVisibleHydrationBatch(batch);
+            while (!batch.complete && (Date.now() - waitStartedAt) < timeoutMs) {
+                await new Promise(function (resolve) { setTimeout(resolve, 25); });
+                refreshGalleryAdminVisibleHydrationBatch(batch);
+            }
+            var timedOut = !batch.complete;
+            if (!batch.complete && timedOut) {
+                batch.timedOut = true;
+                galleryAdminVisibleHydrationRuntime.timeouts += 1;
+                (batch.tasks || []).forEach(function (task) {
+                    if (!task || task.status !== "pending") return;
+                    try { if (task.onTimeout) task.onTimeout(); } catch (timeoutError) { console.warn("Admin visible task timeout cleanup warning:", timeoutError); }
+                    settleGalleryAdminVisibleHydrationTask(batch, task, "unavailable", "Admin visible hydration timeout.", { timeoutMs: timeoutMs });
+                });
+            }
+        }
+        refreshGalleryAdminVisibleHydrationBatch(batch);
+        if (batch.complete) {
+            galleryAdminVisibleHydrationRuntime.lastBatch = batch;
+            flushGalleryAdminVisibleHydrationGlobalRefresh(reason || "V14.1.5-admin-visible-settled");
+            if (!batch.eventDispatched) {
+                batch.eventDispatched = true;
+                try {
+                    window.dispatchEvent(new CustomEvent("gallery-admin-visible-settled", {
+                        detail: getGalleryAdminVisibleHydrationBatchSnapshot(batch)
+                    }));
+                } catch (eventError) {}
+            }
+        }
+        return getGalleryAdminVisibleHydrationBatchSnapshot(batch);
+    }
+
+    function isGalleryAdminVisibleHydrationBatchPending() {
+        if (!galleryAdminVisibleHydrationRuntime.enabled) return false;
+        var batch = galleryAdminVisibleHydrationRuntime.activeBatch;
+        return !!(batch && !refreshGalleryAdminVisibleHydrationBatch(batch).complete);
+    }
+
+
     // STAGE 12C65E — GALLERY ZONES / CRITICAL → NEARBY → DEFERRED
     // Zones are derived from floor segment bounds and quantized when a gallery contains many tiles.
     // The current zone is critical, directly adjacent zones are nearby, everything else stays deferred.
@@ -18427,6 +18789,12 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 throw previewError;
             }
 
+            settleGalleryAdminArtworkPreviewTask(reason || "foreground-preview-ready", snapshot);
+            var adminVisibleHydration = await waitForGalleryAdminVisibleHydrationBatch(
+                reason || "foreground-admin-visible-settle",
+                { timeoutMs: 30000 }
+            );
+
             sweepGalleryInactiveExhibitionOwners(activeId, "foreground-ready-final-sweep");
             var quietTimeoutMs = Math.max(2400, Number(options.quietTimeoutMs) || 5200);
             var quiet = await waitForGalleryForegroundQuietFrames(quietTimeoutMs);
@@ -18458,7 +18826,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 criticalPath: cloneGalleryJson(galleryExhibitionRuntime.startupCriticalPath),
                 backgroundHydration: cloneGalleryJson(galleryExhibitionRuntime.backgroundHydration),
                 longTasks: galleryExhibitionRuntime.longTaskCount, longTaskDurationMs: Math.round(galleryExhibitionRuntime.longTaskDurationMs * 10) / 10,
-                ownerSweep: galleryExhibitionRuntime.ownerSweepLast
+                ownerSweep: galleryExhibitionRuntime.ownerSweepLast,
+                adminVisibleHydration: adminVisibleHydration
             };
             if (token === galleryExhibitionRuntime.foregroundReadyToken) {
                 galleryExhibitionRuntime.foregroundReady = true;
@@ -18508,7 +18877,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             backgroundHydration: cloneGalleryJson(galleryExhibitionRuntime.backgroundHydration)
         };
         // C6C8C11: every assigned artwork must already have Preview (or Full) before Ready.
-        // Models remain background work and do not block interaction.
+        // Public models remain background; Admin foreground-terminal model/Frame/Prop tasks are gated separately by V14.1.5.
         snapshot.heavyReady = !!(
             snapshot.stateApplied &&
             snapshot.artworkQueue === 0 &&
@@ -38474,7 +38843,8 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         });
     }
 
-    function applySharedAssetPropStateToSlot(slot, instanceState) {
+    function applySharedAssetPropStateToSlot(slot, instanceState, options) {
+        options = options || {};
         var descriptor = normalizeSharedAssetPropDescriptor(instanceState);
         if (!slot || !descriptor) return Promise.resolve(false);
         descriptor.instanceId = String(instanceState.instanceId || instanceState.id || descriptor.instanceId || createSharedAssetInstanceId());
@@ -38496,6 +38866,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         applySculptureTransformToSlot(slot);
         var modelState = buildSharedAssetPropModelState(slot, descriptor);
         if (!modelState) return Promise.resolve(false);
+        if (options.forceImmediate) modelState._galleryFastStartForceImmediate = true;
         slot.metadata.model3d = modelState;
         return Promise.resolve(applyModel3dStateToSlot(slot, modelState)).then(function (ok) {
             if (ok) clearSharedAssetPropUnavailable(slot);
@@ -38513,7 +38884,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var slot = createPedestalDisplay(point, index, { name: "AssetProp_" + descriptor.instanceId.replace(/[^a-z0-9]/gi, "").slice(0, 12), slotId: "asset-prop-" + descriptor.instanceId });
         if (!slot) return Promise.resolve(null);
         forgetDeletedModel3dSlotName(slot.name);
-        return Promise.resolve(applySharedAssetPropStateToSlot(slot, Object.assign({}, instanceState, descriptor))).then(function (ok) {
+        return Promise.resolve(applySharedAssetPropStateToSlot(slot, Object.assign({}, instanceState, descriptor), options)).then(function (ok) {
             if (!ok && options.requireLoad) {
                 deleteModel3dSlotRuntime(slot, { skipRememberDeleted: true, silent: true });
                 return null;
@@ -39159,7 +39530,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 transformNodeCount: pendingRuntime.transformNodes.length,
                 loadedAt: pendingRuntime.loadedAt
             };
-            if (galleryFastStartRuntime && galleryFastStartRuntime.startupBatchHydrationActive) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
+            if (galleryFastStartRuntime && (galleryFastStartRuntime.startupBatchHydrationActive || isGalleryAdminVisibleHydrationBatchPending())) galleryFastStartRuntime.startupBatchGlobalRefreshNeeded = true;
             else { refreshViewerExhibitionCollisionMeshes(); refreshCommonLightingMaterialSupport(); hydrateSavedLocalLightTargetsForAll("model3d-loaded"); }
             updateViewerModePlaceholderVisibility();
             updateModel3dSlotUi();
@@ -43941,6 +44312,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
 
         if (Array.isArray(editorState.artworks)) {
+            registerGalleryAdminArtworkPreviewTaskFromEditorState(editorState);
             applyDeletedArtworkNamesFromState(editorState);
 
             editorState.artworks.forEach(function (artworkState) {
@@ -44090,13 +44462,31 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 }
 
                 if (artworkState.frame || artworkState.artworkFrame) {
-                    Promise.resolve(applyArtworkFrameState(
+                    var frameRestorePromise = Promise.resolve(applyArtworkFrameState(
                         artwork,
                         artworkState.frame || artworkState.artworkFrame,
                         { silent: true, markDirty: false }
                     )).catch(function (frameRestoreError) {
                         console.warn("Artwork frame restore warning:", frameRestoreError);
+                        return false;
                     });
+                    registerGalleryAdminVisibleHydrationTask(
+                        "frames",
+                        ensureArtworkIdentity(artwork),
+                        frameRestorePromise,
+                        {
+                            reason: "apply-editor-state-frame",
+                            unavailableMessage: "Saved Frame is unavailable; binding preserved.",
+                            onTimeout: function () {
+                                if (!artwork || (artwork.isDisposed && artwork.isDisposed())) return;
+                                nextArtworkFrameLoadGeneration(artwork);
+                                disposeArtworkFrameRuntime(artwork);
+                                artwork.metadata = artwork.metadata || {};
+                                artwork.metadata.artworkFrameLoading = false;
+                                artwork.metadata.artworkFrameUnavailable = { message: "Admin visible Frame hydration timed out.", at: Date.now() };
+                            }
+                        }
+                    ).catch(function () {});
                 } else {
                     nextArtworkFrameLoadGeneration(artwork);
                     disposeArtworkFrameRuntime(artwork);
@@ -44221,9 +44611,39 @@ syncControl("bloomEnabled", "visualBloomEnabled");
 
                 if (sphereState.model3d) {
                     sphere.metadata.model3dLoading = true;
-                    Promise.resolve(applyModel3dStateToSlot(sphere, sphereState.model3d)).finally(function () {
+                    var modelVisibleBlocking = isGalleryAdminVisibleFamilyBlocking("sculpture-models");
+                    var modelRestoreState = modelVisibleBlocking
+                        ? Object.assign({}, sphereState.model3d, { _galleryFastStartForceImmediate: true })
+                        : sphereState.model3d;
+                    var modelRestorePromise = Promise.resolve(applyModel3dStateToSlot(sphere, modelRestoreState)).then(function (ok) {
+                        if (sphere && sphere.metadata) {
+                            sphere.metadata.model3dUnavailable = ok ? null : { message: "Saved sculpture/model is unavailable; reference preserved.", at: Date.now() };
+                        }
+                        return ok;
+                    }).catch(function (modelRestoreError) {
+                        if (sphere && sphere.metadata) sphere.metadata.model3dUnavailable = { message: modelRestoreError && modelRestoreError.message ? String(modelRestoreError.message) : "Saved sculpture/model restore failed.", at: Date.now() };
+                        console.warn("Sculpture/model restore warning:", modelRestoreError);
+                        return false;
+                    }).finally(function () {
                         if (sphere && sphere.metadata) sphere.metadata.model3dLoading = false;
                     });
+                    registerGalleryAdminVisibleHydrationTask(
+                        "sculpture-models",
+                        ensureModel3dSlotIdentity(sphere),
+                        modelRestorePromise,
+                        {
+                            reason: "apply-editor-state-model",
+                            unavailableMessage: "Saved sculpture/model is unavailable; reference preserved.",
+                            onTimeout: function () {
+                                if (!sphere || (sphere.isDisposed && sphere.isDisposed())) return;
+                                nextModel3dSlotLoadGeneration(sphere, "admin-visible-timeout");
+                                disposeModel3dSlotRuntime(sphere);
+                                sphere.metadata = sphere.metadata || {};
+                                sphere.metadata.model3dLoading = false;
+                                sphere.metadata.model3dUnavailable = { message: "Admin visible sculpture/model hydration timed out.", at: Date.now() };
+                            }
+                        }
+                    ).catch(function () {});
                 } else {
                     removeModel3dFromSlot(sphere);
                 }
@@ -44246,9 +44666,42 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                     return state && String(state.instanceId) === String(instanceState.instanceId || instanceState.id || "");
                 });
                 if (existing) return;
-                Promise.resolve(createSharedAssetPropInstanceFromState(instanceState, { select: false, markDirty: false, requireLoad: false }))
-                    .then(function (slot) { if (!slot) console.warn("Shared Asset Prop restore returned no slot."); })
-                    .catch(function (error) { console.warn("Shared Asset Prop restore warning:", error); });
+                var sharedPropVisibleBlocking = isGalleryAdminVisibleFamilyBlocking("shared-props");
+                var sharedPropInstanceId = String(instanceState.instanceId || instanceState.id || "prop-" + Date.now().toString(36));
+                var sharedPropRestorePromise = Promise.resolve(createSharedAssetPropInstanceFromState(instanceState, {
+                    select: false,
+                    markDirty: false,
+                    requireLoad: false,
+                    forceImmediate: sharedPropVisibleBlocking
+                })).then(function (slot) {
+                    if (!slot) console.warn("Shared Asset Prop restore returned no slot.");
+                    return slot;
+                }).catch(function (error) {
+                    console.warn("Shared Asset Prop restore warning:", error);
+                    return null;
+                });
+                registerGalleryAdminVisibleHydrationTask(
+                    "shared-props",
+                    sharedPropInstanceId,
+                    sharedPropRestorePromise,
+                    {
+                        reason: "apply-editor-state-shared-prop",
+                        unavailableMessage: "Saved Shared Prop is unavailable; reference preserved.",
+                        isLoaded: function (slot) {
+                            return !!(slot && slot.metadata && !slot.metadata.sharedAssetUnavailable && slot.metadata.model3dRuntime && slot.metadata.model3dRuntime.loadedAt);
+                        },
+                        onTimeout: function () {
+                            var slot = artSpheres.find(function (candidate) {
+                                var state = getSharedAssetPropInstanceState(candidate);
+                                return state && String(state.instanceId) === sharedPropInstanceId;
+                            });
+                            if (!slot) return;
+                            nextModel3dSlotLoadGeneration(slot, "admin-visible-timeout");
+                            disposeModel3dSlotRuntime(slot);
+                            markSharedAssetPropUnavailable(slot, new Error("Admin visible Shared Prop hydration timed out."));
+                        }
+                    }
+                ).catch(function () {});
             });
         }
 
@@ -44985,7 +45438,24 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (imageState && (!imagePlane || !artwork.metadata.imageMaterial)) queueGalleryFastStartArtworkLoad(artwork, imageState);
             var frameState = artwork.metadata && artwork.metadata.artworkFrame;
             if (frameState && !(artwork.metadata && artwork.metadata.artworkFrameRuntime)) {
-                Promise.resolve(applyArtworkFrameState(artwork, frameState, { silent: true, markDirty: false })).catch(function () {});
+                var residentFramePromise = Promise.resolve(applyArtworkFrameState(artwork, frameState, { silent: true, markDirty: false })).catch(function () { return false; });
+                registerGalleryAdminVisibleHydrationTask(
+                    "frames",
+                    ensureArtworkIdentity(artwork),
+                    residentFramePromise,
+                    {
+                        reason: "resident-layer-frame",
+                        unavailableMessage: "Saved Frame is unavailable; binding preserved.",
+                        onTimeout: function () {
+                            if (!artwork || (artwork.isDisposed && artwork.isDisposed())) return;
+                            nextArtworkFrameLoadGeneration(artwork);
+                            disposeArtworkFrameRuntime(artwork);
+                            artwork.metadata = artwork.metadata || {};
+                            artwork.metadata.artworkFrameLoading = false;
+                            artwork.metadata.artworkFrameUnavailable = { message: "Admin resident Frame hydration timed out.", at: Date.now() };
+                        }
+                    }
+                ).catch(function () {});
             }
         });
         artSpheres.forEach(function (slot, index) {
@@ -44993,7 +45463,62 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             ensureModel3dSlotIdentity(slot, slot.metadata && slot.metadata.model3dSlotId);
             setGallerySculptureResidentEnabled(slot, true, layer.sculptureNodeStates && layer.sculptureNodeStates[index]);
             var modelState = getModel3dState(slot);
-            if (modelState && !(slot.metadata && slot.metadata.model3dRuntime)) queueGalleryFastStartModelLoad(slot, modelState);
+            if (modelState && !(slot.metadata && slot.metadata.model3dRuntime)) {
+                if (galleryAdminVisibleHydrationRuntime.enabled) {
+                    if (isSharedAssetPropSlot(slot)) {
+                        var residentPropState = serializeSharedAssetPropInstance(slot);
+                        var residentPropPromise = residentPropState
+                            ? Promise.resolve(applySharedAssetPropStateToSlot(slot, residentPropState, { forceImmediate: true }))
+                            : Promise.resolve(false);
+                        registerGalleryAdminVisibleHydrationTask(
+                            "shared-props",
+                            residentPropState && residentPropState.instanceId ? residentPropState.instanceId : ensureModel3dSlotIdentity(slot),
+                            residentPropPromise,
+                            {
+                                reason: "resident-layer-shared-prop",
+                                unavailableMessage: "Saved Shared Prop is unavailable; reference preserved.",
+                                isLoaded: function (ok) { return ok === true; },
+                                onTimeout: function () {
+                                    if (!slot || (slot.isDisposed && slot.isDisposed())) return;
+                                    nextModel3dSlotLoadGeneration(slot, "admin-resident-shared-prop-timeout");
+                                    disposeModel3dSlotRuntime(slot);
+                                    markSharedAssetPropUnavailable(slot, new Error("Admin resident Shared Prop hydration timed out."));
+                                }
+                            }
+                        ).catch(function () {});
+                    } else {
+                        var residentModelState = Object.assign({}, modelState, { _galleryFastStartForceImmediate: true });
+                        var residentModelPromise = Promise.resolve(applyModel3dStateToSlot(slot, residentModelState)).then(function (ok) {
+                            slot.metadata = slot.metadata || {};
+                            slot.metadata.model3dUnavailable = ok ? null : { message: "Saved sculpture/model is unavailable; reference preserved.", at: Date.now() };
+                            return ok;
+                        }).catch(function () {
+                            slot.metadata = slot.metadata || {};
+                            slot.metadata.model3dUnavailable = { message: "Saved sculpture/model restore failed.", at: Date.now() };
+                            return false;
+                        });
+                        registerGalleryAdminVisibleHydrationTask(
+                            "sculpture-models",
+                            ensureModel3dSlotIdentity(slot),
+                            residentModelPromise,
+                            {
+                                reason: "resident-layer-model",
+                                unavailableMessage: "Saved sculpture/model is unavailable; reference preserved.",
+                                onTimeout: function () {
+                                    if (!slot || (slot.isDisposed && slot.isDisposed())) return;
+                                    nextModel3dSlotLoadGeneration(slot, "admin-resident-model-timeout");
+                                    disposeModel3dSlotRuntime(slot);
+                                    slot.metadata = slot.metadata || {};
+                                    slot.metadata.model3dLoading = false;
+                                    slot.metadata.model3dUnavailable = { message: "Admin resident sculpture/model hydration timed out.", at: Date.now() };
+                                }
+                            }
+                        ).catch(function () {});
+                    }
+                } else {
+                    queueGalleryFastStartModelLoad(slot, modelState);
+                }
+            }
         });
         localLightItems.forEach(function (item, index) {
             if (item) item.exhibitionLayerParked = false;
@@ -45463,6 +45988,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             if (rowState && Object.keys(rowState).length > 0) {
                 var applyResult = tryApplyGalleryStateSafely(rowState);
                 if (!applyResult.ok) { notifyGalleryStatus("Nie udalo sie wczytac zapisanej wystawy."); return false; }
+                if (galleryAdminVisibleHydrationRuntime.enabled) {
+                    var manualPreviewReadiness = await waitForGallerySameSpaceArtworkPreviews("manual-admin-preview-ready", { timeoutMs: 18000, pollMs: 45 });
+                    settleGalleryAdminArtworkPreviewTask("manual-admin-preview-ready", manualPreviewReadiness);
+                    await waitForGalleryAdminVisibleHydrationBatch("manual-admin-visible-settled", { timeoutMs: 30000 });
+                }
                 if (applyResult.usedFallback) notifyGalleryStatus("Wczytano wystawe bez biblioteki autorow. Sprawdz ARTWORK INFO i zapisz ponownie."); else if (!options.silent) notifyGalleryStatus("Wczytano wystawe: " + exhibition.name + ". Lampy: " + getStateLightCount(rowState) + ".");
                 setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: rowState, revision: row && row.revision !== undefined ? Number(row.revision) || 0 : getGalleryStateRevision(rowState), confirmed: true, serverRowExists: row ? row.rowExists !== false : true, reason: "manual-load-exhibition-baseline" });
                 return true;
@@ -45526,6 +46056,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             contextChanged = true;
             await yieldGalleryForegroundFrame(0);
 
+            if (galleryAdminVisibleHydrationRuntime.enabled) {
+                beginGalleryAdminVisibleHydrationBatch("admin-exhibition-switch", {
+                    fromExhibitionId: previousExhibition && previousExhibition.id ? previousExhibition.id : null,
+                    toExhibitionId: exhibition.id,
+                    residentHit: !!targetResidentLayer
+                });
+                registerGalleryAdminArtworkPreviewTaskFromEditorState(state && state.editor ? state.editor : state);
+            }
+
             if (sameSpaceSwitch && targetResidentLayer) {
                 var restoredLayer = restoreGalleryExhibitionLayer(exhibition.id);
                 if (!restoredLayer) throw new Error("Resident Exhibition layer could not be restored.");
@@ -45553,6 +46092,17 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             );
             if (galleryExhibitionRuntime.lastHydrationProfile) {
                 galleryExhibitionRuntime.lastHydrationProfile.previewReadiness = cloneGalleryJson(sameSpacePreviewReadiness);
+            }
+            settleGalleryAdminArtworkPreviewTask(
+                targetLayerRestored ? "resident-exhibition-preview-ready" : "same-space-exhibition-preview-ready",
+                sameSpacePreviewReadiness
+            );
+            var sameSpaceAdminVisibleReadiness = await waitForGalleryAdminVisibleHydrationBatch(
+                targetLayerRestored ? "resident-exhibition-admin-visible-settled" : "same-space-exhibition-admin-visible-settled",
+                { timeoutMs: 30000 }
+            );
+            if (galleryExhibitionRuntime.lastHydrationProfile) {
+                galleryExhibitionRuntime.lastHydrationProfile.adminVisibleReadiness = cloneGalleryJson(sameSpaceAdminVisibleReadiness);
             }
 
             verifyGallerySpaceIntegrity(spaceIntegrityBefore, "after-exhibition-switch-" + transitionEpoch);
@@ -45593,12 +46143,18 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                         clearGalleryExhibitionOwnedRuntime();
                     }
                     setActiveGalleryExhibitionContext(previousExhibition, { persistCurrentQueues: false, restoreQueues: true });
+                    if (galleryAdminVisibleHydrationRuntime.enabled) {
+                        beginGalleryAdminVisibleHydrationBatch("admin-exhibition-rollback", { exhibitionId: previousExhibition.id });
+                        registerGalleryAdminArtworkPreviewTaskFromEditorState(previousRuntimeState && previousRuntimeState.editor ? previousRuntimeState.editor : previousRuntimeState);
+                    }
                     var previousResident = previousLayerParked ? restoreGalleryExhibitionLayer(previousExhibition.id) : null;
                     if (previousResident) applyGalleryResidentLayerPresentation(previousRuntimeState, "resident-exhibition-rollback");
                     else if (rollbackSameSpace) await applyGallerySameSpaceExhibitionState(previousRuntimeState, "same-space-exhibition-rollback");
                     else { resetGalleryRuntimeToBlankExhibition(); tryApplyGalleryStateSafely(previousRuntimeState); }
                     if (rollbackSameSpace) {
-                        await waitForGallerySameSpaceArtworkPreviews("same-space-exhibition-rollback-preview-ready", { timeoutMs: 18000, pollMs: 45 });
+                        var rollbackPreviewReadiness = await waitForGallerySameSpaceArtworkPreviews("same-space-exhibition-rollback-preview-ready", { timeoutMs: 18000, pollMs: 45 });
+                        settleGalleryAdminArtworkPreviewTask("same-space-exhibition-rollback-preview-ready", rollbackPreviewReadiness);
+                        await waitForGalleryAdminVisibleHydrationBatch("same-space-exhibition-rollback-admin-visible-settled", { timeoutMs: 30000 });
                     }
                     verifyGallerySpaceIntegrity(spaceIntegrityBefore, "after-exhibition-switch-rollback-" + transitionEpoch);
                     verifyGalleryCanonicalSpaceIntegrity("canonical-after-exhibition-switch-rollback-" + transitionEpoch);
@@ -45843,16 +46399,34 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 ? galleryLoadingSession.getSnapshot()
                 : null;
             return {
-                stage: "V14.1.4",
+                stage: "V14.1.5",
                 schema: galleryLoadingPolicy.schema,
                 contextKind: galleryLoadingPolicy.contextKind,
                 readiness: cloneGalleryJson(galleryLoadingPolicy.readiness),
                 sceneReuse: cloneGalleryJson(galleryLoadingPolicy.sceneReuse),
                 compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility),
                 authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug),
+                adminVisibleHydration: Object.assign(getGalleryAdminVisibleHydrationBatchSnapshot(), {
+                    batchesStarted: galleryAdminVisibleHydrationRuntime.batchesStarted,
+                    tasksRegistered: galleryAdminVisibleHydrationRuntime.tasksRegistered,
+                    tasksLoaded: galleryAdminVisibleHydrationRuntime.tasksLoaded,
+                    tasksUnavailable: galleryAdminVisibleHydrationRuntime.tasksUnavailable,
+                    tasksErrored: galleryAdminVisibleHydrationRuntime.tasksErrored,
+                    timeouts: galleryAdminVisibleHydrationRuntime.timeouts
+                }),
                 sceneWorkCurrent: isGallerySceneWorkCurrent(),
                 loadingSession: loadingSessionSnapshot ? cloneGalleryJson(loadingSessionSnapshot) : null
             };
+        },
+        getAdminVisibleHydrationDebug: function () {
+            return Object.assign(getGalleryAdminVisibleHydrationBatchSnapshot(), {
+                batchesStarted: galleryAdminVisibleHydrationRuntime.batchesStarted,
+                tasksRegistered: galleryAdminVisibleHydrationRuntime.tasksRegistered,
+                tasksLoaded: galleryAdminVisibleHydrationRuntime.tasksLoaded,
+                tasksUnavailable: galleryAdminVisibleHydrationRuntime.tasksUnavailable,
+                tasksErrored: galleryAdminVisibleHydrationRuntime.tasksErrored,
+                timeouts: galleryAdminVisibleHydrationRuntime.timeouts
+            });
         },
         isDraftPreviewActive: function () {
             return !!galleryAdminDraftPreviewActive;

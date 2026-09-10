@@ -233,7 +233,7 @@ assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId()
 
 const orchestratorDebug = orchestrator.getDebug();
 assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
-assert.equal(orchestratorDebug.stage, 'V14.1.3');
+assert.equal(orchestratorDebug.stage, 'V14.1.5');
 assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.3 must not silently enable latest-wins behavior before V14.1.7');
 assert.ok(orchestratorDebug.requests >= 2);
 assert.ok(orchestratorDebug.recentSessions.length >= 2);
@@ -243,7 +243,27 @@ assert.equal(orchestratorDebug.activeVenueVersionId, 'venue-version-a2');
 // session cancellation primitive directly here; source-level checks below prove the
 // real core calls it from physical Scene disposal.
 const activeSession = orchestratedAdminScene.options.loadingSession;
+const frameTask = activeSession.registerTask({
+  phase: 'admin-visible-settled',
+  family: 'frames',
+  key: 'frame-1',
+  blocksSettle: true,
+  referencePreserved: true
+});
+assert.equal(frameTask.getSnapshot().status, 'pending');
+assert.equal(activeSession.getTaskSnapshot('admin-visible-settled').pending, 1);
+frameTask.settle('loaded');
+assert.equal(activeSession.getTaskSnapshot('admin-visible-settled').loaded, 1);
+const modelTask = activeSession.registerTask({
+  phase: 'admin-visible-settled',
+  family: 'sculpture-models',
+  key: 'model-1',
+  blocksSettle: true,
+  referencePreserved: true
+});
+assert.equal(modelTask.getSnapshot().status, 'pending');
 assert.equal(activeSession.cancel('synthetic-scene-dispose', { lifecycleId: orchestratedAdminScene.options.lifecycleId }), true);
+assert.equal(modelTask.getSnapshot().status, 'superseded', 'session cancellation must terminalize pending lifecycle tasks');
 assert.equal(activeSession.isCancelled(), true);
 assert.equal(activeSession.canContinue(orchestratedAdminScene.options.lifecycleId), false);
 assert.equal(activeSession.getSnapshot().cancelReason, 'synthetic-scene-dispose');
@@ -284,6 +304,11 @@ assert.ok(source.includes('Cross-Space Exhibition switch requires C6C8C25 Scene 
 assert.ok(api.includes('const runtimeKey = (modeValue, id) =>'), 'Public/Admin runtime caches must be channel-qualified');
 assert.ok(api.includes('public:<') === false); // implementation uses dynamic canonical key, not hard-coded one-off values
 assert.ok(api.includes('requestedMode'), 'mode-specific runtime cache lookup missing');
+assert.ok(source.includes('gallery-admin-visible-hydration-batch.v1'), 'V14.1.5 Admin visible hydration batch registry missing');
+assert.ok(source.includes('registerGalleryLoadingSessionTask(family, key, details)'), 'V14.1.5 core does not bind visible tasks to loading session');
+assert.ok(source.includes('waitForGalleryAdminVisibleHydrationBatch('), 'V14.1.5 Admin visible readiness wait missing');
+assert.ok(source.includes('sameSpaceAdminVisibleReadiness = await waitForGalleryAdminVisibleHydrationBatch'), 'V14.1.5 same-Space switch must await Admin visible terminal state');
+assert.ok(source.includes('queueGalleryFastStartModelLoad(slot, modelState);'), 'V14.1.5 must preserve Public model background hydration');
 
 
 

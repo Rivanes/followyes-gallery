@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.14.1-v14-1-4-gallery-authoring-assigned-space-settle",
+  "version": "0.14.1-v14-1-5-admin-visible-hydration-batch",
   "private": true,
-  "description": "Exhibition Platform — V14.1.4 Gallery Authoring Assigned-Space Settle",
+  "description": "Exhibition Platform — V14.1.5 Admin Visible Hydration Batch",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",

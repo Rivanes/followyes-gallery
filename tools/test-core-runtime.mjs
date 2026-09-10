@@ -1468,6 +1468,13 @@ assert.ok(coreSource.includes('getSceneLoadingSpaceRolePolicy(\n                
 assert.ok(coreSource.includes('galleryStartupBlockingAssetNames.indexOf(assetName) !== -1'), 'V14.1.4 terminal startup counter must use preview-blocking assets');
 assert.ok(coreSource.includes('getGalleryPendingStartupBlockingAssetNames().forEach'), 'V14.1.4 watchdog must terminate pending authoring assignments');
 assert.ok(coreSource.includes('retry-late-success-discarded:'), 'V14.1.4 late success after terminal failure must be discarded');
+assert.ok(coreSource.includes('gallery-admin-visible-hydration-batch.v1'), 'V14.1.5 Admin visible hydration batch missing');
+assert.ok(coreSource.includes('registerGalleryLoadingSessionTask(family, key, details)'), 'V14.1.5 visible task loading-session bridge missing');
+assert.ok(coreSource.includes('registerGalleryAdminVisibleHydrationTask('), 'V14.1.5 visible task promise registry missing');
+assert.ok(coreSource.includes('waitForGalleryAdminVisibleHydrationBatch('), 'V14.1.5 terminal Admin visible wait missing');
+assert.ok(coreSource.includes('gallery-admin-visible-settled'), 'V14.1.5 settled event missing');
+assert.ok(coreSource.includes('_galleryFastStartForceImmediate: true'), 'V14.1.5 Admin model immediate hydration override missing');
+assert.ok(coreSource.includes('forceImmediate: sharedPropVisibleBlocking'), 'V14.1.5 Shared Prop Admin immediate hydration override missing');
 
-console.log('V14.1.1 + V14.1.4 Scene Loading policy/authoring settle tests passed.');
+console.log('V14.1.1 + V14.1.4 + V14.1.5 Scene Loading policy/authoring/Admin visible settle tests passed.');
 })();

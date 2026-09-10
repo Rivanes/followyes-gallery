@@ -50,7 +50,7 @@ function extractFunction(text, name) {
 const modeFn = extractFunction(source, 'setGallerySameRuntimeModeState');
 const resumeFn = extractFunction(admin, 'resumeAdminWorkspace');
 
-expect('current package stage', pkg.version.includes('v14-1-4-gallery-authoring-assigned-space-settle'));
+expect('current package stage', pkg.version.includes('v14-1-5-admin-visible-hydration-batch'));
 expect('current runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C13: Instant Workspace Mode Switch'));
 expect('mode switch preserves foreground readiness', !modeFn.includes('markGalleryForegroundNotReady('));
@@ -109,7 +109,7 @@ const presentationFn = extractFunction(source, 'applyGalleryViewerPresentationFa
 const repairFn = extractFunction(source, 'scheduleGalleryWorkspacePublicReturnDeferredRepair');
 const closeFn = extractFunction(viewer, 'closeInlineAdminWorkspace');
 
-expect('package stage', pkg.version.includes('v14-1-4-gallery-authoring-assigned-space-settle'));
+expect('package stage', pkg.version.includes('v14-1-5-admin-visible-hydration-batch'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C14: Zero-Work Public Return'));
 
@@ -185,7 +185,7 @@ const exitFn = extractFunction(source, 'exitGalleryAdminWorkspaceMode');
 const enterFn = extractFunction(source, 'enterGalleryAdminWorkspaceMode');
 const hasUnsavedFn = extractFunction(source, 'hasGalleryUnsavedChanges');
 
-expect('package identity', pkg.version.includes('v14-1-4-gallery-authoring-assigned-space-settle'));
+expect('package identity', pkg.version.includes('v14-1-5-admin-visible-hydration-batch'));
 expect('runtime identity', source.includes('stage: "C6C8C21"'));
 expect('history marker', source.includes('Stage 12C66C6C8C15: Persistent Draft / Instant Public Preview'));
 
@@ -269,7 +269,7 @@ const assetWorkspace = fs.readFileSync(new URL('../src/bootstrap/admin-asset-wor
 const source = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.meta.url), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-assert.equal(pkg.version, '0.14.1-v14-1-4-gallery-authoring-assigned-space-settle');
+assert.equal(pkg.version, '0.14.1-v14-1-5-admin-visible-hydration-batch');
 assert.ok(admin.includes('data-section="exhibitions"') && admin.includes('data-section="galleries"') && admin.includes('data-section="assets"'), 'V13.2 left tabs are not EXHIBITIONS | GALLERIES | ASSETS');
 assert.ok(admin.includes('grid-template-columns:repeat(3,minmax(0,1fr))'), 'V13.2 left tabs are not responsive three-column tabs');
 assert.ok(assetWorkspace.includes('createAdminAssetWorkspace') && assetWorkspace.includes('Asset Library'), 'Shared Asset Manager is not isolated in its own left-workspace module');

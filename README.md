@@ -1,26 +1,28 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.4 — Gallery Authoring Assigned-Space Settle**.
+Current repository release: **V14.1.5 — Admin Visible Hydration Batch**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
-## V14.1.4 Gallery Authoring Assigned-Space Settle
+## V14.1.5 Admin Visible Hydration Batch
 
-V14.1.4 fixes Gallery Draft preview readiness without changing the Public loading policy. In `gallery-authoring`, an unassigned Floor/Walls/Ceiling/Props role remains legal and creates no loading task; an assigned role is derived from the canonical Scene Loading policy, starts immediately and must reach terminal `loaded` or explicit `failed` before the authoring preview proceeds.
+V14.1.5 makes the existing `admin-exhibition` loading policy real at executor level. Assigned artwork Preview, artwork Frames, sculpture/models and Shared Props now participate in one policy-driven Admin visible hydration batch. Admin preview/same-Space Exhibition switching does not report `admin-visible-settled` until every required visible task is terminal: `loaded`, or explicit `unavailable/error` with its immutable reference preserved.
 
-The authoring settle gate is deliberately separate from the Public structural-critical gate. Assigned authoring Space assets no longer wait in the post-interaction deferred optional queue. The startup watchdog explicitly terminalizes a missing assigned callback, Admin surfaces a partial-preview warning for failed assigned assets, and a GLB that succeeds only after terminal failure is discarded instead of appearing after READY.
+Frame/model/Shared Prop restore tasks are registered against the current Scene loading session as lifecycle tasks. Scene cancellation supersedes still-pending tasks, and timeout cleanup invalidates the corresponding async generation/runtime so a late completion cannot silently mutate an already-settled Admin preview. Existing V13.5 unavailable/retry semantics remain authoritative for corrupt or unavailable immutable assets.
 
-V14.1.3 remains the underlying Scene-ownership foundation: every physical Scene has a cancellable loading session bound to the exact lifecycle ID, and late Scene-owned work is rejected after disposal/lifecycle mismatch.
+For Admin only, sculpture/models and Shared Props bypass the state-apply deferred background queue while they belong to the visible batch. Their expensive global refresh work is coalesced until the batch settles. **Public behavior is unchanged:** artwork Preview remains foreground while Frames, sculpture/models and Shared Props may continue streaming in background.
+
+V14.1.4 remains the Gallery-authoring readiness foundation: assigned Floor/Walls/Ceiling/Props settle before authoring preview, while an unassigned role remains legal. V14.1.3 remains the Scene-ownership/cancellation foundation.
 
 The three-file target remains:
 
 ```text
 scene-lifecycle-controller.js
-scene-loading-orchestrator.js   (V14.1.2 shell; V14.1.3 session cancellation)
-scene-loading-policies.js       (V14.1.1 policy; V14.1.4 authoring assigned-settle contract)
+scene-loading-orchestrator.js   (V14.1.2 shell; V14.1.3 cancellation; V14.1.5 lifecycle task reporting)
+scene-loading-policies.js       (V14.1.1 canonical context/readiness/family policy)
 ```
 
-`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.4 requires no SQL and does not enable latest-wins navigation.
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.5 requires no SQL and does not enable latest-wins navigation.
 
 ## Product model
 
@@ -54,7 +56,7 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
 - `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract.
-- `src/runtime/scene-loading-orchestrator.js` — V14.1.2 high-level shell; V14.1.3 adds cancellable Scene-owned loading sessions and lifecycle-current checks.
+- `src/runtime/scene-loading-orchestrator.js` — high-level Scene loading shell; V14.1.5 adds lifecycle task registration/snapshots to the existing cancellable Scene-owned loading sessions.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
@@ -353,7 +355,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.4 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.5 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

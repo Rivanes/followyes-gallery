@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.3 Scene Loading Orchestrator
+  Exhibition Platform — V14.1.5 Scene Loading Orchestrator
   Compatibility shell above SceneLifecycleController. It owns high-level loading request/session
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
@@ -56,8 +56,61 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
   let cancelledAt = 0;
   let cancelReason = null;
   let cancelDetails = null;
+  let taskGeneration = 0;
+  const lifecycleTasks = new Map();
   const createdAt = wallNow();
   const startedAt = nowMs();
+
+  function snapshotTask(entry) {
+    if (!entry) return null;
+    return {
+      id: entry.id,
+      key: entry.key,
+      phase: entry.phase,
+      family: entry.family,
+      status: entry.status,
+      blocksSettle: entry.blocksSettle,
+      referencePreserved: entry.referencePreserved,
+      details: entry.details ? { ...entry.details } : null,
+      error: entry.error,
+      createdAt: entry.createdAt,
+      settledAt: entry.settledAt || null
+    };
+  }
+
+  function settleLifecycleTask(entry, nextStatus, reason, details) {
+    if (!entry || entry.status !== "pending") return snapshotTask(entry);
+    const allowed = new Set(["loaded", "unavailable", "error", "superseded"]);
+    entry.status = allowed.has(nextStatus) ? nextStatus : "error";
+    entry.error = entry.status === "loaded" ? null : (text(reason) || null);
+    if (details && typeof details === "object") entry.details = { ...(entry.details || {}), ...details };
+    entry.settledAt = wallNow();
+    return snapshotTask(entry);
+  }
+
+  function getLifecycleTaskSnapshot(phase) {
+    const phaseFilter = text(phase);
+    const tasks = Array.from(lifecycleTasks.values())
+      .filter((entry) => !phaseFilter || entry.phase === phaseFilter)
+      .map(snapshotTask);
+    const pending = tasks.filter((task) => task.status === "pending").length;
+    const loaded = tasks.filter((task) => task.status === "loaded").length;
+    const unavailable = tasks.filter((task) => task.status === "unavailable").length;
+    const errors = tasks.filter((task) => task.status === "error").length;
+    const superseded = tasks.filter((task) => task.status === "superseded").length;
+    return {
+      phase: phaseFilter || null,
+      total: tasks.length,
+      pending,
+      loaded,
+      unavailable,
+      errors,
+      superseded,
+      terminal: tasks.length - pending,
+      complete: pending === 0,
+      tasks
+    };
+  }
 
   const session = {
     schema: SCENE_LOADING_SESSION_SCHEMA,
@@ -95,11 +148,52 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       cancelledAt = wallNow();
       cancelReason = text(reason) || "scene-loading-session-cancelled";
       cancelDetails = details && typeof details === "object" ? { ...details } : null;
+      lifecycleTasks.forEach((entry) => {
+        if (entry && entry.status === "pending") settleLifecycleTask(entry, "superseded", cancelReason, { cancelled: true });
+      });
       return true;
     },
     isCancelled() { return cancelled; },
     canContinue(lifecycleId) {
       return !cancelled && session.isOwnedByLifecycle(lifecycleId);
+    },
+    registerTask(input = {}) {
+      const phase = text(input.phase) || "runtime";
+      const family = text(input.family) || "unknown";
+      const key = text(input.key) || `${family}-${++taskGeneration}`;
+      const compositeKey = `${phase}:${family}:${key}`;
+      const existing = lifecycleTasks.get(compositeKey);
+      if (existing) return existing.handle;
+      const entry = {
+        id: `task-${++taskGeneration}`,
+        key,
+        phase,
+        family,
+        status: cancelled ? "superseded" : "pending",
+        blocksSettle: input.blocksSettle === true,
+        referencePreserved: input.referencePreserved !== false,
+        details: input.details && typeof input.details === "object" ? { ...input.details } : null,
+        error: cancelled ? (cancelReason || "scene-loading-session-cancelled") : null,
+        createdAt: wallNow(),
+        settledAt: cancelled ? wallNow() : 0,
+        handle: null
+      };
+      const handle = Object.freeze({
+        id: entry.id,
+        key,
+        phase,
+        family,
+        settle(nextStatus, reason, details) {
+          return settleLifecycleTask(entry, nextStatus, reason, details);
+        },
+        getSnapshot() { return snapshotTask(entry); }
+      });
+      entry.handle = handle;
+      lifecycleTasks.set(compositeKey, entry);
+      return handle;
+    },
+    getTaskSnapshot(phase) {
+      return getLifecycleTaskSnapshot(phase);
     },
     getSnapshot() {
       return {
@@ -119,7 +213,8 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
         cancelDetails,
         createdAt,
         settledAt: settledAt || null,
-        durationMs: Math.max(0, nowMs() - startedAt)
+        durationMs: Math.max(0, nowMs() - startedAt),
+        tasks: getLifecycleTaskSnapshot()
       };
     }
   };
@@ -141,7 +236,7 @@ export function createSceneLoadingOrchestrator(options = {}) {
   let disposed = false;
   const recentSessions = [];
   const debug = {
-    stage: "V14.1.3",
+    stage: "V14.1.5",
     schema: SCENE_LOADING_ORCHESTRATOR_SCHEMA,
     requests: 0,
     starts: 0,

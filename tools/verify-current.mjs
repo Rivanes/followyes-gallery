@@ -33,11 +33,11 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V14.1.4"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V14.1.4"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V14.1.4"'),'Admin stage identity missing');
-assert(bootstrap.includes('v14_1_4_gallery_authoring_assigned_space_settle_20260910'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_4_gallery_authoring_assigned_space_settle_20260910'),'Index viewer cache key missing');
+assert(index.includes('stage: "V14.1.5"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V14.1.5"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V14.1.5"'),'Admin stage identity missing');
+assert(bootstrap.includes('v14_1_5_admin_visible_hydration_batch_20260910'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_5_admin_visible_hydration_batch_20260910'),'Index viewer cache key missing');
 assert(sceneLoadingPolicies.includes('SCENE_LOADING_POLICY_SCHEMA = "exhibition-platform-scene-loading-policy.v1"'),'V14.1.1 loading policy schema missing');
 assert(sceneLoadingPolicies.includes('PUBLIC_EXHIBITION: "public-exhibition"')&&sceneLoadingPolicies.includes('ADMIN_EXHIBITION: "admin-exhibition"')&&sceneLoadingPolicies.includes('GALLERY_AUTHORING: "gallery-authoring"')&&sceneLoadingPolicies.includes('TEST_GALLERY: "test-gallery"'),'V14.1.1 canonical loading contexts missing');
 assert(sceneLoadingPolicies.includes('function resolveSceneLoadingContextFromRuntimeOptions')&&sceneLoadingPolicies.includes('function createSceneLoadingPolicy')&&sceneLoadingPolicies.includes('function getSceneLoadingSpaceRolePolicy'),'V14.1.1 pure policy API missing');
@@ -61,6 +61,13 @@ assert(source.includes('galleryStartupBlockingAssetNames.indexOf(assetName) !== 
 assert(source.includes('retry-late-success-discarded:'),'V14.1.4 late success after terminal authoring failure is not discarded');
 assert(source.includes('authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug)'),'V14.1.4 authoring settle debug snapshot missing');
 assert(adminBootstrap.includes('Gallery preview is partial. Assigned asset failed to load:'),'V14.1.4 Admin explicit authoring failure surface missing');
+assert(sceneLoadingOrchestrator.includes('registerTask(input = {})')&&sceneLoadingOrchestrator.includes('getTaskSnapshot(phase)'),'V14.1.5 loading-session lifecycle task registry missing');
+assert(source.includes('gallery-admin-visible-hydration-batch.v1')&&source.includes('waitForGalleryAdminVisibleHydrationBatch'),'V14.1.5 Admin visible hydration batch missing');
+assert(source.includes('registerGalleryLoadingSessionTask(family, key, details)')&&source.includes('galleryLoadingSession.registerTask'),'V14.1.5 core tasks are not bound to current loading session');
+assert(source.includes('registerGalleryAdminVisibleHydrationTask')&&source.includes('"frames"')&&source.includes('"shared-props"')&&source.includes('"sculpture-models"'),'V14.1.5 Frame/model/Shared Prop task families missing');
+assert(source.includes('_galleryFastStartForceImmediate: true')&&source.includes('forceImmediate: sharedPropVisibleBlocking'),'V14.1.5 Admin visible model/Prop immediate hydration bridge missing');
+assert(source.includes('gallery-admin-visible-settled')&&source.includes('getAdminVisibleHydrationDebug: function ()'),'V14.1.5 Admin visible settle event/debug surface missing');
+assert(source.includes('queueGalleryFastStartModelLoad(slot, modelState);'),'V14.1.5 Public resident model background path was removed');
 assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
 assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
 assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame"]'),'V13.1 Shared Asset GLB validation contract missing');
