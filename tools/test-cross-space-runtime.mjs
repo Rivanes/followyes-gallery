@@ -236,7 +236,8 @@ assert.ok(admin.includes('Gallery authoring preview is read-only for Exhibition 
 assert.ok(admin.includes('restoreSelectedExhibitionPreview'));
 assert.ok(admin.includes('--gallery-admin-text'));
 assert.ok(admin.includes('--gallery-visual-viewport-height'));
-assert.ok(source.includes('var galleryAuthoringSpacePreview = runtimeOptions.authoringSpacePreview === true'));
+assert.ok(source.includes('var galleryAuthoringSpacePreview = galleryLegacySceneModeFlags.authoringSpacePreview === true'));
+assert.ok(source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)'));
 assert.ok(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]'));
 assert.ok(source.includes('galleryCriticalAssetNames = galleryAuthoringSpacePreview ? [] : galleryStrictCriticalAssetNames.slice()'));
 assert.ok(source.includes('galleryAuthoringSpacePreview ? optionalGallerySpaceAsset("floor") : requireGallerySpaceAsset("floor")'));

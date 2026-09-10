@@ -147,8 +147,8 @@ assert.ok(api.includes('async unpublish(reference)'));
 assert.ok(api.includes('p_published: false'));
 assert.ok(!api.includes('patch.is_published'));
 
-assert.equal(pkg.version, '0.13.5-v13-reference-runtime-hardening');
-assert.ok(pkg.description.includes('V13.5'));
+assert.equal(pkg.version, '0.14.1-v14-1-1-scene-loading-policies');
+assert.ok(pkg.description.includes('V14.1.1'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
-console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.5.');
+console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.6.');

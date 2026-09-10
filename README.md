@@ -1,8 +1,22 @@
 # Exhibition Platform
 
-Current repository release: **V13.5 — Reference / Runtime Hardening**.
+Current repository release: **V14.1.1 — Scene Loading Policies**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
+
+## V14.1.1 Scene Loading Policies
+
+V14.1.1 is the first deployable slice of the V14 Scene Loading/Lifecycle cleanup. It adds a pure policy module for Public Exhibition, Admin Exhibition, Gallery authoring and Test Gallery, then derives the existing core mode flags from that module. It intentionally does **not** change readiness enforcement or move loading orchestration yet.
+
+The three-file target remains:
+
+```text
+scene-lifecycle-controller.js
+scene-loading-orchestrator.js   (starts V14.1.2)
+scene-loading-policies.js       (implemented V14.1.1)
+```
+
+`Gallery_V0_11.js` remains the Babylon/editor executor layer during the staged extraction. V14.1.1 requires no SQL.
 
 ## Product model
 
@@ -35,6 +49,7 @@ Specific Gallery names are data. They are not platform/runtime branding.
 - `src/workers/shared-asset-glb-validator-worker.js` — independent V13.1 streaming GLB validator for reusable Props/Frames.
 - `src/runtime/space-definition-resolver.js` — resolves a canonical Venue Version into the small Space contract consumed by the engine.
 - `src/runtime/scene-lifecycle-controller.js` — C25 owner of one mutable Babylon Scene on the persistent Engine/canvas.
+- `src/runtime/scene-loading-policies.js` — V14.1.1 pure context/readiness policy contract; compatibility-only wiring in this slice.
 - `src/runtime/public-space-entry-policy.js` — C26 exact-`venue_version_id` policy for the public Gallery instruction popup.
 - `src/validation/gallery-model-validation.js` — C23 browser coordinator for technical Gallery model validation.
 - `src/workers/gallery-glb-validator-worker.js` — streaming GLB/glTF validator + incremental SHA-256 worker.
@@ -253,7 +268,7 @@ Gallery CRUD/versioning/model validation/Exhibition assignment remain outside `G
 
 ## V13 Shared Asset Foundation + Asset Manager + Prop Placement
 
-V13.1/V13.2/V13.3/V13.4 are PASS/CLOSED. V13.5 hardens reference preservation, failed-model recovery and diagnostics without changing the Shared Asset database contract.
+V13.1/V13.2/V13.3/V13.4/V13.5 are PASS/CLOSED. V13.6 is the production-closure candidate: it keeps the Shared Asset table model intact, adds aggregate closure diagnostics, and corrects channel-aware validation in the derived usage synchronizer.
 
 Canonical reusable asset model:
 
@@ -281,7 +296,7 @@ V13.1 also freezes the future Exhibition reference contract without integrating 
 - future Props reference immutable `assetVersionId` from Exhibition `assetInstances`;
 - future artwork Frames may reference immutable `assetVersionId` inside `artworks[].frame`;
 - a database usage synchronizer indexes Draft / Published / Previous references transactionally when `exhibition_states` changes;
-- Gallery-scoped (`venue`) asset references are rejected when the Exhibition belongs to another canonical Gallery/Venue;
+- Gallery-scoped (`venue`) references are validated per state channel against that channel's exact Venue Version Gallery; Draft, Published and Previous may legitimately resolve to different Galleries;
 - published/history asset-version payloads cannot be overwritten or physically deleted;
 - new version publication requires current V13.1 streaming GLB validation and SHA-256/file-size identity.
 
@@ -300,6 +315,10 @@ V13.3 adds `editor.assetInstances[]` for Exhibition-owned Shared Props. Publishe
 V13.4 removes the old full Frame variant grid from the right artwork inspector. The right side keeps only current Frame + `CHANGE` / `REMOVE`; `CHANGE` opens left `ASSETS / FRAMES` without rebuilding the Scene or losing artwork selection. Published Frames can be clicked in binding mode or dragged directly onto an artwork. Frame drops on Floor/Wall/Props are rejected. New bindings persist stable Shared Asset/version IDs with legacy Storage fallback, while existing legacy Published Frames remain readable.
 
 V13.5 preserves Shared Prop instances and artwork Frame bindings when an immutable GLB cannot hydrate. Admin exposes explicit unavailable state plus retry actions instead of silently rewriting/deleting references. `GalleryApp.getSharedAssetIntegrityDebug()` reports unavailable Props/Frames for the active Exhibition and exact Venue Version. Asset archive confirmation is usage-aware; archived assets keep existing references readable but block new placement/assignment until Restore.
+
+V13.6 adds the read-only `GalleryApp.getV13ProductionClosureDebug()` aggregate used during the final production matrix. It combines active Exhibition/exact Venue Version identity, Prop/Frame counts, unavailable-reference diagnostics, switching/residency counters and ownership/orphan/workspace audit counters. It is diagnostic-only and does not replace the full production closure matrix.
+
+V13.6 also corrects the derived `shared_asset_usages` synchronizer so Draft, Published and Previous resolve Gallery scope independently through their own exact `*_venue_version_id -> venue_versions.venue_id`. This preserves the C24 reassignment contract where the three channels can belong to different Galleries. The corrective migration resynchronizes the derived index transactionally and does not add a placement table or change Shared Asset identity/versioning.
 
 Catalog browsing uses metadata/thumbnails and does not prefetch the full GLB catalog. V13.2 thumbnails use immutable `shared-assets/assets/<asset UUID>/thumbnails/<media UUID>.webp` paths and are registered in `media_library`. V13.3 enriches the existing catalog RPC with Published file hash/runtime metadata so native HTML dragstart can build its payload synchronously; no placement table is introduced.
 
@@ -329,7 +348,7 @@ SQL package verification is separate:
 node OUTSIDE_REPO/TOOLS/verify-sql-package.mjs
 ```
 
-The SQL/package verifier is static. V13.1/V13.2/V13.3 database contracts are already deployed/PASS. **V13.4/V13.5 add no SQL** and require only the repository deploy plus browser smoke. `CURRENT_PRECHECK.sql` / `CURRENT_POSTCHECK.sql` are optional read-only baseline diagnostics. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
+The SQL/package verifier is static. V13.1/V13.2/V13.3/V13.6 database changes are already deployed/PASS and V13.4/V13.5 added no SQL. **V14.1.1 adds no SQL/schema/RPC change.** Deploy only the repository through GitHub/GitHub Pages. `ALL_IN_ONE.sql` remains fresh-install/reference-only and must not be run on the existing production database.
 
 ## Documentation
 

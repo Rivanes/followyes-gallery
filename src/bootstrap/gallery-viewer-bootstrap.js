@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V13.5 — Reference / Runtime Hardening
+  Exhibition Platform — V14.1.1 — Scene Loading Policies
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -12,8 +12,8 @@ import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExh
 import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=c6c8c25_2_admin_gallery_preview";
 import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v13_2_left_workspace_asset_manager";
 
-const STAGE = "V13.5";
-const ENGINE_CACHE_KEY = "v13_5_reference_runtime_hardening_20260909";
+const STAGE = "V14.1.1";
+const ENGINE_CACHE_KEY = "v14_1_1_scene_loading_policies_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -282,7 +282,7 @@ async function ensurePublicExhibitionSelection(options = {}) {
 }
 
 const publicSpaceEntryDebug = {
-  stage: "V13.5",
+  stage: "V13.6",
   schema: "public-space-entry-policy.v1",
   evaluations: 0,
   shows: 0,

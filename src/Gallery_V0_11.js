@@ -1,3 +1,5 @@
+import { resolveSceneLoadingPolicyFromRuntimeOptions, getLegacySceneModeFlags } from "./runtime/scene-loading-policies.js";
+
 /*
   Exhibition Platform
   Plik: Gallery_V0_11.js
@@ -125,6 +127,7 @@
   - C6C8C22: Gallery Management — adds only a read-only camera-pose bridge for isolated Test Gallery Entry capture; Gallery CRUD/versioning remains outside the Babylon engine.
   - C6C8C23: Space Model Validation — technical GLB/hash validation remains outside the engine; Floor/Walls/Ceiling stay the critical Space shell while Props becomes an optional resident Space asset that cannot block interaction readiness.
   - C6C8C25: Cross-Space Runtime — one persistent Babylon Engine/canvas may recreate the active Scene when the immutable Venue Version changes; exact venue_version_id is the Space identity and lifecycle events are generation-scoped.
+  - V14.1.1: Scene Loading Policies — adds the pure three-context/four-context loading-policy contract and compatibility wiring without changing legacy execution/readiness behavior.
   - Stage C6C8C20: Current-Zone Model Fast Lane — sculpture/model GLBs in the camera's current gallery streaming zone start immediately after Interaction Ready without waiting for the generic viewer-motion / 2.8 s model idle budget; nearby/deferred models keep the existing conservative background streaming policy.
 */
 
@@ -136,9 +139,14 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
     var runtimeOptions = runtimeOptionsArg && typeof runtimeOptionsArg === "object" ? runtimeOptionsArg : {};
     var galleryLifecycleId = String(runtimeOptions.lifecycleId || ("legacy-scene-" + Date.now().toString(36))).trim();
     var galleryDisposed = false;
-    var galleryAuthoringSpacePreview = runtimeOptions.authoringSpacePreview === true;
-    var galleryAdminWorkspaceMode = runtimeOptions.adminWorkspace === true && !galleryAuthoringSpacePreview;
-    var galleryPublicViewerOnly = !galleryAdminWorkspaceMode && !galleryAuthoringSpacePreview;
+    // V14.1.1: policy classification is now pure and canonical. This compatibility
+    // wiring intentionally preserves the pre-V14 execution paths; later slices move
+    // readiness/orchestration authority out of this Babylon executor layer.
+    var galleryLoadingPolicy = resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions);
+    var galleryLegacySceneModeFlags = getLegacySceneModeFlags(galleryLoadingPolicy);
+    var galleryAuthoringSpacePreview = galleryLegacySceneModeFlags.authoringSpacePreview === true;
+    var galleryAdminWorkspaceMode = galleryLegacySceneModeFlags.adminWorkspace === true && !galleryAuthoringSpacePreview;
+    var galleryPublicViewerOnly = galleryLegacySceneModeFlags.publicViewerOnly === true && !galleryAdminWorkspaceMode && !galleryAuthoringSpacePreview;
     // C6C8C15: when Admin temporarily previews the public presentation, keep the
     // in-memory scene draft alive without keeping Edit/Admin UI active.
     var galleryAdminDraftPreviewActive = false;
@@ -38497,6 +38505,75 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         };
     }
 
+    // V13.6 — production-closure diagnostic snapshot. This is read-only and on-demand;
+    // it intentionally aggregates existing lifecycle/Shared Asset counters without changing
+    // Scene ownership, Exhibition state, asset references or network behavior.
+    function getV13ProductionClosureDebug() {
+        var serialized = serializeGalleryState();
+        var editorState = serialized && serialized.editor && typeof serialized.editor === "object" ? serialized.editor : {};
+        var activeArtworks = getActiveArtworks();
+        var frameCount = 0;
+        var sharedFrameCount = 0;
+        var legacyFrameCount = 0;
+        activeArtworks.forEach(function (artwork) {
+            var frame = getArtworkFrameState(artwork);
+            if (!frame) return;
+            frameCount += 1;
+            if (frame.assetVersionId) sharedFrameCount += 1;
+            else if (frame.storagePath || frame.publicUrl) legacyFrameCount += 1;
+        });
+        var propDebug = getSharedAssetPropPlacementDebug();
+        var frameDebug = getSharedAssetFrameBindingDebug();
+        var integrity = getSharedAssetIntegrityDebug();
+        var snapshot = {
+            schema: "exhibition-platform-v13-production-closure.v1",
+            stage: "V13.6",
+            active: {
+                exhibitionId: getActiveGalleryExhibitionId() || null,
+                venueId: gallerySpaceDefinition && gallerySpaceDefinition.venueId ? gallerySpaceDefinition.venueId : null,
+                venueVersionId: galleryActiveVenueVersionId || null,
+                editMode: !!editMode,
+                galleryAuthoringSpacePreview: !!galleryAuthoringSpacePreview
+            },
+            state: {
+                artworks: Array.isArray(editorState.artworks) ? editorState.artworks.length : 0,
+                sculptures: Array.isArray(editorState.spheres) ? editorState.spheres.length : 0,
+                propInstances: Array.isArray(editorState.assetInstances) ? editorState.assetInstances.length : 0,
+                frameBindings: frameCount,
+                sharedFrameBindings: sharedFrameCount,
+                legacyFrameBindings: legacyFrameCount
+            },
+            sharedAssets: {
+                propPlacement: propDebug,
+                frameBinding: frameDebug,
+                integrity: integrity
+            },
+            lifecycle: {
+                switching: !!galleryExhibitionRuntime.switching,
+                hydrationActive: !!galleryExhibitionRuntime.hydrationActive,
+                foregroundReady: !!galleryExhibitionRuntime.foregroundReady,
+                sameSpaceSwitchCount: Number(galleryExhibitionRuntime.sameSpaceSwitchCount) || 0,
+                fullRuntimeResetCount: Number(galleryExhibitionRuntime.fullRuntimeResetCount) || 0,
+                residentLayerCount: Object.keys(galleryExhibitionRuntime.layerResidency || {}).length,
+                residentLayerHits: Number(galleryExhibitionRuntime.residentLayerHits) || 0,
+                residentLayerMisses: Number(galleryExhibitionRuntime.residentLayerMisses) || 0,
+                residentLayerEvictions: Number(galleryExhibitionRuntime.residentLayerEvictions) || 0,
+                ownershipViolations: Number(galleryExhibitionRuntime.ownershipViolations) || 0,
+                orphanSweepDetections: Number(galleryExhibitionRuntime.orphanSweepDetections) || 0,
+                staleOwnerCallbacksBlocked: Number(galleryExhibitionRuntime.staleOwnerCallbacksBlocked) || 0,
+                workspaceModeAuditFailures: Number(galleryExhibitionRuntime.workspaceModeAuditFailures) || 0,
+                lastSwitchMode: galleryExhibitionRuntime.lastSwitchMode || null,
+                lastSwitchDurationMs: Number(galleryExhibitionRuntime.lastSwitchDurationMs) || 0
+            }
+        };
+        snapshot.currentSnapshotHealthy = integrity.unavailableCount === 0 &&
+            snapshot.lifecycle.ownershipViolations === 0 &&
+            snapshot.lifecycle.orphanSweepDetections === 0 &&
+            snapshot.lifecycle.workspaceModeAuditFailures === 0 &&
+            !snapshot.lifecycle.switching && !snapshot.lifecycle.hydrationActive && snapshot.lifecycle.foregroundReady;
+        return snapshot;
+    }
+
     function getModel3dSlotByName(name) {
         return getSphereByName(name);
     }
@@ -45535,6 +45612,16 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 exhibitionId: getActiveGalleryExhibitionId()
             };
         },
+        getSceneLoadingPolicyDebug: function () {
+            return {
+                stage: "V14.1.1",
+                schema: galleryLoadingPolicy.schema,
+                contextKind: galleryLoadingPolicy.contextKind,
+                readiness: cloneGalleryJson(galleryLoadingPolicy.readiness),
+                sceneReuse: cloneGalleryJson(galleryLoadingPolicy.sceneReuse),
+                compatibility: cloneGalleryJson(galleryLoadingPolicy.compatibility)
+            };
+        },
         isDraftPreviewActive: function () {
             return !!galleryAdminDraftPreviewActive;
         },
@@ -45604,6 +45691,7 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         cancelSharedAssetPropPlacement: cancelSharedAssetPropPlacement,
         getSharedAssetPropPlacementDebug: getSharedAssetPropPlacementDebug,
         getSharedAssetIntegrityDebug: getSharedAssetIntegrityDebug,
+        getV13ProductionClosureDebug: getV13ProductionClosureDebug,
         // V13.4 — artwork-only Frame Browser / drag binding bridge.
         getSelectedArtworkFrameBindingContext: getSelectedArtworkFrameBindingContext,
         applySharedAssetFrameToSelectedArtwork: applySharedAssetFrameToSelectedArtwork,

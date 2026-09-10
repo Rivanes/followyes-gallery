@@ -1,10 +1,10 @@
-/* Exhibition Platform — V13.5 Left Workspace Asset Manager + reference/lifecycle hardening.
+/* Exhibition Platform — V13.6 Left Workspace Asset Manager + production closure.
    Asset catalog remains in the left workspace; scene placement/binding is delegated to the live Gallery runtime. */
 
-import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_5_reference_runtime_hardening";
-import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_5_reference_runtime_hardening";
+import { createSharedAssetApi } from "../data/shared-asset-api.js?v=v13_6_production_closure";
+import { getDefaultSharedAssetRuntimeMetadata } from "../validation/shared-asset-validation.js?v=v13_6_production_closure";
 
-export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.5";
+export const ADMIN_ASSET_WORKSPACE_STAGE = "V13.6";
 
 const MAX_THUMBNAIL_SOURCE_BYTES = 12 * 1024 * 1024;
 const THUMBNAIL_MAX_SIDE = 640;

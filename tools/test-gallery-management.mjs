@@ -49,8 +49,8 @@ const entryReader = extractFunction(admin, 'readRequiredFiniteGalleryNumber');
 const mutationWrapper = extractFunction(admin, 'withGalleryMutation');
 const detailRenderer = extractFunction(admin, 'renderGalleryDetail');
 
-expect('release package is V13.5 Reference / Runtime Hardening', pkg.version.includes('v13-reference-runtime-hardening'));
-expect('Admin release identity is V13.5', admin.includes('const STAGE = "V13.5"'));
+expect('release package is V13.6 Production Closure', pkg.version.includes('v14-1-1-scene-loading-policies'));
+expect('Admin release identity is V13.6', admin.includes('const STAGE = "V14.1.1"'));
 expect('Gallery data adapter uses canonical Venue RPCs', api.includes('admin_create_gallery_with_initial_draft') && api.includes('admin_begin_venue_draft') && api.includes('admin_set_venue_asset_slot'));
 expect('new asset paths are stable UUID owner paths, not Gallery names', api.includes('venues/${venue}/versions/${version}/assets/${normalizedRole}/') && !api.includes('venue.slug'));
 expect('the controlled Gallery role contract remains exposed for C23', api.includes('["floor", "walls", "ceiling", "props"]'));
@@ -74,4 +74,4 @@ expect('Test Gallery resolves Gallery Version only', testBootstrap.includes('gal
 expect('Test Gallery uses a local read-only Exhibition adapter', testBootstrap.includes('Test Gallery is read-only') && testBootstrap.includes('loadState()'));
 expect('Engine CRUD remains outside GalleryApp while camera bridge exists', source.includes('getCameraPose: function ()') && !source.includes('admin_create_gallery_with_initial_draft'));
 
-console.log('C6C8C22 Gallery Management regression invariants passed under V13.5.');
+console.log('C6C8C22 Gallery Management regression invariants passed under V13.6.');

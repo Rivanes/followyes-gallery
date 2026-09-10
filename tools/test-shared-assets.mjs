@@ -30,14 +30,14 @@ function expect(label, ok) {
   console.log(`✓ ${label}`);
 }
 
-expect('package identity is V13.5 Reference / Runtime Hardening', pkg.version === '0.13.5-v13-reference-runtime-hardening');
+expect('package identity is V13.6 Production Closure', pkg.version === '0.14.1-v14-1-1-scene-loading-policies');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
 expect('validator worker accepts prop/frame rather than Gallery Space roles', workerSource.includes('["prop","frame"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));
 expect('Shared Asset API uses guarded canonical RPCs', apiSource.includes('admin_create_shared_asset') && apiSource.includes('admin_create_shared_asset_version') && apiSource.includes('admin_register_shared_asset_version_binary') && apiSource.includes('admin_publish_shared_asset_version'));
 expect('immutable upload uses UUID version path returned by server and no upsert', apiSource.includes('version.storage_path') && apiSource.includes('upsert: false'));
 expect('Shared Asset state contract remains separate from Venue props', stateSource.includes('exhibition-platform-state-assets.v1') && !stateSource.includes('venue_assets'));
-expect('V13.2 Asset Manager is a separate left-workspace module', assetWorkspaceSource.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.5"') && assetWorkspaceSource.includes('Asset Library') && assetWorkspaceSource.includes('UPLOAD NEW GLB VERSION'));
+expect('V13.2 Asset Manager is a separate left-workspace module', assetWorkspaceSource.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.6"') && assetWorkspaceSource.includes('Asset Library') && assetWorkspaceSource.includes('UPLOAD NEW GLB VERSION'));
 expect('V13.2 admin exposes three left top-level sections', adminSource.includes('data-section=\"exhibitions\"') && adminSource.includes('data-section=\"galleries\"') && adminSource.includes('data-section=\"assets\"'));
 expect('V13.2 thumbnail API uses guarded Shared Asset RPCs', apiSource.includes('admin_register_shared_asset_thumbnail') && apiSource.includes('admin_clear_shared_asset_thumbnail') && apiSource.includes('/thumbnails/'));
 expect('V13.3 catalog exposes desktop drag and tap PLACE without async dragstart', assetWorkspaceSource.includes('application/x-exhibition-shared-asset') && assetWorkspaceSource.includes('PLACE PROP') && !assetWorkspaceSource.includes('tile.addEventListener("dragstart", async'));
@@ -62,13 +62,42 @@ expect('V13.5 unavailable Prop runtime preserves references and exposes retry', 
 expect('V13.5 unavailable Frame binding preserves state and exposes retry', gallerySource.includes('MODEL UNAVAILABLE — binding preserved') && gallerySource.includes('artworkFrameRetryButton') && gallerySource.includes('artworkFrameUnavailable'));
 expect('V13.5 shared asset integrity diagnostics expose unavailable Props and Frames', gallerySource.includes('exhibition-platform-shared-asset-integrity.v1') && gallerySource.includes('getSharedAssetIntegrityDebug'));
 expect('V13.5 archive confirmation is reference-aware', assetWorkspaceSource.includes('indexed Exhibition reference') && assetWorkspaceSource.includes('Existing references were preserved'));
-expect('runtime metadata enforces Frame artwork-only and Prop floor contracts', true);
+
 
 const assetId = '11111111-1111-4111-8111-111111111111';
 const propVersionId = '22222222-2222-4222-8222-222222222222';
 const frameVersionId = '33333333-3333-4333-8333-333333333333';
 const artworkId = '44444444-4444-4444-8444-444444444444';
 const propInstanceId = '55555555-5555-4555-8555-555555555555';
+
+// V13.6 Production Closure local invariants. Real production content/switch/mobile/storage
+// checks remain a manual closure gate, but the reusable state/reference contracts are
+// exercised here inside the consolidated Shared Asset regression suite.
+expect('V13.6 aggregate production-closure runtime snapshot is exposed', gallerySource.includes('getV13ProductionClosureDebug') && gallerySource.includes('exhibition-platform-v13-production-closure.v1') && gallerySource.includes('currentSnapshotHealthy'));
+expect('V13.6 closure snapshot carries exact Space identity and lifecycle ownership counters', gallerySource.includes('venueVersionId: galleryActiveVenueVersionId') && gallerySource.includes('sameSpaceSwitchCount') && gallerySource.includes('fullRuntimeResetCount') && gallerySource.includes('ownershipViolations') && gallerySource.includes('workspaceModeAuditFailures'));
+
+const closureTenInstances = Array.from({ length: 10 }, (_, index) => ({ instanceId: `bench-copy-${String(index + 1).padStart(2, '0')}`, assetVersionId: propVersionId }));
+const closureTenRefs = collectSharedAssetReferences({ editor: { assetInstances: closureTenInstances }, artworks: [] });
+assert.equal(closureTenRefs.length, 10);
+assert.equal(new Set(closureTenRefs.map((entry) => entry.usageKey)).size, 10);
+expect('V13.6 one immutable Prop version can back ten unique Exhibition instances', true);
+assert.throws(() => collectSharedAssetReferences({ editor: { assetInstances: [{ instanceId: 'same', assetVersionId: propVersionId }, { instanceId: 'same', assetVersionId: propVersionId }] } }), /Duplicate Shared Asset prop usage key/);
+expect('V13.6 duplicate Prop instance identity is rejected instead of silently collapsing usage', true);
+
+const closureMixedRefs = collectSharedAssetReferences({
+  editor: { assetInstances: closureTenInstances },
+  artworks: [
+    { artworkId: 'closure-artwork-a', frame: { assetVersionId: frameVersionId } },
+    { artworkId: 'closure-artwork-b', frame: { assetVersionId: frameVersionId } }
+  ]
+});
+assert.equal(closureMixedRefs.filter((entry) => entry.usageType === 'prop-instance').length, 10);
+assert.equal(closureMixedRefs.filter((entry) => entry.usageType === 'artwork-frame').length, 2);
+expect('V13.6 Prop and Frame reference domains stay independent in one Exhibition state', true);
+expect('V13.6 hiding ASSETS cancels active Prop/Frame tools and binding target', assetWorkspaceSource.includes('onCancelPropPlacement({ reason: "workspace-hidden" })') && assetWorkspaceSource.includes('onCancelFrameDrag({ reason: "workspace-hidden" })') && assetWorkspaceSource.includes('state.frameBindingTarget = null'));
+expect('V13.6 Gallery-host ASSETS remains management-only', assetWorkspaceSource.includes('Open Assets from an Exhibition to place Props.') && assetWorkspaceSource.includes('Open Assets from an Exhibition to assign Frames.'));
+expect('V13.6 inline Admin remount keeps one Frame Browser handler', adminSource.includes('__exhibitionPlatformOpenFrameBrowserHandler') && adminSource.includes('removeEventListener("exhibition-platform:open-frame-browser"'));
+expect('runtime metadata enforces Frame artwork-only and Prop floor contracts', true);
 
 const manifest = buildSharedAssetManifest([
   { assetId, assetVersionId: propVersionId, assetType: 'prop', storageBucket: 'shared-assets', storagePath: `assets/${assetId}/versions/${propVersionId}/model.glb`, fileHash: 'sha256:' + 'a'.repeat(64), runtimeMetadata: { placementMode: 'floor' } }
@@ -125,4 +154,4 @@ assert.equal(rpcCalls[0][1].p_asset_type, 'prop');
 assert.equal((await api.get(assetId)).asset.id, assetId);
 expect('data adapter maps catalog/get reads to V13.1 RPC surface', true);
 
-console.log('V13.1 foundation + V13.2 Asset Manager + V13.3 Prop placement + V13.4 Frame migration + V13.5 hardening invariants passed.');
+console.log('V13.1 foundation + V13.2 Asset Manager + V13.3 Prop placement + V13.4 Frame migration + V13.5 hardening invariants passed under V13.6 closure candidate.');

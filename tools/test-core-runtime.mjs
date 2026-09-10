@@ -1360,3 +1360,101 @@ assert.ok(!css.includes('grid-template-rows: minmax(var(--gallery-inspect-avatar
 console.log('Stage 12C66C6A1 compact mobile Inspect UI and joystick ownership tests passed.');
 
 })();
+
+// --- V14.1.1 scene-loading-policies pure contract ---
+await (async () => {
+const policies = await import('../src/runtime/scene-loading-policies.js');
+const {
+  SCENE_LOADING_POLICY_SCHEMA,
+  SCENE_LOADING_CONTEXTS,
+  normalizeSceneLoadingContext,
+  resolveSceneLoadingContextFromRuntimeOptions,
+  createSceneLoadingPolicy,
+  canReuseSameVenueVersionScene,
+  getSceneLoadingSpaceRolePolicy,
+  getSceneLoadingReadinessContract,
+  getSceneLoadingFamilyPolicy,
+  getLegacySceneModeFlags
+} = policies;
+
+assert.equal(SCENE_LOADING_POLICY_SCHEMA, 'exhibition-platform-scene-loading-policy.v1');
+assert.deepEqual(Object.values(SCENE_LOADING_CONTEXTS), [
+  'public-exhibition', 'admin-exhibition', 'gallery-authoring', 'test-gallery'
+]);
+assert.equal(normalizeSceneLoadingContext('viewer'), 'public-exhibition');
+assert.equal(normalizeSceneLoadingContext('ADMIN'), 'admin-exhibition');
+assert.equal(normalizeSceneLoadingContext('gallery-preview'), 'gallery-authoring');
+assert.equal(normalizeSceneLoadingContext('test'), 'test-gallery');
+assert.equal(normalizeSceneLoadingContext('unknown'), 'public-exhibition');
+
+assert.equal(resolveSceneLoadingContextFromRuntimeOptions({}), 'public-exhibition');
+assert.equal(resolveSceneLoadingContextFromRuntimeOptions({ adminWorkspace: true }), 'admin-exhibition');
+assert.equal(resolveSceneLoadingContextFromRuntimeOptions({ adminWorkspace: true, authoringSpacePreview: true }), 'gallery-authoring');
+assert.equal(resolveSceneLoadingContextFromRuntimeOptions({ galleryTestMode: true }), 'test-gallery');
+assert.equal(resolveSceneLoadingContextFromRuntimeOptions({ loadingContext: 'admin-exhibition', authoringSpacePreview: true }), 'admin-exhibition');
+
+const publicPolicy = createSceneLoadingPolicy('public-exhibition');
+const adminPolicy = createSceneLoadingPolicy('admin-exhibition');
+const authoringPolicy = createSceneLoadingPolicy('gallery-authoring');
+const testPolicy = createSceneLoadingPolicy('test-gallery');
+for (const policy of [publicPolicy, adminPolicy, authoringPolicy, testPolicy]) {
+  assert.equal(policy.schema, SCENE_LOADING_POLICY_SCHEMA);
+  assert.equal(Object.isFrozen(policy), true, `${policy.contextKind} policy must be immutable`);
+  assert.equal(Object.isFrozen(policy.spaceRoles), true, `${policy.contextKind} space roles must be immutable`);
+  assert.equal(Object.isFrozen(policy.readiness), true, `${policy.contextKind} readiness must be immutable`);
+}
+
+assert.equal(canReuseSameVenueVersionScene(publicPolicy), true);
+assert.equal(canReuseSameVenueVersionScene(adminPolicy), true);
+assert.equal(canReuseSameVenueVersionScene(authoringPolicy), false);
+assert.equal(canReuseSameVenueVersionScene(testPolicy), false);
+
+for (const context of ['public-exhibition', 'admin-exhibition', 'test-gallery']) {
+  for (const role of ['floor', 'walls', 'ceiling']) {
+    const rolePolicy = getSceneLoadingSpaceRolePolicy(context, role, { assigned: true });
+    assert.equal(rolePolicy.requiredForValidRuntime, true, `${context}/${role} must stay structurally required`);
+    assert.equal(rolePolicy.mustSettleBeforePreview, true, `${context}/${role} must settle before its preview contract`);
+  }
+}
+assert.equal(getSceneLoadingSpaceRolePolicy('public-exhibition', 'props').requiredForValidRuntime, false);
+assert.equal(getSceneLoadingSpaceRolePolicy('public-exhibition', 'props').mustSettleBeforePreview, false);
+for (const role of ['floor', 'walls', 'ceiling', 'props']) {
+  const unassigned = getSceneLoadingSpaceRolePolicy(authoringPolicy, role, { assigned: false });
+  const assigned = getSceneLoadingSpaceRolePolicy(authoringPolicy, role, { assigned: true });
+  assert.equal(unassigned.unassignedIsLegal, true, `authoring/${role} must permit an unassigned slot`);
+  assert.equal(unassigned.createsTask, false, `authoring/${role} unassigned slot must not create a loading task`);
+  assert.equal(assigned.mustSettleBeforePreview, true, `authoring/${role} assigned slot must settle before preview`);
+}
+
+assert.equal(getSceneLoadingReadinessContract(publicPolicy).previewPhase, 'interaction-ready');
+assert.equal(getSceneLoadingReadinessContract(adminPolicy).previewPhase, 'admin-visible-settled');
+assert.equal(getSceneLoadingReadinessContract(authoringPolicy).previewPhase, 'authoring-preview-settled');
+assert.equal(getSceneLoadingReadinessContract(testPolicy).previewPhase, 'test-preview-settled');
+assert.equal(getSceneLoadingFamilyPolicy(publicPolicy, 'artwork-preview').blocksPreviewSettle, true);
+assert.equal(getSceneLoadingFamilyPolicy(publicPolicy, 'frames').mode, 'background');
+assert.equal(getSceneLoadingFamilyPolicy(adminPolicy, 'frames').mode, 'foreground-terminal');
+assert.equal(getSceneLoadingFamilyPolicy(adminPolicy, 'frames').explicitUnavailableCountsAsTerminal, true);
+assert.equal(getSceneLoadingFamilyPolicy(authoringPolicy, 'shared-props').mode, 'not-applicable');
+
+assert.deepEqual(getLegacySceneModeFlags(publicPolicy), {
+  authoringSpacePreview: false, adminWorkspace: false, publicViewerOnly: true, galleryTestMode: false
+});
+assert.deepEqual(getLegacySceneModeFlags(adminPolicy), {
+  authoringSpacePreview: false, adminWorkspace: true, publicViewerOnly: false, galleryTestMode: false
+});
+assert.deepEqual(getLegacySceneModeFlags(authoringPolicy), {
+  authoringSpacePreview: true, adminWorkspace: false, publicViewerOnly: false, galleryTestMode: false
+});
+assert.deepEqual(getLegacySceneModeFlags(testPolicy), {
+  authoringSpacePreview: false, adminWorkspace: false, publicViewerOnly: true, galleryTestMode: true
+});
+
+const policySource = fs.readFileSync(new URL('../src/runtime/scene-loading-policies.js', import.meta.url), 'utf8');
+assert.equal(/\b(window|document|BABYLON|gallerySupabase|fetch|XMLHttpRequest)\b/.test(policySource), false, 'Policy layer must stay pure and side-effect free');
+const coreSource = fs.readFileSync(new URL('../src/Gallery_V0_11.js', import.meta.url), 'utf8');
+assert.ok(coreSource.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)'), 'Core compatibility wiring does not resolve the canonical loading policy');
+assert.ok(coreSource.includes('getLegacySceneModeFlags(galleryLoadingPolicy)'), 'Core compatibility wiring does not preserve legacy execution flags through policy');
+assert.ok(coreSource.includes('getSceneLoadingPolicyDebug: function ()'), 'Policy debug surface missing');
+
+console.log('V14.1.1 pure Scene Loading policy matrix and compatibility wiring tests passed.');
+})();

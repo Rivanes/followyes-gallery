@@ -20,6 +20,7 @@ const assetCacheBootstrap=fs.readFileSync(new URL('../src/bootstrap/asset-cache-
 const assetCacheSw=fs.readFileSync(new URL('../asset-cache-sw.js',import.meta.url),'utf8');
 const transitionGuard=fs.readFileSync(new URL('../src/bootstrap/transition-guard.js',import.meta.url),'utf8');
 const sceneLifecycle=fs.readFileSync(new URL('../src/runtime/scene-lifecycle-controller.js',import.meta.url),'utf8');
+const sceneLoadingPolicies=fs.readFileSync(new URL('../src/runtime/scene-loading-policies.js',import.meta.url),'utf8');
 const sharedAssetApi=fs.readFileSync(new URL('../src/data/shared-asset-api.js',import.meta.url),'utf8');
 const sharedAssetState=fs.readFileSync(new URL('../src/runtime/shared-asset-state.js',import.meta.url),'utf8');
 const sharedAssetValidation=fs.readFileSync(new URL('../src/validation/shared-asset-validation.js',import.meta.url),'utf8');
@@ -31,15 +32,21 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V13.5"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V13.5"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V13.5"'),'Admin stage identity missing');
-assert(bootstrap.includes('v13_5_reference_runtime_hardening_20260909'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v13_5_reference_runtime_hardening_20260909'),'Index viewer cache key missing');
+assert(index.includes('stage: "V14.1.1"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V14.1.1"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V14.1.1"'),'Admin stage identity missing');
+assert(bootstrap.includes('v14_1_1_scene_loading_policies_20260910'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_1_scene_loading_policies_20260910'),'Index viewer cache key missing');
+assert(sceneLoadingPolicies.includes('SCENE_LOADING_POLICY_SCHEMA = "exhibition-platform-scene-loading-policy.v1"'),'V14.1.1 loading policy schema missing');
+assert(sceneLoadingPolicies.includes('PUBLIC_EXHIBITION: "public-exhibition"')&&sceneLoadingPolicies.includes('ADMIN_EXHIBITION: "admin-exhibition"')&&sceneLoadingPolicies.includes('GALLERY_AUTHORING: "gallery-authoring"')&&sceneLoadingPolicies.includes('TEST_GALLERY: "test-gallery"'),'V14.1.1 canonical loading contexts missing');
+assert(sceneLoadingPolicies.includes('function resolveSceneLoadingContextFromRuntimeOptions')&&sceneLoadingPolicies.includes('function createSceneLoadingPolicy')&&sceneLoadingPolicies.includes('function getSceneLoadingSpaceRolePolicy'),'V14.1.1 pure policy API missing');
+assert(!/\b(window|document|BABYLON|gallerySupabase|fetch|XMLHttpRequest)\b/.test(sceneLoadingPolicies),'V14.1.1 policy module gained runtime side effects');
+assert(source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)')&&source.includes('getLegacySceneModeFlags(galleryLoadingPolicy)'),'V14.1.1 compatibility wiring missing from core');
+assert(source.includes('getSceneLoadingPolicyDebug: function ()'),'V14.1.1 policy debug surface missing');
 assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
 assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
 assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame"]'),'V13.1 Shared Asset GLB validation contract missing');
-assert(assetWorkspace.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.5"')&&assetWorkspace.includes('Asset Library')&&assetWorkspace.includes('UPLOAD NEW GLB VERSION'),'V13.2 left Asset Workspace module missing');
+assert(assetWorkspace.includes('ADMIN_ASSET_WORKSPACE_STAGE = "V13.6"')&&assetWorkspace.includes('Asset Library')&&assetWorkspace.includes('UPLOAD NEW GLB VERSION'),'V13.2 left Asset Workspace module missing');
 assert(adminBootstrap.includes('data-section=\"assets\"')&&adminBootstrap.includes('assetWorkspaceHost')&&adminBootstrap.includes('currentPreviewContextSection'),'V13.2 three-tab/host-context orchestration missing');
 assert(assetWorkspace.includes('api.uploadThumbnail')&&sharedAssetApi.includes('admin_register_shared_asset_thumbnail'),'V13.2 thumbnail management bridge missing');
 assert(assetWorkspace.includes('application/x-exhibition-shared-asset')&&assetWorkspace.includes('PLACE PROP')&&!assetWorkspace.includes('tile.addEventListener("dragstart", async'),'V13.3 synchronous Prop drag/tap placement launcher missing');
@@ -53,6 +60,7 @@ assert(source.includes('artworkFrameChangeButton.innerText = \"CHANGE\"')&&sourc
 assert(source.includes('assetVersionId: frameState.assetVersionId || null')&&source.includes('runtimeMetadata: frameState.runtimeMetadata'),'V13.4 stable Frame ID state/fallback serialization missing');
 assert(source.includes('sharedAssetFrameDrop')&&source.includes('Drop the Frame directly on an artwork.'),'V13.4 artwork-only Frame drop guard missing');
 assert(source.includes('getSharedAssetIntegrityDebug')&&source.includes('MODEL UNAVAILABLE — reference preserved')&&source.includes('MODEL UNAVAILABLE — binding preserved'),'V13.5 Shared Asset unavailable-reference hardening missing');
+assert(source.includes('getV13ProductionClosureDebug')&&source.includes('exhibition-platform-v13-production-closure.v1')&&source.includes('currentSnapshotHealthy'),'V13.6 production-closure diagnostic snapshot missing');
 assert(!index.includes('id="galleryBootStart"')&&!index.includes('id="galleryBootAbout"'),'Legacy prestart Enter Gallery popup remains');
 assert(index.includes('class="is-hidden" data-state="prestart"'),'Boot guard must be hidden before Exhibition selection');
 assert(bootstrap.includes('c26HomepageExhibitionCarousel')&&bootstrap.includes('bootGuard.start();'),'Homepage Exhibition carousel/start bridge missing');
