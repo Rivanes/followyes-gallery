@@ -40,8 +40,8 @@ function functionBody(name) {
   throw new Error(`Could not extract ${name}`);
 }
 
-assert.equal(pkg.version, '0.14.2-v14-2-3-creation-scene-lifecycle');
-assert.ok(pkg.description.includes('V14.2.3 Creation to Scene Lifecycle Integration'));
+assert.equal(pkg.version, '0.14.2-v14-2-4-exhibition-workspace-cleanup');
+assert.ok(pkg.description.includes('V14.2.4 Exhibition Workspace Cleanup'));
 
 for (const context of ['public-exhibition', 'admin-exhibition']) {
   const policy = createSceneLoadingPolicy(context);

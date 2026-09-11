@@ -96,6 +96,9 @@
     #posterPreview { width:94px; aspect-ratio:4/5; object-fit:cover; border-radius:10px; border:1px solid var(--line-strong); background:#101210; }
     .posterActions { display:grid; gap:7px; }
     #posterFileInput { display:none; }
+    .publicationControls { display:grid; gap:8px; padding-top:11px; border-top:1px solid var(--line); }
+    .publicationActions { display:flex; flex-wrap:wrap; gap:7px; }
+    .publicationNotice.blocked { color:#f0b5b5; }
 
     #workspaceMain { min-width:0; min-height:0; padding:18px; background:radial-gradient(circle at 30% 10%, rgba(255,255,255,.035), transparent 36%), #0b0d0c; }
     #viewportCard { height:100%; min-height:0; display:grid; grid-template-rows:56px minmax(0,1fr); border:1px solid var(--line); border-radius:16px; overflow:hidden; background:#050606; box-shadow:0 28px 90px rgba(0,0,0,.22); }
@@ -160,7 +163,7 @@
         </section>
 
         <section class="workspaceSection">
-          <div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata, Gallery assignment and publication controls for this Exhibition.</p></div></div>
+          <div class="sectionHead"><div><h2>Exhibition details</h2><p>Metadata and public visibility for this Exhibition.</p></div></div>
           <div class="sectionBody">
             <form id="detailsForm">
               <label class="fieldLabel">Name<input id="exhibitionName" class="adminInput" maxlength="120" required /></label>
@@ -180,8 +183,15 @@
                   <input id="posterFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif" />
                 </div>
               </div>
-              <div class="fieldMeta">Space: <strong id="exhibitionSpaceId">—</strong></div>
+              <div class="fieldMeta">Gallery: <strong id="exhibitionSpaceId">—</strong></div>
               <button id="saveMetadataButton" class="adminButton primary" type="submit">SAVE EXHIBITION DETAILS</button>
+              <div class="publicationControls">
+                <div id="exhibitionPublicationNotice" class="fieldMeta publicationNotice hidden"></div>
+                <div class="publicationActions">
+                  <button id="publishExhibitionBundleButton" class="adminButton primary" type="button">PUBLISH EXHIBITION</button>
+                  <button id="unpublishExhibitionButton" class="adminButton danger" type="button">UNPUBLISH EXHIBITION</button>
+                </div>
+              </div>
             </form>
           </div>
         </section>
@@ -221,6 +231,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_2_3_creation_scene_lifecycle_20260911"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_2_4_exhibition_workspace_cleanup_20260911"></script>
 </body>
 </html>

@@ -30,7 +30,7 @@ function expect(label, ok) {
   console.log(`✓ ${label}`);
 }
 
-expect('current package identity remains V14 runtime with V14.2.3 corrective shell', pkg.version === '0.14.2-v14-2-3-creation-scene-lifecycle');
+expect('current package identity remains V14 runtime with V14.2.3 corrective shell', pkg.version === '0.14.2-v14-2-4-exhibition-workspace-cleanup');
 expect('Shared Asset constants expose V13.1 / shared-assets', SHARED_ASSET_STAGE === 'V13.1' && SHARED_ASSET_BUCKET === 'shared-assets');
 expect('independent Shared Asset validator schema is frozen', SHARED_ASSET_VALIDATION_SCHEMA === 'exhibition-platform-shared-asset-validation.v1' && SHARED_ASSET_VALIDATOR_VERSION === 'V13.1');
 expect('renderable GLB worker preserves Shared Asset prop/frame and adds Sculpture validation without Gallery Space roles', workerSource.includes('["prop","frame","sculpture"]') && workerSource.includes('assetType') && !workerSource.includes('["floor","walls","ceiling","props"]'));

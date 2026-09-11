@@ -1,8 +1,14 @@
 # Exhibition Platform
 
-Current repository release: **V14.2.3 — Creation -> Scene Lifecycle Integration**.
+Current repository release: **V14.2.4 — Exhibition Workspace Cleanup**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
+
+## V14.2.4 Exhibition Workspace Cleanup
+
+The normal Exhibition workspace no longer exposes the historical C24 Gallery reassignment workflow. Draft/Published/Previous Gallery binding rows, `ASSIGN DRAFT`, `CONFIRM LAYOUT`, the reassignment selector and visible `ROLLBACK PUBLICATION` control are removed from both standalone and inline Admin. Exhibition Details now stays product-facing: metadata, current Gallery identity, publication status, Poster/Cover and explicit Publish/Unpublish actions.
+
+The C24 database/data-adapter reassignment and rollback capabilities are intentionally retained for compatibility/recovery and are no longer treated as normal authoring controls. Internal `admin_get_exhibition` detail remains available for publication validation and the existing Shared Asset placement fallback. V14.2.4 changes no SQL/schema/RPC behavior and does not yet change Save/Publish semantics.
 
 ## V14.2.3 Creation -> Scene Lifecycle Integration
 
@@ -168,9 +174,9 @@ Previous   -> rollback-history Gallery Version
 
 The Draft authoring Gallery remains mirrored on `exhibitions.venue_id` and `exhibition_states.venue_id`. Published/Previous are exact Version references and are not forced to match that Draft Gallery.
 
-### Draft-only reassignment
+### Draft-only reassignment compatibility
 
-Normal Admin reassignment can target only the chosen Gallery's current Published/frozen Version.
+The C24 backend compatibility path can target only the chosen Gallery's current Published/frozen Version. V14.2.4 removes this reassignment workflow from normal Admin UI; it remains available only as retained compatibility/recovery behavior.
 
 Example:
 
@@ -186,7 +192,7 @@ Published  -> Main Gallery v2   (unchanged and still public)
 
 Cross-Gallery reassignment resets only Gallery-specific spatial state: wall presentation state, artwork/sculpture placement/anchor/focus-camera fields, local lights, tour order and navigation path. Exhibition identity/media/text and unrelated non-spatial data remain.
 
-A versioned `venueMigration` marker records the pending migration. If spatial items exist, the rebuilt layout must be saved after assignment before **CONFIRM LAYOUT**. An unresolved migration blocks Exhibition publication.
+A versioned `venueMigration` marker records the pending migration. Historical C24 flows required layout confirmation after assignment; V14.2.4 no longer exposes that maintenance action in the normal Exhibition workspace. An unresolved migration still blocks Exhibition publication at the backend/validation layer.
 
 ### Explicit publication boundary
 
@@ -233,8 +239,8 @@ Same exact `venue_version_id` Exhibition switches continue to reuse the live Bab
 
 - Poster/Cover is optional for Exhibition publication.
 - Generic Exhibition Details save does not change public visibility.
-- Publication is explicit through `PUBLISH EXHIBITION`; hiding is explicit through `UNPUBLISH EXHIBITION`.
-- Admin shows canonical publication blockers/warnings from `admin_validate_exhibition()`.
+- Publication remains explicit through `PUBLISH EXHIBITION`; hiding remains explicit through `UNPUBLISH EXHIBITION`.
+- V14.2.4 removes the large Gallery-assignment/readiness box; only actual publication blockers are surfaced next to the compact publication actions.
 - Public discovery supports coverless title-only cards.
 
 ## C6C8C25.2 Admin Gallery Partial Preview / UI Fixes

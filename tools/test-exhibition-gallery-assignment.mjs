@@ -113,18 +113,24 @@ assert.ok(api.includes('admin_rollback_exhibition_bundle'));
 assert.ok(api.includes('list_public_exhibition_cards'));
 assert.ok(api.includes('migrationPending: isExhibitionGalleryMigrationPending'));
 
-// Admin contract: reassignment is explicitly Draft-only; C25 now performs cross-Gallery Scene lifecycle cutover in-session.
-assert.ok(admin.includes('ASSIGN DRAFT'));
-assert.ok(admin.includes('CONFIRM LAYOUT'));
-assert.ok(admin.includes('PUBLISH EXHIBITION'));
-assert.ok(admin.includes('ROLLBACK PUBLICATION'));
-assert.ok(admin.includes('Assignment changes the private Draft only'));
-assert.ok(admin.includes('summarizeGalleryMigrationImpact'));
-assert.ok(admin.includes('isExhibitionGalleryMigrationPending'));
+// V14.2.4 UI cleanup: C24 reassignment remains a backend compatibility capability, not a normal Admin control.
+assert.ok(!admin.includes('ASSIGN DRAFT'));
+assert.ok(!admin.includes('CONFIRM LAYOUT'));
+assert.ok(!admin.includes('ROLLBACK PUBLICATION'));
+assert.ok(!admin.includes('Assignment changes the private Draft only'));
+assert.ok(!admin.includes('summarizeGalleryMigrationImpact'));
+assert.ok(!admin.includes('handleAssignExhibitionGallery'));
+assert.ok(!admin.includes('handleConfirmExhibitionGalleryLayout'));
+assert.ok(!admin.includes('handleRollbackExhibitionBundle'));
+assert.ok(read('admin.html').includes('PUBLISH EXHIBITION'));
+assert.ok(read('admin.html').includes('UNPUBLISH EXHIBITION'));
+assert.ok(viewer.includes('PUBLISH EXHIBITION'));
+assert.ok(viewer.includes('UNPUBLISH EXHIBITION'));
+assert.ok(admin.includes('refreshExhibitionAdminDetail'));
+assert.ok(admin.includes('exhibitionAdminDetail'));
 assert.ok(admin.includes('V14.1.7 — runtime resolution happens inside the orchestrator request boundary.'));
 assert.ok(!admin.includes('targetRuntime = await exhibitionData.resolveRuntime(id, { force: true });'));
 assert.ok(admin.includes('sceneLifecycleController.switchTo(id'));
-assert.ok(admin.includes('exhibitionGalleryDetail'));
 assert.ok(admin.includes('function setViewportStatus(label)') && admin.includes('strong.textContent = String(label'));
 assert.ok(!admin.includes('viewportStatus.innerHTML = `3D preview: <strong>${target.name}'));
 
@@ -141,15 +147,16 @@ assert.ok(index.includes('href="./index.html"'));
 // C25.3 publication UI contract: Poster/Cover optional and publication is explicit.
 assert.ok(!admin.includes('id="exhibitionPublished"'));
 assert.ok(admin.includes('exhibitionPublicationStatus'));
-assert.ok(admin.includes('UNPUBLISH EXHIBITION'));
-assert.ok(admin.includes('Poster / cover is optional'));
-assert.ok(admin.includes('c25PublishValidation'));
+assert.ok(read('admin.html').includes('UNPUBLISH EXHIBITION'));
+assert.ok(viewer.includes('UNPUBLISH EXHIBITION'));
+assert.ok(admin.includes('exhibitionPublicationNotice'));
+assert.ok(admin.includes('renderExhibitionPublication'));
 assert.ok(api.includes('async unpublish(reference)'));
 assert.ok(api.includes('p_published: false'));
 assert.ok(!api.includes('patch.is_published'));
 
-assert.equal(pkg.version, '0.14.2-v14-2-3-creation-scene-lifecycle');
-assert.ok(pkg.description.includes('V14.2.3 Creation to Scene Lifecycle Integration'));
+assert.equal(pkg.version, '0.14.2-v14-2-4-exhibition-workspace-cleanup');
+assert.ok(pkg.description.includes('V14.2.4 Exhibition Workspace Cleanup'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
-console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.6.');
+console.log('C6C8C24 backend compatibility invariants remain preserved while V14.2.4 removes normal assignment UI.');

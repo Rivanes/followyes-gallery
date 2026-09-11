@@ -42,13 +42,15 @@ function extractFunction(text,name){const ms=[`async function ${name}(`,`functio
 assert(index.includes('stage: "V14.1.10.1"'),'Index stage identity missing');
 assert(bootstrap.includes('const STAGE = "V14.1.10.1"'),'Viewer stage identity missing');
 assert(adminBootstrap.includes('const STAGE = "V14.1.10.1"'),'Admin stage identity missing');
-assert(bootstrap.includes('v14_2_3_creation_scene_lifecycle_20260911'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v14_2_3_creation_scene_lifecycle_20260911'),'Index viewer cache key missing');
+assert(bootstrap.includes('v14_2_4_exhibition_workspace_cleanup_20260911'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_2_4_exhibition_workspace_cleanup_20260911'),'Index viewer cache key missing');
 const currentPackage=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
-assert(currentPackage.version==='0.14.2-v14-2-3-creation-scene-lifecycle'&&currentPackage.description.includes('V14.2.3 Creation to Scene Lifecycle Integration'),'V14.2.3 package identity missing');
+assert(currentPackage.version==='0.14.2-v14-2-4-exhibition-workspace-cleanup'&&currentPackage.description.includes('V14.2.4 Exhibition Workspace Cleanup'),'V14.2.4 package identity missing');
 assert(adminBootstrap.includes('newExhibitionGallery')&&adminBootstrap.includes('exhibitionData.create({ name, venueId, venueVersionId })'),'V14.2.2 explicit Gallery-target create flow missing');
 assert(adminBootstrap.includes('selectAndSwitchExhibition(created.id, {')&&adminBootstrap.includes('reason: "admin-exhibition-create-enter"'),'V14.2.3 post-create orchestrated Scene entry missing');
-assert(adminBootstrap.includes('CREATE EXHIBITION IN THIS GALLERY')&&adminBootstrap.includes('handleCreateExhibitionForGallery'),'V14.2.3 Published Gallery creation shortcut missing');
+assert(adminBootstrap.includes('CREATE EXHIBITION IN THIS GALLERY')&&adminBootstrap.includes('handleCreateExhibitionForGallery'),'V14.2.3 creation shortcut regression missing');
+assert(!adminBootstrap.includes('ASSIGN DRAFT')&&!adminBootstrap.includes('CONFIRM LAYOUT')&&!adminBootstrap.includes('ROLLBACK PUBLICATION'),'V14.2.4 legacy Gallery Assignment controls still exposed');
+assert(adminBootstrap.includes('refreshExhibitionAdminDetail')&&adminBootstrap.includes('renderExhibitionPublication'),'V14.2.4 compact publication state bridge missing');
 assert(exhibitionApi.includes('async listCreationTargets()')&&exhibitionApi.includes('p_venue_version_id: venueVersionId'),'V14.2.2 creation target adapter missing');
 assert(sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_EVENT = "gallery-scene-readiness"')&&sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_PHASE = "scene-visually-settled"'),'V14.1.8 canonical readiness authority constants missing');
 assert(sceneLoadingPolicies.includes('authorityEvent: SCENE_LOADING_READINESS_EVENT')&&sceneLoadingPolicies.includes('authorityPhase: SCENE_LOADING_READINESS_PHASE')&&sceneLoadingPolicies.includes('compatibilityReadyEvent: "gallery-interaction-ready"'),'V14.1.8 policy readiness contract missing');
@@ -263,6 +265,7 @@ const expectedRegressionSuites=[
   'test-exhibition-creation-lifecycle.mjs',
   'test-exhibition-creation-targeting.mjs',
   'test-exhibition-gallery-assignment.mjs',
+  'test-exhibition-workspace-cleanup.mjs',
   'test-gallery-management.mjs',
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
