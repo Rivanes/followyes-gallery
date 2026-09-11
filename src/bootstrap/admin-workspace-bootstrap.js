@@ -4,8 +4,8 @@
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=v14_2_2_exhibition_creation_targeting_20260911";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=v14_2_3_creation_scene_lifecycle_20260911";
 import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import {
   REQUIRED_GALLERY_MODEL_ROLES,
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_2_2_exhibition_creation_targeting_20260911";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_2_3_creation_scene_lifecycle_20260911";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
 const STAGE = "V14.1.10.1";
-const ENGINE_CACHE_KEY = "v14_2_2_exhibition_creation_targeting_20260911";
+const ENGINE_CACHE_KEY = "v14_2_3_creation_scene_lifecycle_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -803,21 +803,21 @@ function syncSelectedFromCatalog(id) {
   return found;
 }
 
-async function selectAndSwitchExhibition(id) {
+async function selectAndSwitchExhibition(id, options = {}) {
   const target = catalog.find((item) => item.id === id);
-  if (!target || isTransitionGuardActive()) return;
+  if (!target || isTransitionGuardActive()) return false;
   if (!engineReady || !window.GalleryApp || !sceneLifecycleController) {
     setSelectedExhibition(target);
     updateUrlExhibition(id);
     if (!sceneLifecycleController && !inlineWorkspaceMode) reloadAdminForExhibition(id);
-    return;
+    return true;
   }
   const current = window.GalleryApp.getActiveExhibition();
   if (current && current.id === id) {
     setSelectedExhibition(target);
-    return;
+    return true;
   }
-  if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return;
+  if (options.skipConfirm !== true && !confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and switch exhibition?")) return false;
   if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
   if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
 
@@ -827,19 +827,22 @@ async function selectAndSwitchExhibition(id) {
   const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
   const fromId = current && current.id ? current.id : "?";
   const guardToken = await beginTransitionGuard({
-    title: `Switching to ${target.name}…`,
-    detail: "Preparing the selected Gallery runtime.",
+    title: options.guardTitle || `Switching to ${target.name}…`,
+    detail: options.guardDetail || "Preparing the selected Gallery runtime.",
     minVisibleMs: 150
   });
-  if (!guardToken) return;
+  if (!guardToken) return false;
   const transitionStartedAt = performance.now();
   try {
     const result = await sceneLifecycleController.switchTo(id, {
       forceRemote: true,
-      reason: "admin-exhibition-switch",
+      reason: options.reason || "admin-exhibition-switch",
       sceneOptions: { adminWorkspace: true }
     });
-    if (!result || !result.ok || result.superseded) return;
+    if (!result || !result.ok || result.superseded) {
+      if (options.failurePrefix) showToast(options.failurePrefix + "transition did not complete.");
+      return false;
+    }
     const targetRuntime = result.runtime || sceneLifecycleController.getActiveRuntime();
     const currentRuntime = sceneLifecycleController.getActiveRuntime();
     const crossSpace = result.mode === "cross-space-scene-recreate";
@@ -861,10 +864,12 @@ async function selectAndSwitchExhibition(id) {
     void captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id)
       .then(() => updateAssetDeliveryStatus())
       .catch(() => null);
+    return true;
   } catch (error) {
     scene = sceneLifecycleController.getActiveScene();
     if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
-    showToast("Could not switch exhibition: " + (error.message || error));
+    showToast((options.failurePrefix || "Could not switch exhibition: ") + (error.message || error));
+    return false;
   } finally {
     await endTransitionGuard(guardToken);
   }
@@ -1221,7 +1226,14 @@ createExhibitionForm.addEventListener("submit", async (event) => {
     newExhibitionGallery.value = "";
     upsertLocalCatalogRecord(created);
     renderExhibitionCreationTargets();
-    showToast(`Exhibition created in ${option.textContent}. Select it to open its Gallery.`);
+    const entered = await selectAndSwitchExhibition(created.id, {
+      skipConfirm: true,
+      reason: "admin-exhibition-create-enter",
+      guardTitle: `Opening ${created.name}…`,
+      guardDetail: `Entering ${option.textContent} through the canonical Scene lifecycle.`,
+      failurePrefix: "Exhibition was created, but its Gallery could not be opened: "
+    });
+    if (entered) showToast(`Exhibition created and opened in ${option.textContent}.`);
   } catch (error) { showToast(error.message || String(error)); }
   finally { setBusy(createExhibitionButton, false); renderExhibitionCreationTargets(); }
 });
@@ -1902,6 +1914,7 @@ function renderGalleryDetail(detail) {
       <div class="gallerySubsection"><h3>Validation</h3><div id="galleryValidation" class="galleryValidation ${validationValid ? "valid" : "invalid"}"></div><button id="validateGalleryButton" class="adminButton" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>VALIDATE DRAFT</button></div>
       <div class="gallerySubsection"><h3>Actions</h3><div class="galleryActions">
         <button id="publishGalleryButton" class="adminButton primary" type="button" ${canManage && draft && venue.status !== "archived" ? "" : "disabled"}>PUBLISH VERSION</button>
+        <button id="createExhibitionForGalleryButton" class="adminButton" type="button" ${canManage && published && venue.status !== "archived" ? "" : "disabled"}>CREATE EXHIBITION IN THIS GALLERY</button>
         <button id="rollbackGalleryButton" class="adminButton" type="button" ${canManage && rollback.available && venue.status !== "archived" ? "" : "disabled"}>ROLLBACK</button>
         <button id="archiveGalleryButton" class="adminButton danger" type="button" ${canManage && venue.status !== "archived" && !draft && activeExhibitionCount===0 ? "" : "disabled"}>ARCHIVE</button>
         <button id="restoreGalleryButton" class="adminButton" type="button" ${canManage && venue.status === "archived" ? "" : "disabled"}>RESTORE</button>
@@ -1939,6 +1952,7 @@ function renderGalleryDetail(detail) {
     galleryEl("testGalleryButton").addEventListener("click", handleTestGallery);
     galleryEl("validateGalleryButton").addEventListener("click", handleValidateGallery);
     galleryEl("publishGalleryButton").addEventListener("click", handlePublishGallery);
+    galleryEl("createExhibitionForGalleryButton").addEventListener("click", handleCreateExhibitionForGallery);
     galleryEl("rollbackGalleryButton").addEventListener("click", handleRollbackGallery);
     galleryEl("archiveGalleryButton").addEventListener("click", handleArchiveGallery);
     galleryEl("restoreGalleryButton").addEventListener("click", handleRestoreGallery);
@@ -2252,6 +2266,31 @@ async function handlePublishGallery() {
       showToast(`${draft.version_number} published. It is now available when creating an Exhibition.`);
     } catch(error) { showToast(error.message || String(error)); }
   });
+}
+
+async function handleCreateExhibitionForGallery() {
+  const detail = selectedGalleryDetail;
+  const venue = detail && detail.venue ? detail.venue : null;
+  const published = galleryPublishedVersion(detail);
+  if (!venue || !published || venue.status === "archived") {
+    showToast("Publish this Gallery before creating an Exhibition in it.");
+    return;
+  }
+  if (!setAdminWorkspaceSection("exhibitions")) return;
+  try {
+    await refreshExhibitionCreationTargets();
+    const value = `${venue.id}|${published.id}`;
+    const matchingOption = newExhibitionGallery
+      ? [...newExhibitionGallery.options].find((option) => option.value === value)
+      : null;
+    if (!matchingOption) throw new Error("This Published Gallery is not available as an Exhibition creation target.");
+    newExhibitionGallery.value = value;
+    renderExhibitionCreationTargets();
+    newExhibitionName.focus();
+    showToast(`Creating a new Exhibition in ${matchingOption.textContent}.`);
+  } catch (error) {
+    showToast(error.message || String(error));
+  }
 }
 
 async function handleRollbackGallery() {

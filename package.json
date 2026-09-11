@@ -1,8 +1,8 @@
 {
   "name": "exhibition-platform",
-  "version": "0.14.2-v14-2-2-exhibition-creation-targeting",
+  "version": "0.14.2-v14-2-3-creation-scene-lifecycle",
   "private": true,
-  "description": "Exhibition Platform \u2014 V14.2.2 Exhibition Creation Targeting",
+  "description": "Exhibition Platform \u2014 V14.2.3 Creation to Scene Lifecycle Integration",
   "type": "module",
   "scripts": {
     "build": "node tools/build-current.mjs",
@@ -13,7 +13,7 @@
     "test:platform": "node tools/test-platform-runtime.mjs",
     "test:performance": "node tools/test-performance-runtime.mjs",
     "test:workspace": "node tools/test-workspace-ui.mjs",
-    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:sculpture-models && npm run test:creation-targeting && npm run test:gallery-assignment && npm run test:cross-space && npm run test:runtime-host && npm run test:transitions && npm run test:readiness && npm run test:walkthrough && npm run test:residency && npm run test:reentry && npm run test:assets",
+    "test": "npm run test:core && npm run test:media && npm run test:platform && npm run test:performance && npm run test:workspace && npm run test:gallery && npm run test:space-models && npm run test:sculpture-models && npm run test:creation-targeting && npm run test:creation-lifecycle && npm run test:gallery-assignment && npm run test:cross-space && npm run test:runtime-host && npm run test:transitions && npm run test:readiness && npm run test:walkthrough && npm run test:residency && npm run test:reentry && npm run test:assets",
     "check": "npm run build && npm run syntax && npm run verify && npm test",
     "test:gallery": "node tools/test-gallery-management.mjs",
     "test:space-models": "node tools/test-space-model-validation.mjs",
@@ -27,6 +27,7 @@
     "test:walkthrough": "node tools/test-walkthrough-hydration.mjs",
     "test:residency": "node tools/test-active-visit-residency.mjs",
     "test:reentry": "node tools/test-public-reentry.mjs",
-    "test:creation-targeting": "node tools/test-exhibition-creation-targeting.mjs"
+    "test:creation-targeting": "node tools/test-exhibition-creation-targeting.mjs",
+    "test:creation-lifecycle": "node tools/test-exhibition-creation-lifecycle.mjs"
   }
 }

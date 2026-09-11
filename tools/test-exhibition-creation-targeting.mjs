@@ -75,9 +75,16 @@ for (const shell of [adminHtml, inline]) {
   assert.ok(shell.includes('explicit Published Gallery'));
 }
 
-// Admin creates through the data adapter directly. V14.2.3 will own automatic post-create Scene transition.
+// V14.2.2.1 visual contract: native Chromium option popup must remain legible in dark Admin UI.
+assert.ok(adminHtml.includes('select.adminInput { color-scheme:dark;'));
+assert.ok(adminHtml.includes('select.adminInput option { background:#202422; color:var(--text); }'));
+assert.ok(inline.includes('#inlineAdminWorkspace select.adminInput { color-scheme:dark;'));
+assert.ok(inline.includes('#inlineAdminWorkspace select.adminInput option { background:#202422; color:rgba(255,255,255,.92); }'));
+
+// Admin creates through the data adapter directly; V14.2.3 then enters through the canonical orchestrated selection helper.
 assert.ok(admin.includes('exhibitionData.create({ name, venueId, venueVersionId })'));
-assert.ok(admin.includes('Select it to open its Gallery.'));
+assert.ok(admin.includes('selectAndSwitchExhibition(created.id, {'));
+assert.ok(admin.includes('reason: "admin-exhibition-create-enter"'));
 assert.ok(!admin.includes('window.GalleryApp.createExhibition(name)'));
 assert.ok(admin.includes('refreshExhibitionCreationTargets'));
 assert.ok(admin.includes('await refreshExhibitionCreationTargets();'));
@@ -90,7 +97,7 @@ const createEnd = source.indexOf('async function updateGalleryExhibitionMetadata
 const createBody = source.slice(createStart, createEnd);
 assert.ok(!createBody.includes('switchGalleryExhibition(canonicalCreated.id'));
 
-assert.equal(pkg.version, '0.14.2-v14-2-2-exhibition-creation-targeting');
+assert.equal(pkg.version, '0.14.2-v14-2-3-creation-scene-lifecycle');
 assert.ok(pkg.scripts.test.includes('test:creation-targeting'));
 
-console.log('V14.2.2 Exhibition Creation Targeting regression invariants passed.');
+console.log('V14.2.2.1 creation targeting + selector visual invariants remain preserved under V14.2.3.');

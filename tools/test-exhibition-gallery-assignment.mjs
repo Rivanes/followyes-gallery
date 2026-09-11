@@ -148,8 +148,8 @@ assert.ok(api.includes('async unpublish(reference)'));
 assert.ok(api.includes('p_published: false'));
 assert.ok(!api.includes('patch.is_published'));
 
-assert.equal(pkg.version, '0.14.2-v14-2-2-exhibition-creation-targeting');
-assert.ok(pkg.description.includes('V14.2.2 Exhibition Creation Targeting'));
+assert.equal(pkg.version, '0.14.2-v14-2-3-creation-scene-lifecycle');
+assert.ok(pkg.description.includes('V14.2.3 Creation to Scene Lifecycle Integration'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
 console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.6.');

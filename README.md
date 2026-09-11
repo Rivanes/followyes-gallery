@@ -1,14 +1,22 @@
 # Exhibition Platform
 
-Current repository release: **V14.2.2 — Exhibition Creation Targeting**.
+Current repository release: **V14.2.3 — Creation -> Scene Lifecycle Integration**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
 
+## V14.2.3 Creation -> Scene Lifecycle Integration
+
+After `CREATE EXHIBITION` succeeds, Admin now automatically enters the created Exhibition through the existing Scene Loading Orchestrator. Same exact immutable Venue Version keeps the current Scene and uses the established Exhibition-layer switch/reuse path; a different Venue Version uses the established controlled cross-Space Scene recreation on the persistent Engine/canvas. Creation does not call `GalleryApp.switchExhibition()` directly and does not introduce another lifecycle authority.
+
+Published Gallery details also expose `CREATE EXHIBITION IN THIS GALLERY`. The shortcut does not fork creation: it switches to the canonical Exhibition form, refreshes creation targets and preselects the Gallery's exact current Published Version. A Gallery Draft is never selected. If database creation succeeds but Scene entry fails, the Exhibition remains created and selectable for a normal retry. V14.2.3 requires **no SQL/schema/RPC change**.
+
+## V14.2.2.1 Published Gallery Selector Visual Fix
+
+The V14.2.2.1 dark native selector readability fix remains included. Its separate production visual smoke was folded into the V14.2.3 smoke by explicit user decision.
+
 ## V14.2.2 Exhibition Creation Targeting
 
-Admin `CREATE EXHIBITION` now requires a name plus an explicit current Published Gallery. The client passes the exact `venue_id + published_version_id` pair to the existing guarded creation RPC instead of silently inheriting the Gallery from the currently open Exhibition. A Gallery Draft is never a creation target.
-
-Creation and Scene transition are intentionally separated in this stage: after creating the record, the new Exhibition appears in the catalog but is not automatically entered. V14.2.3 will connect post-create selection to the existing Scene Loading Orchestrator. V14.2.2 requires **no SQL/schema/RPC change**.
+Admin `CREATE EXHIBITION` requires a name plus an explicit current Published Gallery. The client passes the exact `venue_id + published_version_id` pair to the existing guarded creation RPC instead of silently inheriting the Gallery from the currently open Exhibition. A Gallery Draft is never a creation target.
 
 ## V14.1.10.1 Resident Gallery Re-entry / Public Fresh-Visit UX
 

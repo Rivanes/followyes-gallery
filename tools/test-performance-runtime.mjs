@@ -15,11 +15,11 @@ const admin = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.j
 const guard = fs.readFileSync(new URL('src/bootstrap/transition-guard.js', root), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('package.json', root), 'utf8'));
 function expect(label, ok){ if(!ok) throw new Error(`FAIL: ${label}`); console.log(`OK: ${label}`); }
-expect('current package keeps transition guard regression coverage', pkg.version.includes('v14-2-2-exhibition-creation-targeting') && viewer.includes('const STAGE = "V14.1.10.1"') && admin.includes('const STAGE = "V14.1.10.1"'));
+expect('current package keeps transition guard regression coverage', pkg.version.includes('v14-2-3-creation-scene-lifecycle') && viewer.includes('const STAGE = "V14.1.10.1"') && admin.includes('const STAGE = "V14.1.10.1"'));
 expect('shared full-page guard exists', guard.includes('position:fixed; inset:0') && guard.includes('z-index:2147483000') && guard.includes('epTransitionSpinner'));
 expect('guard blocks wheel/touch/keyboard interaction', guard.includes('document.addEventListener("wheel"') && guard.includes('document.addEventListener("touchmove"') && guard.includes('document.addEventListener("keydown"'));
 expect('guard paints before transition work', guard.includes('await waitForPaint()'));
-expect('exhibition switch is guarded', admin.includes('title: `Switching to ${target.name}…`') && admin.includes('await sceneLifecycleController.switchTo'));
+expect('exhibition switch is guarded', admin.includes('title: options.guardTitle || `Switching to ${target.name}…`') && admin.includes('await sceneLifecycleController.switchTo'));
 expect('Admin to Public clean same-runtime return bypasses the full-page guard with guarded fallback', viewer.includes('const instantFastPath = !crossSpaceReturn && (preserveDraft || !sceneDirty) && canUseInstantWorkspaceModeSwitch()') && viewer.includes('if (!instantFastPath)') && viewer.includes('title: "Returning to Public Page…"'));
 expect('Public to Admin same-runtime entry is guarded', viewer.includes('title: "Opening Admin Workspace…"') && viewer.includes('enterAdminWorkspaceMode'));
 expect('network telemetry no longer extends the blocking overlay', admin.includes('void captureExhibitionTransitionDiagnostic') && viewer.includes('void finishModeTransitionDiagnostic'));
@@ -139,7 +139,7 @@ function extractFunction(name) {
   throw new Error(`unterminated ${name}`);
 }
 
-expect('package identity', pkg.version.includes('v14-2-2-exhibition-creation-targeting'));
+expect('package identity', pkg.version.includes('v14-2-3-creation-scene-lifecycle'));
 expect('source stage identity', source.includes('stage: "C6C8C21"'));
 expect('residency schema v3', source.includes('schema: "gallery-artwork-residency.v3"'));
 expect('workspace-independent Full budget', source.includes('desktopFullTextures: 6') && source.includes('desktopHardFullTextures: 8'));
@@ -183,7 +183,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.ur
 
 function expect(label, value) { if (!value) throw new Error(`C6C8C9 regression: ${label}`); }
 
-expect("package stage", pkg.version.includes("v14-2-2-exhibition-creation-targeting"));
+expect("package stage", pkg.version.includes("v14-2-3-creation-scene-lifecycle"));
 expect("runtime stage", source.includes('stage: "C6C8C21"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect("owner scene scan", source.includes("function getGallerySceneOwnerEntities(") && source.includes("scene.transformNodes") && source.includes("scene.lights"));
 expect("inactive owner sweep", source.includes("function sweepGalleryInactiveExhibitionOwners(") && source.includes("active-context-change") && source.includes("post-hydration-orphan-sweep"));
@@ -220,7 +220,7 @@ function extract(name) {
   for(let i=brace;i<source.length;i++){const c=source[i],n=source[i+1]||'';if(state==='c'){if(c==='"'||c==="'"||c==='`'){state='s';quote=c}else if(c==='/'&&n==='/'){state='l';i++}else if(c==='/'&&n==='*'){state='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return source.slice(start,i+1)}else if(state==='s'){if(c==='\\')i++;else if(c===quote)state='c'}else if(state==='l'&&c==='\n')state='c';else if(state==='b'&&c==='*'&&n==='/'){state='c';i++;}}
   throw new Error(`Unterminated ${name}`);
 }
-expect('package stage', pkg.version.includes('v14-2-2-exhibition-creation-targeting'));
+expect('package stage', pkg.version.includes('v14-2-3-creation-scene-lifecycle'));
 expect('runtime stage', source.includes('stage: "C6C8C21"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect('foreground Preview gate upgraded by C6C8C11', source.includes('previewGateMode: "all-assigned-preview"') && source.includes('function prepareGalleryForegroundArtworkBudget('));
 const pending = extract('getGalleryForegroundPendingSnapshot');
@@ -276,7 +276,7 @@ function extract(name) {
   throw new Error(`Unterminated ${name}`);
 }
 
-expect('package stage', pkg.version.includes('v14-2-2-exhibition-creation-targeting'));
+expect('package stage', pkg.version.includes('v14-2-3-creation-scene-lifecycle'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('all assigned Preview policy', source.includes('previewGateMode: "all-assigned-preview"'));
 
@@ -314,7 +314,7 @@ const source = fs.readFileSync(path.join(root, 'src/Gallery_V0_11.js'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'src/config/space-fixture.js'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 function expect(label, value) { if (!value) throw new Error(`C6C8C12 regression: ${label}`); }
-expect('package stage', pkg.version.includes('v14-2-2-exhibition-creation-targeting'));
+expect('package stage', pkg.version.includes('v14-2-3-creation-scene-lifecycle'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('props optional in Space config', /props:[\s\S]*?fileName: "Props\.glb"[\s\S]*?required: false/.test(config));
 expect('props removed from critical shell', source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]') && source.includes('galleryAuthoringSpacePreview'));

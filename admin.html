@@ -64,6 +64,9 @@
       width:100%; border:1px solid var(--line-strong); border-radius:10px; background:rgba(255,255,255,.055); color:var(--text); outline:none;
     }
     .adminInput { height:38px; padding:0 11px; }
+    select.adminInput { color-scheme:dark; background-color:#202422; color:var(--text); }
+    select.adminInput option { background:#202422; color:var(--text); }
+    select.adminInput option[value=""] { color:var(--muted); }
     .adminTextarea { min-height:92px; resize:vertical; padding:10px 11px; line-height:1.45; }
     .adminInput:focus, .adminTextarea:focus { border-color:rgba(154,180,155,.58); box-shadow:0 0 0 3px rgba(154,180,155,.08); }
 
@@ -218,6 +221,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_2_2_exhibition_creation_targeting_20260911"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_2_3_creation_scene_lifecycle_20260911"></script>
 </body>
 </html>

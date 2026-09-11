@@ -7,14 +7,14 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_2_2_exhibition_creation_targeting_20260911";
-import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v14_2_2_exhibition_creation_targeting_20260911";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_2_3_creation_scene_lifecycle_20260911";
+import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v14_2_3_creation_scene_lifecycle_20260911";
 
 const STAGE = "V14.1.10.1";
-const ENGINE_CACHE_KEY = "v14_2_2_exhibition_creation_targeting_20260911";
+const ENGINE_CACHE_KEY = "v14_2_3_creation_scene_lifecycle_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -509,6 +509,9 @@ function ensureInlineAdminWorkspaceStyles() {
     #inlineAdminWorkspace #newExhibitionGallery { min-width:0; }
     #inlineAdminWorkspace .adminInput, #inlineAdminWorkspace .adminTextarea { width:100%; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.055); color:rgba(255,255,255,.92); outline:none; font:inherit; }
     #inlineAdminWorkspace .adminInput { height:38px; padding:0 11px; }
+    #inlineAdminWorkspace select.adminInput { color-scheme:dark; background-color:#202422; color:rgba(255,255,255,.92); }
+    #inlineAdminWorkspace select.adminInput option { background:#202422; color:rgba(255,255,255,.92); }
+    #inlineAdminWorkspace select.adminInput option[value=""] { color:rgba(255,255,255,.57); }
     #inlineAdminWorkspace .adminTextarea { min-height:92px; resize:vertical; padding:10px 11px; line-height:1.45; }
     #inlineAdminWorkspace #exhibitionList { display:grid; gap:7px; max-height:280px; overflow:auto; padding-right:2px; }
     #inlineAdminWorkspace .exhibitionRow { width:100%; display:grid; grid-template-columns:48px minmax(0,1fr); gap:10px; align-items:center; text-align:left; padding:7px; border:1px solid transparent; border-radius:10px; background:transparent; color:rgba(255,255,255,.92); cursor:pointer; }
