@@ -1,8 +1,14 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.10.1 — Resident Gallery Re-entry / Public Fresh-Visit UX**.
+Current repository release: **V14.2.2 — Exhibition Creation Targeting**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
+
+## V14.2.2 Exhibition Creation Targeting
+
+Admin `CREATE EXHIBITION` now requires a name plus an explicit current Published Gallery. The client passes the exact `venue_id + published_version_id` pair to the existing guarded creation RPC instead of silently inheriting the Gallery from the currently open Exhibition. A Gallery Draft is never a creation target.
+
+Creation and Scene transition are intentionally separated in this stage: after creating the record, the new Exhibition appears in the catalog but is not automatically entered. V14.2.3 will connect post-create selection to the existing Scene Loading Orchestrator. V14.2.2 requires **no SQL/schema/RPC change**.
 
 ## V14.1.10.1 Resident Gallery Re-entry / Public Fresh-Visit UX
 

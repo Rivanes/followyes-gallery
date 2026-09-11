@@ -47589,12 +47589,15 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var slug = String(name || "exhibition").trim().toLowerCase(); if (typeof slug.normalize === "function") slug = slug.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         slug = slug.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56); return (slug || "exhibition") + "-" + String(id || "").slice(-6).toLowerCase();
     }
-    async function createGalleryExhibition(name) {
-        name = String(name || "").trim();
+    async function createGalleryExhibition(request) {
+        request = request && typeof request === "object" ? request : {};
+        var name = String(request.name || "").trim();
+        var venueId = String(request.venueId || "").trim();
+        var venueVersionId = String(request.venueVersionId || "").trim();
         if (!name) { notifyGalleryStatus("Podaj nazwe nowej wystawy."); return null; }
+        if (!venueId || !venueVersionId) { notifyGalleryStatus("Wybierz opublikowana Gallery dla nowej wystawy."); return null; }
         if (galleryExhibitionRuntime.creating) return null;
         if (galleryEditorLoginEnabled && !editorAuthenticated) { notifyGalleryStatus("Zaloguj sie jako edytor, aby utworzyc wystawe."); return null; }
-        if (!confirmGalleryDiscardUnsavedChanges("Creating another exhibition")) return null;
         if (!window.gallerySupabase) { notifyGalleryStatus("Supabase nie jest skonfigurowany."); return null; }
         if (!galleryExhibitionDataAdapter || typeof galleryExhibitionDataAdapter.create !== "function") {
             notifyGalleryStatus("Canonical Exhibition data adapter is unavailable.");
@@ -47602,11 +47605,10 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
         galleryExhibitionRuntime.creating = true;
         try {
-            var canonicalCreated = normalizeGalleryExhibitionRecord(await galleryExhibitionDataAdapter.create(name));
+            var canonicalCreated = normalizeGalleryExhibitionRecord(await galleryExhibitionDataAdapter.create({ name: name, venueId: venueId, venueVersionId: venueVersionId }));
             if (!canonicalCreated) throw new Error("Canonical Exhibition creation returned no record.");
             galleryExhibitionRuntime.catalogLoaded = false;
             await loadGalleryExhibitionCatalog(true);
-            await switchGalleryExhibition(canonicalCreated.id, { force: true, forceRemote: true });
             return canonicalCreated;
         } catch (canonicalCreateError) {
             galleryExhibitionRuntime.lastError = canonicalCreateError && canonicalCreateError.message ? canonicalCreateError.message : String(canonicalCreateError);

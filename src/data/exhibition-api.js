@@ -283,21 +283,41 @@ export function createExhibitionDataAdapter({ supabase, mode = "public", initial
       const runtime = await resolve(reference, false);
       return saveCanonicalState(supabase, runtime, state);
     },
-    async create(name) {
+    async listCreationTargets() {
+      if (modeName !== "admin") throw new Error("Public Viewer cannot list Exhibition creation targets.");
+      const venues = asRows(await supabase.rpc("admin_list_venues", { p_status: "published", p_search: null }));
+      return venues.map((venue) => {
+        const venueId = text(venue && venue.id);
+        const venueVersionId = text(venue && venue.published_version_id);
+        const versions = Array.isArray(venue && venue.versions) ? venue.versions : [];
+        const publishedVersion = versions.find((version) => text(version && version.id) === venueVersionId) || null;
+        if (!venueId || !venueVersionId || !publishedVersion || text(publishedVersion.status) !== "published") return null;
+        return {
+          venueId,
+          venueVersionId,
+          venueName: text(venue.name || venue.slug || venueId),
+          venueSlug: text(venue.slug),
+          versionNumber: text(publishedVersion.version_number || venueVersionId)
+        };
+      }).filter(Boolean);
+    },
+    async create(input) {
       if (modeName !== "admin") throw new Error("Public Viewer cannot create Exhibitions.");
-      const current = initialRuntime || Array.from(runtimeByKey.values()).find((item) => item && item.mode === "admin") || await loadAdminRuntime(supabase, "main");
+      const request = input && typeof input === "object" ? input : {};
+      const name = text(request.name);
+      const venueId = text(request.venueId);
+      const venueVersionId = text(request.venueVersionId);
+      if (!name) throw new Error("Exhibition name is required.");
+      if (!venueId || !venueVersionId) throw new Error("Choose a Published Gallery before creating an Exhibition.");
       const id = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : null;
       const suffix = id ? id.slice(-6) : Date.now().toString(36).slice(-6);
-      const base = text(name).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56) || "exhibition";
+      const base = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56) || "exhibition";
       const slug = `${base}-${suffix}`;
-      const venueDetail = rpcOne(await supabase.rpc("admin_get_venue", { p_venue_id: current.venue.id }));
-      const publishedVersionId = venueDetail && venueDetail.venue ? text(venueDetail.venue.published_version_id) : "";
-      if (!publishedVersionId) throw new Error("Create a Published Gallery Version before creating an Exhibition.");
       const created = rpcOne(await supabase.rpc("admin_create_exhibition", {
-        p_venue_id: current.venue.id,
-        p_venue_version_id: publishedVersionId,
+        p_venue_id: venueId,
+        p_venue_version_id: venueVersionId,
         p_slug: slug,
-        p_title: text(name),
+        p_title: name,
         p_patch: { display_order: 0 }
       }));
       if (!created || !created.id) throw new Error("Exhibition creation returned no record.");

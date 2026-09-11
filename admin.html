@@ -58,6 +58,8 @@
     .sectionBody { padding:0 14px 14px; }
 
     #createExhibitionForm { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+    #newExhibitionName { grid-column:1 / -1; }
+    #newExhibitionGallery { min-width:0; }
     .adminInput, .adminTextarea {
       width:100%; border:1px solid var(--line-strong); border-radius:10px; background:rgba(255,255,255,.055); color:var(--text); outline:none;
     }
@@ -142,11 +144,12 @@
     <div id="adminBody">
       <aside id="adminSidebar">
         <section class="workspaceSection">
-          <div class="sectionHead"><div><h2>Exhibitions</h2><p>Switch the active exhibition or create a new one in the current 3D Space.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div>
+          <div class="sectionHead"><div><h2>Exhibitions</h2><p>Create an Exhibition in an explicit Published Gallery, or switch the active Exhibition.</p></div><button id="refreshExhibitionsButton" class="adminButton" type="button">↻</button></div>
           <div class="sectionBody">
             <form id="createExhibitionForm">
               <input id="newExhibitionName" class="adminInput" maxlength="120" placeholder="New exhibition name" autocomplete="off" />
-              <button id="createExhibitionButton" class="adminButton primary" type="submit">CREATE</button>
+              <select id="newExhibitionGallery" class="adminInput" aria-label="Published Gallery" required><option value="">Loading Published Galleries…</option></select>
+              <button id="createExhibitionButton" class="adminButton primary" type="submit" disabled>CREATE</button>
             </form>
             <div style="height:10px"></div>
             <div id="exhibitionList"><div class="fieldMeta">Loading exhibition catalog…</div></div>
@@ -215,6 +218,6 @@
     </form>
   </div>
 
-  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_1_10_1_public_reentry_20260911"></script>
+  <script type="module" src="./src/bootstrap/admin-workspace-bootstrap.js?v=v14_2_2_exhibition_creation_targeting_20260911"></script>
 </body>
 </html>

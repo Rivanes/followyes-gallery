@@ -40,8 +40,8 @@ function functionBody(name) {
   throw new Error(`Could not extract ${name}`);
 }
 
-assert.equal(pkg.version, '0.14.1-v14-1-10-1-public-fresh-visit-reentry');
-assert.ok(pkg.description.includes('V14.1.10.1 Resident Gallery Re-entry + Public Fresh-Visit UX'));
+assert.equal(pkg.version, '0.14.2-v14-2-2-exhibition-creation-targeting');
+assert.ok(pkg.description.includes('V14.2.2 Exhibition Creation Targeting'));
 
 for (const context of ['public-exhibition', 'admin-exhibition']) {
   const policy = createSceneLoadingPolicy(context);

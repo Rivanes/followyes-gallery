@@ -4,8 +4,8 @@
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_1_10_1_public_reentry_20260911";
-import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_2_2_exhibition_creation_targeting_20260911";
+import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=v14_2_2_exhibition_creation_targeting_20260911";
 import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import {
   REQUIRED_GALLERY_MODEL_ROLES,
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_1_public_reentry_20260911";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_1_public_reentry_20260911";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_2_2_exhibition_creation_targeting_20260911";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_2_2_exhibition_creation_targeting_20260911";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
 const STAGE = "V14.1.10.1";
-const ENGINE_CACHE_KEY = "v14_1_10_1_public_reentry_20260911";
+const ENGINE_CACHE_KEY = "v14_2_2_exhibition_creation_targeting_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -53,6 +53,7 @@ const exhibitionList = el("exhibitionList");
 const refreshExhibitionsButton = el("refreshExhibitionsButton");
 const createExhibitionForm = el("createExhibitionForm");
 const newExhibitionName = el("newExhibitionName");
+const newExhibitionGallery = el("newExhibitionGallery");
 const createExhibitionButton = el("createExhibitionButton");
 const detailsForm = el("detailsForm");
 const exhibitionName = el("exhibitionName");
@@ -112,6 +113,7 @@ let assetWorkspaceReturnSection = "exhibitions";
 let exhibitionGalleryDetail = null;
 let exhibitionGalleryDetailRequest = 0;
 let exhibitionGalleryMutationInFlight = false;
+let exhibitionCreationTargets = [];
 let galleryAuthoringPreviewActive = false;
 
 function formatDeliveryBytes(bytes) {
@@ -682,12 +684,51 @@ function normalizeExhibition(record) {
   };
 }
 
+function renderExhibitionCreationTargets() {
+  if (!newExhibitionGallery) return;
+  const previousValue = newExhibitionGallery.value;
+  newExhibitionGallery.innerHTML = "";
+  if (!exhibitionCreationTargets.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No Published Galleries available";
+    newExhibitionGallery.appendChild(option);
+    createExhibitionButton.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose Published Gallery…";
+  newExhibitionGallery.appendChild(placeholder);
+  for (const target of exhibitionCreationTargets) {
+    const option = document.createElement("option");
+    option.value = `${target.venueId}|${target.venueVersionId}`;
+    option.dataset.venueId = target.venueId;
+    option.dataset.versionId = target.venueVersionId;
+    option.textContent = `${target.venueName} · ${target.versionNumber}`;
+    newExhibitionGallery.appendChild(option);
+  }
+  if ([...newExhibitionGallery.options].some((option) => option.value === previousValue)) newExhibitionGallery.value = previousValue;
+  createExhibitionButton.disabled = !newExhibitionName.value.trim() || !newExhibitionGallery.value;
+}
+
+async function refreshExhibitionCreationTargets() {
+  if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
+  if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
+  exhibitionCreationTargets = typeof exhibitionData.listCreationTargets === "function"
+    ? await exhibitionData.listCreationTargets()
+    : [];
+  renderExhibitionCreationTargets();
+  return exhibitionCreationTargets;
+}
+
 async function fetchCatalog() {
   if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
   if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
   window.ExhibitionPlatformDataAdapter = exhibitionData;
   if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("admin");
   catalog = (await exhibitionData.list()).map(normalizeExhibition).filter(Boolean);
+  await refreshExhibitionCreationTargets();
   renderCatalog();
   return catalog;
 }
@@ -1165,19 +1206,28 @@ refreshExhibitionsButton.addEventListener("click", async () => {
 createExhibitionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = newExhibitionName.value.trim();
-  if (!name || !window.GalleryApp) return;
+  const option = newExhibitionGallery && newExhibitionGallery.selectedOptions ? newExhibitionGallery.selectedOptions[0] : null;
+  const venueId = option && option.dataset ? String(option.dataset.venueId || "") : "";
+  const venueVersionId = option && option.dataset ? String(option.dataset.versionId || "") : "";
+  if (!name || !venueId || !venueVersionId) return;
   if (!confirmAndDiscardAdminChanges("You have unsaved Admin changes. Discard them and create a new exhibition?")) return;
+  if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
+  if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
   setBusy(createExhibitionButton, true);
   try {
-    const created = await window.GalleryApp.createExhibition(name);
+    const created = await exhibitionData.create({ name, venueId, venueVersionId });
     if (!created) return;
     newExhibitionName.value = "";
-    const localCreated = upsertLocalCatalogRecord(created);
-    setSelectedExhibition(localCreated);
-    updateUrlExhibition(created.id);
+    newExhibitionGallery.value = "";
+    upsertLocalCatalogRecord(created);
+    renderExhibitionCreationTargets();
+    showToast(`Exhibition created in ${option.textContent}. Select it to open its Gallery.`);
   } catch (error) { showToast(error.message || String(error)); }
-  finally { setBusy(createExhibitionButton, false); }
+  finally { setBusy(createExhibitionButton, false); renderExhibitionCreationTargets(); }
 });
+
+newExhibitionName.addEventListener("input", renderExhibitionCreationTargets);
+if (newExhibitionGallery) newExhibitionGallery.addEventListener("change", renderExhibitionCreationTargets);
 
 detailsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2198,7 +2248,8 @@ async function handlePublishGallery() {
     try {
       await galleryManagement.publish(draft.id);
       await refreshSelectedGallery();
-      showToast(`${draft.version_number} published. Existing Exhibitions were not reassigned.`);
+      await refreshExhibitionCreationTargets();
+      showToast(`${draft.version_number} published. It is now available when creating an Exhibition.`);
     } catch(error) { showToast(error.message || String(error)); }
   });
 }
