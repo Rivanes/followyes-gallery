@@ -258,6 +258,7 @@ export function createSceneLifecycleController(options = {}) {
         const ok = await app.switchExhibition(targetRuntime.exhibition.id, {
           force: true,
           forceRemote: switchOptions.forceRemote === true,
+          reuseResidentLayer: switchOptions.reuseResidentLayer !== false,
           reloadCurrent: switchOptions.reloadCurrent === true
         });
         if (!ok) throw new Error("Same-Space Exhibition switch was rejected.");

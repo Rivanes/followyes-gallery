@@ -2,10 +2,10 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { createGalleryManagementApi } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import { buildSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_cross_space_runtime";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_no_reload_residency_20260910";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_1_public_reentry_20260911";
 
-const STAGE = "V14.1.10";
-const ENGINE_CACHE_KEY = "v14_1_10_no_reload_residency_20260910";
+const STAGE = "V14.1.10.1";
+const ENGINE_CACHE_KEY = "v14_1_10_1_public_reentry_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);

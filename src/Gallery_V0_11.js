@@ -3,7 +3,7 @@ import {
     getLegacySceneModeFlags,
     getSceneLoadingSpaceRolePolicy,
     getSceneLoadingFamilyPolicy
-} from "./runtime/scene-loading-policies.js?v=v14_1_10_no_reload_residency_20260910";
+} from "./runtime/scene-loading-policies.js?v=v14_1_10_1_public_reentry_20260911";
 import {
     validateSculptureModelFile,
     hasRenderableSculptureGeometry
@@ -528,6 +528,21 @@ export const createScene = function (engineArg, canvasArg, runtimeOptionsArg) {
         pendingCleanupStorageKey: "berryboy_gallery_pending_storage_cleanup_main_v1",
         pendingDraftUploadStorageKey: "berryboy_gallery_pending_draft_uploads_main_v1",
         latestSaveResult: null
+    };
+
+    var galleryPublicVisitRuntime = {
+        stage: "V14.1.10.1",
+        schema: "public-gallery-visit.v1",
+        generation: 0,
+        visitId: null,
+        active: false,
+        suspended: true,
+        starts: 0,
+        suspends: 0,
+        cameraResets: 0,
+        lastReason: "startup",
+        lastStartedAt: 0,
+        lastSuspendedAt: 0
     };
 
     var galleryExhibitionRuntime = {
@@ -16151,6 +16166,75 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         }
     }
 
+    function resetGalleryPublicVisitToEntryPoint(reason) {
+        if (editMode) return false;
+        reason = reason || "public-visit-reset";
+        try { closeGalleryInspect("startup-reset"); } catch (error) {}
+        try { stopViewerSafeFocusRuntimeAnimation(); } catch (error) {}
+        try { scene.stopAnimation(camera); } catch (error) {}
+        try { stopGalleryClickToMove(reason); } catch (error) {}
+        try { resetViewerWASDMovementRuntime(true); } catch (error) {}
+        try { resetGalleryDesktopDpadState(); } catch (error) {}
+        try { resetMobileJoystick(); } catch (error) {}
+        try { resetMobileCanvasMoveGesture(); } catch (error) {}
+        try { if (mobileLookActive) endMobileCanvasLook(null, true); } catch (error) {}
+        try { if (desktopViewerMiddleLookActive) endDesktopViewerMiddleLook(null); } catch (error) {}
+        try { clearGalleryBuiltInCameraMotionResidue(); } catch (error) {}
+        if (lookAtObserver) {
+            try { scene.onBeforeRenderObservable.remove(lookAtObserver); } catch (error) {}
+            lookAtObserver = null;
+        }
+        camera.position.copyFrom(new BABYLON.Vector3(
+            Number(gallerySpaceEntryPosition.x) || 0,
+            Number(gallerySpaceEntryPosition.y) || 0,
+            Number(gallerySpaceEntryPosition.z) || 0
+        ));
+        camera.setTarget(new BABYLON.Vector3(
+            Number(gallerySpaceEntryTarget.x) || 0,
+            Number(gallerySpaceEntryTarget.y) || 0,
+            Number(gallerySpaceEntryTarget.z) || 0
+        ));
+        if (camera.rotation) camera.rotation.z = 0;
+        mobileInitialCameraRotation = camera.rotation.clone();
+        viewerIntroOverlayMovementUnlocked = false;
+        galleryPublicVisitRuntime.cameraResets += 1;
+        galleryPublicVisitRuntime.lastReason = reason;
+        return true;
+    }
+
+    function beginGalleryPublicVisit(options) {
+        options = options || {};
+        if (editMode) return null;
+        galleryPublicVisitRuntime.generation += 1;
+        galleryPublicVisitRuntime.visitId = "visit-" + Date.now().toString(36) + "-" + galleryPublicVisitRuntime.generation.toString(36);
+        galleryPublicVisitRuntime.active = true;
+        galleryPublicVisitRuntime.suspended = false;
+        galleryPublicVisitRuntime.starts += 1;
+        galleryPublicVisitRuntime.lastStartedAt = Date.now();
+        galleryPublicVisitRuntime.lastReason = options.reason || "public-entry";
+        resetGalleryPublicVisitToEntryPoint(options.reason || "public-entry");
+        showViewerIntroOverlay();
+        updateViewerIntroInteractionState();
+        return galleryPublicVisitRuntime.visitId;
+    }
+
+    function suspendGalleryPublicVisit(reason) {
+        if (editMode) return false;
+        galleryPublicVisitRuntime.active = false;
+        galleryPublicVisitRuntime.suspended = true;
+        galleryPublicVisitRuntime.suspends += 1;
+        galleryPublicVisitRuntime.lastSuspendedAt = Date.now();
+        galleryPublicVisitRuntime.lastReason = reason || "public-home";
+        viewerIntroOverlayMovementUnlocked = false;
+        try { closeGalleryInspect("startup-reset"); } catch (error) {}
+        try { stopGalleryClickToMove("public-visit-suspended"); } catch (error) {}
+        try { resetViewerWASDMovementRuntime(true); } catch (error) {}
+        try { resetGalleryDesktopDpadState(); } catch (error) {}
+        try { resetMobileJoystick(); } catch (error) {}
+        try { resetMobileCanvasMoveGesture(); } catch (error) {}
+        return true;
+    }
+
     function hideViewerIntroOverlay() {
         if (!editMode && !isGallerySceneReadinessSnapshotCurrent(getGallerySceneReadinessSnapshot())) {
             updateViewerIntroInteractionState();
@@ -20041,7 +20125,19 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             return;
         }
 
-        camera.rotation = new BABYLON.Vector3(0, Math.PI / 50, 0);
+        // V14.1.10.1 — the authored Entry Point owns both position and look target.
+        // Never replace its direction with a fixed yaw during startup.
+        camera.position.copyFrom(new BABYLON.Vector3(
+            Number(gallerySpaceEntryPosition.x) || 0,
+            Number(gallerySpaceEntryPosition.y) || 0,
+            Number(gallerySpaceEntryPosition.z) || 0
+        ));
+        camera.setTarget(new BABYLON.Vector3(
+            Number(gallerySpaceEntryTarget.x) || 0,
+            Number(gallerySpaceEntryTarget.y) || 0,
+            Number(gallerySpaceEntryTarget.z) || 0
+        ));
+        if (camera.rotation) camera.rotation.z = 0;
         refreshMobileViewerMode();
         updateViewerModePlaceholderVisibility();
         if (mobileViewerEnabled) setMobileStartCameraPosition();
@@ -46604,9 +46700,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         var layerId = normalizeGalleryRuntimeId(exhibition.id, "main");
         closeGalleryInspect("exhibition-layer-park");
         clearEditSelection();
+        var cachedLayerState = galleryExhibitionRuntime.stateCache[layerId] || null;
         var layer = {
             id: layerId,
             exhibition: Object.assign({}, exhibition),
+            revision: Number(cachedLayerState && cachedLayerState.revision) || 0,
+            lockVersion: Number(cachedLayerState && cachedLayerState.lockVersion) || 0,
+            updatedAt: cachedLayerState && cachedLayerState.updatedAt ? cachedLayerState.updatedAt : null,
             spaceId: getGalleryExhibitionSpaceId(exhibition),
             state: runtimeState && typeof runtimeState === "object" ? cloneGalleryJson(runtimeState) : serializeGalleryState(),
             artworks: artworks.slice(),
@@ -47313,7 +47413,11 @@ syncControl("bloomEnabled", "visualBloomEnabled");
         try {
             var previousIsClean = !hasGalleryUnsavedChanges();
             if (previousIsClean && previousExhibition) {
-                cacheGalleryExhibitionState(previousExhibition, previousRuntimeState, { rowExists: previousBaseline.publishedServerRowExists, source: "switch-away-clean-runtime" });
+                cacheGalleryExhibitionState(previousExhibition, previousRuntimeState, {
+                    rowExists: previousBaseline.publishedServerRowExists,
+                    revision: previousBaseline.publishedRevision,
+                    source: "switch-away-clean-runtime"
+                });
             }
             var cachedTarget = options.forceRemote ? null : getCachedGalleryExhibitionState(exhibitionId);
             var exhibition = cachedTarget ? Object.assign({}, cachedTarget.exhibition) : await resolveGalleryExhibitionMetadata(client, exhibitionId);
@@ -47330,7 +47434,21 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             try { persistGalleryPendingStorageCleanupQueue(); } catch (error) {}
             try { persistGalleryPendingDraftUploads(); } catch (error) {}
             var sameSpaceSwitch = areGalleryExhibitionsInSameSpace(previousExhibition, exhibition);
-            var targetResidentLayer = !options.forceRemote && sameSpaceSwitch ? galleryExhibitionRuntime.layerResidency[exhibition.id] || null : null;
+            // V14.1.10.1 splits server freshness from resident render-layer reuse.
+            // A fresh Published row may be fetched while the already-instantiated Babylon layer
+            // is reused when its revision still matches the canonical row.
+            var residentCandidate = sameSpaceSwitch ? galleryExhibitionRuntime.layerResidency[exhibition.id] || null : null;
+            var canonicalRevision = row && row.revision !== undefined ? Number(row.revision) || 0 : 0;
+            var residentRevision = residentCandidate ? Number(residentCandidate.revision) || 0 : -1;
+            var allowResidentReuse = options.reuseResidentLayer !== false;
+            var targetResidentLayer = allowResidentReuse && residentCandidate && residentRevision === canonicalRevision ? residentCandidate : null;
+            if (residentCandidate && !targetResidentLayer) {
+                disposeParkedGalleryExhibitionLayer(residentCandidate);
+                delete galleryExhibitionRuntime.layerResidency[exhibition.id];
+                galleryExhibitionRuntime.residentLayerEvictions += 1;
+                galleryExhibitionRuntime.lastResidentLayerAction = "stale-revision-evict";
+                galleryExhibitionRuntime.lastResidentLayerId = exhibition.id;
+            }
 
             if (sameSpaceSwitch && previousIsClean) {
                 parkActiveGalleryExhibitionLayer(previousExhibition, previousRuntimeState);
@@ -47415,7 +47533,13 @@ syncControl("bloomEnabled", "visualBloomEnabled");
                 at: Date.now()
             };
             setGalleryPublishedStateBaseline(serializeGalleryState(), { serverState: state && Object.keys(state).length ? state : null, revision: row && row.revision !== undefined ? Number(row.revision) || 0 : getGalleryStateRevision(state), confirmed: true, serverRowExists: row ? row.rowExists !== false : false, reason: "exhibition-switch-baseline" });
-            cacheGalleryExhibitionState(exhibition, serializeGalleryState(), { updatedAt: row ? row.updated_at || null : null, rowExists: !!row, source: targetLayerRestored ? "switch-resident-hit" : (cachedTarget ? "switch-cache-hit" : "switch-loaded") });
+            cacheGalleryExhibitionState(exhibition, serializeGalleryState(), {
+                updatedAt: row ? row.updated_at || null : null,
+                rowExists: row ? row.rowExists !== false : false,
+                revision: row && row.revision !== undefined ? Number(row.revision) || 0 : getGalleryStateRevision(state),
+                lockVersion: row && row.lock_version !== undefined ? Number(row.lock_version) || 0 : 0,
+                source: targetLayerRestored ? "switch-resident-hit" : (cachedTarget ? "switch-cache-hit" : "switch-loaded")
+            });
             globalThis.BerryboyArtGalleryLatestState = serializeGalleryState();
             publishGallerySceneReadiness(
                 targetLayerRestored ? "resident-exhibition-scene-settled" : "same-space-exhibition-scene-settled",
@@ -48201,6 +48325,22 @@ syncControl("bloomEnabled", "visualBloomEnabled");
             }
 
             return viewerWASDMovementEnabled;
+        },
+        beginPublicVisit: function (options) {
+            return beginGalleryPublicVisit(options);
+        },
+        suspendPublicVisit: function (reason) {
+            return suspendGalleryPublicVisit(reason);
+        },
+        resetPublicVisitToEntryPoint: function (reason) {
+            return resetGalleryPublicVisitToEntryPoint(reason);
+        },
+        getPublicVisitDebug: function () {
+            return Object.assign({}, galleryPublicVisitRuntime, {
+                entryPosition: cloneGalleryJson(gallerySpaceEntryPosition),
+                entryTarget: cloneGalleryJson(gallerySpaceEntryTarget),
+                introUnlocked: viewerIntroOverlayMovementUnlocked
+            });
         },
         showViewerIntroOverlay: function () {
             showViewerIntroOverlay();

@@ -4,7 +4,7 @@
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetCacheStatus, getExhibitionAssetDeliveryStats, evictExhibitionAssetCacheUrl } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_1_10_1_public_reentry_20260911";
 import { createExhibitionDataAdapter, resolveInitialAdminRuntime } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
 import { createGalleryManagementApi, CONTROLLED_GALLERY_ASSET_ROLES } from "../data/gallery-management-api.js?v=c6c8c25_cross_space_runtime";
 import {
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_no_reload_residency_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_1_public_reentry_20260911";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_1_public_reentry_20260911";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -24,8 +24,8 @@ import {
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V14.1.10";
-const ENGINE_CACHE_KEY = "v14_1_10_no_reload_residency_20260910";
+const STAGE = "V14.1.10.1";
+const ENGINE_CACHE_KEY = "v14_1_10_1_public_reentry_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;

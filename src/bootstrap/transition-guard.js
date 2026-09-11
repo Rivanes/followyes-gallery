@@ -34,6 +34,10 @@ function ensureStyles() {
       opacity:1; visibility:visible;
       transition:opacity 120ms ease, visibility 120ms ease;
     }
+    #${GUARD_ID}.epTransitionOpaque {
+      background:#0d0f0e;
+      backdrop-filter:none; -webkit-backdrop-filter:none;
+    }
     #${GUARD_ID}.hidden { opacity:0; visibility:hidden; pointer-events:none; }
     #${GUARD_ID} .epTransitionCard {
       min-width:190px; max-width:min(360px,calc(100vw - 40px));
@@ -131,6 +135,7 @@ export async function beginTransitionGuard(options = {}) {
   if (detail) detail.textContent = String(options.detail || "Please wait.");
   document.documentElement.classList.add("exhibition-transition-locked");
   if (document.body) document.body.classList.add("exhibition-transition-locked");
+  guard.classList.toggle("epTransitionOpaque", options.opaque === true);
   guard.classList.remove("hidden");
   guard.setAttribute("aria-hidden", "false");
   guard.setAttribute("aria-busy", "true");
@@ -147,6 +152,7 @@ export async function endTransitionGuard(token, options = {}) {
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
   if (token !== activeToken) return false;
   guard.classList.add("hidden");
+  guard.classList.remove("epTransitionOpaque");
   guard.setAttribute("aria-hidden", "true");
   guard.setAttribute("aria-busy", "false");
   document.documentElement.classList.remove("exhibition-transition-locked");

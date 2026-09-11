@@ -4,12 +4,12 @@
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
 
-import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "./scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
+import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "./scene-lifecycle-controller.js?v=v14_1_10_1_public_reentry_20260911";
 import {
   SCENE_LOADING_POLICY_SCHEMA,
   createSceneLoadingPolicy,
   resolveSceneLoadingPolicyFromRuntimeOptions
-} from "./scene-loading-policies.js?v=v14_1_10_no_reload_residency_20260910";
+} from "./scene-loading-policies.js?v=v14_1_10_1_public_reentry_20260911";
 
 export const SCENE_LOADING_ORCHESTRATOR_SCHEMA = "exhibition-platform-scene-loading-orchestrator.v1";
 export const SCENE_LOADING_SESSION_SCHEMA = "exhibition-platform-scene-loading-session.v1";

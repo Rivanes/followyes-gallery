@@ -26,6 +26,7 @@ const publicEntryPolicy=fs.readFileSync(new URL('../src/runtime/public-space-ent
 const readinessTest=fs.readFileSync(new URL('./test-readiness-authority.mjs',import.meta.url),'utf8');
 const walkthroughTest=fs.readFileSync(new URL('./test-walkthrough-hydration.mjs',import.meta.url),'utf8');
 const residencyTest=fs.readFileSync(new URL('./test-active-visit-residency.mjs',import.meta.url),'utf8');
+const reentryTest=fs.readFileSync(new URL('./test-public-reentry.mjs',import.meta.url),'utf8');
 const sharedAssetApi=fs.readFileSync(new URL('../src/data/shared-asset-api.js',import.meta.url),'utf8');
 const sharedAssetState=fs.readFileSync(new URL('../src/runtime/shared-asset-state.js',import.meta.url),'utf8');
 const sharedAssetValidation=fs.readFileSync(new URL('../src/validation/shared-asset-validation.js',import.meta.url),'utf8');
@@ -38,13 +39,13 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V14.1.10"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V14.1.10"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V14.1.10"'),'Admin stage identity missing');
-assert(bootstrap.includes('v14_1_10_no_reload_residency_20260910'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_10_no_reload_residency_20260910'),'Index viewer cache key missing');
+assert(index.includes('stage: "V14.1.10.1"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V14.1.10.1"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V14.1.10.1"'),'Admin stage identity missing');
+assert(bootstrap.includes('v14_1_10_1_public_reentry_20260911'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_10_1_public_reentry_20260911'),'Index viewer cache key missing');
 const currentPackage=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
-assert(currentPackage.version==='0.14.1-v14-1-10-no-reload-residency-frame-time'&&currentPackage.description.includes('V14.1.10 No-Reload Residency & Frame-Time Closure'),'V14.1.10 package identity missing');
+assert(currentPackage.version==='0.14.1-v14-1-10-1-public-fresh-visit-reentry'&&currentPackage.description.includes('V14.1.10.1 Resident Gallery Re-entry + Public Fresh-Visit UX'),'V14.1.10.1 package identity missing');
 assert(sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_EVENT = "gallery-scene-readiness"')&&sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_PHASE = "scene-visually-settled"'),'V14.1.8 canonical readiness authority constants missing');
 assert(sceneLoadingPolicies.includes('authorityEvent: SCENE_LOADING_READINESS_EVENT')&&sceneLoadingPolicies.includes('authorityPhase: SCENE_LOADING_READINESS_PHASE')&&sceneLoadingPolicies.includes('compatibilityReadyEvent: "gallery-interaction-ready"'),'V14.1.8 policy readiness contract missing');
 assert(sceneLifecycle.includes('function resolveReadinessWaitContract(')&&sceneLifecycle.includes('const authorityEvent = text(waitContract.authorityEvent)')&&sceneLifecycle.includes('const authorityPhase = text(waitContract.authorityPhase)'),'V14.1.8 controller policy-driven readiness waiter missing');
@@ -100,6 +101,11 @@ assert(source.includes('suppressedModelSuspends')&&source.includes('suppressedMo
 assert(source.includes('suppressedNormalFullQueues')&&source.includes('suppressedTextureDowngrades')&&source.includes('explicitInspectFullRequests'),'V14.1.10 stable texture-variant diagnostics missing');
 assert(source.includes('recordGalleryActiveVisitFrameTelemetry();')&&source.includes('surfaceActiveSelectionMisses')&&source.includes('getActiveVisitResidencyDebug: function ()'),'V14.1.10 post-unlock frame/Space diagnostics missing');
 assert(residencyTest.includes('active-visit no-reload residency and frame-time regression passed.'),'V14.1.10 executable residency/frame-time regression missing');
+assert(source.includes('schema: "public-gallery-visit.v1"')&&source.includes('beginPublicVisit: function (options)')&&source.includes('suspendPublicVisit: function (reason)'),'V14.1.10.1 Public visit authority missing');
+assert(bootstrap.includes('reuseResidentLayer: true')&&bootstrap.includes('opaque: true')&&bootstrap.includes('suspendPublicVisit'),'V14.1.10.1 Public re-entry orchestration missing');
+assert(source.includes('residentRevision === canonicalRevision')&&source.includes('stale-revision-evict'),'V14.1.10.1 revision-aware resident layer reuse missing');
+assert(!extractFunction(source,'finishGalleryStartup').includes('Math.PI / 50')&&extractFunction(source,'finishGalleryStartup').includes('gallerySpaceEntryTarget'),'V14.1.10.1 exact Entry Point direction reset missing');
+assert(reentryTest.includes('Public fresh-visit + resident re-entry regression passed.'),'V14.1.10.1 executable re-entry regression missing');
 assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
 assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
 assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame","sculpture"]'),'V13.1 Shared Asset GLB validation contract missing');
@@ -255,6 +261,7 @@ const expectedRegressionSuites=[
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
   'test-platform-runtime.mjs',
+  'test-public-reentry.mjs',
   'test-readiness-authority.mjs',
   'test-scene-runtime-host.mjs',
   'test-sculpture-model-validation.mjs',

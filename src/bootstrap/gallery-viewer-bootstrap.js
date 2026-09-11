@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.10 — No-Reload Residency & Frame-Time Closure
+  Exhibition Platform — V14.1.10.1 — Resident Gallery Re-entry / Public Fresh-Visit UX
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -7,14 +7,14 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
-import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
+import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=v14_1_10_1_public_reentry_20260911";
 import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_no_reload_residency_20260910";
-import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v14_1_10_no_reload_residency_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_1_public_reentry_20260911";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_1_public_reentry_20260911";
+import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v14_1_10_1_public_reentry_20260911";
 
-const STAGE = "V14.1.10";
-const ENGINE_CACHE_KEY = "v14_1_10_no_reload_residency_20260910";
+const STAGE = "V14.1.10.1";
+const ENGINE_CACHE_KEY = "v14_1_10_1_public_reentry_20260911";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -175,6 +175,11 @@ function ensurePublicDiscoveryStyles() {
 }
 
 async function ensurePublicExhibitionSelection(options = {}) {
+  // V14.1.10.1 — Home/listing ends the current visitor session without disposing
+  // the resident Babylon Scene or its renderable assets.
+  if (activeScene && window.GalleryApp && typeof window.GalleryApp.suspendPublicVisit === "function") {
+    try { window.GalleryApp.suspendPublicVisit(options.reason || "public-home-listing"); } catch (_error) {}
+  }
   if (options.force !== true && hasExplicitExhibitionSelection()) return getRequestedExhibitionId();
   let cards = [];
   try { cards = await listPublicExhibitionCards(supabase); }
@@ -283,8 +288,8 @@ async function ensurePublicExhibitionSelection(options = {}) {
 }
 
 const publicSpaceEntryDebug = {
-  stage: "V14.1.10",
-  schema: "public-gallery-entry-policy.v2",
+  stage: "V14.1.10.1",
+  schema: "public-gallery-entry-policy.v3",
   evaluations: 0,
   shows: 0,
   hides: 0,
@@ -339,10 +344,15 @@ async function switchPublicExhibition(reference, options = {}) {
       updatePublicRuntimeIdentity(currentRuntime, options.historyMode || "push");
       activePublicRuntime = currentRuntime;
       if (options.publicEntry === true || options.entry === true) {
-        applyPublicSpaceIntroPolicy(currentRuntime, currentRuntime, {
-          entry: true,
-          reason: options.reason || "public-gallery-reentry-same-runtime"
-        });
+        const app = window.GalleryApp || null;
+        if (app && typeof app.beginPublicVisit === "function") {
+          app.beginPublicVisit({ reason: options.reason || "public-gallery-reentry-same-runtime" });
+        } else {
+          applyPublicSpaceIntroPolicy(currentRuntime, currentRuntime, {
+            entry: true,
+            reason: options.reason || "public-gallery-reentry-same-runtime"
+          });
+        }
       }
       return true;
     }
@@ -355,13 +365,15 @@ async function switchPublicExhibition(reference, options = {}) {
   const guardToken = ownsGuard ? await beginTransitionGuard({
     title: "Opening exhibition…",
     detail: "Preparing the selected Gallery and exhibition.",
-    minVisibleMs: 150
+    minVisibleMs: 150,
+    opaque: true
   }) : null;
   if (ownsGuard && !guardToken) return false;
 
   try {
     const result = await sceneLifecycleController.switchTo(reference, {
       forceRemote: true,
+      reuseResidentLayer: true,
       reason: "public-exhibition-switch",
       sceneOptions: { adminWorkspace: false }
     });
@@ -370,10 +382,22 @@ async function switchPublicExhibition(reference, options = {}) {
 
     if (!result || result.superseded || !result.ok) return false;
     if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("public");
-    applyPublicSpaceIntroPolicy(currentRuntime, activePublicRuntime || result.runtime, {
-      entry: options.publicEntry === true || options.entry === true,
-      reason: options.reason || "public-exhibition-switch"
-    });
+    if (options.publicEntry === true || options.entry === true) {
+      const app = window.GalleryApp || null;
+      if (app && typeof app.beginPublicVisit === "function") {
+        app.beginPublicVisit({ reason: options.reason || "public-exhibition-switch" });
+      } else {
+        applyPublicSpaceIntroPolicy(currentRuntime, activePublicRuntime || result.runtime, {
+          entry: true,
+          reason: options.reason || "public-exhibition-switch"
+        });
+      }
+    } else {
+      applyPublicSpaceIntroPolicy(currentRuntime, activePublicRuntime || result.runtime, {
+        entry: false,
+        reason: options.reason || "public-exhibition-switch"
+      });
+    }
     updatePublicRuntimeIdentity(activePublicRuntime || result.runtime, options.historyMode || "push");
     syncMobileQualityControl();
     if (activeEngine && activeEngine.resize) activeEngine.resize();
@@ -1068,7 +1092,7 @@ if (exhibitionsButton) exhibitionsButton.addEventListener("click", function (eve
     location.href = url.href;
     return;
   }
-  ensurePublicExhibitionSelection({ force: true })
+  ensurePublicExhibitionSelection({ force: true, reason: "public-home-button" })
     .then((reference) => reference ? switchPublicExhibition(reference, { historyMode: "push", publicEntry: true, reason: "homepage-gallery-entry" }) : false)
     .catch((error) => showToast(`Could not open exhibition list: ${error && error.message ? error.message : error}`));
 });
@@ -1283,7 +1307,11 @@ async function startGalleryRuntime() {
     // Canonical Scene readiness has settled. Hide the page loader, then present the mandatory Public entry gate before movement unlock.
     bootGuard.ready();
     window.requestAnimationFrame(function () {
-      applyPublicSpaceIntroPolicy(null, publicRuntime, { initial: true, reason: "initial-public-entry" });
+      if (window.GalleryApp && typeof window.GalleryApp.beginPublicVisit === "function") {
+        window.GalleryApp.beginPublicVisit({ reason: "initial-public-entry" });
+      } else {
+        applyPublicSpaceIntroPolicy(null, publicRuntime, { initial: true, reason: "initial-public-entry" });
+      }
 
       window.requestAnimationFrame(function () {
         const introOverlay = document.getElementById("berryboyViewerIntroOverlay");

@@ -1,8 +1,16 @@
 # Exhibition Platform
 
-Current repository release: **V14.1.10 — No-Reload Residency & Frame-Time Closure**.
+Current repository release: **V14.1.10.1 — Resident Gallery Re-entry / Public Fresh-Visit UX**.
 
 This repository contains the deployable Babylon.js 3D Exhibition Platform plus repository-local build and regression tooling. Database migration/deployment SQL is intentionally kept outside `REPO` in the documented release package.
+
+## V14.1.10.1 Resident Gallery Re-entry / Public Fresh-Visit UX
+
+V14.1.10.1 is the corrective follow-up to production-observed Public re-entry behavior. Home/listing now suspends the visitor session without disposing the resident Scene. Every real Public entry starts a fresh visit, resets movement/Inspect/camera to the authored Entry Point `position + target`, and shows the mandatory Explore popup.
+
+Same-Space Public switching still fetches fresh Published truth, but this no longer disables reuse of an already-instantiated Exhibition layer. A resident layer is reused only when its stored canonical revision matches the current row; stale resident resources are explicitly disposed before replacement. Public preparation uses an opaque transition guard so visitors never watch an Exhibition layer being rebuilt. Admin remains seamless.
+
+Focused debug: `GalleryApp.getPublicVisitDebug()`. V14.1.10.1 requires **no SQL/schema/RPC change**.
 
 ## V14.1.10 No-Reload Residency & Frame-Time Closure
 
