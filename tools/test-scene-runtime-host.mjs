@@ -48,8 +48,8 @@ function makeSceneModule(createdOptions, order) {
         render() { this.renders += 1; },
         dispose() { this.disposed = true; }
       };
-      queueMicrotask(() => window.dispatchEvent(new CustomEvent('gallery-interaction-ready', {
-        detail: { lifecycleId: options.lifecycleId }
+      queueMicrotask(() => window.dispatchEvent(new CustomEvent('gallery-scene-readiness', {
+        detail: { lifecycleId: options.lifecycleId, phase: 'scene-visually-settled', loadingSessionId: options.loadingSession && options.loadingSession.id }
       })));
       return scene;
     }
@@ -62,9 +62,11 @@ const authoringRuntime = makeRuntime('authoring-a', 'version-a', 'admin', 'galle
 const order = [];
 const createdOptions = [];
 const rebindCalls = [];
+const sessionRebindCalls = [];
 const adapterModes = [];
 const engine = makeEngine();
 const canvas = { id: 'renderCanvas' };
+let currentReadiness = null;
 const app = {
   rebindSceneLoadingContext(options) {
     const context = options.loadingPolicy && options.loadingPolicy.contextKind;
@@ -72,9 +74,24 @@ const app = {
     order.push(`rebind:${context}`);
     return { supported: true, changed: true, to: context };
   },
+  rebindSceneLoadingSession(options) {
+    const sessionId = options.loadingSession && options.loadingSession.id;
+    sessionRebindCalls.push(sessionId);
+    order.push(`session:${sessionId}`);
+    return { supported: true, changed: true, to: sessionId };
+  },
   async switchExhibition(id) {
     order.push(`switch:${id}`);
+    const sessionId = sessionRebindCalls.at(-1) || null;
+    currentReadiness = { settled: true, lifecycleId: host && host.orchestrator ? host.orchestrator.getActiveLifecycleId() : null, loadingSessionId: sessionId, phase: 'scene-visually-settled' };
     return true;
+  },
+  async waitForSceneReadiness(options = {}) {
+    return { ...(currentReadiness || {}), settled: true, lifecycleId: options.lifecycleId, loadingSessionId: options.loadingSessionId, phase: options.phase || 'scene-visually-settled' };
+  },
+  republishSceneReadiness(_reason, details = {}) {
+    currentReadiness = { settled: true, lifecycleId: host && host.orchestrator ? host.orchestrator.getActiveLifecycleId() : null, loadingSessionId: details.loadingSessionId || sessionRebindCalls.at(-1) || null, phase: 'scene-visually-settled' };
+    return currentReadiness;
   }
 };
 window.GalleryApp = app;
@@ -120,7 +137,10 @@ assert.equal(switched.ok, true);
 assert.equal(switched.mode, 'same-venue-version');
 assert.equal(createdOptions.length, 1, 'Public -> inline Admin on exact Venue Version must reuse the Scene');
 assert.deepEqual(rebindCalls, ['admin-exhibition']);
-assert.deepEqual(order.slice(0, 2), ['rebind:admin-exhibition', 'switch:admin-a'], 'current loading context must be rebound before same-Scene Exhibition hydration');
+assert.equal(order[0], 'rebind:admin-exhibition', 'current loading context must be rebound before same-Scene Exhibition hydration');
+assert.match(order[1], /^session:v14-loading-/, 'current loading session must be rebound before same-Scene Exhibition hydration');
+assert.equal(order[2], 'switch:admin-a');
+assert.equal(sessionRebindCalls.length, 1);
 assert.equal(host.getActiveRuntime(), adminRuntime);
 assert.equal(adapterModes.at(-1), 'admin');
 
@@ -130,6 +150,7 @@ assert.equal(adopted.ok, true);
 assert.equal(createdOptions.length, 1);
 assert.equal(rebindCalls.at(-1), 'public-exhibition');
 assert.equal(order[0], 'rebind:public-exhibition');
+assert.match(order[1], /^session:v14-loading-/, 'same-Scene adopt must also receive a current loading session');
 assert.equal(host.getActiveRuntime(), publicRuntime);
 
 // Gallery authoring is an isolated context. Even on the same immutable Venue Version,
@@ -202,4 +223,4 @@ assert.equal(testBootstrap.includes('module.createScene('), false, 'Test Gallery
 assert.ok(testBootstrap.includes('loadingContext: "test-gallery"'));
 assert.ok(testBootstrap.includes('galleryTestMode: true'));
 
-console.log('V14.1.6 shared runtime host + dynamic context rebinding passed.');
+console.log('V14.1.8 shared runtime host + canonical readiness authority passed.');

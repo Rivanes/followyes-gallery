@@ -15,7 +15,7 @@ const admin = fs.readFileSync(new URL('src/bootstrap/admin-workspace-bootstrap.j
 const guard = fs.readFileSync(new URL('src/bootstrap/transition-guard.js', root), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(new URL('package.json', root), 'utf8'));
 function expect(label, ok){ if(!ok) throw new Error(`FAIL: ${label}`); console.log(`OK: ${label}`); }
-expect('current package keeps transition guard regression coverage', pkg.version.includes('v14-1-6-shared-runtime-host') && viewer.includes('const STAGE = "V14.1.6"') && admin.includes('const STAGE = "V14.1.6"'));
+expect('current package keeps transition guard regression coverage', pkg.version.includes('v14-1-10-no-reload-residency-frame-time') && viewer.includes('const STAGE = "V14.1.10"') && admin.includes('const STAGE = "V14.1.10"'));
 expect('shared full-page guard exists', guard.includes('position:fixed; inset:0') && guard.includes('z-index:2147483000') && guard.includes('epTransitionSpinner'));
 expect('guard blocks wheel/touch/keyboard interaction', guard.includes('document.addEventListener("wheel"') && guard.includes('document.addEventListener("touchmove"') && guard.includes('document.addEventListener("keydown"'));
 expect('guard paints before transition work', guard.includes('await waitForPaint()'));
@@ -139,7 +139,7 @@ function extractFunction(name) {
   throw new Error(`unterminated ${name}`);
 }
 
-expect('package identity', pkg.version.includes('v14-1-6-shared-runtime-host'));
+expect('package identity', pkg.version.includes('v14-1-10-no-reload-residency-frame-time'));
 expect('source stage identity', source.includes('stage: "C6C8C21"'));
 expect('residency schema v3', source.includes('schema: "gallery-artwork-residency.v3"'));
 expect('workspace-independent Full budget', source.includes('desktopFullTextures: 6') && source.includes('desktopHardFullTextures: 8'));
@@ -183,7 +183,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.ur
 
 function expect(label, value) { if (!value) throw new Error(`C6C8C9 regression: ${label}`); }
 
-expect("package stage", pkg.version.includes("v14-1-6-shared-runtime-host"));
+expect("package stage", pkg.version.includes("v14-1-10-no-reload-residency-frame-time"));
 expect("runtime stage", source.includes('stage: "C6C8C21"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect("owner scene scan", source.includes("function getGallerySceneOwnerEntities(") && source.includes("scene.transformNodes") && source.includes("scene.lights"));
 expect("inactive owner sweep", source.includes("function sweepGalleryInactiveExhibitionOwners(") && source.includes("active-context-change") && source.includes("post-hydration-orphan-sweep"));
@@ -220,11 +220,11 @@ function extract(name) {
   for(let i=brace;i<source.length;i++){const c=source[i],n=source[i+1]||'';if(state==='c'){if(c==='"'||c==="'"||c==='`'){state='s';quote=c}else if(c==='/'&&n==='/'){state='l';i++}else if(c==='/'&&n==='*'){state='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return source.slice(start,i+1)}else if(state==='s'){if(c==='\\')i++;else if(c===quote)state='c'}else if(state==='l'&&c==='\n')state='c';else if(state==='b'&&c==='*'&&n==='/'){state='c';i++;}}
   throw new Error(`Unterminated ${name}`);
 }
-expect('package stage', pkg.version.includes('v14-1-6-shared-runtime-host'));
+expect('package stage', pkg.version.includes('v14-1-10-no-reload-residency-frame-time'));
 expect('runtime stage', source.includes('stage: "C6C8C21"') && source.includes('exhibition-platform-multi-exhibition.v10'));
 expect('foreground Preview gate upgraded by C6C8C11', source.includes('previewGateMode: "all-assigned-preview"') && source.includes('function prepareGalleryForegroundArtworkBudget('));
 const pending = extract('getGalleryForegroundPendingSnapshot');
-expect('models not foreground blockers', !pending.includes('criticalModelQueue') && !pending.includes('modelActive:') && pending.includes('backgroundModelQueue'));
+expect('legacy pending snapshot leaves models to the terminal walkthrough batch', !pending.includes('criticalModelQueue') && !pending.includes('modelActive:') && pending.includes('backgroundModelQueue') && source.includes('waitForGalleryWalkthroughFinalSettle('));
 const drain = extract('drainGalleryFastStartBackgroundQueue');
 expect('foreground drain artwork-only', drain.includes('takeGalleryForegroundArtworkEntry()') && !drain.includes('applyModel3dStateToSlot'));
 const pump = extract('pumpGalleryZoneStreamingQueues');
@@ -276,7 +276,7 @@ function extract(name) {
   throw new Error(`Unterminated ${name}`);
 }
 
-expect('package stage', pkg.version.includes('v14-1-6-shared-runtime-host'));
+expect('package stage', pkg.version.includes('v14-1-10-no-reload-residency-frame-time'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('all assigned Preview policy', source.includes('previewGateMode: "all-assigned-preview"'));
 
@@ -298,7 +298,7 @@ const snapshot = extract('getGalleryInteractionReadinessSnapshot');
 expect('readiness counts required Preview', snapshot.includes('requiredPreviews') && snapshot.includes('readyPreviews') && snapshot.includes('missingPreviews'));
 expect('ready requires complete fill', snapshot.includes('snapshot.requiredPreviews === snapshot.readyPreviews') && snapshot.includes('snapshot.missingPreviews === 0'));
 expect('hard gate rejects broken Preview fill', source.includes('Artwork Preview readiness failed:') && source.includes('required-preview-hard-gate'));
-expect('models remain background', !snapshot.includes('snapshot.modelQueue === 0') && !snapshot.includes('snapshot.modelActive === 0'));
+expect('legacy Preview snapshot delegates visible models to walkthrough terminal batch', !snapshot.includes('snapshot.modelQueue === 0') && !snapshot.includes('snapshot.modelActive === 0') && source.includes('scheduleGalleryWalkthroughHeavyHydration("sculpture-models"'));
 
 expect('Full residency policy preserved', source.includes('schema: "gallery-artwork-residency.v3"') && source.includes('idleBeforeFullMs: 1800'));
 expect('Admin diagnostics describe guarantee', admin.includes('Preview presence'));
@@ -314,11 +314,11 @@ const source = fs.readFileSync(path.join(root, 'src/Gallery_V0_11.js'), 'utf8');
 const config = fs.readFileSync(path.join(root, 'src/config/space-fixture.js'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 function expect(label, value) { if (!value) throw new Error(`C6C8C12 regression: ${label}`); }
-expect('package stage', pkg.version.includes('v14-1-6-shared-runtime-host'));
+expect('package stage', pkg.version.includes('v14-1-10-no-reload-residency-frame-time'));
 expect('runtime stage', source.includes('stage: "C6C8C21"'));
 expect('props optional in Space config', /props:[\s\S]*?fileName: "Props\.glb"[\s\S]*?required: false/.test(config));
 expect('props removed from critical shell', source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]') && source.includes('galleryAuthoringSpacePreview'));
-expect('Props are the current optional Space asset', source.includes('galleryAuthoringSpacePreview'));
+expect('Props remain structurally optional but assigned Props are policy blocking', source.includes('galleryHasOptionalProps') && source.includes('galleryPolicyPreviewBlockingAssetNames') && source.includes('galleryStartupBlockingAssetNames = galleryPolicyPreviewBlockingAssetNames.slice()'));
 expect('generic optional deferral only', source.includes('return galleryOptionalAssetNames.indexOf(assetName) !== -1;'));
 expect('per mesh warmup cache', source.includes('var gallerySpaceGpuWarmMeshCache') && source.includes('getGallerySpaceGpuWarmupRevision'));
 expect('every wall mesh participates', source.includes('{ kind: "wall", meshes: wallMeshes }'));
@@ -329,7 +329,7 @@ expect('warmup timeout is a failure', source.includes('compileState === "timeout
 expect('hard warmup gate', source.includes('warmup.ok !== true') && source.includes('Space visual warmup failed for:'));
 expect('props resident', source.includes('gallerySpaceAlwaysResident = true') && source.includes('mesh.setEnabled(true)'));
 expect('props static freeze', source.includes('freezeStaticGalleryMeshes(propMeshes, "prop")'));
-expect('props no longer block readiness', source.includes('propsSettled: !galleryHasOptionalProps') && !source.includes('blockers.push("props")'));
+expect('assigned Props settle in startup gate rather than interaction snapshot blocker', source.includes('propsSettled: !galleryHasOptionalProps') && source.includes('galleryPolicyPreviewBlockingAssetNames.indexOf(assetName) !== -1') && !source.includes('blockers.push("props")'));
 console.log('C6C8C12 Hard Space Visual Ready regression passed.');
 
 })();

@@ -1,15 +1,15 @@
 /*
-  Exhibition Platform — V14.1.6 Scene Loading Orchestrator / Shared Runtime Host
+  Exhibition Platform — V14.1.10 Scene Loading Orchestrator / No-Reload Residency & Frame-Time Closure
   Compatibility shell above SceneLifecycleController. It owns high-level loading request/session
   identity and policy resolution while delegating the existing physical Scene behavior unchanged.
 */
 
-import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "./scene-lifecycle-controller.js";
+import { createSceneLifecycleController, getRuntimeVenueVersionKey } from "./scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
 import {
   SCENE_LOADING_POLICY_SCHEMA,
   createSceneLoadingPolicy,
   resolveSceneLoadingPolicyFromRuntimeOptions
-} from "./scene-loading-policies.js";
+} from "./scene-loading-policies.js?v=v14_1_10_no_reload_residency_20260910";
 
 export const SCENE_LOADING_ORCHESTRATOR_SCHEMA = "exhibition-platform-scene-loading-orchestrator.v1";
 export const SCENE_LOADING_SESSION_SCHEMA = "exhibition-platform-scene-loading-session.v1";
@@ -57,6 +57,11 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
   let cancelledAt = 0;
   let cancelReason = null;
   let cancelDetails = null;
+  let retired = false;
+  let retiredAt = 0;
+  let retireReason = null;
+  let retireDetails = null;
+  let acceptingTasks = true;
   let taskGeneration = 0;
   const lifecycleTasks = new Map();
   const createdAt = wallNow();
@@ -142,10 +147,12 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       status = ok === false ? "failed" : "settled";
       error = ok === false ? text(reason) || "scene-loading-request-failed" : null;
       settledAt = wallNow();
+      acceptingTasks = false;
     },
     cancel(reason, details) {
       if (cancelled) return false;
       cancelled = true;
+      acceptingTasks = false;
       cancelledAt = wallNow();
       cancelReason = text(reason) || "scene-loading-session-cancelled";
       cancelDetails = details && typeof details === "object" ? { ...details } : null;
@@ -155,8 +162,21 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       return true;
     },
     isCancelled() { return cancelled; },
+    retire(reason, details) {
+      if (retired) return false;
+      retired = true;
+      acceptingTasks = false;
+      retiredAt = wallNow();
+      retireReason = text(reason) || "scene-loading-session-retired";
+      retireDetails = details && typeof details === "object" ? { ...details } : null;
+      lifecycleTasks.forEach((entry) => {
+        if (entry && entry.status === "pending") settleLifecycleTask(entry, "superseded", retireReason, { retired: true });
+      });
+      return true;
+    },
+    isRetired() { return retired; },
     canContinue(lifecycleId) {
-      return !cancelled && session.isOwnedByLifecycle(lifecycleId);
+      return !cancelled && !retired && session.isOwnedByLifecycle(lifecycleId);
     },
     registerTask(input = {}) {
       const phase = text(input.phase) || "runtime";
@@ -165,6 +185,27 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
       const compositeKey = `${phase}:${family}:${key}`;
       const existing = lifecycleTasks.get(compositeKey);
       if (existing) return existing.handle;
+      if (!acceptingTasks) {
+        const closedAt = wallNow();
+        const closedSnapshot = {
+          id: `task-rejected-${++taskGeneration}`,
+          key,
+          phase,
+          family,
+          status: "superseded",
+          blocksSettle: input.blocksSettle === true,
+          referencePreserved: input.referencePreserved !== false,
+          details: input.details && typeof input.details === "object" ? { ...input.details, registrationRejected: true } : { registrationRejected: true },
+          error: retireReason || cancelReason || "scene-loading-session-closed",
+          createdAt: closedAt,
+          settledAt: closedAt
+        };
+        return Object.freeze({
+          id: closedSnapshot.id, key, phase, family,
+          settle() { return { ...closedSnapshot }; },
+          getSnapshot() { return { ...closedSnapshot }; }
+        });
+      }
       const entry = {
         id: `task-${++taskGeneration}`,
         key,
@@ -212,6 +253,11 @@ function createLoadingSession({ id, requestId, transitionId, kind, policy, runti
         cancelledAt: cancelledAt || null,
         cancelReason,
         cancelDetails,
+        retired,
+        retiredAt: retiredAt || null,
+        retireReason,
+        retireDetails,
+        acceptingTasks,
         createdAt,
         settledAt: settledAt || null,
         durationMs: Math.max(0, nowMs() - startedAt),
@@ -233,12 +279,17 @@ export function createSceneLoadingOrchestrator(options = {}) {
   let requestGeneration = 0;
   let transitionGeneration = 0;
   let loadingGeneration = 0;
+  let intentGeneration = 0;
   let activeRequest = null;
+  let activeIntent = null;
+  let pendingLatestIntent = null;
+  let switchDrainPromise = null;
+  let switchCycleIntents = [];
   let resolvingSwitch = false;
   let disposed = false;
   const recentSessions = [];
   const debug = {
-    stage: "V14.1.6",
+    stage: "V14.1.10",
     schema: SCENE_LOADING_ORCHESTRATOR_SCHEMA,
     requests: 0,
     starts: 0,
@@ -246,8 +297,14 @@ export function createSceneLoadingOrchestrator(options = {}) {
     adopts: 0,
     busyRejects: 0,
     failures: 0,
-    latestWinsEnabled: false,
+    latestWinsEnabled: true,
+    switchIntents: 0,
+    supersededIntents: 0,
+    reconciliations: 0,
+    sameSceneSessionRebinds: 0,
+    rollbackRecoverySessions: 0,
     pendingLatestRequest: null,
+    lastRequestedIntentId: null,
     lastRequestId: null,
     lastTransitionId: null,
     lastLoadingSessionId: null,
@@ -272,18 +329,23 @@ export function createSceneLoadingOrchestrator(options = {}) {
     };
   }
 
-  function publishSession(session) {
-    recentSessions.push(session);
-    while (recentSessions.length > 12) recentSessions.shift();
+  function nextIntentId() {
+    intentGeneration += 1;
+    return `v14-switch-intent-${intentGeneration}-${wallNow().toString(36)}`;
   }
 
-  function beginRequest(kind, runtime, operationOptions = {}) {
-    const ids = nextId(kind);
+  function publishSession(session) {
+    recentSessions.push(session);
+    while (recentSessions.length > 16) recentSessions.shift();
+  }
+
+  function createResolvedRequest(kind, runtime, operationOptions = {}, ids = null) {
+    const requestIds = ids || nextId(kind);
     const policy = resolvePolicy(runtime, operationOptions);
     const session = createLoadingSession({
-      id: ids.loadingSessionId,
-      requestId: ids.requestId,
-      transitionId: ids.transitionId,
+      id: requestIds.loadingSessionId,
+      requestId: requestIds.requestId,
+      transitionId: requestIds.transitionId,
       kind,
       policy,
       runtime
@@ -291,7 +353,7 @@ export function createSceneLoadingOrchestrator(options = {}) {
     const startedAt = nowMs();
     const request = Object.freeze({
       schema: SCENE_LOADING_REQUEST_SCHEMA,
-      ...ids,
+      ...requestIds,
       kind,
       policy,
       session,
@@ -327,14 +389,14 @@ export function createSceneLoadingOrchestrator(options = {}) {
     };
   }
 
-  function finishRequest(request, result, error) {
+  function finishRequest(request, result, error, options = {}) {
     if (!request) return result;
     const lifecycleId = result && result.lifecycleId
       ? result.lifecycleId
       : (typeof lifecycleController.getActiveLifecycleId === "function" ? lifecycleController.getActiveLifecycleId() : "");
     request.session.bindSceneLifecycleId(lifecycleId);
     request.session.markSettled(!error, error && (error.message || error));
-    if (error && typeof request.session.cancel === "function") {
+    if (error && options.keepSessionUsable !== true && typeof request.session.cancel === "function") {
       request.session.cancel("request-failed", { error: text(error && (error.message || error)) || null });
     }
     debug.lastMode = result && result.mode ? result.mode : (error ? "failed" : request.kind);
@@ -351,9 +413,40 @@ export function createSceneLoadingOrchestrator(options = {}) {
     return resolveRuntime(reference, { force: operationOptions.forceRemote !== false });
   }
 
+  function mergePreparedOptions(baseOptions, preparedOptions) {
+    if (!preparedOptions || typeof preparedOptions !== "object") return { ...(baseOptions || {}) };
+    const baseSceneOptions = baseOptions && baseOptions.sceneOptions && typeof baseOptions.sceneOptions === "object" ? baseOptions.sceneOptions : {};
+    const preparedSceneOptions = preparedOptions.sceneOptions && typeof preparedOptions.sceneOptions === "object" ? preparedOptions.sceneOptions : {};
+    return {
+      ...(baseOptions || {}),
+      ...preparedOptions,
+      sceneOptions: {
+        ...baseSceneOptions,
+        ...preparedSceneOptions
+      }
+    };
+  }
+
+  async function prepareResolvedSwitchOptions(intent, targetRuntime) {
+    let operationOptions = { ...(intent.options || {}) };
+    delete operationOptions.prepareResolvedOptions;
+    const prepareResolvedOptions = intent.options && typeof intent.options.prepareResolvedOptions === "function"
+      ? intent.options.prepareResolvedOptions
+      : null;
+    if (prepareResolvedOptions) {
+      const prepared = await prepareResolvedOptions(targetRuntime, getActiveRuntime(), {
+        intentId: intent.intentId,
+        requestedAt: intent.requestedAt
+      });
+      operationOptions = mergePreparedOptions(operationOptions, prepared);
+    }
+    operationOptions.runtime = targetRuntime;
+    return operationOptions;
+  }
+
   async function start(runtime, createOptions = {}) {
     if (disposed) throw new Error("Scene loading orchestrator is disposed.");
-    const request = beginRequest("start", runtime, createOptions);
+    const request = createResolvedRequest("start", runtime, createOptions);
     debug.starts += 1;
     request.session.markDelegated();
     try {
@@ -388,74 +481,335 @@ export function createSceneLoadingOrchestrator(options = {}) {
     return result && typeof result === "object" ? result : { supported: true, changed: result !== false };
   }
 
-  async function switchTo(reference, switchOptions = {}) {
-    if (disposed) throw new Error("Scene loading orchestrator is disposed.");
-    if (activeRequest || resolvingSwitch || (typeof lifecycleController.isSwitching === "function" && lifecycleController.isSwitching())) {
-      debug.busyRejects += 1;
-      return { ok: false, mode: "busy", scene: getActiveScene(), runtime: getActiveRuntime() };
+  function rebindActiveSceneLoadingSession(session, runtime, reason) {
+    const app = getApp();
+    if (!app || typeof app.rebindSceneLoadingSession !== "function") return { supported: false, changed: false };
+    const lifecycleId = getActiveLifecycleId();
+    if (session && typeof session.bindSceneLifecycleId === "function") session.bindSceneLifecycleId(lifecycleId);
+    const result = app.rebindSceneLoadingSession({
+      loadingSession: session,
+      runtimeMode: runtime && runtime.mode ? runtime.mode : null,
+      reason: reason || "orchestrator-session-rebind"
+    });
+    if (result && result.changed !== false) debug.sameSceneSessionRebinds += 1;
+    return result && typeof result === "object" ? result : { supported: true, changed: result !== false };
+  }
+
+  function createRecoverySession(runtime, reason, parentRequest) {
+    const ids = nextId("recovery");
+    const policy = resolvePolicy(runtime, { loadingContext: runtime && (runtime.context || runtime.mode) });
+    const session = createLoadingSession({
+      id: ids.loadingSessionId,
+      requestId: ids.requestId,
+      transitionId: ids.transitionId,
+      kind: "recovery",
+      policy,
+      runtime
+    });
+    session.bindSceneLifecycleId(getActiveLifecycleId());
+    session.markDelegated();
+    publishSession(session);
+    debug.rollbackRecoverySessions += 1;
+    return { ids, policy, session, reason: reason || "transition-recovery", parentRequestId: parentRequest ? parentRequest.requestId : null };
+  }
+
+  function createSwitchIntent(reference, switchOptions = {}) {
+    const ids = nextId("switch");
+    const intent = {
+      intentId: nextIntentId(),
+      sequence: intentGeneration,
+      reference,
+      options: switchOptions && typeof switchOptions === "object" ? { ...switchOptions } : {},
+      ids,
+      requestedAt: wallNow(),
+      supersededBy: null,
+      result: null,
+      error: null,
+      resolvePromise: null,
+      rejectPromise: null,
+      promise: null
+    };
+    intent.promise = new Promise((resolve, reject) => {
+      intent.resolvePromise = resolve;
+      intent.rejectPromise = reject;
+    });
+    debug.switchIntents += 1;
+    debug.lastRequestedIntentId = intent.intentId;
+    return intent;
+  }
+
+  function markIntentSuperseded(intent, newerIntent, mode) {
+    if (!intent || intent.result || intent.error) return;
+    intent.supersededBy = newerIntent ? newerIntent.intentId : intent.supersededBy;
+    intent.result = {
+      ok: false,
+      mode: mode || "superseded",
+      superseded: true,
+      intentId: intent.intentId,
+      supersededBy: intent.supersededBy || null,
+      scene: getActiveScene(),
+      runtime: getActiveRuntime(),
+      lifecycleId: getActiveLifecycleId() || null
+    };
+    debug.supersededIntents += 1;
+  }
+
+  function settleSwitchCycleIntents(cycleIntents) {
+    for (const intent of cycleIntents) {
+      if (intent.error) intent.rejectPromise(intent.error);
+      else intent.resolvePromise(intent.result || {
+        ok: false,
+        mode: "superseded",
+        superseded: true,
+        intentId: intent.intentId,
+        scene: getActiveScene(),
+        runtime: getActiveRuntime(),
+        lifecycleId: getActiveLifecycleId() || null
+      });
     }
+  }
+
+  async function executeSwitchIntent(intent) {
     let targetRuntime = null;
+    let operationOptions = null;
+    let request = null;
+    let previousRuntime = getActiveRuntime();
+    let contextRebound = false;
+    let sessionRebound = false;
+    let rollbackRecovery = null;
+
     resolvingSwitch = true;
+    debug.pendingLatestRequest = pendingLatestIntent ? pendingLatestIntent.intentId : null;
     try {
-      targetRuntime = await resolveTarget(reference, switchOptions);
+      targetRuntime = await resolveTarget(intent.reference, intent.options);
     } catch (error) {
+      resolvingSwitch = false;
+      if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+        intent.result = {
+          ok: false,
+          mode: "superseded-during-resolve",
+          superseded: true,
+          intentId: intent.intentId,
+          supersededBy: pendingLatestIntent.intentId,
+          scene: getActiveScene(),
+          runtime: getActiveRuntime(),
+          lifecycleId: getActiveLifecycleId() || null
+        };
+        debug.supersededIntents += 1;
+        return;
+      }
       debug.failures += 1;
       debug.lastMode = "resolve-failed";
       debug.lastError = text(error && (error.message || error));
-      throw error;
+      intent.error = error;
+      return;
     } finally {
       resolvingSwitch = false;
     }
-    const policyRuntime = targetRuntime || switchOptions.runtime || getActiveRuntime();
-    const previousRuntime = getActiveRuntime();
-    const request = beginRequest("switch", policyRuntime, switchOptions);
-    debug.switches += 1;
-    request.session.markDelegated();
-    const reusedSceneContext = canReuseActiveSceneForRuntime(policyRuntime, request.policy);
-    let contextRebound = false;
-    if (reusedSceneContext) {
-      const rebound = rebindActiveSceneLoadingContext(request.policy, policyRuntime, "orchestrator-switch-preflight");
-      contextRebound = !!(rebound && rebound.changed !== false);
+
+    if (!targetRuntime || !targetRuntime.exhibition || !targetRuntime.spaceDefinition) {
+      const error = new Error("Target Exhibition runtime could not be resolved.");
+      if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+        intent.result = { ok: false, mode: "superseded-during-resolve", superseded: true, intentId: intent.intentId, supersededBy: pendingLatestIntent.intentId, scene: getActiveScene(), runtime: getActiveRuntime(), lifecycleId: getActiveLifecycleId() || null };
+        debug.supersededIntents += 1;
+      } else intent.error = error;
+      return;
     }
+
+    if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+      markIntentSuperseded(intent, pendingLatestIntent, "superseded-before-delegate");
+      return;
+    }
+
     try {
-      const delegatedOptions = decorateOptions(switchOptions, request);
-      if (targetRuntime || switchOptions.runtime) delegatedOptions.runtime = targetRuntime || switchOptions.runtime;
-      else delete delegatedOptions.runtime;
-      const result = await lifecycleController.switchTo(reference, delegatedOptions);
-      return finishRequest(request, result, null);
+      operationOptions = await prepareResolvedSwitchOptions(intent, targetRuntime);
     } catch (error) {
-      if (contextRebound && previousRuntime) {
+      if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+        markIntentSuperseded(intent, pendingLatestIntent, "superseded-during-prepare");
+      } else intent.error = error;
+      return;
+    }
+
+    if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+      markIntentSuperseded(intent, pendingLatestIntent, "superseded-before-delegate");
+      return;
+    }
+
+    try {
+      previousRuntime = getActiveRuntime();
+      request = createResolvedRequest("switch", targetRuntime, operationOptions, intent.ids);
+      debug.switches += 1;
+      request.session.markDelegated();
+      const reusedSceneContext = canReuseActiveSceneForRuntime(targetRuntime, request.policy);
+      if (reusedSceneContext) {
+        const rebound = rebindActiveSceneLoadingContext(request.policy, targetRuntime, "orchestrator-switch-preflight");
+        contextRebound = !!(rebound && rebound.changed !== false);
+        const sessionResult = rebindActiveSceneLoadingSession(request.session, targetRuntime, "orchestrator-switch-current-session");
+        if (!sessionResult || sessionResult.supported === false) {
+          throw new Error("Same-Space Scene cannot bind the current loading session.");
+        }
+        sessionRebound = !!(sessionResult && sessionResult.changed !== false);
+      }
+
+      const delegatedOptions = decorateOptions(operationOptions, request);
+      delegatedOptions.runtime = targetRuntime;
+      delegatedOptions.createRollbackOptions = async ({ previousRuntime: rollbackRuntime }) => {
+        rollbackRecovery = createRecoverySession(rollbackRuntime, "cross-space-rollback", request);
+        return {
+          sceneOptions: {
+            loadingPolicy: rollbackRecovery.policy,
+            loadingSession: rollbackRecovery.session
+          }
+        };
+      };
+      delegatedOptions.onRollbackComplete = ({ ok, lifecycleId, error }) => {
+        if (!rollbackRecovery) return;
+        rollbackRecovery.session.bindSceneLifecycleId(lifecycleId || getActiveLifecycleId());
+        rollbackRecovery.session.markSettled(ok !== false, error && (error.message || error));
+        if (ok === false && typeof rollbackRecovery.session.cancel === "function") {
+          rollbackRecovery.session.cancel("rollback-recovery-failed", { error: text(error && (error.message || error)) || null });
+        }
+      };
+      const physicalResult = await lifecycleController.switchTo(intent.reference, delegatedOptions);
+      finishRequest(request, physicalResult, null);
+
+      if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+        if (request.session && typeof request.session.retire === "function") {
+          request.session.retire("superseded-after-delegate", { supersededBy: pendingLatestIntent.intentId });
+        }
+        intent.result = {
+          ...physicalResult,
+          ok: false,
+          mode: "superseded-after-delegate",
+          physicalMode: physicalResult && physicalResult.mode ? physicalResult.mode : null,
+          superseded: true,
+          intentId: intent.intentId,
+          supersededBy: pendingLatestIntent.intentId
+        };
+        debug.supersededIntents += 1;
+        return;
+      }
+
+      intent.result = { ...physicalResult, intentId: intent.intentId, superseded: false };
+    } catch (error) {
+      if (request) finishRequest(request, null, error, { keepSessionUsable: sessionRebound });
+      if (sessionRebound && previousRuntime) {
+        try {
+          const recovery = createRecoverySession(previousRuntime, "same-space-switch-failure", request);
+          recovery.session.bindSceneLifecycleId(getActiveLifecycleId());
+          rebindActiveSceneLoadingContext(recovery.policy, previousRuntime, "orchestrator-switch-rollback");
+          rebindActiveSceneLoadingSession(recovery.session, previousRuntime, "orchestrator-switch-session-rollback");
+          recovery.session.markSettled(true);
+        } catch (_rebindRollbackError) {}
+      } else if (contextRebound && previousRuntime) {
         try {
           rebindActiveSceneLoadingContext(resolvePolicy(previousRuntime, { loadingContext: previousRuntime.context || previousRuntime.mode }), previousRuntime, "orchestrator-switch-rollback");
         } catch (_rebindRollbackError) {}
       }
-      finishRequest(request, null, error);
-      throw error;
+
+      if (pendingLatestIntent && pendingLatestIntent.sequence > intent.sequence) {
+        intent.result = {
+          ok: false,
+          mode: "superseded-after-failure",
+          superseded: true,
+          intentId: intent.intentId,
+          supersededBy: pendingLatestIntent.intentId,
+          scene: getActiveScene(),
+          runtime: getActiveRuntime(),
+          lifecycleId: getActiveLifecycleId() || null
+        };
+        debug.supersededIntents += 1;
+        return;
+      }
+      intent.error = error;
     }
+  }
+
+  async function drainSwitchIntents(firstIntent) {
+    let current = firstIntent;
+    try {
+      while (current && !disposed) {
+        activeIntent = current;
+        if (pendingLatestIntent && pendingLatestIntent.intentId === current.intentId) pendingLatestIntent = null;
+        debug.pendingLatestRequest = pendingLatestIntent ? pendingLatestIntent.intentId : null;
+        await executeSwitchIntent(current);
+        activeIntent = null;
+
+        if (pendingLatestIntent) {
+          current = pendingLatestIntent;
+          pendingLatestIntent = null;
+          debug.reconciliations += 1;
+          continue;
+        }
+        current = null;
+      }
+    } finally {
+      activeIntent = null;
+      resolvingSwitch = false;
+      debug.pendingLatestRequest = null;
+      switchDrainPromise = null;
+      const completedCycleIntents = switchCycleIntents;
+      switchCycleIntents = [];
+      settleSwitchCycleIntents(completedCycleIntents);
+    }
+  }
+
+  function switchTo(reference, switchOptions = {}) {
+    if (disposed) return Promise.reject(new Error("Scene loading orchestrator is disposed."));
+    const intent = createSwitchIntent(reference, switchOptions);
+    switchCycleIntents.push(intent);
+
+    if (pendingLatestIntent && !pendingLatestIntent.result && !pendingLatestIntent.error) {
+      markIntentSuperseded(pendingLatestIntent, intent, "superseded-before-delegate");
+    }
+    pendingLatestIntent = intent;
+    debug.pendingLatestRequest = intent.intentId;
+
+    if (activeIntent && activeIntent.sequence < intent.sequence) activeIntent.supersededBy = intent.intentId;
+
+    if (!switchDrainPromise) {
+      const first = pendingLatestIntent;
+      pendingLatestIntent = null;
+      switchDrainPromise = drainSwitchIntents(first);
+    }
+    return intent.promise;
   }
 
   function adoptRuntime(runtime, reason = "same-scene-runtime-adopt") {
     if (disposed) throw new Error("Scene loading orchestrator is disposed.");
-    if (activeRequest) {
+    if (activeRequest || activeIntent || switchDrainPromise) {
       debug.busyRejects += 1;
       return { ok: false, mode: "busy", scene: getActiveScene(), runtime: getActiveRuntime() };
     }
     const previousRuntime = getActiveRuntime();
-    const request = beginRequest("adopt", runtime, { loadingContext: runtime && (runtime.context || runtime.mode) });
+    const request = createResolvedRequest("adopt", runtime, { loadingContext: runtime && (runtime.context || runtime.mode) });
     debug.adopts += 1;
     request.session.markDelegated();
     let contextRebound = false;
+    let sessionRebound = false;
     if (canReuseActiveSceneForRuntime(runtime, request.policy)) {
       const rebound = rebindActiveSceneLoadingContext(request.policy, runtime, reason || "same-scene-runtime-adopt");
       contextRebound = !!(rebound && rebound.changed !== false);
+      const reboundSession = rebindActiveSceneLoadingSession(request.session, runtime, `${reason || "same-scene-runtime-adopt"}-session`);
+      sessionRebound = !!(reboundSession && reboundSession.changed !== false);
     }
     try {
       const result = lifecycleController.adoptRuntime(runtime, reason);
+      const app = getApp();
+      if (app && typeof app.republishSceneReadiness === "function") {
+        app.republishSceneReadiness(reason || "same-scene-runtime-adopt", {
+          source: "orchestrator-adopt",
+          loadingSessionId: request.session.id
+        });
+      }
       return finishRequest(request, result, null);
     } catch (error) {
-      if (contextRebound && previousRuntime) {
+      if ((contextRebound || sessionRebound) && previousRuntime) {
         try {
-          rebindActiveSceneLoadingContext(resolvePolicy(previousRuntime, { loadingContext: previousRuntime.context || previousRuntime.mode }), previousRuntime, "orchestrator-adopt-rollback");
+          const recovery = createRecoverySession(previousRuntime, "adopt-rollback", request);
+          rebindActiveSceneLoadingContext(recovery.policy, previousRuntime, "orchestrator-adopt-rollback");
+          rebindActiveSceneLoadingSession(recovery.session, previousRuntime, "orchestrator-adopt-session-rollback");
+          recovery.session.markSettled(true);
         } catch (_rebindRollbackError) {}
       }
       finishRequest(request, null, error);
@@ -466,10 +820,13 @@ export function createSceneLoadingOrchestrator(options = {}) {
   function getActiveScene() { return typeof lifecycleController.getActiveScene === "function" ? lifecycleController.getActiveScene() : null; }
   function getActiveRuntime() { return typeof lifecycleController.getActiveRuntime === "function" ? lifecycleController.getActiveRuntime() : null; }
   function getActiveLifecycleId() { return typeof lifecycleController.getActiveLifecycleId === "function" ? lifecycleController.getActiveLifecycleId() : ""; }
-  function isSwitching() { return !!activeRequest || resolvingSwitch || (typeof lifecycleController.isSwitching === "function" && lifecycleController.isSwitching()); }
+  function isSwitching() { return !!activeRequest || !!activeIntent || !!switchDrainPromise || resolvingSwitch || (typeof lifecycleController.isSwitching === "function" && lifecycleController.isSwitching()); }
 
   function dispose() {
     disposed = true;
+    if (pendingLatestIntent && !pendingLatestIntent.result && !pendingLatestIntent.error) {
+      pendingLatestIntent.error = new Error("Scene loading orchestrator was disposed before the requested transition ran.");
+    }
     if (activeRequest && activeRequest.session && typeof activeRequest.session.cancel === "function") {
       activeRequest.session.cancel("orchestrator-dispose", { requestId: activeRequest.requestId });
     }
@@ -483,6 +840,17 @@ export function createSceneLoadingOrchestrator(options = {}) {
       ...debug,
       disposed,
       resolvingSwitch,
+      activeIntent: activeIntent ? {
+        intentId: activeIntent.intentId,
+        sequence: activeIntent.sequence,
+        reference: text(activeIntent.reference) || null,
+        supersededBy: activeIntent.supersededBy || null
+      } : null,
+      pendingLatestRequest: pendingLatestIntent ? {
+        intentId: pendingLatestIntent.intentId,
+        sequence: pendingLatestIntent.sequence,
+        reference: text(pendingLatestIntent.reference) || null
+      } : null,
       activeRequest: activeRequest ? {
         requestId: activeRequest.requestId,
         transitionId: activeRequest.transitionId,
@@ -513,12 +881,13 @@ export function createSceneLoadingOrchestrator(options = {}) {
   });
 }
 
+
 export async function createSceneLoadingRuntimeHost(options = {}) {
   let hostOptions = { ...(options || {}) };
   const prepare = typeof hostOptions.prepare === "function" ? hostOptions.prepare : null;
   const configure = typeof hostOptions.configure === "function" ? hostOptions.configure : null;
   const debug = {
-    stage: "V14.1.6",
+    stage: "V14.1.10",
     schema: SCENE_LOADING_RUNTIME_HOST_SCHEMA,
     prepared: false,
     configured: false,

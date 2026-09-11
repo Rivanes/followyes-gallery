@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.6 — Shared Runtime Host
+  Exhibition Platform — V14.1.10 — No-Reload Residency & Frame-Time Closure
   Save Integrity Repair / Correct Startup Rebuild.
   Babylon, GLB loaders and the gallery engine start only after an explicit visitor click.
   The engine-owned instructional popup is shown after true interaction readiness; C6C8C16 keeps its mobile CTA pinned.
@@ -9,12 +9,12 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { registerExhibitionAssetCache, getExhibitionAssetDeliveryStats } from "./asset-cache-bootstrap.js?v=c6c8c22_gallery_management_20260908";
 import { beginTransitionGuard, endTransitionGuard, isTransitionGuardActive } from "./transition-guard.js?v=c6c8c22_gallery_management_20260908";
 import { createExhibitionDataAdapter, resolveInitialPublicRuntime, listPublicExhibitionCards } from "../data/exhibition-api.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_6_shared_runtime_host_20260910";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_6_shared_runtime_host_20260910";
-import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v13_2_left_workspace_asset_manager";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_no_reload_residency_20260910";
+import { shouldShowPublicSpaceIntro } from "../runtime/public-space-entry-policy.js?v=v14_1_10_no_reload_residency_20260910";
 
-const STAGE = "V14.1.6";
-const ENGINE_CACHE_KEY = "v14_1_6_shared_runtime_host_20260910";
+const STAGE = "V14.1.10";
+const ENGINE_CACHE_KEY = "v14_1_10_no_reload_residency_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 
@@ -283,8 +283,8 @@ async function ensurePublicExhibitionSelection(options = {}) {
 }
 
 const publicSpaceEntryDebug = {
-  stage: "V13.6",
-  schema: "public-space-entry-policy.v1",
+  stage: "V14.1.10",
+  schema: "public-gallery-entry-policy.v2",
   evaluations: 0,
   shows: 0,
   hides: 0,
@@ -300,6 +300,7 @@ function applyPublicSpaceIntroPolicy(previousRuntime, nextRuntime, options = {})
     reason: options.reason || "public-space-entry",
     previousVenueVersionId: getRuntimeVenueVersionKey(previousRuntime) || null,
     nextVenueVersionId: getRuntimeVenueVersionKey(nextRuntime) || null,
+    explicitEntry: options.entry === true || options.publicEntry === true || options.initial === true,
     show,
     at: Date.now()
   };
@@ -328,44 +329,64 @@ function updatePublicRuntimeIdentity(runtime, historyMode = "replace") {
 
 async function switchPublicExhibition(reference, options = {}) {
   if (!sceneLifecycleController || !publicExhibitionData || !activeEngine) return false;
-  if (isTransitionGuardActive()) return false;
   publicExhibitionData.setMode("public");
-  const targetRuntime = await publicExhibitionData.resolveRuntime(reference, { force: true });
   const currentRuntime = sceneLifecycleController.getActiveRuntime();
-  if (currentRuntime && currentRuntime.mode === "public" && currentRuntime.exhibition && currentRuntime.exhibition.id === targetRuntime.exhibition.id && getRuntimeVenueVersionKey(currentRuntime) === getRuntimeVenueVersionKey(targetRuntime)) {
-    updatePublicRuntimeIdentity(targetRuntime, options.historyMode || "push");
-    activePublicRuntime = targetRuntime;
-    return true;
+  const normalizedReference = String(reference == null ? "" : reference).trim();
+  if (currentRuntime && currentRuntime.mode === "public" && currentRuntime.exhibition) {
+    const activeId = String(currentRuntime.exhibition.id || "");
+    const activeSlug = String(currentRuntime.exhibition.slug || "");
+    if (normalizedReference && (normalizedReference === activeId || normalizedReference === activeSlug)) {
+      updatePublicRuntimeIdentity(currentRuntime, options.historyMode || "push");
+      activePublicRuntime = currentRuntime;
+      if (options.publicEntry === true || options.entry === true) {
+        applyPublicSpaceIntroPolicy(currentRuntime, currentRuntime, {
+          entry: true,
+          reason: options.reason || "public-gallery-reentry-same-runtime"
+        });
+      }
+      return true;
+    }
   }
-  const crossSpace = getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(targetRuntime);
-  const guardToken = await beginTransitionGuard({
-    title: `Opening ${targetRuntime.exhibition.name}…`,
-    detail: crossSpace ? "Switching Gallery space without reloading the page." : "Switching exhibition in the current Gallery.",
+
+  // V14.1.7 — request ordering belongs to the orchestrator. Do not resolve the
+  // runtime before creating the transition request: a slow older network response
+  // must never become newer than a later Back/Forward or Gallery selection intent.
+  const ownsGuard = !isTransitionGuardActive();
+  const guardToken = ownsGuard ? await beginTransitionGuard({
+    title: "Opening exhibition…",
+    detail: "Preparing the selected Gallery and exhibition.",
     minVisibleMs: 150
-  });
-  if (!guardToken) return false;
+  }) : null;
+  if (ownsGuard && !guardToken) return false;
+
   try {
     const result = await sceneLifecycleController.switchTo(reference, {
-      runtime: targetRuntime,
       forceRemote: true,
       reason: "public-exhibition-switch",
       sceneOptions: { adminWorkspace: false }
     });
     activeScene = sceneLifecycleController.getActiveScene();
     activePublicRuntime = sceneLifecycleController.getActiveRuntime();
+
+    if (!result || result.superseded || !result.ok) return false;
     if (window.GalleryApp && typeof window.GalleryApp.setExhibitionDataMode === "function") window.GalleryApp.setExhibitionDataMode("public");
-    applyPublicSpaceIntroPolicy(currentRuntime, activePublicRuntime || targetRuntime, { reason: "public-exhibition-switch" });
-    updatePublicRuntimeIdentity(activePublicRuntime || targetRuntime, options.historyMode || "push");
+    applyPublicSpaceIntroPolicy(currentRuntime, activePublicRuntime || result.runtime, {
+      entry: options.publicEntry === true || options.entry === true,
+      reason: options.reason || "public-exhibition-switch"
+    });
+    updatePublicRuntimeIdentity(activePublicRuntime || result.runtime, options.historyMode || "push");
     syncMobileQualityControl();
     if (activeEngine && activeEngine.resize) activeEngine.resize();
-    return !!(result && result.ok);
+    return true;
   } catch (error) {
     activeScene = sceneLifecycleController.getActiveScene();
     activePublicRuntime = sceneLifecycleController.getActiveRuntime();
+    // Back/Forward failure must not leave browser URL and the live Scene disagreeing.
+    if (activePublicRuntime && activePublicRuntime.exhibition) updatePublicRuntimeIdentity(activePublicRuntime, "replace");
     showToast(`Could not open exhibition: ${error && error.message ? error.message : error}`);
     return false;
   } finally {
-    await endTransitionGuard(guardToken);
+    if (guardToken) await endTransitionGuard(guardToken);
   }
 }
 
@@ -708,19 +729,12 @@ async function openInlineAdminWorkspace(exhibitionId) {
   const foregroundReadyBeforeOpen = canUseInstantWorkspaceModeSwitch();
   publicExhibitionData.setMode("admin");
   let adminRuntime = null;
-  try {
-    adminRuntime = await publicExhibitionData.resolveRuntime(targetReference, { force: true });
-  } catch (error) {
-    publicExhibitionData.setMode("public");
-    inlineWorkspaceModeSwitchActive = false;
-    showToast(`Could not resolve Admin Draft Gallery: ${error && error.message ? error.message : error}`);
-    return false;
-  }
+  let crossSpace = false;
+  let initialSnapshot = null;
   const currentRuntime = sceneLifecycleController.getActiveRuntime();
-  const crossSpace = getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(adminRuntime);
   const guardToken = await beginTransitionGuard({
     title: "Opening Admin Workspace…",
-    detail: crossSpace ? "Opening the Exhibition Draft Gallery space." : "Reusing the live Gallery space.",
+    detail: "Resolving the Exhibition Draft and preparing its Gallery runtime.",
     minVisibleMs: 150
   });
   if (!guardToken) {
@@ -730,23 +744,27 @@ async function openInlineAdminWorkspace(exhibitionId) {
   }
 
   try {
-    let initialSnapshot = null;
-    if (crossSpaceAdminDraftSnapshot && crossSpaceAdminDraftSnapshot.exhibition &&
-        String(crossSpaceAdminDraftSnapshot.exhibition.id) === String(adminRuntime.exhibition.id) &&
-        String(crossSpaceAdminDraftSnapshot.venueVersionId || "") === String(getRuntimeVenueVersionKey(adminRuntime))) {
-      initialSnapshot = crossSpaceAdminDraftSnapshot;
-    }
-
-    const preserveResidentDraftPreview = !crossSpace && window.GalleryApp && typeof window.GalleryApp.isDraftPreviewActive === "function" && window.GalleryApp.isDraftPreviewActive();
-    const result = await sceneLifecycleController.switchTo(adminRuntime.exhibition.id, {
-      runtime: adminRuntime,
+    const result = await sceneLifecycleController.switchTo(targetReference, {
       forceRemote: true,
-      reloadCurrent: !!(currentRuntime && currentRuntime.mode !== "admin" && !preserveResidentDraftPreview),
       reason: "public-to-admin-runtime",
-      initialSnapshot,
-      sceneOptions: { adminWorkspace: crossSpace }
+      prepareResolvedOptions(resolvedRuntime, activeRuntime) {
+        adminRuntime = resolvedRuntime;
+        crossSpace = getRuntimeVenueVersionKey(activeRuntime) !== getRuntimeVenueVersionKey(adminRuntime);
+        if (crossSpaceAdminDraftSnapshot && crossSpaceAdminDraftSnapshot.exhibition &&
+            String(crossSpaceAdminDraftSnapshot.exhibition.id) === String(adminRuntime.exhibition.id) &&
+            String(crossSpaceAdminDraftSnapshot.venueVersionId || "") === String(getRuntimeVenueVersionKey(adminRuntime))) {
+          initialSnapshot = crossSpaceAdminDraftSnapshot;
+        }
+        const preserveResidentDraftPreview = !crossSpace && window.GalleryApp && typeof window.GalleryApp.isDraftPreviewActive === "function" && window.GalleryApp.isDraftPreviewActive();
+        return {
+          reloadCurrent: !!(activeRuntime && activeRuntime.mode !== "admin" && !preserveResidentDraftPreview),
+          initialSnapshot,
+          sceneOptions: { adminWorkspace: crossSpace }
+        };
+      }
     });
-    if (!result || !result.ok) throw new Error("Admin Draft runtime could not be opened.");
+    if (!result || !result.ok || result.superseded) throw new Error("Admin Draft runtime could not be opened.");
+    adminRuntime = result.runtime || sceneLifecycleController.getActiveRuntime();
     if (initialSnapshot) crossSpaceAdminDraftSnapshot = null;
     activeScene = sceneLifecycleController.getActiveScene();
 
@@ -1051,7 +1069,7 @@ if (exhibitionsButton) exhibitionsButton.addEventListener("click", function (eve
     return;
   }
   ensurePublicExhibitionSelection({ force: true })
-    .then((reference) => reference ? switchPublicExhibition(reference, { historyMode: "push" }) : false)
+    .then((reference) => reference ? switchPublicExhibition(reference, { historyMode: "push", publicEntry: true, reason: "homepage-gallery-entry" }) : false)
     .catch((error) => showToast(`Could not open exhibition list: ${error && error.message ? error.message : error}`));
 });
 
@@ -1262,7 +1280,7 @@ async function startGalleryRuntime() {
     };
     window.BerryboyViewerRuntime = window.ExhibitionPlatformViewerRuntime; // legacy debug alias
 
-    // Hide the page loader first, then show and verify the exact engine-owned popup from Stage 12C66A1.
+    // Canonical Scene readiness has settled. Hide the page loader, then present the mandatory Public entry gate before movement unlock.
     bootGuard.ready();
     window.requestAnimationFrame(function () {
       applyPublicSpaceIntroPolicy(null, publicRuntime, { initial: true, reason: "initial-public-entry" });

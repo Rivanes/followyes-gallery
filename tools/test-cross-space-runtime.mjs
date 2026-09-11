@@ -63,15 +63,16 @@ const engineModule = {
     queueMicrotask(() => {
       // Deliberately send one event from an unrelated lifecycle first. The waiter must ignore it.
       staleEvents += 1;
-      window.dispatchEvent(new CustomEvent('gallery-interaction-ready', { detail: { lifecycleId: 'stale-c24-scene' } }));
+      window.dispatchEvent(new CustomEvent('gallery-scene-readiness', { detail: { lifecycleId: 'stale-c24-scene', phase: 'scene-visually-settled' } }));
       if (options.spaceDefinition.failStartup) {
         window.dispatchEvent(new CustomEvent('gallery-startup-failure', {
           detail: { lifecycleId: options.lifecycleId, message: 'synthetic target startup failure' }
         }));
       } else {
-        window.dispatchEvent(new CustomEvent('gallery-interaction-ready', {
+        window.dispatchEvent(new CustomEvent('gallery-scene-readiness', {
           detail: {
             lifecycleId: options.lifecycleId,
+            phase: 'scene-visually-settled',
             venueVersionId: options.spaceDefinition.venueVersionId,
             exhibitionId: options.exhibitionId
           }
@@ -89,6 +90,14 @@ window.GalleryApp = {
     assert.ok(id);
     assert.equal(options.force, true);
     return true;
+  },
+  async waitForSceneReadiness(options = {}) {
+    return {
+      settled: true,
+      lifecycleId: options.lifecycleId || null,
+      loadingSessionId: options.loadingSessionId || null,
+      phase: options.phase || 'scene-visually-settled'
+    };
   }
 };
 
@@ -233,41 +242,67 @@ assert.equal(orchestratedAdminScene.options.loadingSession.getSceneLifecycleId()
 
 const orchestratorDebug = orchestrator.getDebug();
 assert.equal(orchestratorDebug.schema, SCENE_LOADING_ORCHESTRATOR_SCHEMA);
-assert.equal(orchestratorDebug.stage, 'V14.1.6');
-assert.equal(orchestratorDebug.latestWinsEnabled, false, 'V14.1.3 must not silently enable latest-wins behavior before V14.1.7');
+assert.equal(orchestratorDebug.stage, 'V14.1.10');
+assert.equal(orchestratorDebug.latestWinsEnabled, true, 'V14.1.7 must enable newest-target reconciliation');
 assert.ok(orchestratorDebug.requests >= 2);
 assert.ok(orchestratorDebug.recentSessions.length >= 2);
 assert.equal(orchestratorDebug.recentSessions.at(-1).contextKind, 'admin-exhibition');
 assert.equal(orchestratorDebug.activeVenueVersionId, 'venue-version-a2');
-// The fake Scene cannot execute Gallery_V0_11.onDisposeObservable, so exercise the
-// session cancellation primitive directly here; source-level checks below prove the
-// real core calls it from physical Scene disposal.
+// V14.1.7 closes a request session when its atomic request settles. A late task
+// registration must be rejected as superseded and must not accumulate in the old session.
 const activeSession = orchestratedAdminScene.options.loadingSession;
-const frameTask = activeSession.registerTask({
+const settledSnapshotBefore = activeSession.getTaskSnapshot('admin-visible-settled');
+const lateTask = activeSession.registerTask({
   phase: 'admin-visible-settled',
   family: 'frames',
-  key: 'frame-1',
+  key: 'late-frame-after-settle',
   blocksSettle: true,
   referencePreserved: true
 });
-assert.equal(frameTask.getSnapshot().status, 'pending');
-assert.equal(activeSession.getTaskSnapshot('admin-visible-settled').pending, 1);
-frameTask.settle('loaded');
-assert.equal(activeSession.getTaskSnapshot('admin-visible-settled').loaded, 1);
-const modelTask = activeSession.registerTask({
-  phase: 'admin-visible-settled',
-  family: 'sculpture-models',
-  key: 'model-1',
-  blocksSettle: true,
-  referencePreserved: true
-});
-assert.equal(modelTask.getSnapshot().status, 'pending');
+assert.equal(lateTask.getSnapshot().status, 'superseded');
+assert.equal(lateTask.getSnapshot().details.registrationRejected, true);
+assert.equal(activeSession.getTaskSnapshot('admin-visible-settled').total, settledSnapshotBefore.total, 'settled sessions must not accumulate new lifecycle tasks');
+assert.equal(activeSession.getSnapshot().acceptingTasks, false);
 assert.equal(activeSession.cancel('synthetic-scene-dispose', { lifecycleId: orchestratedAdminScene.options.lifecycleId }), true);
-assert.equal(modelTask.getSnapshot().status, 'superseded', 'session cancellation must terminalize pending lifecycle tasks');
 assert.equal(activeSession.isCancelled(), true);
 assert.equal(activeSession.canContinue(orchestratedAdminScene.options.lifecycleId), false);
 assert.equal(activeSession.getSnapshot().cancelReason, 'synthetic-scene-dispose');
 assert.equal(activeSession.cancel('duplicate-cancel'), false, 'cancellation must be idempotent');
+
+// V14.1.7 — a failed cross-Space target must recreate the previous Scene with
+// a fresh recovery loading session. The rollback must never inherit the failed
+// target request/session identity.
+const rollbackSourceScene = orchestrator.getActiveScene();
+const failedOrchestratedTarget = runtime('ex-orchestrator-fail', 'venue-version-orchestrator-fail', {
+  spaceId: 'broken-orchestrator-gallery',
+  failStartup: true,
+  mode: 'admin'
+});
+await assert.rejects(
+  orchestrator.switchTo('ex-orchestrator-fail', {
+    runtime: failedOrchestratedTarget,
+    forceRemote: true,
+    sceneOptions: { adminWorkspace: true }
+  }),
+  /synthetic target startup failure/
+);
+const rollbackScene = orchestrator.getActiveScene();
+assert.notEqual(rollbackScene, rollbackSourceScene, 'cross-Space failure must recreate the previous physical Scene');
+assert.equal(orchestrator.getActiveRuntime().exhibition.id, 'ex-b');
+assert.ok(rollbackScene.options.loadingSession, 'rollback Scene must receive a loading session');
+const rollbackSessionSnapshot = rollbackScene.options.loadingSession.getSnapshot();
+assert.equal(rollbackSessionSnapshot.kind, 'recovery');
+assert.equal(rollbackSessionSnapshot.target.exhibitionId, 'ex-b');
+assert.equal(rollbackSessionSnapshot.cancelled, false);
+assert.equal(rollbackSessionSnapshot.status, 'settled');
+assert.equal(rollbackScene.options.loadingSession.getSceneLifecycleId(), rollbackScene.options.lifecycleId);
+const failedSessionSnapshot = orchestrator.getDebug().recentSessions.find((entry) => entry.target.exhibitionId === 'ex-orchestrator-fail');
+assert.ok(failedSessionSnapshot, 'failed target request session must remain diagnosable');
+assert.equal(failedSessionSnapshot.status, 'failed');
+assert.equal(failedSessionSnapshot.cancelled, true);
+assert.notEqual(failedSessionSnapshot.id, rollbackSessionSnapshot.id, 'rollback must not reuse failed target loading session');
+assert.ok(orchestrator.getDebug().rollbackRecoverySessions >= 1);
+
 orchestrator.dispose();
 assert.equal(engine.scenes.length, 0);
 
@@ -304,11 +339,11 @@ assert.ok(source.includes('Cross-Space Exhibition switch requires C6C8C25 Scene 
 assert.ok(api.includes('const runtimeKey = (modeValue, id) =>'), 'Public/Admin runtime caches must be channel-qualified');
 assert.ok(api.includes('public:<') === false); // implementation uses dynamic canonical key, not hard-coded one-off values
 assert.ok(api.includes('requestedMode'), 'mode-specific runtime cache lookup missing');
-assert.ok(source.includes('gallery-admin-visible-hydration-batch.v1'), 'V14.1.5 Admin visible hydration batch registry missing');
-assert.ok(source.includes('registerGalleryLoadingSessionTask(family, key, details)'), 'V14.1.5 core does not bind visible tasks to loading session');
-assert.ok(source.includes('waitForGalleryAdminVisibleHydrationBatch('), 'V14.1.5 Admin visible readiness wait missing');
-assert.ok(source.includes('sameSpaceAdminVisibleReadiness = await waitForGalleryAdminVisibleHydrationBatch'), 'V14.1.5 same-Space switch must await Admin visible terminal state');
-assert.ok(source.includes('queueGalleryFastStartModelLoad(slot, modelState);'), 'V14.1.5 must preserve Public model background hydration');
+assert.ok(source.includes('gallery-walkthrough-visible-hydration-batch.v1'), 'V14.1.9 Public/Admin walkthrough visible hydration batch registry missing');
+assert.ok(source.includes('registerGalleryLoadingSessionTask(family, key, details)'), 'V14.1.9 core does not bind visible tasks to loading session');
+assert.ok(source.includes('waitForGalleryWalkthroughFinalSettle('), 'V14.1.9 final walkthrough readiness wait missing');
+assert.ok(source.includes('sameSpaceWalkthroughSettle = await waitForGalleryWalkthroughFinalSettle'), 'V14.1.9 same-Space switch must await final walkthrough settle');
+assert.ok(source.includes('scheduleGalleryWalkthroughHeavyHydration("sculpture-models"'), 'V14.1.9 initial Public/Admin model hydration must use bounded terminal scheduler');
 
 
 
@@ -336,7 +371,7 @@ assert.ok(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall
 assert.ok(source.includes('galleryCriticalAssetNames = galleryAuthoringSpacePreview ? [] : galleryStrictCriticalAssetNames.slice()'));
 assert.ok(source.includes('galleryAuthoringPreviewBlockingAssetNames'), 'V14.1.4 must keep authoring validity separate from assigned preview settle');
 assert.ok(source.includes('if (galleryPolicyPreviewBlockingAssetNames.indexOf(assetName) !== -1)'), 'assigned authoring/Test assets must bypass deferred optional queue');
-assert.ok(source.includes('galleryStartupBlockingAssetNames = (galleryAuthoringSpacePreview || galleryTestMode)'), 'authoring/Test preview needs its own startup blocking set');
+assert.ok(source.includes('galleryStartupBlockingAssetNames = galleryPolicyPreviewBlockingAssetNames.slice()'), 'V14.1.9 all contexts must use the policy-owned startup blocking set');
 assert.ok(source.includes('authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug)'), 'authoring settle debug contract missing');
 assert.ok(admin.includes('Gallery preview is partial. Assigned asset failed to load:'), 'assigned authoring asset failure must be explicit in Admin UI');
 assert.ok(source.includes('galleryAuthoringSpacePreview ? optionalGallerySpaceAsset("floor") : requireGallerySpaceAsset("floor")'));
@@ -355,7 +390,9 @@ console.log('C6C8C25/C25.2 Cross-Space + Admin Gallery preview regression invari
   const authoringB = { ...runtime('intro-authoring-b', 'venue-version-b1', { spaceId: 'gallery-b', mode: 'admin' }), context: 'gallery-authoring' };
 
   assert.equal(shouldShowPublicSpaceIntro(null, publicA1, { initial: true }), true, 'initial public entry must show intro');
-  assert.equal(shouldShowPublicSpaceIntro(publicA1, publicA1OtherExhibition), false, 'same exact Venue Version Exhibition switch must not re-show intro');
+  assert.equal(shouldShowPublicSpaceIntro(publicA1, publicA1OtherExhibition), false, 'same exact Venue Version Exhibition switch must not re-show intro during an already-open visit');
+  assert.equal(shouldShowPublicSpaceIntro(publicA1, publicA1OtherExhibition, { entry: true }), true, 'explicit Home/list Gallery entry must always show intro even on same Venue Version');
+  assert.equal(shouldShowPublicSpaceIntro(publicA1, publicA1, { publicEntry: true }), true, 'explicit re-entry to the exact resident Gallery must show intro');
   assert.equal(shouldShowPublicSpaceIntro(publicA1, publicB1), true, 'cross-Gallery Venue Version entry must show intro');
   assert.equal(shouldShowPublicSpaceIntro(publicB1, publicA1), true, 'return to a previously visited Space must show intro again');
   assert.equal(shouldShowPublicSpaceIntro(publicA1, publicA2), true, 'same Gallery slug but a different immutable Venue Version must show intro');

@@ -25,7 +25,23 @@ function isSceneDisposed(scene) {
   catch (_error) { return false; }
 }
 
-function createLifecycleWaiter(lifecycleId, timeoutMs) {
+function resolveReadinessWaitContract(operationOptions = {}) {
+  const sceneOptions = operationOptions.sceneOptions && typeof operationOptions.sceneOptions === "object"
+    ? operationOptions.sceneOptions
+    : {};
+  const policy = operationOptions.loadingPolicy || sceneOptions.loadingPolicy || null;
+  const readiness = policy && policy.readiness && typeof policy.readiness === "object" ? policy.readiness : {};
+  return Object.freeze({
+    authorityEvent: text(readiness.authorityEvent) || "gallery-scene-readiness",
+    authorityPhase: text(readiness.authorityPhase) || "scene-visually-settled",
+    failureEvent: text(readiness.failureEvent) || "gallery-startup-failure"
+  });
+}
+
+function createLifecycleWaiter(lifecycleId, timeoutMs, waitContract = {}) {
+  const authorityEvent = text(waitContract.authorityEvent) || "gallery-scene-readiness";
+  const authorityPhase = text(waitContract.authorityPhase) || "scene-visually-settled";
+  const failureEvent = text(waitContract.failureEvent) || "gallery-startup-failure";
   let timeoutId = 0;
   let settled = false;
   let resolvePromise;
@@ -33,8 +49,8 @@ function createLifecycleWaiter(lifecycleId, timeoutMs) {
   const promise = new Promise((resolve, reject) => { resolvePromise = resolve; rejectPromise = reject; });
 
   function cleanup() {
-    window.removeEventListener("gallery-interaction-ready", onReady);
-    window.removeEventListener("gallery-startup-failure", onFailure);
+    window.removeEventListener(authorityEvent, onReady);
+    window.removeEventListener(failureEvent, onFailure);
     if (timeoutId) window.clearTimeout(timeoutId);
     timeoutId = 0;
   }
@@ -50,7 +66,9 @@ function createLifecycleWaiter(lifecycleId, timeoutMs) {
   }
   function onReady(event) {
     if (!matches(event)) return;
-    finish(true, event.detail || {});
+    const detail = event && event.detail ? event.detail : {};
+    if (authorityPhase && text(detail.phase) !== authorityPhase) return;
+    finish(true, detail);
   }
   function onFailure(event) {
     if (!matches(event)) return;
@@ -60,8 +78,8 @@ function createLifecycleWaiter(lifecycleId, timeoutMs) {
     finish(false, error);
   }
 
-  window.addEventListener("gallery-interaction-ready", onReady);
-  window.addEventListener("gallery-startup-failure", onFailure);
+  window.addEventListener(authorityEvent, onReady);
+  window.addEventListener(failureEvent, onFailure);
   timeoutId = window.setTimeout(() => {
     const error = new Error(`Gallery lifecycle ${lifecycleId} timed out.`);
     error.code = "gallery-lifecycle-timeout";
@@ -102,7 +120,7 @@ export function createSceneLifecycleController(options = {}) {
   let switching = false;
   let disposed = false;
   const debug = {
-    stage: "C6C8C25",
+    stage: "V14.1.10",
     schema: "exhibition-platform-scene-lifecycle.v1",
     starts: 0,
     sameVersionSwitches: 0,
@@ -157,13 +175,19 @@ export function createSceneLifecycleController(options = {}) {
     if (!runtime || !runtime.exhibition || !runtime.spaceDefinition) throw new Error("Target Exhibition runtime is incomplete.");
     setAdapterModeForRuntime(runtime);
     const lifecycleId = nextLifecycleId();
-    const waiter = createLifecycleWaiter(lifecycleId, createOptions.timeoutMs || readinessTimeoutMs);
+    let waiter = null;
     let scene = null;
     try {
       const extraOptions = typeof options.getCreateSceneOptions === "function"
         ? (options.getCreateSceneOptions(runtime, createOptions) || {})
         : {};
       const sceneOptions = createOptions.sceneOptions && typeof createOptions.sceneOptions === "object" ? createOptions.sceneOptions : {};
+      const waitContract = resolveReadinessWaitContract({
+        ...createOptions,
+        loadingPolicy: createOptions.loadingPolicy || sceneOptions.loadingPolicy || extraOptions.loadingPolicy,
+        sceneOptions: { ...extraOptions, ...sceneOptions }
+      });
+      waiter = createLifecycleWaiter(lifecycleId, createOptions.timeoutMs || readinessTimeoutMs, waitContract);
       const loadingSession = sceneOptions.loadingSession && typeof sceneOptions.loadingSession === "object" ? sceneOptions.loadingSession : null;
       if (loadingSession && typeof loadingSession.bindSceneLifecycleId === "function") {
         loadingSession.bindSceneLifecycleId(lifecycleId);
@@ -181,7 +205,7 @@ export function createSceneLifecycleController(options = {}) {
       await waiter.promise;
       return { scene, runtime, lifecycleId };
     } catch (error) {
-      waiter.cancel(error);
+      if (waiter) waiter.cancel(error);
       if (scene && !isSceneDisposed(scene)) {
         try { scene.dispose(); } catch (_disposeError) {}
       }
@@ -237,6 +261,18 @@ export function createSceneLifecycleController(options = {}) {
           reloadCurrent: switchOptions.reloadCurrent === true
         });
         if (!ok) throw new Error("Same-Space Exhibition switch was rejected.");
+        if (!app || typeof app.waitForSceneReadiness !== "function") {
+          throw new Error("Canonical Scene readiness API is unavailable for Same-Space transition.");
+        }
+        const readinessContract = resolveReadinessWaitContract(switchOptions);
+        const loadingSession = switchOptions.loadingSession || (switchOptions.sceneOptions && switchOptions.sceneOptions.loadingSession) || null;
+        await app.waitForSceneReadiness({
+          lifecycleId: activeLifecycleId,
+          loadingSessionId: loadingSession && loadingSession.id ? loadingSession.id : null,
+          phase: readinessContract.authorityPhase,
+          timeoutMs: switchOptions.timeoutMs || readinessTimeoutMs,
+          reason: switchOptions.reason || "same-space-switch"
+        });
         activeRuntime = targetRuntime;
         debug.sameVersionSwitches += 1;
         debug.lastMode = "same-venue-version";
@@ -276,21 +312,49 @@ export function createSceneLifecycleController(options = {}) {
       }
 
       // Post-dispose failure: rebuild the exact previous canonical runtime on the same Engine/canvas.
+      // V14.1.7 lets the orchestrator supply a fresh recovery loading session so the
+      // recreated previous Scene never inherits the failed target request session.
       if (previousRuntime) {
         try {
-          const rollbackCreated = await createSceneForRuntime(previousRuntime, {
+          let rollbackOptions = {
             initialSnapshot: switchOptions.rollbackSnapshot || null,
             sceneOptions: switchOptions.rollbackSceneOptions || switchOptions.sceneOptions || null,
             timeoutMs: switchOptions.timeoutMs
-          });
+          };
+          if (typeof switchOptions.createRollbackOptions === "function") {
+            const preparedRollbackOptions = await switchOptions.createRollbackOptions({
+              previousRuntime,
+              targetRuntime,
+              error,
+              previousLifecycleId,
+              previousVersionId
+            });
+            if (preparedRollbackOptions && typeof preparedRollbackOptions === "object") {
+              rollbackOptions = {
+                ...rollbackOptions,
+                ...preparedRollbackOptions,
+                sceneOptions: {
+                  ...(rollbackOptions.sceneOptions && typeof rollbackOptions.sceneOptions === "object" ? rollbackOptions.sceneOptions : {}),
+                  ...(preparedRollbackOptions.sceneOptions && typeof preparedRollbackOptions.sceneOptions === "object" ? preparedRollbackOptions.sceneOptions : {})
+                }
+              };
+            }
+          }
+          const rollbackCreated = await createSceneForRuntime(previousRuntime, rollbackOptions);
           notifySceneChanged(rollbackCreated.scene, previousRuntime, rollbackCreated.lifecycleId, "cross-space-rollback");
           debug.rollbacks += 1;
           debug.lastMode = "cross-space-rollback";
+          if (typeof switchOptions.onRollbackComplete === "function") {
+            await switchOptions.onRollbackComplete({ ok: true, scene: rollbackCreated.scene, runtime: previousRuntime, lifecycleId: rollbackCreated.lifecycleId });
+          }
         } catch (rollbackError) {
           debug.rollbackFailures += 1;
           debug.lastMode = "cross-space-rollback-failed";
           debug.lastError += ` | rollback: ${rollbackError && rollbackError.message ? rollbackError.message : rollbackError}`;
           notifySceneChanged(null, null, "", "cross-space-rollback-failed");
+          if (typeof switchOptions.onRollbackComplete === "function") {
+            try { await switchOptions.onRollbackComplete({ ok: false, scene: null, runtime: previousRuntime, lifecycleId: "", error: rollbackError }); } catch (_rollbackCallbackError) {}
+          }
         }
       }
       throw error;

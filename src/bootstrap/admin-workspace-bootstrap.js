@@ -1,5 +1,5 @@
 /*
-  Exhibition Platform — V14.1.6 Admin Workspace / Shared Runtime Host
+  Exhibition Platform — V14.1.10 Admin Workspace / No-Reload Residency & Frame-Time Closure
   Authenticated exhibition management + constrained 3D editor viewport.
 */
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -14,8 +14,8 @@ import {
   isCurrentGalleryModelValidation,
   summarizeGalleryModelValidation
 } from "../validation/gallery-model-validation.js?v=c6c8c25_cross_space_runtime";
-import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_6_shared_runtime_host_20260910";
-import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_6_shared_runtime_host_20260910";
+import { getRuntimeVenueVersionKey } from "../runtime/scene-lifecycle-controller.js?v=v14_1_10_no_reload_residency_20260910";
+import { createSceneLoadingRuntimeHost } from "../runtime/scene-loading-orchestrator.js?v=v14_1_10_no_reload_residency_20260910";
 import { buildAuthoringSpaceDefinition } from "../runtime/space-definition-resolver.js?v=c6c8c25_2_admin_gallery_preview";
 import { createAdminAssetWorkspace } from "./admin-asset-workspace.js?v=v13_6_production_closure";
 import {
@@ -24,8 +24,8 @@ import {
   summarizeGalleryMigrationImpact
 } from "../data/exhibition-gallery-assignment.js?v=c6c8c25_cross_space_runtime";
 
-const STAGE = "V14.1.6";
-const ENGINE_CACHE_KEY = "v14_1_6_shared_runtime_host_20260910";
+const STAGE = "V14.1.10";
+const ENGINE_CACHE_KEY = "v14_1_10_no_reload_residency_20260910";
 const SUPABASE_URL = "https://bazbszvhoxmuekxahokc.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iCDi8Ls8ZMvqQgcAuE78MQ_OnPVWqfn";
 const inlineRuntimeContext = window.__EXHIBITION_INLINE_ADMIN_CONTEXT__ || null;
@@ -780,33 +780,28 @@ async function selectAndSwitchExhibition(id) {
   if (!exhibitionData) exhibitionData = createExhibitionDataAdapter({ supabase, mode: "admin" });
   if (typeof exhibitionData.setMode === "function") exhibitionData.setMode("admin");
 
-  let targetRuntime = null;
-  try {
-    targetRuntime = await exhibitionData.resolveRuntime(id, { force: true });
-  } catch (error) {
-    showToast("Could not resolve target Exhibition: " + (error.message || error));
-    return;
-  }
-  const currentRuntime = sceneLifecycleController.getActiveRuntime();
-  const crossSpace = getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(targetRuntime);
-  setViewportStatus(`${crossSpace ? "opening" : "switching to"} ${target.name}…`);
+  // V14.1.7 — runtime resolution happens inside the orchestrator request boundary.
+  // This keeps request order tied to user intent rather than network completion order.
+  setViewportStatus(`switching to ${target.name}…`);
   const transitionBefore = await getExhibitionAssetDeliveryStats().catch(() => null);
   const fromId = current && current.id ? current.id : "?";
   const guardToken = await beginTransitionGuard({
     title: `Switching to ${target.name}…`,
-    detail: crossSpace ? "Recreating the Gallery Scene on the existing WebGL engine." : "Keeping the current immutable Gallery Version resident.",
+    detail: "Preparing the selected Gallery runtime.",
     minVisibleMs: 150
   });
   if (!guardToken) return;
   const transitionStartedAt = performance.now();
   try {
     const result = await sceneLifecycleController.switchTo(id, {
-      runtime: targetRuntime,
       forceRemote: true,
       reason: "admin-exhibition-switch",
       sceneOptions: { adminWorkspace: true }
     });
-    if (!result || !result.ok) return;
+    if (!result || !result.ok || result.superseded) return;
+    const targetRuntime = result.runtime || sceneLifecycleController.getActiveRuntime();
+    const currentRuntime = sceneLifecycleController.getActiveRuntime();
+    const crossSpace = result.mode === "cross-space-scene-recreate";
     scene = sceneLifecycleController.getActiveScene();
     if (inlineRuntimeContext) inlineRuntimeContext.scene = scene;
     window.galleryEditorAuthenticated = true;
@@ -820,7 +815,7 @@ async function selectAndSwitchExhibition(id) {
     }
     updateUrlExhibition(id);
     setSelectedExhibition(catalog.find((item) => item.id === id) || target);
-    setViewportStatus(target.name);
+    setViewportStatus((targetRuntime && targetRuntime.exhibition && targetRuntime.exhibition.name) || target.name);
     if (engine && engine.resize) engine.resize();
     void captureExhibitionTransitionDiagnostic(transitionBefore, transitionStartedAt, fromId, id)
       .then(() => updateAssetDeliveryStatus())
@@ -832,10 +827,6 @@ async function selectAndSwitchExhibition(id) {
   } finally {
     await endTransitionGuard(guardToken);
   }
-}
-
-function sanitizeFileName(name) {
-  return String(name || "poster").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "poster";
 }
 
 async function saveMetadata(patch) {

@@ -121,7 +121,8 @@ assert.ok(admin.includes('ROLLBACK PUBLICATION'));
 assert.ok(admin.includes('Assignment changes the private Draft only'));
 assert.ok(admin.includes('summarizeGalleryMigrationImpact'));
 assert.ok(admin.includes('isExhibitionGalleryMigrationPending'));
-assert.ok(admin.includes('getRuntimeVenueVersionKey(currentRuntime) !== getRuntimeVenueVersionKey(targetRuntime)'));
+assert.ok(admin.includes('V14.1.7 — runtime resolution happens inside the orchestrator request boundary.'));
+assert.ok(!admin.includes('targetRuntime = await exhibitionData.resolveRuntime(id, { force: true });'));
 assert.ok(admin.includes('sceneLifecycleController.switchTo(id'));
 assert.ok(admin.includes('exhibitionGalleryDetail'));
 assert.ok(admin.includes('function setViewportStatus(label)') && admin.includes('strong.textContent = String(label'));
@@ -147,8 +148,8 @@ assert.ok(api.includes('async unpublish(reference)'));
 assert.ok(api.includes('p_published: false'));
 assert.ok(!api.includes('patch.is_published'));
 
-assert.equal(pkg.version, '0.14.1-v14-1-6-shared-runtime-host');
-assert.ok(pkg.description.includes('V14.1.6'));
+assert.equal(pkg.version, '0.14.1-v14-1-10-no-reload-residency-frame-time');
+assert.ok(pkg.description.includes('V14.1.10 No-Reload Residency & Frame-Time Closure'));
 assert.ok(pkg.scripts.test.includes('test:gallery-assignment'));
 
 console.log('C6C8C24 Exhibition ↔ Gallery Assignment regression invariants passed under V13.6.');

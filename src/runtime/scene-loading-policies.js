@@ -1,9 +1,11 @@
 /*
-  Exhibition Platform — V14.1.1 Scene Loading Policies
+  Exhibition Platform — V14.1.1 Scene Loading Policies / V14.1.10 No-Reload Residency & Frame-Time Closure
   Pure lifecycle/loading policy contract. No DOM, Babylon, Supabase or mutable globals.
 */
 
 export const SCENE_LOADING_POLICY_SCHEMA = "exhibition-platform-scene-loading-policy.v1";
+export const SCENE_LOADING_READINESS_EVENT = "gallery-scene-readiness";
+export const SCENE_LOADING_READINESS_PHASE = "scene-visually-settled";
 
 export const SCENE_LOADING_CONTEXTS = Object.freeze({
   PUBLIC_EXHIBITION: "public-exhibition",
@@ -77,7 +79,13 @@ function createSpaceRolePolicy(contextKind, role) {
   const authoringOrTestPreview = contextKind === SCENE_LOADING_CONTEXTS.GALLERY_AUTHORING
     || contextKind === SCENE_LOADING_CONTEXTS.TEST_GALLERY;
   const requiredForValidRuntime = strictSpaceContext && REQUIRED_EXHIBITION_SPACE_ROLES.has(normalizedRole);
-  const assignedMustSettleBeforePreview = authoringOrTestPreview || requiredForValidRuntime;
+  const isExhibitionRuntime = contextKind === SCENE_LOADING_CONTEXTS.PUBLIC_EXHIBITION
+    || contextKind === SCENE_LOADING_CONTEXTS.ADMIN_EXHIBITION;
+  // V14.1.9: Props stay optional at the schema level, but once a Public/Admin Gallery Version
+  // assigns Props they are part of the walkthrough scene and must settle before interaction.
+  const assignedMustSettleBeforePreview = authoringOrTestPreview
+    || requiredForValidRuntime
+    || (isExhibitionRuntime && normalizedRole === "props");
   return freezeRecord({
     role: normalizedRole,
     requiredForValidRuntime,
@@ -99,11 +107,12 @@ function createFamilyPolicy(contextKind, family) {
     return freezeRecord({ family: normalizedFamily, mode: isPublic || isAdmin ? "foreground" : "not-applicable", blocksPreviewSettle: isPublic || isAdmin });
   }
   if (["frames", "sculpture-models", "shared-props"].includes(normalizedFamily)) {
+    const walkthroughTerminal = isPublic || isAdmin;
     return freezeRecord({
       family: normalizedFamily,
-      mode: isPublic ? "background" : (isAdmin ? "foreground-terminal" : "not-applicable"),
-      blocksPreviewSettle: isAdmin,
-      explicitUnavailableCountsAsTerminal: isAdmin
+      mode: walkthroughTerminal ? "foreground-terminal" : "not-applicable",
+      blocksPreviewSettle: walkthroughTerminal,
+      explicitUnavailableCountsAsTerminal: walkthroughTerminal
     });
   }
   return freezeRecord({
@@ -117,14 +126,14 @@ function createReadinessContract(contextKind) {
   const map = {
     [SCENE_LOADING_CONTEXTS.PUBLIC_EXHIBITION]: {
       interactionPhase: "interaction-ready",
-      previewPhase: "interaction-ready",
-      terminalVisiblePhase: "interaction-ready",
+      previewPhase: "walkthrough-visible-settled",
+      terminalVisiblePhase: "walkthrough-visible-settled",
       backgroundAllowedAfterPreview: true
     },
     [SCENE_LOADING_CONTEXTS.ADMIN_EXHIBITION]: {
       interactionPhase: "interaction-ready",
-      previewPhase: "admin-visible-settled",
-      terminalVisiblePhase: "admin-visible-settled",
+      previewPhase: "walkthrough-visible-settled",
+      terminalVisiblePhase: "walkthrough-visible-settled",
       backgroundAllowedAfterPreview: true
     },
     [SCENE_LOADING_CONTEXTS.GALLERY_AUTHORING]: {
@@ -141,6 +150,8 @@ function createReadinessContract(contextKind) {
     }
   };
   return freezeRecord({
+    authorityEvent: SCENE_LOADING_READINESS_EVENT,
+    authorityPhase: SCENE_LOADING_READINESS_PHASE,
     compatibilityReadyEvent: "gallery-interaction-ready",
     failureEvent: "gallery-startup-failure",
     ...map[contextKind]

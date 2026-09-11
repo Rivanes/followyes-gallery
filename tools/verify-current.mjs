@@ -22,6 +22,10 @@ const transitionGuard=fs.readFileSync(new URL('../src/bootstrap/transition-guard
 const sceneLifecycle=fs.readFileSync(new URL('../src/runtime/scene-lifecycle-controller.js',import.meta.url),'utf8');
 const sceneLoadingPolicies=fs.readFileSync(new URL('../src/runtime/scene-loading-policies.js',import.meta.url),'utf8');
 const sceneLoadingOrchestrator=fs.readFileSync(new URL('../src/runtime/scene-loading-orchestrator.js',import.meta.url),'utf8');
+const publicEntryPolicy=fs.readFileSync(new URL('../src/runtime/public-space-entry-policy.js',import.meta.url),'utf8');
+const readinessTest=fs.readFileSync(new URL('./test-readiness-authority.mjs',import.meta.url),'utf8');
+const walkthroughTest=fs.readFileSync(new URL('./test-walkthrough-hydration.mjs',import.meta.url),'utf8');
+const residencyTest=fs.readFileSync(new URL('./test-active-visit-residency.mjs',import.meta.url),'utf8');
 const sharedAssetApi=fs.readFileSync(new URL('../src/data/shared-asset-api.js',import.meta.url),'utf8');
 const sharedAssetState=fs.readFileSync(new URL('../src/runtime/shared-asset-state.js',import.meta.url),'utf8');
 const sharedAssetValidation=fs.readFileSync(new URL('../src/validation/shared-asset-validation.js',import.meta.url),'utf8');
@@ -34,11 +38,27 @@ function count(h,n){return h.split(n).length-1}
 function sha(t){return crypto.createHash('sha256').update(t).digest('hex')}
 function extractFunction(text,name){const ms=[`async function ${name}(`,`function ${name}(`];let st=-1;for(const m of ms){st=text.indexOf(m);if(st>=0)break}assert(st>=0,`Missing ${name}`);const b=text.indexOf('{',st);let d=0,s='c',q='';for(let i=b;i<text.length;i++){const c=text[i],n=text[i+1]||'';if(s==='c'){if(c==='"'||c==="'"||c==='`'){s='s';q=c}else if(c==='/'&&n==='/'){s='l';i++}else if(c==='/'&&n==='*'){s='b';i++}else if(c==='{')d++;else if(c==='}'&&--d===0)return text.slice(st,i+1)}else if(s==='s'){if(c==='\\')i++;else if(c===q)s='c'}else if(s==='l'&&c==='\n')s='c';else if(s==='b'&&c==='*'&&n==='/'){s='c';i++}}throw new Error(`Unterminated ${name}`)}
 
-assert(index.includes('stage: "V14.1.6"'),'Index stage identity missing');
-assert(bootstrap.includes('const STAGE = "V14.1.6"'),'Viewer stage identity missing');
-assert(adminBootstrap.includes('const STAGE = "V14.1.6"'),'Admin stage identity missing');
-assert(bootstrap.includes('v14_1_6_shared_runtime_host_20260910'),'Current engine cache key missing');
-assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_6_shared_runtime_host_20260910'),'Index viewer cache key missing');
+assert(index.includes('stage: "V14.1.10"'),'Index stage identity missing');
+assert(bootstrap.includes('const STAGE = "V14.1.10"'),'Viewer stage identity missing');
+assert(adminBootstrap.includes('const STAGE = "V14.1.10"'),'Admin stage identity missing');
+assert(bootstrap.includes('v14_1_10_no_reload_residency_20260910'),'Current engine cache key missing');
+assert(index.includes('gallery-viewer-bootstrap.js?v=v14_1_10_no_reload_residency_20260910'),'Index viewer cache key missing');
+const currentPackage=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+assert(currentPackage.version==='0.14.1-v14-1-10-no-reload-residency-frame-time'&&currentPackage.description.includes('V14.1.10 No-Reload Residency & Frame-Time Closure'),'V14.1.10 package identity missing');
+assert(sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_EVENT = "gallery-scene-readiness"')&&sceneLoadingPolicies.includes('SCENE_LOADING_READINESS_PHASE = "scene-visually-settled"'),'V14.1.8 canonical readiness authority constants missing');
+assert(sceneLoadingPolicies.includes('authorityEvent: SCENE_LOADING_READINESS_EVENT')&&sceneLoadingPolicies.includes('authorityPhase: SCENE_LOADING_READINESS_PHASE')&&sceneLoadingPolicies.includes('compatibilityReadyEvent: "gallery-interaction-ready"'),'V14.1.8 policy readiness contract missing');
+assert(sceneLifecycle.includes('function resolveReadinessWaitContract(')&&sceneLifecycle.includes('const authorityEvent = text(waitContract.authorityEvent)')&&sceneLifecycle.includes('const authorityPhase = text(waitContract.authorityPhase)'),'V14.1.8 controller policy-driven readiness waiter missing');
+assert(!sceneLifecycle.includes('window.addEventListener("gallery-interaction-ready"'),'V14.1.8 controller still subscribes directly to compatibility ready event');
+assert(sceneLifecycle.includes('typeof app.waitForSceneReadiness !== "function"')&&sceneLifecycle.includes('await app.waitForSceneReadiness({'),'V14.1.8 same-Space canonical readiness wait missing');
+assert(source.includes('function publishGallerySceneReadiness(')&&source.includes('function waitForGallerySceneReadiness(')&&source.includes('getSceneReadinessDebug: function ()'),'V14.1.8 core canonical readiness publication/wait/debug API missing');
+const setInteractionReady=extractFunction(source,'setGalleryInteractionReady');
+assert(setInteractionReady.indexOf('publishGallerySceneReadiness')>=0&&setInteractionReady.indexOf('publishGallerySceneReadiness')<setInteractionReady.indexOf('compatibilityReadyEvent'),'V14.1.8 canonical readiness must publish before compatibility-ready');
+assert(source.includes('if (!editMode && !isGallerySceneReadinessSnapshotCurrent(getGallerySceneReadinessSnapshot()))'),'V14.1.8 intro movement unlock does not require canonical current readiness');
+assert(publicEntryPolicy.includes('options.initial === true || options.entry === true || options.publicEntry === true || !previousRuntime'),'V14.1.8 explicit Public visit/re-entry override missing');
+assert(bootstrap.includes('publicEntry: true')&&bootstrap.includes('homepage-gallery-entry'),'V14.1.8 Home/list entry is not marked as explicit Public visit');
+assert(bootstrap.includes('public-gallery-reentry-same-runtime'),'V14.1.8 same-resident Gallery re-entry path missing');
+assert(sceneLoadingOrchestrator.includes('republishSceneReadiness')&&sceneLoadingOrchestrator.includes('source: "orchestrator-adopt"'),'V14.1.8 same-Scene adopt readiness republish missing');
+assert(readinessTest.includes('legacy interaction-ready must not settle the controller')&&readinessTest.includes('explicit re-entry must show intro on same resident runtime'),'V14.1.8 executable readiness/entry regression missing');
 assert(sceneLoadingPolicies.includes('SCENE_LOADING_POLICY_SCHEMA = "exhibition-platform-scene-loading-policy.v1"'),'V14.1.1 loading policy schema missing');
 assert(sceneLoadingPolicies.includes('PUBLIC_EXHIBITION: "public-exhibition"')&&sceneLoadingPolicies.includes('ADMIN_EXHIBITION: "admin-exhibition"')&&sceneLoadingPolicies.includes('GALLERY_AUTHORING: "gallery-authoring"')&&sceneLoadingPolicies.includes('TEST_GALLERY: "test-gallery"'),'V14.1.1 canonical loading contexts missing');
 assert(sceneLoadingPolicies.includes('function resolveSceneLoadingContextFromRuntimeOptions')&&sceneLoadingPolicies.includes('function createSceneLoadingPolicy')&&sceneLoadingPolicies.includes('function getSceneLoadingSpaceRolePolicy'),'V14.1.1 pure policy API missing');
@@ -46,7 +66,7 @@ assert(!/\b(window|document|BABYLON|gallerySupabase|fetch|XMLHttpRequest)\b/.tes
 assert(source.includes('resolveSceneLoadingPolicyFromRuntimeOptions(runtimeOptions)')&&source.includes('getLegacySceneModeFlags(galleryLoadingPolicy)'),'V14.1.1 compatibility wiring missing from core');
 assert(source.includes('getSceneLoadingPolicyDebug: function ()'),'V14.1.1 policy debug surface missing');
 assert(sceneLoadingOrchestrator.includes('SCENE_LOADING_ORCHESTRATOR_SCHEMA = "exhibition-platform-scene-loading-orchestrator.v1"')&&sceneLoadingOrchestrator.includes('SCENE_LOADING_SESSION_SCHEMA = "exhibition-platform-scene-loading-session.v1"'),'V14.1.3 orchestrator/session schema missing');
-assert(sceneLoadingOrchestrator.includes('createSceneLoadingOrchestrator')&&sceneLoadingOrchestrator.includes('latestWinsEnabled: false')&&sceneLoadingOrchestrator.includes('loadingSession'),'V14.1.3 compatibility orchestrator contract missing');
+assert(sceneLoadingOrchestrator.includes('createSceneLoadingOrchestrator')&&sceneLoadingOrchestrator.includes('latestWinsEnabled: true')&&sceneLoadingOrchestrator.includes('loadingSession'),'V14.1.3 compatibility orchestrator contract missing');
 assert(sceneLifecycle.includes('loadingSession.bindSceneLifecycleId(lifecycleId)'),'V14.1.3 controller does not bind loading session to physical lifecycle');
 assert(bootstrap.includes('createSceneLoadingRuntimeHost')&&!bootstrap.includes('createSceneLifecycleController'),'V14.1.6 Viewer shared runtime host missing');
 assert(adminBootstrap.includes('createSceneLoadingRuntimeHost')&&!adminBootstrap.includes('createSceneLifecycleController'),'V14.1.6 Admin shared runtime host missing');
@@ -66,12 +86,20 @@ assert(source.includes('retry-late-success-discarded:'),'V14.1.4 late success af
 assert(source.includes('authoringPreviewSettle: cloneGalleryJson(galleryAuthoringPreviewSettleDebug)'),'V14.1.4 authoring settle debug snapshot missing');
 assert(adminBootstrap.includes('Gallery preview is partial. Assigned asset failed to load:'),'V14.1.4 Admin explicit authoring failure surface missing');
 assert(sceneLoadingOrchestrator.includes('registerTask(input = {})')&&sceneLoadingOrchestrator.includes('getTaskSnapshot(phase)'),'V14.1.5 loading-session lifecycle task registry missing');
-assert(source.includes('gallery-admin-visible-hydration-batch.v1')&&source.includes('waitForGalleryAdminVisibleHydrationBatch'),'V14.1.5 Admin visible hydration batch missing');
-assert(source.includes('registerGalleryLoadingSessionTask(family, key, details)')&&source.includes('galleryLoadingSession.registerTask'),'V14.1.5 core tasks are not bound to current loading session');
-assert(source.includes('registerGalleryAdminVisibleHydrationTask')&&source.includes('"frames"')&&source.includes('"shared-props"')&&source.includes('"sculpture-models"'),'V14.1.5 Frame/model/Shared Prop task families missing');
-assert(source.includes('_galleryFastStartForceImmediate: true')&&source.includes('forceImmediate: sharedPropVisibleBlocking'),'V14.1.5 Admin visible model/Prop immediate hydration bridge missing');
-assert(source.includes('gallery-admin-visible-settled')&&source.includes('getAdminVisibleHydrationDebug: function ()'),'V14.1.5 Admin visible settle event/debug surface missing');
-assert(source.includes('queueGalleryFastStartModelLoad(slot, modelState);'),'V14.1.5 Public resident model background path was removed');
+assert(source.includes('gallery-walkthrough-visible-hydration-batch.v1')&&source.includes('waitForGalleryWalkthroughVisibleHydrationBatch'),'V14.1.9 walkthrough visible hydration batch missing');
+assert(source.includes('registerGalleryLoadingSessionTask(family, key, details)')&&source.includes('galleryLoadingSession.registerTask'),'V14.1.9 core tasks are not bound to current loading session');
+assert(source.includes('registerGalleryWalkthroughVisibleHydrationTask')&&source.includes('"frames"')&&source.includes('"shared-props"')&&source.includes('"sculpture-models"'),'V14.1.9 Frame/model/Shared Prop task families missing');
+assert(source.includes('_galleryFastStartForceImmediate: true')&&source.includes('forceImmediate: sharedPropVisibleBlocking'),'V14.1.9 Public/Admin visible model/Prop immediate hydration bridge missing');
+assert(source.includes('gallery-admin-visible-settled')&&source.includes('getWalkthroughVisibleHydrationDebug: function ()'),'V14.1.9 walkthrough settle/debug surface missing');
+assert(source.includes('gallery-walkthrough-heavy-hydration-scheduler.v1')&&source.includes('concurrency: 1')&&source.includes('discardGalleryWalkthroughHeavyHydrationBatch'),'V14.1.9 bounded heavy hydration scheduler missing');
+assert(source.includes('function waitForGalleryWalkthroughFinalSettle(')&&source.includes('runGalleryWalkthroughGpuWarmup(')&&source.includes('quiet.stable !== true'),'V14.1.9 final walkthrough settle contract missing');
+assert(walkthroughTest.includes('pre-interaction complete walkthrough hydration regression passed.'),'V14.1.9 executable walkthrough hydration regression missing');
+assert(source.includes('schema: "gallery-active-visit-residency.v1"')&&source.includes('function lockGalleryActiveVisitResidency('),'V14.1.10 active-visit residency authority missing');
+assert(source.includes('mesh.alwaysSelectAsActiveMesh = true')&&source.includes('scene.skipFrustumClipping = false')&&!source.includes('scene.skipFrustumClipping = true'),'V14.1.10 narrow Space-shell active-selection contract missing');
+assert(source.includes('suppressedModelSuspends')&&source.includes('suppressedModelBackgroundStarts')&&source.includes('postUnlockModelImports'),'V14.1.10 model no-reload diagnostics missing');
+assert(source.includes('suppressedNormalFullQueues')&&source.includes('suppressedTextureDowngrades')&&source.includes('explicitInspectFullRequests'),'V14.1.10 stable texture-variant diagnostics missing');
+assert(source.includes('recordGalleryActiveVisitFrameTelemetry();')&&source.includes('surfaceActiveSelectionMisses')&&source.includes('getActiveVisitResidencyDebug: function ()'),'V14.1.10 post-unlock frame/Space diagnostics missing');
+assert(residencyTest.includes('active-visit no-reload residency and frame-time regression passed.'),'V14.1.10 executable residency/frame-time regression missing');
 assert(sharedAssetApi.includes('SHARED_ASSET_STAGE = "V13.1"')&&sharedAssetApi.includes('admin_publish_shared_asset_version'),'V13.1 Shared Asset data adapter missing');
 assert(sharedAssetState.includes('exhibition-platform-state-assets.v1')&&sharedAssetState.includes('collectSharedAssetReferences'),'V13.1 Shared Asset state contract missing');
 assert(sharedAssetValidation.includes('exhibition-platform-shared-asset-validation.v1')&&sharedAssetWorker.includes('["prop","frame","sculpture"]'),'V13.1 Shared Asset GLB validation contract missing');
@@ -172,7 +200,7 @@ assert(source.includes('galleryExhibitionRuntime.hydrationActive = true')&&sourc
 assert(source.includes('blockedSpaceDisposals')&&source.includes('lastHydrationProfile'),'C6C8C7 diagnostics missing');
 assert(transitionGuard.includes('setTimeout(resolve, 34)'),'C6C8C7 transition paint barrier missing');
 assert(bootstrap.includes('Returning to Public Page…')&&bootstrap.includes('Opening Admin Workspace…'),'Viewer/Admin same-runtime transition feedback missing');
-assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Keeping the current immutable Gallery Version resident.'),'Exhibition switch loading feedback missing');
+assert(adminBootstrap.includes('Switching to ${target.name}…')&&adminBootstrap.includes('Preparing the selected Gallery runtime.'),'V14.1.7 Exhibition switch loading feedback missing');
 assert(adminBootstrap.includes('void captureExhibitionTransitionDiagnostic'),'Diagnostics still block the visible exhibition transition');
 assert(source.includes('schema: "gallery-artwork-residency.v3"'),'C6C8C8 residency schema missing');
 assert(source.includes('function isGalleryViewerTextureStreamingMotionBlocked('),'C6C8C8 movement gate missing');
@@ -192,7 +220,7 @@ assert(adminBootstrap.includes('BG slices')&&adminBootstrap.includes('Preview pr
 assert(source.includes('function getGalleryActiveArtworkPreviewPresenceSnapshot(')&&source.includes('function queueGalleryMissingRequiredPreviews('),'C6C8C11 Preview presence/requeue helpers missing');
 assert(source.includes('snapshot.requiredPreviews === snapshot.readyPreviews')&&source.includes('snapshot.missingPreviews === 0'),'C6C8C11 readiness does not guarantee Preview fill');
 assert(source.includes('Math.min(6, getGalleryFastStartPreviewTextureConcurrency())'),'C6C8C11 Preview concurrency path missing');
-assert(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]')&&source.includes('galleryAuthoringSpacePreview'),'C6C8C23 optional Props runtime contract missing');
+assert(source.includes('var galleryStrictCriticalAssetNames = ["floor", "wall", "ceiling"]')&&source.includes('galleryStartupBlockingAssetNames = galleryPolicyPreviewBlockingAssetNames.slice()'),'V14.1.9 required Space shell / assigned Props blocking contract missing');
 assert(source.includes('function getGallerySpaceGpuWarmupRevision(')&&source.includes('{ kind: "wall", meshes: wallMeshes }')&&source.includes('{ kind: "prop", meshes: propMeshes }'),'C6C8C12 per-mesh Space warmup missing');
 assert(source.includes('gallerySpaceAlwaysResident = true')&&source.includes('freezeStaticGalleryMeshes(propMeshes, "prop")'),'C6C8C12 resident Props contract missing');
 assert(source.includes('warmup.ok !== true')&&source.includes('Space visual warmup failed for:'),'C6C8C12 hard visual warmup gate missing');
@@ -217,8 +245,9 @@ assert(source.includes('Exhibition state belongs to another Gallery Version'),'C
 assert(source.includes('gallery-scene-disposed')&&source.includes('galleryDisposed = true'),'C6C8C25 disposal contract missing');
 assert(exhibitionApi.includes('const runtimeKey = (modeValue, id) =>'),'C6C8C25 mode-qualified runtime cache missing');
 
-const packageJson=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+const packageJson=currentPackage;
 const expectedRegressionSuites=[
+  'test-active-visit-residency.mjs',
   'test-core-runtime.mjs',
   'test-cross-space-runtime.mjs',
   'test-exhibition-gallery-assignment.mjs',
@@ -226,10 +255,13 @@ const expectedRegressionSuites=[
   'test-media-runtime.mjs',
   'test-performance-runtime.mjs',
   'test-platform-runtime.mjs',
+  'test-readiness-authority.mjs',
   'test-scene-runtime-host.mjs',
   'test-sculpture-model-validation.mjs',
   'test-shared-assets.mjs',
   'test-space-model-validation.mjs',
+  'test-transition-session-ownership.mjs',
+  'test-walkthrough-hydration.mjs',
   'test-workspace-ui.mjs'
 ];
 const actualRegressionSuites=fs.readdirSync(new URL('./',import.meta.url))
